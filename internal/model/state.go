@@ -1,14 +1,14 @@
 package model
 
-func DeriveProjectStatus(services []Service, activeOperation string) (ProjectStatus, string) {
+func DeriveEnvironmentStatus(services []Service, activeOperation string) (EnvironmentStatus, string) {
 	switch activeOperation {
 	case "up":
-		return ProjectStarting, "services are starting"
+		return EnvironmentStarting, "services are starting"
 	case "down":
-		return ProjectStopping, "services are stopping"
+		return EnvironmentStopping, "services are stopping"
 	}
 	if len(services) == 0 {
-		return ProjectStopped, "no services are defined"
+		return EnvironmentStopped, "no services are defined"
 	}
 	ready := 0
 	running := 0
@@ -16,16 +16,16 @@ func DeriveProjectStatus(services []Service, activeOperation string) (ProjectSta
 		switch service.Status {
 		case ServiceFailed:
 			if service.Required {
-				return ProjectFailed, service.Name + " failed"
+				return EnvironmentFailed, service.Name + " failed"
 			}
-			return ProjectDegraded, service.Name + " failed"
+			return EnvironmentDegraded, service.Name + " failed"
 		case ServiceUnknown:
 			if service.Required {
-				return ProjectUnknown, service.Name + " state cannot be verified"
+				return EnvironmentUnknown, service.Name + " state cannot be verified"
 			}
 		case ServiceUnhealthy, ServiceExited:
 			if service.Required {
-				return ProjectDegraded, service.Name + " is not ready"
+				return EnvironmentDegraded, service.Name + " is not ready"
 			}
 		case ServiceReady:
 			ready++
@@ -35,10 +35,10 @@ func DeriveProjectStatus(services []Service, activeOperation string) (ProjectSta
 		}
 	}
 	if ready == len(services) {
-		return ProjectHealthy, ""
+		return EnvironmentHealthy, ""
 	}
 	if running == 0 {
-		return ProjectStopped, ""
+		return EnvironmentStopped, ""
 	}
-	return ProjectDegraded, "not all services are ready"
+	return EnvironmentDegraded, "not all services are ready"
 }

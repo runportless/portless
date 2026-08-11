@@ -1,6 +1,6 @@
-import type { ProjectStatus, ServiceStatus } from '../types'
+import type { EnvironmentStatus, ServiceStatus } from '../types'
 
-type StatusValue = ProjectStatus | ServiceStatus | string
+type StatusValue = EnvironmentStatus | ServiceStatus | string
 
 export function StatusMark({ status, label = true }: { status: StatusValue; label?: boolean }) {
   const tone = statusTone(status)

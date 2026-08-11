@@ -19,17 +19,18 @@ func TestProcessLifecycleUsesAllocatedPortAndGroupStop(t *testing.T) {
 		PortEnvironment: "PORT",
 		Health:          model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
 	}
-	result, err := manager.Start(context.Background(), "billing", definition, 1, nil, t.TempDir())
+	scope := model.EnvironmentSelector("billing", "local")
+	result, err := manager.Start(context.Background(), scope, definition, 1, nil, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Port == 0 || result.PID == 0 || !manager.IsRunning("billing", "gateway") {
+	if result.Port == 0 || result.PID == 0 || !manager.IsRunning(scope, "gateway") {
 		t.Fatalf("invalid start result %#v", result)
 	}
-	if err := manager.Stop(context.Background(), "billing", "gateway", time.Second); err != nil {
+	if err := manager.Stop(context.Background(), scope, "gateway", time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if manager.IsRunning("billing", "gateway") {
+	if manager.IsRunning(scope, "gateway") {
 		t.Fatal("process remained running after stop")
 	}
 }

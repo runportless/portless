@@ -60,12 +60,12 @@ func New(app *application.Service, authManager *auth.Manager, assets fs.FS) (*Se
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	setSecurityHeaders(writer.Header())
 	host := normalizedHost(request.Host)
-	if service, project, ok := applicationHost(host); ok {
+	if service, environment, project, ok := applicationHost(host); ok {
 		if strings.HasPrefix(request.URL.Path, "/api/") || strings.HasPrefix(request.URL.Path, "/auth/") {
-			writeAPIError(writer, http.StatusMisdirectedRequest, APIError{Code: "CONTROL_HOST_REQUIRED", Message: "control API routes are not served on application hosts"})
+			writeAPIError(writer, http.StatusMisdirectedRequest, APIError{Code: "CONTROL_HOST_REQUIRED", Message: "control routes are not served on application hosts"})
 			return
 		}
-		s.app.Proxy().ServeIngress(writer, request, project, service)
+		s.app.Proxy().ServeIngress(writer, request, model.EnvironmentSelector(project, environment), service)
 		return
 	}
 	if !isControlHost(host) {
@@ -106,7 +106,7 @@ func (s *Server) handleClaim(writer http.ResponseWriter, request *http.Request) 
 		writeAPIError(writer, http.StatusUnauthorized, APIError{Code: "INVALID_BROWSER_CLAIM", Message: err.Error(), Remediation: []Remediation{{Label: "Open the UI again", Command: "portless ui"}}})
 		return
 	}
-	http.SetCookie(writer, &http.Cookie{Name: auth.SessionCookie, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expiresAt, Secure: false})
+	http.SetCookie(writer, &http.Cookie{Name: auth.SessionCookie, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expiresAt})
 	http.Redirect(writer, request, next, http.StatusSeeOther)
 }
 
@@ -122,8 +122,7 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	path := strings.TrimPrefix(strings.Trim(request.URL.Path, "/"), "api/v1/")
-	segments := splitPath(path)
+	segments := splitPath(strings.TrimPrefix(strings.Trim(request.URL.Path, "/"), "api/v1/"))
 	if len(segments) == 0 {
 		writeJSON(writer, http.StatusOK, map[string]any{"name": "portless", "apiVersion": APIVersion})
 		return
@@ -139,6 +138,8 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 		s.handleBrowserClaims(writer, request, principal)
 	case "projects":
 		s.handleProjects(writer, request, segments, principal)
+	case "environments":
+		s.handleEnvironments(writer, request, segments, principal)
 	default:
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "API route not found"})
 	}
@@ -205,7 +206,7 @@ func (s *Server) handleBrowserClaims(writer http.ResponseWriter, request *http.R
 		return
 	}
 	if principal.Session {
-		writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "only an authenticated CLI may create browser claims"})
+		writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "only the local CLI may create browser claims"})
 		return
 	}
 	var input struct {
@@ -226,16 +227,32 @@ func (s *Server) handleBrowserClaims(writer http.ResponseWriter, request *http.R
 func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {
 	ctx := request.Context()
 	if len(segments) == 1 {
-		if request.Method != http.MethodGet {
-			methodNotAllowed(writer, http.MethodGet)
-			return
+		switch request.Method {
+		case http.MethodGet:
+			projects, err := s.app.Projects(ctx)
+			if err != nil {
+				s.writeError(writer, err, nil)
+				return
+			}
+			writeJSON(writer, http.StatusOK, map[string]any{"projects": nonNil(projects)})
+		case http.MethodPost:
+			var input struct {
+				Name    string                    `json:"name"`
+				Sources []application.SourceInput `json:"sources"`
+			}
+			if err := decodeJSON(request, &input); err != nil {
+				writeDecodeError(writer, err)
+				return
+			}
+			project, environment, warnings, err := s.app.CreateProject(ctx, input.Name, input.Sources)
+			if err != nil {
+				s.writeError(writer, err, map[string]any{"project": input.Name})
+				return
+			}
+			writeJSON(writer, http.StatusCreated, map[string]any{"project": project, "environment": environment, "warnings": nonNil(warnings)})
+		default:
+			methodNotAllowed(writer, http.MethodGet, http.MethodPost)
 		}
-		projects, err := s.app.Projects(ctx)
-		if err != nil {
-			s.writeError(writer, err, nil)
-			return
-		}
-		writeJSON(writer, http.StatusOK, map[string]any{"projects": nonNil(projects)})
 		return
 	}
 	if len(segments) == 2 && segments[1] == "discover" {
@@ -244,7 +261,7 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		if principal.Session {
-			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "project discovery may only be requested by the local CLI"})
+			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "source discovery may only be requested by the local CLI"})
 			return
 		}
 		var input struct {
@@ -255,53 +272,36 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			writeDecodeError(writer, err)
 			return
 		}
-		project, warnings, err := s.app.Discover(ctx, input.Path, input.Name)
+		project, environment, warnings, err := s.app.Discover(ctx, input.Path, input.Name)
 		if err != nil {
 			s.writeError(writer, err, nil)
 			return
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{"project": project, "warnings": nonNil(warnings)})
+		writeJSON(writer, http.StatusOK, map[string]any{"project": project, "environment": environment, "warnings": nonNil(warnings)})
 		return
 	}
-	projectName := segments[1]
-	if err := model.ValidateProjectName(projectName); err != nil {
-		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_PROJECT_NAME", Message: err.Error(), Subject: map[string]any{"project": projectName}})
+	project := segments[1]
+	if err := model.ValidateProjectName(project); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_PROJECT_NAME", Message: err.Error(), Subject: map[string]any{"project": project}})
 		return
 	}
 	if len(segments) == 2 {
-		s.handleProject(writer, request, projectName, principal)
+		s.handleProject(writer, request, project, principal)
 		return
 	}
-	switch segments[2] {
-	case "rescan":
-		s.handleRescan(writer, request, projectName)
-	case "declaration":
-		s.handleDeclaration(writer, request, projectName)
-	case "up":
-		s.handleUp(writer, request, projectName, principal)
-	case "down":
-		s.handleDown(writer, request, projectName, principal)
-	case "services":
-		s.handleServices(writer, request, projectName, segments, principal)
-	case "connections":
-		s.handleConnections(writer, request, projectName, segments)
-	case "logs":
-		s.handleLogs(writer, request, projectName)
-	case "traffic":
-		s.handleTraffic(writer, request, projectName, segments)
-	case "stream":
-		s.handleStream(writer, request, projectName)
-	case "recordings":
-		s.handleRecordings(writer, request, projectName, segments, principal)
-	case "faults":
-		s.handleFaults(writer, request, projectName, segments, principal)
-	case "operations":
-		s.handleOperations(writer, request, projectName, segments)
-	case "timeline":
-		s.handleTimeline(writer, request, projectName)
-	default:
-		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "project route not found", Subject: map[string]any{"project": projectName}})
+	if len(segments) == 3 && segments[2] == "declaration" && request.Method == http.MethodGet {
+		content, err := s.app.ExportProject(ctx, project)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project})
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Content-Disposition", `attachment; filename="portless.project.json"`)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write(content)
+		return
 	}
+	writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "project route not found"})
 }
 
 func (s *Server) handleProject(writer http.ResponseWriter, request *http.Request, project string, principal auth.Principal) {
@@ -339,49 +339,178 @@ func (s *Server) handleProject(writer http.ResponseWriter, request *http.Request
 	}
 }
 
-func (s *Server) handleRescan(writer http.ResponseWriter, request *http.Request, project string) {
+func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {
+	ctx := request.Context()
+	if len(segments) == 1 {
+		switch request.Method {
+		case http.MethodGet:
+			environments, err := s.app.Environments(ctx, request.URL.Query().Get("project"))
+			if err != nil {
+				s.writeError(writer, err, nil)
+				return
+			}
+			writeJSON(writer, http.StatusOK, map[string]any{"environments": nonNil(environments)})
+		case http.MethodPost:
+			var input struct {
+				Project string `json:"project"`
+				Name    string `json:"name"`
+				From    string `json:"from"`
+			}
+			if err := decodeJSON(request, &input); err != nil {
+				writeDecodeError(writer, err)
+				return
+			}
+			if input.From == "" {
+				input.From = "local"
+			}
+			environment, err := s.app.CloneEnvironment(ctx, input.Project, input.From, input.Name)
+			if err != nil {
+				s.writeError(writer, err, map[string]any{"project": input.Project, "environment": input.Name})
+				return
+			}
+			writeJSON(writer, http.StatusCreated, environment)
+		default:
+			methodNotAllowed(writer, http.MethodGet, http.MethodPost)
+		}
+		return
+	}
+	if len(segments) == 2 && segments[1] == "resolve" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
+			return
+		}
+		path := request.URL.Query().Get("path")
+		if path == "" {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "PATH_REQUIRED", Message: "the path query parameter is required"})
+			return
+		}
+		environments, err := s.app.EnvironmentsForPath(ctx, path)
+		if err != nil {
+			s.writeError(writer, err, nil)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"environments": nonNil(environments)})
+		return
+	}
+	if len(segments) == 2 && segments[1] == "select" {
+		if request.Method != http.MethodPut {
+			methodNotAllowed(writer, http.MethodPut)
+			return
+		}
+		var input struct {
+			Path        string `json:"path"`
+			Project     string `json:"project"`
+			Environment string `json:"environment"`
+		}
+		if err := decodeJSON(request, &input); err != nil {
+			writeDecodeError(writer, err)
+			return
+		}
+		if err := s.app.SelectEnvironment(ctx, input.Path, input.Project, input.Environment); err != nil {
+			s.writeError(writer, err, nil)
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if len(segments) < 3 {
+		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "environment route not found"})
+		return
+	}
+	project, environment := segments[1], segments[2]
+	if err := model.ValidateProjectName(project); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_PROJECT_NAME", Message: err.Error()})
+		return
+	}
+	if err := model.ValidateEnvironmentName(environment); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_ENVIRONMENT_NAME", Message: err.Error()})
+		return
+	}
+	if len(segments) == 3 {
+		s.handleEnvironment(writer, request, project, environment)
+		return
+	}
+	switch segments[3] {
+	case "rescan":
+		s.handleRescan(writer, request, project, environment)
+	case "up":
+		s.handleUp(writer, request, project, environment, principal)
+	case "down":
+		s.handleDown(writer, request, project, environment, principal)
+	case "bindings":
+		s.handleBindings(writer, request, project, environment, segments)
+	case "sources":
+		s.handleSources(writer, request, project, environment, segments)
+	case "services":
+		s.handleServices(writer, request, project, environment, segments, principal)
+	case "connections":
+		s.handleConnections(writer, request, project, environment, segments)
+	case "logs":
+		s.handleLogs(writer, request, project, environment)
+	case "traffic":
+		s.handleTraffic(writer, request, project, environment, segments)
+	case "stream":
+		s.handleStream(writer, request, project, environment)
+	case "recordings":
+		s.handleRecordings(writer, request, project, environment, segments, principal)
+	case "faults":
+		s.handleFaults(writer, request, project, environment, segments, principal)
+	case "operations":
+		s.handleOperations(writer, request, project, environment, segments)
+	case "timeline":
+		s.handleTimeline(writer, request, project, environment)
+	default:
+		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "environment route not found"})
+	}
+}
+
+func (s *Server) handleEnvironment(writer http.ResponseWriter, request *http.Request, project, environment string) {
+	switch request.Method {
+	case http.MethodGet:
+		result, err := s.app.Environment(request.Context(), project, environment)
+		if err != nil {
+			s.writeError(writer, err, environmentSubject(project, environment))
+			return
+		}
+		writeJSON(writer, http.StatusOK, result)
+	case http.MethodDelete:
+		if err := s.app.ForgetEnvironment(request.Context(), project, environment); err != nil {
+			s.writeError(writer, err, environmentSubject(project, environment))
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	default:
+		methodNotAllowed(writer, http.MethodGet, http.MethodDelete)
+	}
+}
+
+func (s *Server) handleRescan(writer http.ResponseWriter, request *http.Request, project, environment string) {
 	if request.Method != http.MethodPost {
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	result, warnings, err := s.app.Rescan(request.Context(), project)
+	result, warnings, err := s.app.Rescan(request.Context(), project, environment)
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"project": result, "warnings": nonNil(warnings)})
+	writeJSON(writer, http.StatusOK, map[string]any{"environment": result, "warnings": nonNil(warnings)})
 }
 
-func (s *Server) handleDeclaration(writer http.ResponseWriter, request *http.Request, project string) {
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer, http.MethodGet)
-		return
-	}
-	content, err := s.app.ExportProject(request.Context(), project)
-	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Content-Disposition", `attachment; filename="portless.project.json"`)
-	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write(content)
-}
-
-func (s *Server) handleUp(writer http.ResponseWriter, request *http.Request, project string, principal auth.Principal) {
+func (s *Server) handleUp(writer http.ResponseWriter, request *http.Request, project, environment string, principal auth.Principal) {
 	if request.Method != http.MethodPost {
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	operation, err := s.app.Up(request.Context(), project, principal.Actor, request.Header.Get("Idempotency-Key"))
+	operation, err := s.app.Up(request.Context(), project, environment, principal.Actor, request.Header.Get("Idempotency-Key"))
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
 	writeJSON(writer, http.StatusAccepted, operation)
 }
 
-func (s *Server) handleDown(writer http.ResponseWriter, request *http.Request, project string, principal auth.Principal) {
+func (s *Server) handleDown(writer http.ResponseWriter, request *http.Request, project, environment string, principal auth.Principal) {
 	if request.Method != http.MethodPost {
 		methodNotAllowed(writer, http.MethodPost)
 		return
@@ -395,29 +524,71 @@ func (s *Server) handleDown(writer http.ResponseWriter, request *http.Request, p
 			return
 		}
 	}
-	operation, err := s.app.Down(request.Context(), project, principal.Actor, request.Header.Get("Idempotency-Key"), input.RemoveVolumes)
+	operation, err := s.app.Down(request.Context(), project, environment, principal.Actor, request.Header.Get("Idempotency-Key"), input.RemoveVolumes)
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
 	writeJSON(writer, http.StatusAccepted, operation)
 }
 
-func (s *Server) handleServices(writer http.ResponseWriter, request *http.Request, project string, segments []string, principal auth.Principal) {
-	current, err := s.app.Project(request.Context(), project)
-	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+func (s *Server) handleBindings(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if len(segments) != 5 || request.Method != http.MethodPut {
+		methodNotAllowed(writer, http.MethodPut)
 		return
 	}
-	if len(segments) == 3 && request.Method == http.MethodGet {
+	var binding model.ComponentBinding
+	if err := decodeJSON(request, &binding); err != nil {
+		writeDecodeError(writer, err)
+		return
+	}
+	result, err := s.app.SetBinding(request.Context(), project, environment, segments[4], binding)
+	if err != nil {
+		s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "service": segments[4]})
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleSources(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if len(segments) != 5 || request.Method != http.MethodPut {
+		methodNotAllowed(writer, http.MethodPut)
+		return
+	}
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeDecodeError(writer, err)
+		return
+	}
+	if input.Path == "" {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "PATH_REQUIRED", Message: "source path is required"})
+		return
+	}
+	result, warnings, err := s.app.SetSource(request.Context(), project, environment, segments[4], input.Path)
+	if err != nil {
+		s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "source": segments[4]})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"environment": result, "warnings": nonNil(warnings)})
+}
+
+func (s *Server) handleServices(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string, principal auth.Principal) {
+	current, err := s.app.Environment(request.Context(), project, environment)
+	if err != nil {
+		s.writeError(writer, err, environmentSubject(project, environment))
+		return
+	}
+	if len(segments) == 4 && request.Method == http.MethodGet {
 		writeJSON(writer, http.StatusOK, map[string]any{"services": nonNil(current.Services)})
 		return
 	}
-	if len(segments) < 4 {
+	if len(segments) < 5 {
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "service route not found"})
 		return
 	}
-	serviceName := segments[3]
+	serviceName := segments[4]
 	var selected *model.Service
 	for index := range current.Services {
 		if strings.EqualFold(current.Services[index].Name, serviceName) {
@@ -426,31 +597,31 @@ func (s *Server) handleServices(writer http.ResponseWriter, request *http.Reques
 		}
 	}
 	if selected == nil {
-		s.writeError(writer, store.ErrNotFound, map[string]any{"project": project, "service": serviceName})
+		s.writeError(writer, store.ErrNotFound, map[string]any{"project": project, "environment": environment, "service": serviceName})
 		return
 	}
-	if len(segments) == 4 && request.Method == http.MethodGet {
+	if len(segments) == 5 && request.Method == http.MethodGet {
 		writeJSON(writer, http.StatusOK, selected)
 		return
 	}
-	if len(segments) == 5 && segments[4] == "configuration" && request.Method == http.MethodGet {
+	if len(segments) == 6 && segments[5] == "configuration" && request.Method == http.MethodGet {
 		writeJSON(writer, http.StatusOK, maskedConfiguration(selected.ServiceDefinition))
 		return
 	}
-	if len(segments) == 5 && request.Method == http.MethodPost {
+	if len(segments) == 6 && request.Method == http.MethodPost {
 		var operation model.Operation
 		var actionErr error
-		switch segments[4] {
+		switch segments[5] {
 		case "start", "restart":
-			operation, actionErr = s.app.RestartService(request.Context(), project, serviceName, principal.Actor)
+			operation, actionErr = s.app.RestartService(request.Context(), project, environment, serviceName, principal.Actor)
 		case "stop":
-			operation, actionErr = s.app.StopService(request.Context(), project, serviceName, principal.Actor)
+			operation, actionErr = s.app.StopService(request.Context(), project, environment, serviceName, principal.Actor)
 		default:
 			writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "service action not found"})
 			return
 		}
 		if actionErr != nil {
-			s.writeError(writer, actionErr, map[string]any{"project": project, "service": serviceName})
+			s.writeError(writer, actionErr, map[string]any{"project": project, "environment": environment, "service": serviceName})
 			return
 		}
 		writeJSON(writer, http.StatusAccepted, operation)
@@ -459,34 +630,34 @@ func (s *Server) handleServices(writer http.ResponseWriter, request *http.Reques
 	writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "service route not found"})
 }
 
-func (s *Server) handleConnections(writer http.ResponseWriter, request *http.Request, project string, segments []string) {
+func (s *Server) handleConnections(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	definition, err := s.app.ProjectModel(request.Context(), project)
+	current, err := s.app.Environment(request.Context(), project, environment)
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
-	if len(segments) == 3 {
-		writeJSON(writer, http.StatusOK, map[string]any{"connections": nonNil(definition.Connections)})
+	if len(segments) == 4 {
+		writeJSON(writer, http.StatusOK, map[string]any{"connections": nonNil(current.Connections)})
 		return
 	}
-	if len(segments) == 5 {
-		for _, connection := range definition.Connections {
-			if connection.Source == segments[3] && connection.Target == segments[4] {
+	if len(segments) == 6 {
+		for _, connection := range current.Connections {
+			if connection.Source == segments[4] && connection.Target == segments[5] {
 				writeJSON(writer, http.StatusOK, connection)
 				return
 			}
 		}
-		s.writeError(writer, store.ErrNotFound, map[string]any{"project": project, "source": segments[3], "target": segments[4]})
+		s.writeError(writer, store.ErrNotFound, environmentSubject(project, environment))
 		return
 	}
 	writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "connection route not found"})
 }
 
-func (s *Server) handleLogs(writer http.ResponseWriter, request *http.Request, project string) {
+func (s *Server) handleLogs(writer http.ResponseWriter, request *http.Request, project, environment string) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
 		return
@@ -496,28 +667,28 @@ func (s *Server) handleLogs(writer http.ResponseWriter, request *http.Request, p
 		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "SERVICE_REQUIRED", Message: "the service query parameter is required"})
 		return
 	}
-	lines, err := s.app.Logs(request.Context(), project, service, queryInt(request, "limit", 500))
+	lines, err := s.app.Logs(request.Context(), project, environment, service, queryInt(request, "limit", 500))
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project, "service": service})
+		s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "service": service})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"project": project, "service": service, "lines": nonNil(lines)})
+	writeJSON(writer, http.StatusOK, map[string]any{"project": project, "environment": environment, "service": service, "lines": nonNil(lines)})
 }
 
-func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request, project string, segments []string) {
+func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	if len(segments) < 4 || (segments[3] != "http" && segments[3] != "tcp") {
+	if len(segments) < 5 || (segments[4] != "http" && segments[4] != "tcp") {
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "traffic route not found"})
 		return
 	}
 	protocol := model.ProtocolHTTP
-	if segments[3] == "tcp" {
+	if segments[4] == "tcp" {
 		protocol = model.ProtocolTCP
 	}
-	all := s.app.Traffic(project, queryInt(request, "limit", 250))
+	all := s.app.Traffic(project, environment, queryInt(request, "limit", 250))
 	filtered := make([]model.TrafficEvent, 0, len(all))
 	for _, event := range all {
 		isHTTP := event.Protocol == model.ProtocolHTTP
@@ -525,8 +696,8 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 			filtered = append(filtered, event)
 		}
 	}
-	if len(segments) == 5 {
-		sequence, err := strconv.ParseInt(segments[4], 10, 64)
+	if len(segments) == 6 {
+		sequence, err := strconv.ParseInt(segments[5], 10, 64)
 		if err != nil {
 			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_TRAFFIC_SEQUENCE", Message: "traffic sequence must be an integer"})
 			return
@@ -537,13 +708,13 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 				return
 			}
 		}
-		s.writeError(writer, store.ErrNotFound, map[string]any{"project": project, "sequence": sequence})
+		s.writeError(writer, store.ErrNotFound, environmentSubject(project, environment))
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"traffic": filtered})
 }
 
-func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request, project string) {
+func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request, project, environment string) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
 		return
@@ -553,15 +724,16 @@ func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request,
 		writeAPIError(writer, http.StatusInternalServerError, APIError{Code: "STREAM_UNAVAILABLE", Message: "streaming is unavailable"})
 		return
 	}
-	if _, err := s.app.Project(request.Context(), project); err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+	if _, err := s.app.Environment(request.Context(), project, environment); err != nil {
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("X-Accel-Buffering", "no")
 	topics := request.URL.Query()["topic"]
-	subscription := s.app.Broker().Subscribe(request.Context(), project, topics)
+	scope := model.EnvironmentSelector(project, environment)
+	subscription := s.app.Broker().Subscribe(request.Context(), scope, topics)
 	defer subscription.Close()
 	_, _ = io.WriteString(writer, "event: stream.ready\ndata: {\"ready\":true}\n\n")
 	flusher.Flush()
@@ -585,14 +757,14 @@ func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request,
 	}
 }
 
-func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Request, project string, segments []string, principal auth.Principal) {
+func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string, principal auth.Principal) {
 	ctx := request.Context()
-	if len(segments) == 3 {
+	if len(segments) == 4 {
 		switch request.Method {
 		case http.MethodGet:
-			recordings, err := s.app.Recordings(ctx, project)
+			recordings, err := s.app.Recordings(ctx, project, environment)
 			if err != nil {
-				s.writeError(writer, err, map[string]any{"project": project})
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writeJSON(writer, http.StatusOK, map[string]any{"recordings": nonNil(recordings)})
@@ -602,10 +774,10 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 				writeDecodeError(writer, err)
 				return
 			}
-			recording.Project = project
+			recording.Project, recording.Environment = project, environment
 			created, err := s.app.StartRecording(ctx, recording, principal.Actor)
 			if err != nil {
-				s.writeError(writer, err, map[string]any{"project": project, "recording": recording.Name})
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writeJSON(writer, http.StatusCreated, created)
@@ -614,23 +786,23 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 		}
 		return
 	}
-	if len(segments) < 4 {
+	if len(segments) < 5 {
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "recording route not found"})
 		return
 	}
-	name := segments[3]
-	if len(segments) == 4 {
+	name := segments[4]
+	if len(segments) == 5 {
 		switch request.Method {
 		case http.MethodGet:
-			recording, err := findRecording(ctx, s.app, project, name)
+			recording, err := findRecording(ctx, s.app, project, environment, name)
 			if err != nil {
-				s.writeError(writer, err, map[string]any{"project": project, "recording": name})
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writeJSON(writer, http.StatusOK, recording)
 		case http.MethodDelete:
-			if err := s.app.DeleteRecording(ctx, project, name, principal.Actor); err != nil {
-				s.writeError(writer, err, map[string]any{"project": project, "recording": name})
+			if err := s.app.DeleteRecording(ctx, project, environment, name, principal.Actor); err != nil {
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writer.WriteHeader(http.StatusNoContent)
@@ -639,36 +811,36 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 		}
 		return
 	}
-	if len(segments) == 5 && segments[4] == "stop" && request.Method == http.MethodPost {
-		if err := s.app.StopRecording(ctx, project, name, principal.Actor); err != nil {
-			s.writeError(writer, err, map[string]any{"project": project, "recording": name})
+	if len(segments) == 6 && segments[5] == "stop" && request.Method == http.MethodPost {
+		if err := s.app.StopRecording(ctx, project, environment, name, principal.Actor); err != nil {
+			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
-		recording, _ := findRecording(ctx, s.app, project, name)
+		recording, _ := findRecording(ctx, s.app, project, environment, name)
 		writeJSON(writer, http.StatusOK, recording)
 		return
 	}
-	if len(segments) == 5 && segments[4] == "export" && request.Method == http.MethodGet {
-		traffic, err := s.app.RecordedTraffic(ctx, project, name, 10_000)
+	if len(segments) == 6 && segments[5] == "export" && request.Method == http.MethodGet {
+		traffic, err := s.app.RecordedTraffic(ctx, project, environment, name, 10_000)
 		if err != nil {
-			s.writeError(writer, err, map[string]any{"project": project, "recording": name})
+			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
 		writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.json"`, name))
-		writeJSON(writer, http.StatusOK, map[string]any{"schemaVersion": 1, "project": project, "recording": name, "traffic": traffic})
+		writeJSON(writer, http.StatusOK, map[string]any{"schemaVersion": 1, "project": project, "environment": environment, "recording": name, "traffic": traffic})
 		return
 	}
 	writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "recording route not found"})
 }
 
-func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request, project string, segments []string, principal auth.Principal) {
+func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string, principal auth.Principal) {
 	ctx := request.Context()
-	if len(segments) == 3 {
+	if len(segments) == 4 {
 		switch request.Method {
 		case http.MethodGet:
-			faults, err := s.app.Faults(ctx, project)
+			faults, err := s.app.Faults(ctx, project, environment)
 			if err != nil {
-				s.writeError(writer, err, map[string]any{"project": project})
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writeJSON(writer, http.StatusOK, map[string]any{"faults": nonNil(faults)})
@@ -678,10 +850,10 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 				writeDecodeError(writer, err)
 				return
 			}
-			fault.Project = project
+			fault.Project, fault.Environment = project, environment
 			created, err := s.app.CreateFault(ctx, fault, principal.Actor)
 			if err != nil {
-				s.writeError(writer, err, map[string]any{"project": project, "fault": fault.Name})
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writeJSON(writer, http.StatusCreated, created)
@@ -690,29 +862,29 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 		}
 		return
 	}
-	if len(segments) == 4 && segments[3] == "disable-all" && request.Method == http.MethodPost {
-		count, err := s.app.DisableAllFaults(ctx, project, principal.Actor)
+	if len(segments) == 5 && segments[4] == "disable-all" && request.Method == http.MethodPost {
+		count, err := s.app.DisableAllFaults(ctx, project, environment, principal.Actor)
 		if err != nil {
-			s.writeError(writer, err, map[string]any{"project": project})
+			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
 		writeJSON(writer, http.StatusOK, map[string]any{"disabled": count})
 		return
 	}
-	if len(segments) == 4 {
-		name := segments[3]
+	if len(segments) == 5 {
+		name := segments[4]
 		if request.Method == http.MethodGet {
-			fault, err := findFault(ctx, s.app, project, name)
+			fault, err := findFault(ctx, s.app, project, environment, name)
 			if err != nil {
-				s.writeError(writer, err, map[string]any{"project": project, "fault": name})
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writeJSON(writer, http.StatusOK, fault)
 			return
 		}
 		if request.Method == http.MethodDelete {
-			if err := s.app.DisableFault(ctx, project, name, principal.Actor); err != nil {
-				s.writeError(writer, err, map[string]any{"project": project, "fault": name})
+			if err := s.app.DisableFault(ctx, project, environment, name, principal.Actor); err != nil {
+				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
 			writer.WriteHeader(http.StatusNoContent)
@@ -722,45 +894,45 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 	writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "fault route not found"})
 }
 
-func (s *Server) handleOperations(writer http.ResponseWriter, request *http.Request, project string, segments []string) {
-	if request.Method == http.MethodGet && len(segments) == 3 {
-		operations, err := s.app.Operations(request.Context(), project, queryInt(request, "limit", 100))
+func (s *Server) handleOperations(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if request.Method == http.MethodGet && len(segments) == 4 {
+		operations, err := s.app.Operations(request.Context(), project, environment, queryInt(request, "limit", 100))
 		if err != nil {
-			s.writeError(writer, err, map[string]any{"project": project})
+			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
 		writeJSON(writer, http.StatusOK, map[string]any{"operations": nonNil(operations)})
 		return
 	}
-	if request.Method != http.MethodGet || len(segments) < 4 {
+	if request.Method != http.MethodGet || len(segments) < 5 {
 		writeAPIError(writer, http.StatusNotImplemented, APIError{Code: "OPERATION_CANCEL_UNAVAILABLE", Message: "operation cancellation is not available after execution has begun"})
 		return
 	}
-	number, err := strconv.ParseInt(segments[3], 10, 64)
+	number, err := strconv.ParseInt(segments[4], 10, 64)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_OPERATION_NUMBER", Message: "operation number must be an integer"})
 		return
 	}
-	operation, err := s.app.Operation(request.Context(), project, number)
+	operation, err := s.app.Operation(request.Context(), project, environment, number)
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project, "number": number})
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
-	if len(segments) == 5 && segments[4] == "events" {
+	if len(segments) == 6 && segments[5] == "events" {
 		writeJSON(writer, http.StatusOK, map[string]any{"events": nonNil(operation.Events)})
 		return
 	}
 	writeJSON(writer, http.StatusOK, operation)
 }
 
-func (s *Server) handleTimeline(writer http.ResponseWriter, request *http.Request, project string) {
+func (s *Server) handleTimeline(writer http.ResponseWriter, request *http.Request, project, environment string) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	events, err := s.app.Timeline(request.Context(), project, queryInt(request, "limit", 250))
+	events, err := s.app.Timeline(request.Context(), project, environment, queryInt(request, "limit", 250))
 	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project})
+		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"timeline": nonNil(events)})
@@ -866,15 +1038,15 @@ func isControlHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "portless.localhost"
 }
 
-func applicationHost(host string) (service, project string, ok bool) {
+func applicationHost(host string) (service, environment, project string, ok bool) {
 	if !strings.HasSuffix(host, ".localhost") || host == "portless.localhost" {
-		return "", "", false
+		return "", "", "", false
 	}
 	labels := strings.Split(strings.TrimSuffix(host, ".localhost"), ".")
-	if len(labels) != 2 || model.ValidateServiceName(labels[0]) != nil || model.ValidateProjectName(labels[1]) != nil {
-		return "", "", false
+	if len(labels) != 3 || model.ValidateServiceName(labels[0]) != nil || model.ValidateEnvironmentName(labels[1]) != nil || model.ValidateProjectName(labels[2]) != nil {
+		return "", "", "", false
 	}
-	return labels[0], labels[1], true
+	return labels[0], labels[1], labels[2], true
 }
 
 func splitPath(path string) []string {
@@ -912,8 +1084,8 @@ func nonNil[T any](items []T) []T {
 	return items
 }
 
-func findRecording(ctx context.Context, app *application.Service, project, name string) (model.Recording, error) {
-	items, err := app.Recordings(ctx, project)
+func findRecording(ctx context.Context, app *application.Service, project, environment, name string) (model.Recording, error) {
+	items, err := app.Recordings(ctx, project, environment)
 	if err != nil {
 		return model.Recording{}, err
 	}
@@ -925,8 +1097,8 @@ func findRecording(ctx context.Context, app *application.Service, project, name 
 	return model.Recording{}, store.ErrNotFound
 }
 
-func findFault(ctx context.Context, app *application.Service, project, name string) (model.FaultRule, error) {
-	items, err := app.Faults(ctx, project)
+func findFault(ctx context.Context, app *application.Service, project, environment, name string) (model.FaultRule, error) {
+	items, err := app.Faults(ctx, project, environment)
 	if err != nil {
 		return model.FaultRule{}, err
 	}
@@ -936,6 +1108,10 @@ func findFault(ctx context.Context, app *application.Service, project, name stri
 		}
 	}
 	return model.FaultRule{}, store.ErrNotFound
+}
+
+func environmentSubject(project, environment string) map[string]any {
+	return map[string]any{"project": project, "environment": environment}
 }
 
 func maskedConfiguration(definition model.ServiceDefinition) map[string]any {

@@ -29,7 +29,7 @@ func (r *fakeRuntime) StartHost(context.Context) ProbeResult {
 func (r *fakeRuntime) Start(context.Context, string, string, model.ServiceDefinition) (StartResult, error) {
 	return StartResult{}, nil
 }
-func (r *fakeRuntime) StopProject(context.Context, string, bool) error { return nil }
+func (r *fakeRuntime) StopEnvironment(context.Context, string, bool) error { return nil }
 func (r *fakeRuntime) StopService(context.Context, string, string) error {
 	return nil
 }

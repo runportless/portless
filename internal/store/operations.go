@@ -11,16 +11,16 @@ import (
 	"github.com/portless-run/portless/internal/model"
 )
 
-func (s *Store) CreateOperation(ctx context.Context, projectName, operationType, actor, idempotencyKey string) (model.Operation, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) CreateOperation(ctx context.Context, selector, operationType, actor, idempotencyKey string) (model.Operation, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return model.Operation{}, err
 	}
 	if idempotencyKey != "" {
 		var number int64
-		err := s.db.QueryRowContext(ctx, `SELECT number FROM operations WHERE project_key = ? AND idempotency_key = ?`, projectKey, idempotencyKey).Scan(&number)
+		err := s.db.QueryRowContext(ctx, `SELECT number FROM operations WHERE environment_key = ? AND idempotency_key = ?`, environmentKey, idempotencyKey).Scan(&number)
 		if err == nil {
-			return s.Operation(ctx, projectName, number)
+			return s.Operation(ctx, selector, number)
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return model.Operation{}, err
@@ -32,23 +32,24 @@ func (s *Store) CreateOperation(ctx context.Context, projectName, operationType,
 	}
 	defer tx.Rollback()
 	var number int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(number), 0) + 1 FROM operations WHERE project_key = ?`, projectKey).Scan(&number); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(number), 0) + 1 FROM operations WHERE environment_key = ?`, environmentKey).Scan(&number); err != nil {
 		return model.Operation{}, err
 	}
 	started := nowText()
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO operations(project_key, number, type, state, actor, started_at, idempotency_key)
-VALUES(?, ?, ?, 'running', ?, ?, ?)`, projectKey, number, operationType, actor, started, idempotencyKey); err != nil {
+INSERT INTO operations(environment_key, number, type, state, actor, started_at, idempotency_key)
+VALUES(?, ?, ?, 'running', ?, ?, ?)`, environmentKey, number, operationType, actor, started, idempotencyKey); err != nil {
 		return model.Operation{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Operation{}, err
 	}
-	return model.Operation{Project: projectName, Number: number, Type: operationType, State: "running", Actor: actor, StartedAt: parseTime(started)}, nil
+	project, environment := publicScope(selector)
+	return model.Operation{Project: project, Environment: environment, Number: number, Type: operationType, State: "running", Actor: actor, StartedAt: parseTime(started)}, nil
 }
 
-func (s *Store) AddOperationEvent(ctx context.Context, projectName string, operationNumber int64, event model.OperationEvent) (model.OperationEvent, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) AddOperationEvent(ctx context.Context, selector string, operationNumber int64, event model.OperationEvent) (model.OperationEvent, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return model.OperationEvent{}, err
 	}
@@ -62,13 +63,13 @@ func (s *Store) AddOperationEvent(ctx context.Context, projectName string, opera
 	}
 	if err := tx.QueryRowContext(ctx, `
 SELECT COALESCE(MAX(sequence), 0) + 1 FROM operation_events
-WHERE project_key = ? AND operation_number = ?`, projectKey, operationNumber).Scan(&event.Sequence); err != nil {
+WHERE environment_key = ? AND operation_number = ?`, environmentKey, operationNumber).Scan(&event.Sequence); err != nil {
 		return model.OperationEvent{}, err
 	}
 	payload, _ := json.Marshal(event.Payload)
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO operation_events(project_key, operation_number, sequence, timestamp, type, subject, message, payload_json)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, projectKey, operationNumber, event.Sequence,
+INSERT INTO operation_events(environment_key, operation_number, sequence, timestamp, type, subject, message, payload_json)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, operationNumber, event.Sequence,
 		event.Timestamp.Format(time.RFC3339Nano), event.Type, event.Subject, event.Message, payload); err != nil {
 		return model.OperationEvent{}, err
 	}
@@ -78,14 +79,14 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, projectKey, operationNumber, event.Sequence,
 	return event, nil
 }
 
-func (s *Store) CompleteOperation(ctx context.Context, projectName string, operationNumber int64, state, operationError string) error {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) CompleteOperation(ctx context.Context, selector string, operationNumber int64, state, operationError string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE operations SET state = ?, completed_at = ?, error = ?
-WHERE project_key = ? AND number = ?`, state, nowText(), operationError, projectKey, operationNumber)
+WHERE environment_key = ? AND number = ?`, state, nowText(), operationError, environmentKey, operationNumber)
 	if err != nil {
 		return err
 	}
@@ -96,8 +97,8 @@ WHERE project_key = ? AND number = ?`, state, nowText(), operationError, project
 	return nil
 }
 
-func (s *Store) Operation(ctx context.Context, projectName string, number int64) (model.Operation, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Operation(ctx context.Context, selector string, number int64) (model.Operation, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return model.Operation{}, err
 	}
@@ -106,16 +107,16 @@ func (s *Store) Operation(ctx context.Context, projectName string, number int64)
 	var completed sql.NullString
 	err = s.db.QueryRowContext(ctx, `
 SELECT type, state, actor, started_at, completed_at, error
-FROM operations WHERE project_key = ? AND number = ?`, projectKey, number).
+FROM operations WHERE environment_key = ? AND number = ?`, environmentKey, number).
 		Scan(&result.Type, &result.State, &result.Actor, &started, &completed, &result.Error)
 	if err != nil {
 		return model.Operation{}, mapSQLError(err)
 	}
-	result.Project = projectName
+	result.Project, result.Environment = publicScope(selector)
 	result.Number = number
 	result.StartedAt = parseTime(started)
 	result.CompletedAt = parseOptionalTime(completed)
-	events, err := s.OperationEvents(ctx, projectName, number)
+	events, err := s.OperationEvents(ctx, selector, number)
 	if err != nil {
 		return model.Operation{}, err
 	}
@@ -123,8 +124,8 @@ FROM operations WHERE project_key = ? AND number = ?`, projectKey, number).
 	return result, nil
 }
 
-func (s *Store) Operations(ctx context.Context, projectName string, limit int) ([]model.Operation, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Operations(ctx context.Context, selector string, limit int) ([]model.Operation, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +134,7 @@ func (s *Store) Operations(ctx context.Context, projectName string, limit int) (
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT number, type, state, actor, started_at, completed_at, error
-FROM operations WHERE project_key = ? ORDER BY number DESC LIMIT ?`, projectKey, limit)
+FROM operations WHERE environment_key = ? ORDER BY number DESC LIMIT ?`, environmentKey, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +147,7 @@ FROM operations WHERE project_key = ? ORDER BY number DESC LIMIT ?`, projectKey,
 		if err := rows.Scan(&operation.Number, &operation.Type, &operation.State, &operation.Actor, &started, &completed, &operation.Error); err != nil {
 			return nil, err
 		}
-		operation.Project = projectName
+		operation.Project, operation.Environment = publicScope(selector)
 		operation.StartedAt = parseTime(started)
 		operation.CompletedAt = parseOptionalTime(completed)
 		operation.Events = []model.OperationEvent{}
@@ -155,14 +156,14 @@ FROM operations WHERE project_key = ? ORDER BY number DESC LIMIT ?`, projectKey,
 	return result, rows.Err()
 }
 
-func (s *Store) OperationEvents(ctx context.Context, projectName string, number int64) ([]model.OperationEvent, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) OperationEvents(ctx context.Context, selector string, number int64) ([]model.OperationEvent, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, timestamp, type, subject, message, payload_json
-FROM operation_events WHERE project_key = ? AND operation_number = ? ORDER BY sequence`, projectKey, number)
+FROM operation_events WHERE environment_key = ? AND operation_number = ? ORDER BY sequence`, environmentKey, number)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +186,8 @@ FROM operation_events WHERE project_key = ? AND operation_number = ? ORDER BY se
 }
 
 func (s *Store) AddTimelineEvent(ctx context.Context, event model.TimelineEvent) (model.TimelineEvent, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, event.Project)
+	scope := scopeFromFields(event.Project, event.Environment)
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
 		return model.TimelineEvent{}, err
 	}
@@ -197,13 +199,13 @@ func (s *Store) AddTimelineEvent(ctx context.Context, event model.TimelineEvent)
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM timeline_events WHERE project_key = ?`, projectKey).Scan(&event.Sequence); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM timeline_events WHERE environment_key = ?`, environmentKey).Scan(&event.Sequence); err != nil {
 		return model.TimelineEvent{}, err
 	}
 	details, _ := json.Marshal(event.Details)
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO timeline_events(project_key, sequence, timestamp, actor, type, subject, severity, summary, details_json)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectKey, event.Sequence, event.Timestamp.Format(time.RFC3339Nano),
+INSERT INTO timeline_events(environment_key, sequence, timestamp, actor, type, subject, severity, summary, details_json)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, event.Sequence, event.Timestamp.Format(time.RFC3339Nano),
 		event.Actor, event.Type, event.Subject, event.Severity, event.Summary, details)
 	if err != nil {
 		return model.TimelineEvent{}, fmt.Errorf("insert timeline event: %w", err)
@@ -214,8 +216,8 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectKey, event.Sequence, event.Timestamp.
 	return event, nil
 }
 
-func (s *Store) Timeline(ctx context.Context, projectName string, limit int) ([]model.TimelineEvent, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Timeline(ctx context.Context, selector string, limit int) ([]model.TimelineEvent, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +226,7 @@ func (s *Store) Timeline(ctx context.Context, projectName string, limit int) ([]
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, timestamp, actor, type, subject, severity, summary, details_json
-FROM timeline_events WHERE project_key = ? ORDER BY sequence DESC LIMIT ?`, projectKey, limit)
+FROM timeline_events WHERE environment_key = ? ORDER BY sequence DESC LIMIT ?`, environmentKey, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +239,7 @@ FROM timeline_events WHERE project_key = ? ORDER BY sequence DESC LIMIT ?`, proj
 		if err := rows.Scan(&event.Sequence, &timestamp, &event.Actor, &event.Type, &event.Subject, &event.Severity, &event.Summary, &details); err != nil {
 			return nil, err
 		}
-		event.Project = projectName
+		event.Project, event.Environment = publicScope(selector)
 		event.Timestamp = parseTime(timestamp)
 		if len(details) > 0 {
 			_ = json.Unmarshal(details, &event.Details)

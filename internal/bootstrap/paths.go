@@ -39,7 +39,7 @@ func ResolvePaths(override string) (Paths, error) {
 		return Paths{}, errors.New("refusing to use a broad Portless data directory")
 	}
 	return Paths{
-		Root: root, Database: filepath.Join(root, "state.db"), Control: filepath.Join(root, "control.json"),
+		Root: root, Database: filepath.Join(root, "portless.db"), Control: filepath.Join(root, "control.json"),
 		DaemonLog: filepath.Join(root, "daemon.log"), Token: filepath.Join(root, "install.key"),
 		OwnershipKey: filepath.Join(root, "ownership.key"), Lock: filepath.Join(root, "daemon.lock"),
 		Ingress: filepath.Join(root, "ingress.sock"), Logs: filepath.Join(root, "logs"), Temporary: filepath.Join(root, "tmp"),

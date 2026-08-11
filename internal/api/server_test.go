@@ -17,15 +17,18 @@ import (
 	"github.com/portless-run/portless/internal/store"
 )
 
-func TestControlAndApplicationHostsAreSeparated(t *testing.T) {
+func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	data := t.TempDir()
-	controlStore, err := store.Open(filepath.Join(data, "state.db"))
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer controlStore.Close()
-	_, err = controlStore.CreateProject(context.Background(), "billing", "/tmp/api-fixture", model.ProjectModel{SuggestedName: "billing", PrimaryService: "checkout", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}}})
-	if err != nil {
+	definition := model.ProjectModel{SuggestedName: "billing", PrimaryService: "checkout", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}}}
+	if _, err := controlStore.CreateProject(context.Background(), "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(context.Background(), "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
 		t.Fatal(err)
 	}
 	authManager, err := auth.LoadOrCreate(filepath.Join(data, "install.key"))
@@ -40,80 +43,61 @@ func TestControlAndApplicationHostsAreSeparated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unauthenticated := httptest.NewRequest(http.MethodGet, "http://localhost:7331/api/v1/projects", nil)
-	unauthenticated.Host = "localhost:7331"
-	unauthenticatedResponse := httptest.NewRecorder()
-	server.ServeHTTP(unauthenticatedResponse, unauthenticated)
-	if unauthenticatedResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated control request returned %d", unauthenticatedResponse.Code)
+	unauthenticated := request(server, authManager, http.MethodGet, "/api/v1/projects", "", false)
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated control request returned %d", unauthenticated.Code)
+	}
+	projects := request(server, authManager, http.MethodGet, "/api/v1/projects", "", true)
+	if projects.Code != http.StatusOK || !strings.Contains(projects.Body.String(), `"name":"billing"`) || !strings.Contains(projects.Body.String(), `"environments":[`) {
+		t.Fatalf("projects response code=%d body=%s", projects.Code, projects.Body.String())
+	}
+	environment := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local", "", true)
+	if environment.Code != http.StatusOK || !strings.Contains(environment.Body.String(), `"project":"billing"`) || !strings.Contains(environment.Body.String(), `"name":"local"`) ||
+		!strings.Contains(environment.Body.String(), `"dashboardUrl":"http://portless.localhost/environments/billing/local"`) ||
+		!strings.Contains(environment.Body.String(), `"ingressUrl":"http://checkout.local.billing.localhost"`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
+		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
 
-	authenticated := httptest.NewRequest(http.MethodGet, "http://localhost:7331/api/v1/projects", nil)
-	authenticated.Host = "localhost:7331"
-	authenticated.Header.Set("Authorization", "Bearer "+authManager.Token())
-	authenticatedResponse := httptest.NewRecorder()
-	server.ServeHTTP(authenticatedResponse, authenticated)
-	if authenticatedResponse.Code != http.StatusOK || !strings.Contains(authenticatedResponse.Body.String(), `"name":"billing"`) {
-		t.Fatalf("authenticated response code=%d body=%s", authenticatedResponse.Code, authenticatedResponse.Body.String())
-	}
-	if strings.Contains(authenticatedResponse.Body.String(), `"trusted"`) || strings.Contains(authenticatedResponse.Body.String(), "review_required") {
-		t.Fatalf("removed trust state leaked through project API: %s", authenticatedResponse.Body.String())
-	}
-	if !strings.Contains(authenticatedResponse.Body.String(), `"dashboardUrl":"http://portless.localhost/projects/billing"`) ||
-		!strings.Contains(authenticatedResponse.Body.String(), `"ingressUrl":"http://checkout.billing.localhost"`) ||
-		strings.Contains(authenticatedResponse.Body.String(), ".localhost:7331") {
-		t.Fatalf("project API did not use clean localhost URLs: %s", authenticatedResponse.Body.String())
+	binding := request(server, authManager, http.MethodPut, "/api/v1/environments/billing/local/bindings/checkout", `{"provider":"remote","remote":{"url":"https://checkout.qa.example.test","classification":"qa","writePolicy":"read-only","healthPath":"/health"}}`, true)
+	if binding.Code != http.StatusOK || !strings.Contains(binding.Body.String(), `"provider":"remote"`) || !strings.Contains(binding.Body.String(), `"writePolicy":"read-only"`) {
+		t.Fatalf("remote binding response code=%d body=%s", binding.Code, binding.Body.String())
 	}
 
-	browserClaim := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/browser-claims", strings.NewReader(`{"next":"/projects/billing"}`))
-	browserClaim.Host = "127.0.0.1:7331"
-	browserClaim.Header.Set("Authorization", "Bearer "+authManager.Token())
-	browserClaimResponse := httptest.NewRecorder()
-	server.ServeHTTP(browserClaimResponse, browserClaim)
-	if browserClaimResponse.Code != http.StatusCreated || !strings.Contains(browserClaimResponse.Body.String(), `"url":"http://portless.localhost/auth/claim/`) || strings.Contains(browserClaimResponse.Body.String(), ":7331") {
-		t.Fatalf("browser claim did not use clean control origin: %d %s", browserClaimResponse.Code, browserClaimResponse.Body.String())
+	browserClaim := requestHost(server, authManager, http.MethodPost, "/api/v1/browser-claims", `{"next":"/environments/billing/local"}`, true, "127.0.0.1:7331")
+	if browserClaim.Code != http.StatusCreated || !strings.Contains(browserClaim.Body.String(), `"url":"http://portless.localhost/auth/claim/`) || strings.Contains(browserClaim.Body.String(), ":7331") {
+		t.Fatalf("browser claim did not use clean control origin: %d %s", browserClaim.Code, browserClaim.Body.String())
 	}
 
-	selectRuntime := httptest.NewRequest(http.MethodPut, "http://localhost:7331/api/v1/runtime", strings.NewReader(`{"preference":"podman"}`))
-	selectRuntime.Host = "localhost:7331"
-	selectRuntime.Header.Set("Authorization", "Bearer "+authManager.Token())
-	selectRuntimeResponse := httptest.NewRecorder()
-	server.ServeHTTP(selectRuntimeResponse, selectRuntime)
-	if selectRuntimeResponse.Code != http.StatusOK || !strings.Contains(selectRuntimeResponse.Body.String(), `"preference":"podman"`) || !strings.Contains(selectRuntimeResponse.Body.String(), `"candidates"`) {
-		t.Fatalf("runtime selection code=%d body=%s", selectRuntimeResponse.Code, selectRuntimeResponse.Body.String())
+	applicationAPI := requestHost(server, authManager, http.MethodGet, "/api/v1/projects", "", false, "checkout.local.billing.localhost")
+	if applicationAPI.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("application host reached control API: %d", applicationAPI.Code)
 	}
+	unknown := requestHost(server, authManager, http.MethodGet, "/api/v1/health", "", false, "malicious.example")
+	if unknown.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("unknown host returned %d", unknown.Code)
+	}
+}
 
-	invalidRuntime := httptest.NewRequest(http.MethodPut, "http://localhost:7331/api/v1/runtime", strings.NewReader(`{"preference":"compose"}`))
-	invalidRuntime.Host = "localhost:7331"
-	invalidRuntime.Header.Set("Authorization", "Bearer "+authManager.Token())
-	invalidRuntimeResponse := httptest.NewRecorder()
-	server.ServeHTTP(invalidRuntimeResponse, invalidRuntime)
-	if invalidRuntimeResponse.Code != http.StatusBadRequest {
-		t.Fatalf("invalid runtime returned %d: %s", invalidRuntimeResponse.Code, invalidRuntimeResponse.Body.String())
+func TestApplicationHostRequiresServiceEnvironmentProject(t *testing.T) {
+	if service, environment, project, ok := applicationHost("checkout.local.billing.localhost"); !ok || service != "checkout" || environment != "local" || project != "billing" {
+		t.Fatalf("canonical host parsed as %q %q %q %v", service, environment, project, ok)
 	}
+	if _, _, _, ok := applicationHost("checkout.billing.localhost"); ok {
+		t.Fatal("two-label application host should not be accepted")
+	}
+}
 
-	removedDraft := httptest.NewRequest(http.MethodGet, "http://localhost:7331/api/v1/projects/billing/draft", nil)
-	removedDraft.Host = "localhost:7331"
-	removedDraft.Header.Set("Authorization", "Bearer "+authManager.Token())
-	removedDraftResponse := httptest.NewRecorder()
-	server.ServeHTTP(removedDraftResponse, removedDraft)
-	if removedDraftResponse.Code != http.StatusNotFound {
-		t.Fatalf("removed draft API returned %d", removedDraftResponse.Code)
-	}
+func request(server *Server, authManager *auth.Manager, method, path, body string, authenticated bool) *httptest.ResponseRecorder {
+	return requestHost(server, authManager, method, path, body, authenticated, "localhost:7331")
+}
 
-	applicationAPI := httptest.NewRequest(http.MethodGet, "http://checkout.billing.localhost/api/v1/projects", nil)
-	applicationAPI.Host = "checkout.billing.localhost"
-	applicationResponse := httptest.NewRecorder()
-	server.ServeHTTP(applicationResponse, applicationAPI)
-	if applicationResponse.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("application host reached control API: %d", applicationResponse.Code)
+func requestHost(server *Server, authManager *auth.Manager, method, path, body string, authenticated bool, host string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, "http://"+host+path, strings.NewReader(body))
+	request.Host = host
+	if authenticated {
+		request.Header.Set("Authorization", "Bearer "+authManager.Token())
 	}
-
-	unknown := httptest.NewRequest(http.MethodGet, "http://malicious.example/api/v1/health", nil)
-	unknown.Host = "malicious.example"
-	unknownResponse := httptest.NewRecorder()
-	server.ServeHTTP(unknownResponse, unknown)
-	if unknownResponse.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("unknown host returned %d", unknownResponse.Code)
-	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
 }

@@ -81,7 +81,7 @@ func Discover(start string) (Result, error) {
 	if result.Model.PrimaryService == "" {
 		result.Model.PrimaryService = services[0].Name
 	}
-	needsPostgres, needsRedis, bindings := discoverDependencies(root, files, services, serviceNames)
+	needsPostgres, needsRedis, bindings, references := discoverDependencies(root, files, services, serviceNames)
 	if needsPostgres {
 		services = append(services, model.ServiceDefinition{
 			Name: "postgres", Kind: model.ServiceContainer, Template: "postgres", Version: "17", Required: true,
@@ -98,6 +98,7 @@ func Discover(start string) (Result, error) {
 	}
 	result.Model.Services = services
 	result.Model.Connections = uniqueConnections(bindings)
+	result.Model.References = uniqueReferences(references)
 	if err := Validate(result.Model); err != nil {
 		return Result{}, err
 	}
@@ -281,10 +282,11 @@ func discoverNode(root string, files []string) []model.ServiceDefinition {
 	return result
 }
 
-func discoverDependencies(root string, files []string, services []model.ServiceDefinition, names map[string]struct{}) (bool, bool, []model.Connection) {
+func discoverDependencies(root string, files []string, services []model.ServiceDefinition, names map[string]struct{}) (bool, bool, []model.Connection, []model.ConnectionReference) {
 	needsPostgres := false
 	needsRedis := false
 	var connections []model.Connection
+	var references []model.ConnectionReference
 	for _, path := range files {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -307,13 +309,31 @@ func discoverDependencies(root string, files []string, services []model.ServiceD
 			}
 		}
 		for _, match := range environmentURLPattern.FindAllStringSubmatch(string(content), -1) {
+			if managedDependencyURL(match[0]) {
+				continue
+			}
 			target := model.NormalizeDNSName(strings.ToLower(match[1]))
 			if _, ok := names[target]; ok && service != "" && service != target {
 				connections = append(connections, model.Connection{Source: service, Target: target, Protocol: model.ProtocolHTTP, Environment: match[0], Required: true})
+			} else if service != "" && service != target {
+				references = append(references, model.ConnectionReference{Source: service, TargetHint: target, Protocol: model.ProtocolHTTP, Environment: match[0], Required: true})
 			}
 		}
 	}
-	return needsPostgres, needsRedis, connections
+	return needsPostgres, needsRedis, connections, references
+}
+
+func managedDependencyURL(name string) bool {
+	name = strings.ToUpper(name)
+	if strings.Contains(name, "DATASOURCE") {
+		return true
+	}
+	for _, prefix := range []string{"DATABASE_", "POSTGRES_", "POSTGRESQL_", "REDIS_", "VALKEY_"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueServices(input []model.ServiceDefinition, warnings *[]string) []model.ServiceDefinition {
@@ -353,6 +373,25 @@ func uniqueConnections(input []model.Connection) []model.Connection {
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Source == result[j].Source {
 			return result[i].Target < result[j].Target
+		}
+		return result[i].Source < result[j].Source
+	})
+	return result
+}
+
+func uniqueReferences(input []model.ConnectionReference) []model.ConnectionReference {
+	seen := make(map[string]model.ConnectionReference)
+	for _, reference := range input {
+		key := reference.Source + "\x00" + reference.TargetHint + "\x00" + reference.Environment
+		seen[key] = reference
+	}
+	result := make([]model.ConnectionReference, 0, len(seen))
+	for _, reference := range seen {
+		result = append(result, reference)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Source == result[j].Source {
+			return result[i].TargetHint < result[j].TargetHint
 		}
 		return result[i].Source < result[j].Source
 	})

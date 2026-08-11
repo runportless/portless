@@ -1,11 +1,12 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 0.1.0
+  version: 0.2.0
   description: >-
-    Loopback API shared by the Portless CLI and embedded UI. Projects and nested
-    resources are addressed by readable names. Private database, ownership,
-    container, and run keys are intentionally absent from this contract.
+    Loopback-only API shared by the Portless CLI and embedded UI. Projects are
+    reusable application topologies. Environments are independently configured
+    and runnable instances. Public routes use readable project, environment,
+    service, and artifact names; private ownership keys are never exposed.
 servers:
   - url: http://portless.localhost/api/v1
 security:
@@ -18,21 +19,29 @@ paths:
       operationId: health
       responses:
         '200':
-          description: Protocol-compatible daemon readiness
+          description: Daemon readiness
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Health' }
+              schema:
+                type: object
+                required: [ready, apiVersion]
+                properties:
+                  ready: { type: boolean }
+                  apiVersion: { type: string }
   /system:
     get:
       operationId: system
-      responses: { '200': { description: Local system metadata } }
+      responses:
+        '200': { description: Local daemon metadata }
   /runtime:
     get:
       operationId: runtimeStatus
       responses:
         '200':
-          description: Selected container runtime and Docker/Podman availability
-          content: { application/json: { schema: { $ref: '#/components/schemas/RuntimeStatus' } } }
+          description: Docker/Podman selection and availability
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RuntimeStatus' }
     put:
       operationId: selectRuntime
       requestBody:
@@ -46,8 +55,10 @@ paths:
                 preference: { type: string, enum: [auto, docker, podman] }
       responses:
         '200':
-          description: Runtime preference persisted for this machine
-          content: { application/json: { schema: { $ref: '#/components/schemas/RuntimeStatus' } } }
+          description: Persisted runtime preference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RuntimeStatus' }
         '409': { $ref: '#/components/responses/Conflict' }
   /runtime/start:
     post:
@@ -58,7 +69,7 @@ paths:
   /browser-claims:
     post:
       operationId: createBrowserClaim
-      description: CLI bearer authentication only. The returned code is single-use and expires in 60 seconds.
+      description: CLI bearer authentication only; claims are single-use and short-lived.
       requestBody:
         required: true
         content:
@@ -66,54 +77,58 @@ paths:
             schema:
               type: object
               required: [next]
-              properties: { next: { type: string, example: /projects/billing } }
+              properties:
+                next: { type: string, example: /environments/billing/local }
       responses:
-        '201':
-          description: Short-lived browser claim URL
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [url, expiresAt]
-                properties:
-                  url: { type: string, format: uri }
-                  expiresAt: { type: string, format: date-time }
+        '201': { description: Browser claim URL and expiry }
   /session:
     get:
       operationId: session
       responses:
-        '200':
-          description: Current CLI or UI principal
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [actor, browser, csrf]
-                properties:
-                  actor: { type: string, enum: [CLI, UI] }
-                  browser: { type: boolean }
-                  csrf: { type: string, description: Empty for bearer-authenticated CLI calls. }
+        '200': { description: Current CLI or browser principal and CSRF token }
   /session/logout:
     post:
       operationId: logout
-      responses: { '204': { description: Browser session removed } }
+      responses:
+        '204': { description: Browser session removed }
   /projects:
     get:
       operationId: listProjects
       responses:
         '200':
-          description: Machine-local projects
+          description: Logical projects with environment summaries
           content:
             application/json:
               schema:
                 type: object
                 required: [projects]
                 properties:
-                  projects: { type: array, items: { $ref: '#/components/schemas/Project' } }
+                  projects:
+                    type: array
+                    items: { $ref: '#/components/schemas/Project' }
+    post:
+      operationId: createProject
+      description: Discover and combine one or more named source checkouts, then create the local environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, sources]
+              properties:
+                name: { $ref: '#/components/schemas/ProjectName' }
+                sources:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/SourceInput' }
+      responses:
+        '201': { description: Project, initial environment, and discovery warnings }
+        '409': { $ref: '#/components/responses/Conflict' }
   /projects/discover:
     post:
       operationId: discoverProject
-      description: CLI-only static discovery. Does not execute a project command.
+      description: CLI-only single-checkout discovery used by bare `portless up`.
       requestBody:
         required: true
         content:
@@ -122,26 +137,21 @@ paths:
               type: object
               required: [path]
               properties:
-                path: { type: string }
+                path: { type: string, description: Absolute checkout path from the CLI process. }
                 name: { $ref: '#/components/schemas/ProjectName' }
       responses:
-        '200':
-          description: Existing or newly reserved project
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [project, warnings]
-                properties:
-                  project: { $ref: '#/components/schemas/Project' }
-                  warnings: { type: array, items: { type: string } }
-        '409': { $ref: '#/components/responses/Conflict' }
+        '200': { description: Existing or newly created project and local environment }
   /projects/{projectName}:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
     get:
       operationId: getProject
       responses:
-        '200': { description: Project snapshot, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '200':
+          description: Logical topology and environment summaries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       operationId: renameProject
@@ -156,23 +166,108 @@ paths:
                 name: { $ref: '#/components/schemas/ProjectName' }
                 revision: { type: integer, format: int64 }
       responses:
-        '200': { description: Renamed stopped project, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '200': { description: Renamed project; all environments must be stopped }
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: forgetProject
-      responses: { '204': { description: Stopped project metadata forgotten } }
-  /projects/{projectName}/rescan:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    post:
-      operationId: rescanProject
-      responses: { '200': { description: Refreshed model for a stopped project } }
+      responses:
+        '204': { description: Stopped project and all environment metadata forgotten }
   /projects/{projectName}/declaration:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
     get:
       operationId: exportProjectDeclaration
-      responses: { '200': { description: Generated portless.project.json } }
-  /projects/{projectName}/up:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
+      responses:
+        '200': { description: Generated portless.project.json }
+  /environments:
+    get:
+      operationId: listEnvironments
+      parameters:
+        - in: query
+          name: project
+          schema: { $ref: '#/components/schemas/ProjectName' }
+      responses:
+        '200':
+          description: Environments across all projects or one filtered project
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [environments]
+                properties:
+                  environments:
+                    type: array
+                    items: { $ref: '#/components/schemas/Environment' }
+    post:
+      operationId: cloneEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project, name]
+              properties:
+                project: { $ref: '#/components/schemas/ProjectName' }
+                name: { $ref: '#/components/schemas/EnvironmentName' }
+                from: { $ref: '#/components/schemas/EnvironmentName', default: local }
+      responses:
+        '201':
+          description: New stopped environment with copied source and provider configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+  /environments/resolve:
+    get:
+      operationId: resolveEnvironmentForPath
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string, description: Absolute checkout path. }
+      responses:
+        '200': { description: Selected environment, or all environments containing the checkout }
+  /environments/select:
+    put:
+      operationId: selectEnvironmentForPath
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, project, environment]
+              properties:
+                path: { type: string, description: Absolute checkout path. }
+                project: { $ref: '#/components/schemas/ProjectName' }
+                environment: { $ref: '#/components/schemas/EnvironmentName' }
+      responses:
+        '204': { description: Checkout context selection persisted }
+  /environments/{projectName}/{environmentName}:
+    parameters: &environmentParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+    get:
+      operationId: getEnvironment
+      responses:
+        '200':
+          description: Effective sources, providers, topology, and runtime state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: forgetEnvironment
+      responses:
+        '204': { description: Stopped environment metadata forgotten }
+  /environments/{projectName}/{environmentName}/rescan:
+    parameters: *environmentParameters
+    post:
+      operationId: rescanEnvironment
+      responses:
+        '200': { description: Refreshed all source discovery and recompiled topology }
+  /environments/{projectName}/{environmentName}/up:
+    parameters: *environmentParameters
     post:
       operationId: up
       parameters:
@@ -180,10 +275,13 @@ paths:
           name: Idempotency-Key
           schema: { type: string, maxLength: 200 }
       responses:
-        '202': { description: Durable startup operation, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /projects/{projectName}/down:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
+        '202':
+          description: Durable startup operation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/down:
+    parameters: *environmentParameters
     post:
       operationId: down
       requestBody:
@@ -191,129 +289,218 @@ paths:
           application/json:
             schema:
               type: object
-              properties: { removeVolumes: { type: boolean, default: false } }
+              properties:
+                removeVolumes: { type: boolean, default: false }
       responses:
-        '202': { description: Durable shutdown operation, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
-  /projects/{projectName}/services:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
+        '202':
+          description: Durable shutdown operation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/bindings/{serviceName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/ServiceName' }
+    put:
+      operationId: setComponentProvider
+      description: Environment must be stopped. The service field, if present, is replaced by the path service name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComponentBinding' }
+      responses:
+        '200':
+          description: Recompiled environment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+  /environments/{projectName}/{environmentName}/sources/{sourceName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/SourceName' }
+    put:
+      operationId: setEnvironmentSourcePath
+      description: Re-discovers a checkout or Git worktree and recompiles the stopped environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: Absolute checkout or worktree path. }
+      responses:
+        '200': { description: Recompiled environment and discovery warnings }
+  /environments/{projectName}/{environmentName}/services:
+    parameters: *environmentParameters
     get:
       operationId: listServices
       responses:
-        '200':
-          description: Named project services
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [services]
-                properties: { services: { type: array, items: { $ref: '#/components/schemas/Service' } } }
-  /projects/{projectName}/services/{serviceName}:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/ServiceName' } ]
+        '200': { description: Effective service runtime snapshots }
+  /environments/{projectName}/{environmentName}/services/{serviceName}:
+    parameters: &serviceParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/ServiceName' }
     get:
       operationId: getService
-      responses: { '200': { description: Service snapshot, content: { application/json: { schema: { $ref: '#/components/schemas/Service' } } } } }
-  /projects/{projectName}/services/{serviceName}/start:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/ServiceName' } ]
-    post: { operationId: startService, responses: { '202': { description: Service operation accepted } } }
-  /projects/{projectName}/services/{serviceName}/stop:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/ServiceName' } ]
-    post: { operationId: stopService, responses: { '202': { description: Service operation accepted } } }
-  /projects/{projectName}/services/{serviceName}/restart:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/ServiceName' } ]
-    post: { operationId: restartService, responses: { '202': { description: Service operation accepted } } }
-  /projects/{projectName}/services/{serviceName}/configuration:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/ServiceName' } ]
-    get: { operationId: serviceConfiguration, responses: { '200': { description: Masked effective configuration } } }
-  /projects/{projectName}/connections:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
+      responses:
+        '200': { description: Service runtime snapshot }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/start:
+    parameters: *serviceParameters
+    post:
+      operationId: startService
+      responses:
+        '202': { description: Service operation accepted }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/stop:
+    parameters: *serviceParameters
+    post:
+      operationId: stopService
+      responses:
+        '202': { description: Service operation accepted }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/restart:
+    parameters: *serviceParameters
+    post:
+      operationId: restartService
+      responses:
+        '202': { description: Service operation accepted }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/configuration:
+    parameters: *serviceParameters
+    get:
+      operationId: serviceConfiguration
+      responses:
+        '200': { description: Masked static configuration }
+  /environments/{projectName}/{environmentName}/connections:
+    parameters: *environmentParameters
     get:
       operationId: listConnections
       responses:
-        '200':
-          description: Ordered source/target edges
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { connections: { type: array, items: { $ref: '#/components/schemas/Connection' } } }
-  /projects/{projectName}/logs:
+        '200': { description: Effective source/target edges }
+  /environments/{projectName}/{environmentName}/logs:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
       - in: query
         name: service
         required: true
         schema: { $ref: '#/components/schemas/ServiceName' }
-    get: { operationId: serviceLogs, responses: { '200': { description: Bounded merged stdout/stderr lines } } }
-  /projects/{projectName}/traffic/http:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
     get:
-      operationId: httpTraffic
+      operationId: serviceLogs
       responses:
-        '200':
-          description: Newest-first bounded live HTTP summaries
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { traffic: { type: array, items: { $ref: '#/components/schemas/TrafficEvent' } } }
-  /projects/{projectName}/traffic/tcp:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    get: { operationId: tcpTraffic, responses: { '200': { description: Newest-first bounded TCP summaries } } }
-  /projects/{projectName}/stream:
+        '200': { description: Bounded merged stdout/stderr lines }
+  /environments/{projectName}/{environmentName}/traffic/{protocol}:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
-      - in: query
-        name: topic
-        schema: { type: array, items: { type: string } }
-        style: form
-        explode: true
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: path
+        name: protocol
+        required: true
+        schema: { type: string, enum: [http, tcp] }
     get:
-      operationId: projectStream
+      operationId: traffic
+      responses:
+        '200': { description: Newest-first bounded traffic summaries }
+  /environments/{projectName}/{environmentName}/stream:
+    parameters: *environmentParameters
+    get:
+      operationId: environmentStream
+      parameters:
+        - in: query
+          name: topic
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
       responses:
         '200': { description: text/event-stream; see api/events.md }
-  /projects/{projectName}/recordings:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    get: { operationId: listRecordings, responses: { '200': { description: Named project recordings } } }
+  /environments/{projectName}/{environmentName}/recordings:
+    parameters: *environmentParameters
+    get:
+      operationId: listRecordings
+      responses:
+        '200': { description: Environment recordings }
     post:
       operationId: startRecording
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: '#/components/schemas/RecordingInput' } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordingInput' }
       responses:
-        '201': { description: Effective bounded recording, content: { application/json: { schema: { $ref: '#/components/schemas/Recording' } } } }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /projects/{projectName}/recordings/{recordingName}:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/RecordingName' } ]
-    get: { operationId: getRecording, responses: { '200': { description: Recording } } }
-    delete: { operationId: deleteRecording, responses: { '204': { description: Completed recording deleted } } }
-  /projects/{projectName}/recordings/{recordingName}/stop:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/RecordingName' } ]
-    post: { operationId: stopRecording, responses: { '200': { description: Completed recording } } }
-  /projects/{projectName}/recordings/{recordingName}/export:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/RecordingName' } ]
-    get: { operationId: exportRecording, responses: { '200': { description: Portless JSON recording export } } }
-  /projects/{projectName}/faults:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    get: { operationId: listFaults, responses: { '200': { description: Named project fault rules } } }
+        '201': { description: Active bounded recording }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}:
+    parameters: &recordingParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/RecordingName' }
+    get:
+      operationId: getRecording
+      responses:
+        '200': { description: Recording metadata }
+    delete:
+      operationId: deleteRecording
+      responses:
+        '204': { description: Completed recording deleted }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}/stop:
+    parameters: *recordingParameters
+    post:
+      operationId: stopRecording
+      responses:
+        '200': { description: Completed recording }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}/export:
+    parameters: *recordingParameters
+    get:
+      operationId: exportRecording
+      responses:
+        '200': { description: Portless JSON recording export }
+  /environments/{projectName}/{environmentName}/faults:
+    parameters: *environmentParameters
+    get:
+      operationId: listFaults
+      responses:
+        '200': { description: Environment fault rules }
     post:
       operationId: createFault
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: '#/components/schemas/FaultInput' } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FaultInput' }
       responses:
-        '201': { description: Enabled rule and effective scope, content: { application/json: { schema: { $ref: '#/components/schemas/FaultRule' } } } }
-  /projects/{projectName}/faults/{faultName}:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/FaultName' } ]
-    get: { operationId: getFault, responses: { '200': { description: Fault rule } } }
-    delete: { operationId: disableFault, responses: { '204': { description: Rule disabled; audit history retained } } }
-  /projects/{projectName}/faults/disable-all:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    post: { operationId: disableAllFaults, responses: { '200': { description: Active rules disabled atomically } } }
-  /projects/{projectName}/operations:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    get: { operationId: listOperations, responses: { '200': { description: Newest-first project-local operations } } }
-  /projects/{projectName}/operations/{operationNumber}:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/OperationNumber' } ]
+        '201': { description: Enabled fault rule }
+  /environments/{projectName}/{environmentName}/faults/{faultName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/FaultName' }
+    get:
+      operationId: getFault
+      responses:
+        '200': { description: Fault rule }
+    delete:
+      operationId: disableFault
+      responses:
+        '204': { description: Rule disabled; audit history retained }
+  /environments/{projectName}/{environmentName}/faults/disable-all:
+    parameters: *environmentParameters
+    post:
+      operationId: disableAllFaults
+      responses:
+        '200': { description: Active rules disabled atomically }
+  /environments/{projectName}/{environmentName}/operations:
+    parameters: *environmentParameters
+    get:
+      operationId: listOperations
+      responses:
+        '200': { description: Newest-first environment operations }
+  /environments/{projectName}/{environmentName}/operations/{operationNumber}:
+    parameters: &operationParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/OperationNumber' }
     get:
       operationId: getOperation
       responses:
@@ -322,34 +509,50 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
-  /projects/{projectName}/operations/{operationNumber}/events:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' }, { $ref: '#/components/parameters/OperationNumber' } ]
-    get: { operationId: operationEvents, responses: { '200': { description: Ordered operation events } } }
-  /projects/{projectName}/timeline:
-    parameters: [ { $ref: '#/components/parameters/ProjectName' } ]
-    get: { operationId: timeline, responses: { '200': { description: Newest-first durable project timeline } } }
+  /environments/{projectName}/{environmentName}/operations/{operationNumber}/events:
+    parameters: *operationParameters
+    get:
+      operationId: operationEvents
+      responses:
+        '200': { description: Ordered operation events }
+  /environments/{projectName}/{environmentName}/timeline:
+    parameters: *environmentParameters
+    get:
+      operationId: timeline
+      responses:
+        '200': { description: Newest-first durable environment timeline }
 components:
   securitySchemes:
     bearer:
       type: http
       scheme: bearer
-      description: Mode-0600 installation secret used only by the local CLI.
+      description: Mode-0600 installation secret used by the local CLI.
     browserSession:
       type: apiKey
       in: cookie
       name: portless_session
-      description: HttpOnly SameSite=Strict session obtained from a one-use browser claim. Mutations also require X-Portless-CSRF.
+      description: SameSite=Strict browser session; mutations also require X-Portless-CSRF.
   parameters:
     ProjectName:
       in: path
       name: projectName
       required: true
       schema: { $ref: '#/components/schemas/ProjectName' }
+    EnvironmentName:
+      in: path
+      name: environmentName
+      required: true
+      schema: { $ref: '#/components/schemas/EnvironmentName' }
     ServiceName:
       in: path
       name: serviceName
       required: true
       schema: { $ref: '#/components/schemas/ServiceName' }
+    SourceName:
+      in: path
+      name: sourceName
+      required: true
+      schema: { $ref: '#/components/schemas/SourceName' }
     RecordingName:
       in: path
       name: recordingName
@@ -368,21 +571,31 @@ components:
   responses:
     NotFound:
       description: Named resource not found
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Conflict:
-      description: Name, revision, or current-state conflict
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+      description: Name, revision, provider, or current-state conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Unavailable:
       description: Required local runtime unavailable
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   schemas:
-    ProjectName: { type: string, pattern: '^[a-z][a-z0-9-]{0,62}$', examples: [billing] }
-    ServiceName: { type: string, pattern: '^[a-z][a-z0-9-]{0,62}$', examples: [orders] }
-    ArtifactName: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$', examples: [checkout-debug] }
-    Health:
-      type: object
-      required: [ready, apiVersion]
-      properties: { ready: { type: boolean }, apiVersion: { type: string } }
+    ProjectName: &dnsName
+      type: string
+      pattern: '^[a-z][a-z0-9-]{0,62}$'
+      examples: [billing]
+    EnvironmentName: *dnsName
+    ServiceName: *dnsName
+    SourceName: *dnsName
+    ArtifactName:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+      examples: [checkout-debug]
     RuntimeStatus:
       type: object
       required: [preference, state, candidates]
@@ -392,31 +605,47 @@ components:
         state: { type: string, enum: [ready, missing, failed] }
         version: { type: string }
         reason: { type: string }
-        candidates:
-          type: array
-          items:
-            type: object
-            required: [name, state]
-            properties:
-              name: { type: string, enum: [docker, podman] }
-              state: { type: string, enum: [ready, missing, failed] }
-              version: { type: string }
-              reason: { type: string }
-    Project:
+        candidates: { type: array, items: { type: object, additionalProperties: true } }
+    SourceInput:
       type: object
-      required: [name, path, revision, status, createdAt, updatedAt, services, connections]
+      required: [name, path]
       properties:
-        name: { $ref: '#/components/schemas/ProjectName' }
-        path: { type: string }
-        revision: { type: integer, format: int64 }
-        status: { type: string, enum: [starting, healthy, degraded, failed, stopping, stopped, unknown] }
-        reason: { type: string }
-        primaryService: { $ref: '#/components/schemas/ServiceName' }
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
-        dashboardUrl: { type: string, format: uri }
-        services: { type: array, items: { $ref: '#/components/schemas/Service' } }
-        connections: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+        name: { $ref: '#/components/schemas/SourceName' }
+        path: { type: string, description: Absolute path resolved by the CLI. }
+    ProjectSource:
+      type: object
+      required: [name]
+      properties:
+        name: { $ref: '#/components/schemas/SourceName' }
+        services: { type: array, items: { $ref: '#/components/schemas/ServiceName' } }
+    SourceBinding:
+      allOf:
+        - { $ref: '#/components/schemas/SourceInput' }
+        - type: object
+          required: [status, scannedAt]
+          properties:
+            status: { type: string }
+            warnings: { type: array, items: { type: string } }
+            scannedAt: { type: string, format: date-time }
+    RemoteTarget:
+      type: object
+      required: [url, classification, writePolicy]
+      properties:
+        url: { type: string, format: uri, pattern: '^https?://' }
+        classification: { type: string, enum: [development, qa, staging, unknown] }
+        writePolicy: { type: string, enum: [read-only, read-write] }
+        healthPath: { type: string, pattern: '^/' }
+    ComponentBinding:
+      type: object
+      required: [provider]
+      properties:
+        service: { $ref: '#/components/schemas/ServiceName' }
+        provider: { type: string, enum: [local, container, remote] }
+        source: { $ref: '#/components/schemas/SourceName' }
+        remote: { $ref: '#/components/schemas/RemoteTarget' }
+      description: >-
+        local requires source, container is valid only for discovered managed
+        dependencies, and remote requires remote configuration.
     HealthCheck:
       type: object
       required: [kind, timeout, interval]
@@ -425,13 +654,6 @@ components:
         path: { type: string }
         timeout: { type: integer, description: Nanoseconds as encoded by Go time.Duration. }
         interval: { type: integer, description: Nanoseconds as encoded by Go time.Duration. }
-    Evidence:
-      type: object
-      required: [file, explanation, confidence]
-      properties:
-        file: { type: string }
-        explanation: { type: string }
-        confidence: { type: string, enum: [high, medium, low] }
     ServiceDefinition:
       type: object
       required: [name, kind, required, health]
@@ -441,13 +663,12 @@ components:
         framework: { type: string }
         template: { type: string, enum: [postgres, valkey] }
         version: { type: string }
-        command: { type: array, items: { type: string }, description: Argument array; never a shell string. }
+        command: { type: array, items: { type: string } }
         workingDirectory: { type: string }
         portEnvironment: { type: string }
         environment: { type: object, additionalProperties: { type: string } }
         required: { type: boolean }
         health: { $ref: '#/components/schemas/HealthCheck' }
-        evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
     Service:
       allOf:
         - { $ref: '#/components/schemas/ServiceDefinition' }
@@ -468,56 +689,82 @@ components:
       type: object
       required: [source, target, protocol, required]
       properties:
-        source: { type: string, description: Service name or the reserved value external. }
+        source: { type: string, description: Service name or external. }
         target: { $ref: '#/components/schemas/ServiceName' }
         protocol: { type: string, enum: [http, tcp, postgres, redis] }
         environment: { type: string }
         required: { type: boolean }
-    Operation:
+    EnvironmentSummary:
       type: object
-      required: [project, number, type, state, actor, startedAt, events]
+      required: [project, name, revision, status, serviceCount, readyCount, remoteCount, updatedAt]
       properties:
         project: { $ref: '#/components/schemas/ProjectName' }
-        number: { type: integer, format: int64, minimum: 1 }
+        name: { $ref: '#/components/schemas/EnvironmentName' }
+        revision: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/EnvironmentStatus' }
+        reason: { type: string }
+        serviceCount: { type: integer }
+        readyCount: { type: integer }
+        remoteCount: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        dashboardUrl: { type: string, format: uri }
+    Project:
+      type: object
+      required: [name, revision, createdAt, updatedAt]
+      properties:
+        name: { $ref: '#/components/schemas/ProjectName' }
+        revision: { type: integer, format: int64 }
+        primaryService: { $ref: '#/components/schemas/ServiceName' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        dashboardUrl: { type: string, format: uri }
+        sources: { type: array, items: { $ref: '#/components/schemas/ProjectSource' } }
+        services: { type: array, items: { $ref: '#/components/schemas/ServiceDefinition' } }
+        connections: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+        environments: { type: array, items: { $ref: '#/components/schemas/EnvironmentSummary' } }
+    EnvironmentStatus:
+      type: string
+      enum: [starting, healthy, degraded, failed, stopping, stopped, unknown]
+    ConfigurationIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        subject: { type: string }
+        message: { type: string }
+        remediation: { type: string }
+    Environment:
+      type: object
+      required: [project, name, revision, status, createdAt, updatedAt, services, connections]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        name: { $ref: '#/components/schemas/EnvironmentName' }
+        revision: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/EnvironmentStatus' }
+        reason: { type: string }
+        primaryService: { $ref: '#/components/schemas/ServiceName' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        dashboardUrl: { type: string, format: uri }
+        sources: { type: array, items: { $ref: '#/components/schemas/SourceBinding' } }
+        bindings: { type: array, items: { $ref: '#/components/schemas/ComponentBinding' } }
+        services: { type: array, items: { $ref: '#/components/schemas/Service' } }
+        connections: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+        issues: { type: array, items: { $ref: '#/components/schemas/ConfigurationIssue' } }
+    Operation:
+      type: object
+      required: [project, environment, number, type, state, actor, startedAt]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        number: { type: integer, format: int64 }
         type: { type: string }
         state: { type: string, enum: [running, succeeded, failed] }
         actor: { type: string }
         startedAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time }
         error: { type: string }
-        events: { type: array, items: { $ref: '#/components/schemas/OperationEvent' } }
-    OperationEvent:
-      type: object
-      required: [sequence, timestamp, type, message]
-      properties:
-        sequence: { type: integer, format: int64 }
-        timestamp: { type: string, format: date-time }
-        type: { type: string }
-        subject: { type: string }
-        message: { type: string }
-        payload: { type: object, additionalProperties: true }
-    TrafficEvent:
-      type: object
-      required: [project, sequence, protocol, source, target, startedAt, completedAt, durationMs, requestBytes, responseBytes]
-      properties:
-        project: { $ref: '#/components/schemas/ProjectName' }
-        sequence: { type: integer, format: int64 }
-        protocol: { type: string, enum: [http, tcp, postgres, redis] }
-        source: { type: string }
-        target: { type: string }
-        startedAt: { type: string, format: date-time }
-        completedAt: { type: string, format: date-time }
-        method: { type: string }
-        host: { type: string }
-        path: { type: string }
-        status: { type: integer }
-        durationMs: { type: integer, format: int64 }
-        requestBytes: { type: integer, format: int64 }
-        responseBytes: { type: integer, format: int64 }
-        fault: { $ref: '#/components/schemas/ArtifactName' }
-        recording: { $ref: '#/components/schemas/ArtifactName' }
-        error: { type: string }
-        headers: { type: object, additionalProperties: { type: string }, description: "Sensitive names map to [REDACTED]." }
+        events: { type: array, items: { type: object, additionalProperties: true } }
     RecordingInput:
       type: object
       required: [name]
@@ -525,25 +772,10 @@ components:
         name: { $ref: '#/components/schemas/ArtifactName' }
         source: { type: string }
         target: { type: string }
-        captureBodies:
-          type: boolean
-          const: false
-          default: false
-          description: The initial release records metadata only; body capture is reserved for a later release.
-        maxEvents: { type: integer, format: int64, default: 10000 }
-        maxBodyBytes: { type: integer, format: int64, default: 65536 }
+        captureBodies: { type: boolean, const: false, default: false }
+        maxEvents: { type: integer, default: 10000, maximum: 100000 }
+        maxBodyBytes: { type: integer, default: 65536, maximum: 1048576 }
         expiresAt: { type: string, format: date-time }
-    Recording:
-      allOf:
-        - { $ref: '#/components/schemas/RecordingInput' }
-        - type: object
-          required: [project, status, startedAt, eventCount]
-          properties:
-            project: { $ref: '#/components/schemas/ProjectName' }
-            status: { type: string, enum: [active, completed, failed] }
-            startedAt: { type: string, format: date-time }
-            completedAt: { type: string, format: date-time }
-            eventCount: { type: integer, format: int64 }
     FaultInput:
       type: object
       required: [name, source, target]
@@ -552,25 +784,12 @@ components:
         source: { type: string }
         target: { type: string }
         method: { type: string }
-        path: { type: string, description: Glob matched against the request path. }
+        path: { type: string }
         probability: { type: number, minimum: 0, maximum: 1, default: 1 }
-        latencyMs: { type: integer, format: int64, minimum: 0 }
-        jitterMs: { type: integer, format: int64, minimum: 0 }
-        statusCode: { type: integer, minimum: 100, maximum: 599 }
+        latencyMs: { type: integer, minimum: 0 }
+        jitterMs: { type: integer, minimum: 0 }
+        statusCode: { type: integer, minimum: 400, maximum: 599 }
         abort: { type: boolean }
-        expiresAt: { type: string, format: date-time }
-    FaultRule:
-      allOf:
-        - { $ref: '#/components/schemas/FaultInput' }
-        - type: object
-          required: [project, enabled, createdAt, matchCount, revision, scopeSummary]
-          properties:
-            project: { $ref: '#/components/schemas/ProjectName' }
-            enabled: { type: boolean }
-            createdAt: { type: string, format: date-time }
-            matchCount: { type: integer, format: int64 }
-            revision: { type: integer, format: int64 }
-            scopeSummary: { type: string }
     ErrorEnvelope:
       type: object
       required: [error]
@@ -579,13 +798,8 @@ components:
           type: object
           required: [code, message]
           properties:
-            code: { type: string, examples: [REVISION_CONFLICT] }
+            code: { type: string }
             message: { type: string }
             subject: { type: object, additionalProperties: true }
             details: { type: object, additionalProperties: true }
-            remediation:
-              type: array
-              items:
-                type: object
-                required: [label]
-                properties: { label: { type: string }, command: { type: string }, url: { type: string, format: uri } }
+            remediation: { type: array, items: { type: object, additionalProperties: true } }

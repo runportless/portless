@@ -56,7 +56,7 @@ type Runtime interface {
 	Probe(context.Context) ProbeResult
 	StartHost(context.Context) ProbeResult
 	Start(context.Context, string, string, model.ServiceDefinition) (StartResult, error)
-	StopProject(context.Context, string, bool) error
+	StopEnvironment(context.Context, string, bool) error
 	StopService(context.Context, string, string) error
 }
 

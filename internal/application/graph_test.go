@@ -27,3 +27,32 @@ func TestStartOrderRejectsCycles(t *testing.T) {
 		t.Fatal("dependency cycle was accepted")
 	}
 }
+
+func TestExecutionOrderSkipsRemoteServicesAndTheirUnusedContainers(t *testing.T) {
+	definition := model.ProjectModel{
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "payments", Kind: model.ServiceProcess},
+			{Name: "checkout-db", Kind: model.ServiceContainer},
+			{Name: "payments-db", Kind: model.ServiceContainer},
+		},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "payments"},
+			{Source: "checkout", Target: "checkout-db"},
+			{Source: "payments", Target: "payments-db"},
+		},
+	}
+	bindings := []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "payments", Provider: model.ProviderRemote},
+		{Service: "checkout-db", Provider: model.ProviderContainer},
+		{Service: "payments-db", Provider: model.ProviderContainer},
+	}
+	order, err := executionOrder(definition, bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected := []string{"checkout-db", "checkout"}; !reflect.DeepEqual(order, expected) {
+		t.Fatalf("order = %#v, want %#v", order, expected)
+	}
+}

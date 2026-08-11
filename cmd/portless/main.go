@@ -23,6 +23,8 @@ func main() {
 			os.Exit(runIngress(os.Args[2:]))
 		case "__install-ingress":
 			os.Exit(runIngressInstaller(os.Args[2:]))
+		case "__uninstall-ingress":
+			os.Exit(runIngressUninstaller(os.Args[2:]))
 		}
 	}
 	application, err := cli.New(os.Stdout, os.Stderr, "")
@@ -72,6 +74,21 @@ func runIngressInstaller(args []string) int {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "portless setup:", err)
+		return 1
+	}
+	return 0
+}
+
+func runIngressUninstaller(args []string) int {
+	set := flag.NewFlagSet("__uninstall-ingress", flag.ContinueOnError)
+	set.SetOutput(os.Stderr)
+	uid := set.Int("uid", 0, "requesting user ID")
+	force := set.Bool("force", false, "allow removing another user's installation")
+	if err := set.Parse(args); err != nil || set.NArg() != 0 {
+		return 2
+	}
+	if err := ingress.UninstallPrivileged(context.Background(), *uid, *force); err != nil {
+		fmt.Fprintln(os.Stderr, "portless setup uninstall:", err)
 		return 1
 	}
 	return 0

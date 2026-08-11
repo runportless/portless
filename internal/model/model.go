@@ -2,16 +2,16 @@ package model
 
 import "time"
 
-type ProjectStatus string
+type EnvironmentStatus string
 
 const (
-	ProjectStarting ProjectStatus = "starting"
-	ProjectHealthy  ProjectStatus = "healthy"
-	ProjectDegraded ProjectStatus = "degraded"
-	ProjectFailed   ProjectStatus = "failed"
-	ProjectStopping ProjectStatus = "stopping"
-	ProjectStopped  ProjectStatus = "stopped"
-	ProjectUnknown  ProjectStatus = "unknown"
+	EnvironmentStarting EnvironmentStatus = "starting"
+	EnvironmentHealthy  EnvironmentStatus = "healthy"
+	EnvironmentDegraded EnvironmentStatus = "degraded"
+	EnvironmentFailed   EnvironmentStatus = "failed"
+	EnvironmentStopping EnvironmentStatus = "stopping"
+	EnvironmentStopped  EnvironmentStatus = "stopped"
+	EnvironmentUnknown  EnvironmentStatus = "unknown"
 )
 
 type ServiceStatus string
@@ -33,6 +33,30 @@ type ServiceKind string
 const (
 	ServiceProcess   ServiceKind = "process"
 	ServiceContainer ServiceKind = "container"
+)
+
+type ProviderKind string
+
+const (
+	ProviderLocal     ProviderKind = "local"
+	ProviderContainer ProviderKind = "container"
+	ProviderRemote    ProviderKind = "remote"
+)
+
+type RemoteClassification string
+
+const (
+	RemoteDevelopment RemoteClassification = "development"
+	RemoteQA          RemoteClassification = "qa"
+	RemoteStaging     RemoteClassification = "staging"
+	RemoteUnknown     RemoteClassification = "unknown"
+)
+
+type WritePolicy string
+
+const (
+	WriteReadOnly  WritePolicy = "read-only"
+	WriteReadWrite WritePolicy = "read-write"
 )
 
 type Protocol string
@@ -80,25 +104,98 @@ type Connection struct {
 	Required    bool     `json:"required"`
 }
 
+type ConnectionReference struct {
+	Source      string   `json:"source"`
+	TargetHint  string   `json:"targetHint"`
+	Protocol    Protocol `json:"protocol"`
+	Environment string   `json:"environment,omitempty"`
+	Required    bool     `json:"required"`
+}
+
 type ProjectModel struct {
-	SuggestedName  string              `json:"suggestedName"`
-	PrimaryService string              `json:"primaryService,omitempty"`
-	Services       []ServiceDefinition `json:"services"`
-	Connections    []Connection        `json:"connections"`
+	SuggestedName  string                `json:"suggestedName"`
+	PrimaryService string                `json:"primaryService,omitempty"`
+	Services       []ServiceDefinition   `json:"services"`
+	Connections    []Connection          `json:"connections"`
+	References     []ConnectionReference `json:"references,omitempty"`
+}
+
+type ProjectSource struct {
+	Name     string   `json:"name"`
+	Services []string `json:"services,omitempty"`
+}
+
+type SourceBinding struct {
+	Name       string       `json:"name"`
+	Path       string       `json:"path"`
+	Status     string       `json:"status"`
+	Warnings   []string     `json:"warnings,omitempty"`
+	ScannedAt  time.Time    `json:"scannedAt"`
+	Definition ProjectModel `json:"-"`
+}
+
+type RemoteTarget struct {
+	URL            string               `json:"url"`
+	Classification RemoteClassification `json:"classification"`
+	WritePolicy    WritePolicy          `json:"writePolicy"`
+	HealthPath     string               `json:"healthPath,omitempty"`
+}
+
+type ComponentBinding struct {
+	Service  string        `json:"service"`
+	Provider ProviderKind  `json:"provider"`
+	Source   string        `json:"source,omitempty"`
+	Remote   *RemoteTarget `json:"remote,omitempty"`
+}
+
+type ConfigurationIssue struct {
+	Code        string `json:"code"`
+	Subject     string `json:"subject,omitempty"`
+	Message     string `json:"message"`
+	Remediation string `json:"remediation,omitempty"`
+}
+
+type EnvironmentSummary struct {
+	Project      string            `json:"project"`
+	Name         string            `json:"name"`
+	Revision     int64             `json:"revision"`
+	Status       EnvironmentStatus `json:"status"`
+	Reason       string            `json:"reason,omitempty"`
+	ServiceCount int               `json:"serviceCount"`
+	ReadyCount   int               `json:"readyCount"`
+	RemoteCount  int               `json:"remoteCount"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+	DashboardURL string            `json:"dashboardUrl,omitempty"`
 }
 
 type Project struct {
-	Name           string        `json:"name"`
-	Path           string        `json:"path"`
-	Revision       int64         `json:"revision"`
-	Status         ProjectStatus `json:"status"`
-	Reason         string        `json:"reason,omitempty"`
-	PrimaryService string        `json:"primaryService,omitempty"`
-	CreatedAt      time.Time     `json:"createdAt"`
-	UpdatedAt      time.Time     `json:"updatedAt"`
-	DashboardURL   string        `json:"dashboardUrl,omitempty"`
-	Services       []Service     `json:"services,omitempty"`
-	Connections    []Connection  `json:"connections,omitempty"`
+	Name           string               `json:"name"`
+	Revision       int64                `json:"revision"`
+	PrimaryService string               `json:"primaryService,omitempty"`
+	CreatedAt      time.Time            `json:"createdAt"`
+	UpdatedAt      time.Time            `json:"updatedAt"`
+	DashboardURL   string               `json:"dashboardUrl,omitempty"`
+	Sources        []ProjectSource      `json:"sources,omitempty"`
+	Services       []ServiceDefinition  `json:"services,omitempty"`
+	Connections    []Connection         `json:"connections,omitempty"`
+	Environments   []EnvironmentSummary `json:"environments,omitempty"`
+}
+
+type Environment struct {
+	Project        string               `json:"project"`
+	Name           string               `json:"name"`
+	Revision       int64                `json:"revision"`
+	Status         EnvironmentStatus    `json:"status"`
+	Reason         string               `json:"reason,omitempty"`
+	PrimaryService string               `json:"primaryService,omitempty"`
+	CreatedAt      time.Time            `json:"createdAt"`
+	UpdatedAt      time.Time            `json:"updatedAt"`
+	DashboardURL   string               `json:"dashboardUrl,omitempty"`
+	Sources        []SourceBinding      `json:"sources,omitempty"`
+	Bindings       []ComponentBinding   `json:"bindings,omitempty"`
+	Services       []Service            `json:"services,omitempty"`
+	Connections    []Connection         `json:"connections,omitempty"`
+	Issues         []ConfigurationIssue `json:"issues,omitempty"`
 }
 
 type Service struct {
@@ -117,6 +214,7 @@ type Service struct {
 
 type Operation struct {
 	Project     string           `json:"project"`
+	Environment string           `json:"environment"`
 	Number      int64            `json:"number"`
 	Type        string           `json:"type"`
 	State       string           `json:"state"`
@@ -137,28 +235,32 @@ type OperationEvent struct {
 }
 
 type TrafficEvent struct {
-	Project       string            `json:"project"`
-	Sequence      int64             `json:"sequence"`
-	Protocol      Protocol          `json:"protocol"`
-	Source        string            `json:"source"`
-	Target        string            `json:"target"`
-	StartedAt     time.Time         `json:"startedAt"`
-	CompletedAt   time.Time         `json:"completedAt"`
-	Method        string            `json:"method,omitempty"`
-	Host          string            `json:"host,omitempty"`
-	Path          string            `json:"path,omitempty"`
-	Status        int               `json:"status,omitempty"`
-	DurationMS    int64             `json:"durationMs"`
-	RequestBytes  int64             `json:"requestBytes"`
-	ResponseBytes int64             `json:"responseBytes"`
-	Fault         string            `json:"fault,omitempty"`
-	Recording     string            `json:"recording,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
+	Project              string               `json:"project"`
+	Environment          string               `json:"environment"`
+	Sequence             int64                `json:"sequence"`
+	Protocol             Protocol             `json:"protocol"`
+	Source               string               `json:"source"`
+	Target               string               `json:"target"`
+	TargetProvider       ProviderKind         `json:"targetProvider,omitempty"`
+	RemoteClassification RemoteClassification `json:"remoteClassification,omitempty"`
+	StartedAt            time.Time            `json:"startedAt"`
+	CompletedAt          time.Time            `json:"completedAt"`
+	Method               string               `json:"method,omitempty"`
+	Host                 string               `json:"host,omitempty"`
+	Path                 string               `json:"path,omitempty"`
+	Status               int                  `json:"status,omitempty"`
+	DurationMS           int64                `json:"durationMs"`
+	RequestBytes         int64                `json:"requestBytes"`
+	ResponseBytes        int64                `json:"responseBytes"`
+	Fault                string               `json:"fault,omitempty"`
+	Recording            string               `json:"recording,omitempty"`
+	Error                string               `json:"error,omitempty"`
+	Headers              map[string]string    `json:"headers,omitempty"`
 }
 
 type Recording struct {
 	Project       string     `json:"project"`
+	Environment   string     `json:"environment"`
 	Name          string     `json:"name"`
 	Source        string     `json:"source,omitempty"`
 	Target        string     `json:"target,omitempty"`
@@ -174,6 +276,7 @@ type Recording struct {
 
 type FaultRule struct {
 	Project      string     `json:"project"`
+	Environment  string     `json:"environment"`
 	Name         string     `json:"name"`
 	Source       string     `json:"source"`
 	Target       string     `json:"target"`
@@ -193,13 +296,14 @@ type FaultRule struct {
 }
 
 type TimelineEvent struct {
-	Project   string         `json:"project"`
-	Sequence  int64          `json:"sequence"`
-	Timestamp time.Time      `json:"timestamp"`
-	Actor     string         `json:"actor"`
-	Type      string         `json:"type"`
-	Subject   string         `json:"subject,omitempty"`
-	Severity  string         `json:"severity"`
-	Summary   string         `json:"summary"`
-	Details   map[string]any `json:"details,omitempty"`
+	Project     string         `json:"project"`
+	Environment string         `json:"environment"`
+	Sequence    int64          `json:"sequence"`
+	Timestamp   time.Time      `json:"timestamp"`
+	Actor       string         `json:"actor"`
+	Type        string         `json:"type"`
+	Subject     string         `json:"subject,omitempty"`
+	Severity    string         `json:"severity"`
+	Summary     string         `json:"summary"`
+	Details     map[string]any `json:"details,omitempty"`
 }

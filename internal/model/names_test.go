@@ -23,8 +23,12 @@ func TestNormalizeDNSName(t *testing.T) {
 
 func TestPublicModelContainsNamesAndNoGenericIDs(t *testing.T) {
 	t.Parallel()
-	project := Project{Name: "billing", Services: []Service{{ServiceDefinition: ServiceDefinition{Name: "orders"}}}}
-	encoded, err := json.Marshal(project)
+	project := Project{Name: "billing", Services: []ServiceDefinition{{Name: "orders"}}}
+	environment := Environment{Project: "billing", Name: "local", Services: []Service{{ServiceDefinition: ServiceDefinition{Name: "orders"}}}}
+	encoded, err := json.Marshal(struct {
+		Project     Project     `json:"project"`
+		Environment Environment `json:"environment"`
+	}{project, environment})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +43,14 @@ func TestPublicModelContainsNamesAndNoGenericIDs(t *testing.T) {
 	}
 }
 
-func TestDeriveProjectStatus(t *testing.T) {
+func TestDeriveEnvironmentStatus(t *testing.T) {
 	t.Parallel()
 	services := []Service{
 		{ServiceDefinition: ServiceDefinition{Name: "gateway", Required: true}, Status: ServiceReady},
 		{ServiceDefinition: ServiceDefinition{Name: "orders", Required: true}, Status: ServiceUnhealthy},
 	}
-	status, reason := DeriveProjectStatus(services, "")
-	if status != ProjectDegraded || !strings.Contains(reason, "orders") {
+	status, reason := DeriveEnvironmentStatus(services, "")
+	if status != EnvironmentDegraded || !strings.Contains(reason, "orders") {
 		t.Fatalf("got %s %q", status, reason)
 	}
 }

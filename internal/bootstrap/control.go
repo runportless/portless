@@ -114,6 +114,11 @@ func ReadControl(paths Paths) (ControlRecord, error) {
 	return record, nil
 }
 
+// CheckDaemon verifies an existing daemon without starting or modifying it.
+func CheckDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
+	return readHealthyRecord(ctx, paths)
+}
+
 func writeControl(paths Paths, record ControlRecord) error {
 	content, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {

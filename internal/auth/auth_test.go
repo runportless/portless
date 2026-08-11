@@ -23,7 +23,7 @@ func TestSingleUseBrowserClaimAndCSRF(t *testing.T) {
 	if _, _, _, _, err := manager.ConsumeClaim(code); err == nil {
 		t.Fatal("claim was reusable")
 	}
-	request := httptest.NewRequest(http.MethodPost, "http://localhost:7331/api/v1/projects/billing/up", nil)
+	request := httptest.NewRequest(http.MethodPost, "http://localhost:7331/api/v1/environments/billing/local/up", nil)
 	request.AddCookie(&http.Cookie{Name: SessionCookie, Value: token})
 	request.Header.Set("Origin", "http://localhost:7331")
 	principal, ok := manager.Authenticate(request)

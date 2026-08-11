@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	labelOwner       = "dev.portless.owner"
-	labelInstall     = "dev.portless.installation.key"
-	labelProject     = "dev.portless.project.key"
-	labelProjectName = "dev.portless.project.name"
-	labelService     = "dev.portless.service.name"
+	labelOwner           = "dev.portless.owner"
+	labelInstall         = "dev.portless.installation.key"
+	labelEnvironment     = "dev.portless.environment.key"
+	labelEnvironmentName = "dev.portless.environment.name"
+	labelService         = "dev.portless.service.name"
 )
 
 type Engine interface {
@@ -57,22 +57,22 @@ func (m *Manager) StartHost(ctx context.Context) container.ProbeResult {
 	return m.engine.StartHost(ctx)
 }
 
-func (m *Manager) Start(ctx context.Context, projectName, projectKey string, service model.ServiceDefinition) (container.StartResult, error) {
+func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition) (container.StartResult, error) {
 	if service.Kind != model.ServiceContainer {
 		return container.StartResult{}, errors.New("container runtime only starts container services")
 	}
 	if result := m.Probe(ctx); result.State != "ready" {
 		return container.StartResult{}, errors.New(result.Reason)
 	}
-	suffix := projectKey
+	suffix := environmentKey
 	if len(suffix) > 8 {
 		suffix = suffix[:8]
 	}
-	networkName := resourceName("portless", projectName, suffix)
-	if err := m.ensureNetwork(ctx, networkName, projectName, projectKey); err != nil {
+	networkName := resourceName("portless", environmentName, suffix)
+	if err := m.ensureNetwork(ctx, networkName, environmentName, environmentKey); err != nil {
 		return container.StartResult{}, err
 	}
-	containerName := resourceName("portless", projectName, service.Name, suffix)
+	containerName := resourceName("portless", environmentName, service.Name, suffix)
 	if running, port := m.inspectRunning(ctx, containerName, servicePort(service)); running {
 		environment, _ := m.inspectEnvironment(ctx, containerName)
 		return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC()}, nil
@@ -82,12 +82,12 @@ func (m *Manager) Start(ctx context.Context, projectName, projectKey string, ser
 	if err != nil {
 		return container.StartResult{}, err
 	}
-	environment, envFile, err := m.environmentFile(projectKey, service.Name, defaults)
+	environment, envFile, err := m.environmentFile(environmentKey, service.Name, defaults)
 	if err != nil {
 		return container.StartResult{}, err
 	}
-	volumeName := resourceName("portless", projectName, service.Name, "data", suffix)
-	existingVolumes, err := m.ownedServiceVolumes(ctx, projectKey, service.Name)
+	volumeName := resourceName("portless", environmentName, service.Name, "data", suffix)
+	existingVolumes, err := m.ownedServiceVolumes(ctx, environmentKey, service.Name)
 	if err != nil {
 		return container.StartResult{}, err
 	}
@@ -97,15 +97,15 @@ func (m *Manager) Start(ctx context.Context, projectName, projectKey string, ser
 	if len(existingVolumes) == 1 {
 		volumeName = existingVolumes[0]
 	}
-	if err := m.ensureVolume(ctx, volumeName, projectName, projectKey, service.Name); err != nil {
+	if err := m.ensureVolume(ctx, volumeName, environmentName, environmentKey, service.Name); err != nil {
 		return container.StartResult{}, err
 	}
 	args := []string{"run", "-d", "--name", containerName,
 		"--network", networkName,
 		"--label", labelOwner + "=true",
 		"--label", labelInstall + "=" + m.installationKey,
-		"--label", labelProject + "=" + projectKey,
-		"--label", labelProjectName + "=" + projectName,
+		"--label", labelEnvironment + "=" + environmentKey,
+		"--label", labelEnvironmentName + "=" + environmentName,
 		"--label", labelService + "=" + service.Name,
 		"--env-file", envFile,
 		"-p", "127.0.0.1::" + strconv.Itoa(servicePort(service)),
@@ -127,8 +127,8 @@ func (m *Manager) Start(ctx context.Context, projectName, projectKey string, ser
 	return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC()}, nil
 }
 
-func (m *Manager) StopProject(ctx context.Context, projectKey string, removeVolumes bool) error {
-	containers, err := m.ownedContainers(ctx, projectKey)
+func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {
+	containers, err := m.ownedContainers(ctx, environmentKey)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (m *Manager) StopProject(ctx context.Context, projectKey string, removeVolu
 		}
 	}
 	if removeVolumes {
-		volumes, err := m.ownedResources(ctx, "volume", projectKey)
+		volumes, err := m.ownedResources(ctx, "volume", environmentKey)
 		if err != nil {
 			return err
 		}
@@ -147,13 +147,13 @@ func (m *Manager) StopProject(ctx context.Context, projectKey string, removeVolu
 				return fmt.Errorf("remove volume %s: %w", name, err)
 			}
 		}
-		if safePathComponent(projectKey) {
-			if err := os.RemoveAll(filepath.Join(m.credentialsRoot, projectKey)); err != nil {
+		if safePathComponent(environmentKey) {
+			if err := os.RemoveAll(filepath.Join(m.credentialsRoot, environmentKey)); err != nil {
 				return fmt.Errorf("remove generated credentials: %w", err)
 			}
 		}
 	}
-	networks, err := m.ownedResources(ctx, "network", projectKey)
+	networks, err := m.ownedResources(ctx, "network", environmentKey)
 	if err != nil {
 		return err
 	}
@@ -163,10 +163,10 @@ func (m *Manager) StopProject(ctx context.Context, projectKey string, removeVolu
 	return nil
 }
 
-func (m *Manager) StopService(ctx context.Context, projectKey, serviceName string) error {
+func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName string) error {
 	output, err := m.output(ctx, "ps", "-a", "--filter", "label="+labelOwner+"=true",
 		"--filter", "label="+labelInstall+"="+m.installationKey,
-		"--filter", "label="+labelProject+"="+projectKey,
+		"--filter", "label="+labelEnvironment+"="+environmentKey,
 		"--filter", "label="+labelService+"="+serviceName,
 		"--format", "{{.Names}}")
 	if err != nil {
@@ -180,27 +180,27 @@ func (m *Manager) StopService(ctx context.Context, projectKey, serviceName strin
 	return nil
 }
 
-func (m *Manager) ensureNetwork(ctx context.Context, name, projectName, projectKey string) error {
+func (m *Manager) ensureNetwork(ctx context.Context, name, environmentName, environmentKey string) error {
 	if m.engine.ResourceExists(ctx, "network", name) {
 		return nil
 	}
 	return m.run(ctx, "network", "create",
 		"--label", labelOwner+"=true",
 		"--label", labelInstall+"="+m.installationKey,
-		"--label", labelProject+"="+projectKey,
-		"--label", labelProjectName+"="+projectName,
+		"--label", labelEnvironment+"="+environmentKey,
+		"--label", labelEnvironmentName+"="+environmentName,
 		name)
 }
 
-func (m *Manager) ensureVolume(ctx context.Context, name, projectName, projectKey, service string) error {
+func (m *Manager) ensureVolume(ctx context.Context, name, environmentName, environmentKey, service string) error {
 	if m.engine.ResourceExists(ctx, "volume", name) {
 		return nil
 	}
 	return m.run(ctx, "volume", "create",
 		"--label", labelOwner+"=true",
 		"--label", labelInstall+"="+m.installationKey,
-		"--label", labelProject+"="+projectKey,
-		"--label", labelProjectName+"="+projectName,
+		"--label", labelEnvironment+"="+environmentKey,
+		"--label", labelEnvironmentName+"="+environmentName,
 		"--label", labelService+"="+service,
 		name)
 }
@@ -284,11 +284,11 @@ func (m *Manager) waitForHealth(ctx context.Context, name string, command []stri
 	}
 }
 
-func (m *Manager) environmentFile(projectKey, serviceName string, defaults map[string]string) (map[string]string, string, error) {
-	if !safePathComponent(projectKey) || !safePathComponent(serviceName) {
-		return nil, "", errors.New("unsafe project or service key for credential storage")
+func (m *Manager) environmentFile(environmentKey, serviceName string, defaults map[string]string) (map[string]string, string, error) {
+	if !safePathComponent(environmentKey) || !safePathComponent(serviceName) {
+		return nil, "", errors.New("unsafe environment or service key for credential storage")
 	}
-	directory := filepath.Join(m.credentialsRoot, projectKey)
+	directory := filepath.Join(m.credentialsRoot, environmentKey)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, "", err
 	}
@@ -351,28 +351,28 @@ func parseEnvironment(content []byte) map[string]string {
 	return result
 }
 
-func (m *Manager) ownedContainers(ctx context.Context, projectKey string) ([]string, error) {
+func (m *Manager) ownedContainers(ctx context.Context, environmentKey string) ([]string, error) {
 	output, err := m.output(ctx, "ps", "-a", "--filter", "label="+labelOwner+"=true", "--filter", "label="+labelInstall+"="+m.installationKey,
-		"--filter", "label="+labelProject+"="+projectKey, "--format", "{{.Names}}")
+		"--filter", "label="+labelEnvironment+"="+environmentKey, "--format", "{{.Names}}")
 	if err != nil {
 		return nil, err
 	}
 	return nonemptyLines(string(output)), nil
 }
 
-func (m *Manager) ownedResources(ctx context.Context, kind, projectKey string) ([]string, error) {
+func (m *Manager) ownedResources(ctx context.Context, kind, environmentKey string) ([]string, error) {
 	output, err := m.output(ctx, kind, "ls", "--filter", "label="+labelOwner+"=true", "--filter", "label="+labelInstall+"="+m.installationKey,
-		"--filter", "label="+labelProject+"="+projectKey, "--format", "{{.Name}}")
+		"--filter", "label="+labelEnvironment+"="+environmentKey, "--format", "{{.Name}}")
 	if err != nil {
 		return nil, err
 	}
 	return nonemptyLines(string(output)), nil
 }
 
-func (m *Manager) ownedServiceVolumes(ctx context.Context, projectKey, serviceName string) ([]string, error) {
+func (m *Manager) ownedServiceVolumes(ctx context.Context, environmentKey, serviceName string) ([]string, error) {
 	output, err := m.output(ctx, "volume", "ls", "--filter", "label="+labelOwner+"=true",
 		"--filter", "label="+labelInstall+"="+m.installationKey,
-		"--filter", "label="+labelProject+"="+projectKey,
+		"--filter", "label="+labelEnvironment+"="+environmentKey,
 		"--filter", "label="+labelService+"="+serviceName,
 		"--format", "{{.Name}}")
 	if err != nil {
@@ -395,8 +395,8 @@ func redactArguments(arguments []string) []string {
 		switch {
 		case strings.HasPrefix(argument, labelInstall+"="):
 			result[index] = labelInstall + "=<private>"
-		case strings.HasPrefix(argument, labelProject+"="):
-			result[index] = labelProject + "=<private>"
+		case strings.HasPrefix(argument, labelEnvironment+"="):
+			result[index] = labelEnvironment + "=<private>"
 		default:
 			result[index] = argument
 		}

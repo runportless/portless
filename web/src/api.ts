@@ -1,4 +1,4 @@
-import type { APIErrorShape } from './types'
+import type { APIErrorShape, Environment } from './types'
 
 export class APIError extends Error {
   status: number
@@ -47,9 +47,13 @@ export function projectPath(project: string, suffix = '') {
   return `/projects/${encodeURIComponent(project)}${suffix}`
 }
 
-export function connectEvents(project: string, topics: string[], onEvent: (type: string, value: unknown) => void) {
+export function environmentPath(environment: Pick<Environment, 'project' | 'name'>, suffix = '') {
+  return `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}${suffix}`
+}
+
+export function connectEvents(environment: Pick<Environment, 'project' | 'name'>, topics: string[], onEvent: (type: string, value: unknown) => void) {
   const query = topics.map((topic) => `topic=${encodeURIComponent(topic)}`).join('&')
-  const source = new EventSource(`/api/v1/projects/${encodeURIComponent(project)}/stream?${query}`)
+  const source = new EventSource(`/api/v1${environmentPath(environment, '/stream')}?${query}`)
   for (const topic of topics) {
     source.addEventListener(topic, (event) => {
       try {

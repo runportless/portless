@@ -13,7 +13,8 @@ import (
 )
 
 func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) (model.Recording, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, recording.Project)
+	scope := scopeFromFields(recording.Project, recording.Environment)
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
 		return model.Recording{}, err
 	}
@@ -27,7 +28,7 @@ func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) 
 		recording.MaxBodyBytes = 64 * 1024
 	}
 	var activeName string
-	err = s.db.QueryRowContext(ctx, `SELECT name FROM recordings WHERE project_key = ? AND status = 'active' LIMIT 1`, projectKey).Scan(&activeName)
+	err = s.db.QueryRowContext(ctx, `SELECT name FROM recordings WHERE environment_key = ? AND status = 'active' LIMIT 1`, environmentKey).Scan(&activeName)
 	if err == nil {
 		return model.Recording{}, fmt.Errorf("recording %s is already active; stop it before starting another: %w", activeName, ErrConflict)
 	}
@@ -40,8 +41,8 @@ func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) 
 		expires = recording.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO recordings(project_key, name, source, target, capture_bodies, max_events, max_body_bytes, status, started_at, expires_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectKey, recording.Name, recording.Source, recording.Target,
+INSERT INTO recordings(environment_key, name, source, target, capture_bodies, max_events, max_body_bytes, status, started_at, expires_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, recording.Name, recording.Source, recording.Target,
 		boolInt(recording.CaptureBodies), recording.MaxEvents, recording.MaxBodyBytes, recording.Status,
 		recording.StartedAt.Format(time.RFC3339Nano), expires)
 	if err != nil {
@@ -53,21 +54,21 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, projectKey, recording.Name, recording.Sou
 	return recording, nil
 }
 
-func (s *Store) Recordings(ctx context.Context, projectName string) ([]model.Recording, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Recordings(ctx context.Context, selector string) ([]model.Recording, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT name, source, target, capture_bodies, max_events, max_body_bytes, status, started_at, completed_at, expires_at, event_count
-FROM recordings WHERE project_key = ? ORDER BY started_at DESC`, projectKey)
+FROM recordings WHERE environment_key = ? ORDER BY started_at DESC`, environmentKey)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var result []model.Recording
 	for rows.Next() {
-		recording, err := scanRecording(rows, projectName)
+		recording, err := scanRecording(rows, selector)
 		if err != nil {
 			return nil, err
 		}
@@ -76,19 +77,19 @@ FROM recordings WHERE project_key = ? ORDER BY started_at DESC`, projectKey)
 	return result, rows.Err()
 }
 
-func (s *Store) Recording(ctx context.Context, projectName, name string) (model.Recording, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Recording(ctx context.Context, selector, name string) (model.Recording, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return model.Recording{}, err
 	}
 	recording, err := scanRecording(s.db.QueryRowContext(ctx, `
 SELECT name, source, target, capture_bodies, max_events, max_body_bytes, status, started_at, completed_at, expires_at, event_count
-FROM recordings WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, name), projectName)
+FROM recordings WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name), selector)
 	return recording, mapSQLError(err)
 }
 
-func (s *Store) ActiveRecordings(ctx context.Context, projectName string) ([]model.Recording, error) {
-	recordings, err := s.Recordings(ctx, projectName)
+func (s *Store) ActiveRecordings(ctx context.Context, selector string) ([]model.Recording, error) {
+	recordings, err := s.Recordings(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (s *Store) ActiveRecordings(ctx context.Context, projectName string) ([]mod
 			continue
 		}
 		if recording.ExpiresAt != nil && now.After(*recording.ExpiresAt) {
-			_ = s.StopRecording(ctx, projectName, recording.Name, "expired")
+			_ = s.StopRecording(ctx, selector, recording.Name, "expired")
 			continue
 		}
 		active = append(active, recording)
@@ -107,8 +108,8 @@ func (s *Store) ActiveRecordings(ctx context.Context, projectName string) ([]mod
 	return active, nil
 }
 
-func (s *Store) StopRecording(ctx context.Context, projectName, name, reason string) error {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) StopRecording(ctx context.Context, selector, name, reason string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
@@ -118,21 +119,21 @@ func (s *Store) StopRecording(ctx context.Context, projectName, name, reason str
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE recordings SET status = ?, completed_at = ?
-WHERE project_key = ? AND name = ? COLLATE NOCASE AND status = 'active'`, status, nowText(), projectKey, name)
+WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active'`, status, nowText(), environmentKey, name)
 	if err != nil {
 		return err
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
-		if _, err := s.Recording(ctx, projectName, name); err != nil {
+		if _, err := s.Recording(ctx, selector, name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) DeleteRecording(ctx context.Context, projectName, name string) error {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) DeleteRecording(ctx context.Context, selector, name string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
@@ -142,23 +143,23 @@ func (s *Store) DeleteRecording(ctx context.Context, projectName, name string) e
 	}
 	defer tx.Rollback()
 	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM recordings WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, name).Scan(&status); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM recordings WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name).Scan(&status); err != nil {
 		return mapSQLError(err)
 	}
 	if status == "active" {
 		return fmt.Errorf("active recording must be stopped before deletion")
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM traffic_events WHERE project_key = ? AND recording_name = ? COLLATE NOCASE`, projectKey, name); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM traffic_events WHERE environment_key = ? AND recording_name = ? COLLATE NOCASE`, environmentKey, name); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM recordings WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, name); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recordings WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) PersistTraffic(ctx context.Context, event model.TrafficEvent) error {
-	projectKey, err := s.PrivateProjectKey(ctx, event.Project)
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scopeFromFields(event.Project, event.Environment))
 	if err != nil {
 		return err
 	}
@@ -176,31 +177,31 @@ func (s *Store) PersistTraffic(ctx context.Context, event model.TrafficEvent) er
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
 UPDATE recordings SET event_count = event_count + 1
-WHERE project_key = ? AND name = ? COLLATE NOCASE AND status = 'active' AND event_count < max_events`, projectKey, event.Recording)
+WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active' AND event_count < max_events`, environmentKey, event.Recording)
 	if err != nil {
 		return err
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
-		_, _ = tx.ExecContext(ctx, `UPDATE recordings SET status = 'completed', completed_at = ? WHERE project_key = ? AND name = ? COLLATE NOCASE AND status = 'active'`, nowText(), projectKey, event.Recording)
+		_, _ = tx.ExecContext(ctx, `UPDATE recordings SET status = 'completed', completed_at = ? WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active'`, nowText(), environmentKey, event.Recording)
 		return tx.Commit()
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO traffic_events(project_key, sequence, recording_name, event_json) VALUES(?, ?, ?, ?)`, projectKey, event.Sequence, event.Recording, encoded); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO traffic_events(environment_key, sequence, recording_name, event_json) VALUES(?, ?, ?, ?)`, environmentKey, event.Sequence, event.Recording, encoded); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) RecordedTraffic(ctx context.Context, projectName, recordingName string, limit int) ([]model.TrafficEvent, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName string, limit int) ([]model.TrafficEvent, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
 	if limit <= 0 || limit > 10_000 {
 		limit = 1000
 	}
-	query := `SELECT event_json FROM traffic_events WHERE project_key = ?`
-	args := []any{projectKey}
+	query := `SELECT event_json FROM traffic_events WHERE environment_key = ?`
+	args := []any{environmentKey}
 	if recordingName != "" {
 		query += ` AND recording_name = ? COLLATE NOCASE`
 		args = append(args, recordingName)
@@ -228,7 +229,8 @@ func (s *Store) RecordedTraffic(ctx context.Context, projectName, recordingName 
 }
 
 func (s *Store) CreateFault(ctx context.Context, fault model.FaultRule) (model.FaultRule, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, fault.Project)
+	scope := scopeFromFields(fault.Project, fault.Environment)
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
 		return model.FaultRule{}, err
 	}
@@ -248,9 +250,9 @@ func (s *Store) CreateFault(ctx context.Context, fault model.FaultRule) (model.F
 		expires = fault.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO fault_rules(project_key, name, source, target, method, path, probability, latency_ms, jitter_ms,
+INSERT INTO fault_rules(environment_key, name, source, target, method, path, probability, latency_ms, jitter_ms,
   status_code, abort, enabled, created_at, expires_at, revision, scope_summary)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)`, projectKey, fault.Name, fault.Source, fault.Target,
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)`, environmentKey, fault.Name, fault.Source, fault.Target,
 		fault.Method, fault.Path, fault.Probability, fault.LatencyMS, fault.JitterMS, fault.StatusCode, boolInt(fault.Abort),
 		fault.CreatedAt.Format(time.RFC3339Nano), expires, fault.ScopeSummary)
 	if err != nil {
@@ -262,20 +264,20 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)`, projectKey, fault.Name,
 	return fault, nil
 }
 
-func (s *Store) Faults(ctx context.Context, projectName string, enabledOnly bool) ([]model.FaultRule, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Faults(ctx context.Context, selector string, enabledOnly bool) ([]model.FaultRule, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
 	query := `
 SELECT name, source, target, method, path, probability, latency_ms, jitter_ms, status_code, abort,
   enabled, created_at, expires_at, match_count, revision, scope_summary
-FROM fault_rules WHERE project_key = ?`
+FROM fault_rules WHERE environment_key = ?`
 	if enabledOnly {
 		query += ` AND enabled = 1`
 	}
 	query += ` ORDER BY created_at DESC`
-	rows, err := s.db.QueryContext(ctx, query, projectKey)
+	rows, err := s.db.QueryContext(ctx, query, environmentKey)
 	if err != nil {
 		return nil, err
 	}
@@ -283,12 +285,12 @@ FROM fault_rules WHERE project_key = ?`
 	var result []model.FaultRule
 	now := time.Now()
 	for rows.Next() {
-		fault, err := scanFault(rows, projectName)
+		fault, err := scanFault(rows, selector)
 		if err != nil {
 			return nil, err
 		}
 		if fault.Enabled && fault.ExpiresAt != nil && now.After(*fault.ExpiresAt) {
-			_ = s.DisableFault(ctx, projectName, fault.Name)
+			_ = s.DisableFault(ctx, selector, fault.Name)
 			fault.Enabled = false
 			if enabledOnly {
 				continue
@@ -299,24 +301,24 @@ FROM fault_rules WHERE project_key = ?`
 	return result, rows.Err()
 }
 
-func (s *Store) Fault(ctx context.Context, projectName, name string) (model.FaultRule, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) Fault(ctx context.Context, selector, name string) (model.FaultRule, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return model.FaultRule{}, err
 	}
 	fault, err := scanFault(s.db.QueryRowContext(ctx, `
 SELECT name, source, target, method, path, probability, latency_ms, jitter_ms, status_code, abort,
   enabled, created_at, expires_at, match_count, revision, scope_summary
-FROM fault_rules WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, name), projectName)
+FROM fault_rules WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name), selector)
 	return fault, mapSQLError(err)
 }
 
-func (s *Store) DisableFault(ctx context.Context, projectName, name string) error {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) DisableFault(ctx context.Context, selector, name string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 0, revision = revision + 1 WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, name)
+	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 0, revision = revision + 1 WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name)
 	if err != nil {
 		return err
 	}
@@ -327,35 +329,35 @@ func (s *Store) DisableFault(ctx context.Context, projectName, name string) erro
 	return nil
 }
 
-func (s *Store) DisableAllFaults(ctx context.Context, projectName string) (int64, error) {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) DisableAllFaults(ctx context.Context, selector string) (int64, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return 0, err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 0, revision = revision + 1 WHERE project_key = ? AND enabled = 1`, projectKey)
+	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 0, revision = revision + 1 WHERE environment_key = ? AND enabled = 1`, environmentKey)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-func (s *Store) IncrementFaultMatch(ctx context.Context, projectName, name string) error {
-	projectKey, err := s.PrivateProjectKey(ctx, projectName)
+func (s *Store) IncrementFaultMatch(ctx context.Context, selector, name string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE fault_rules SET match_count = match_count + 1 WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, name)
+	_, err = s.db.ExecContext(ctx, `UPDATE fault_rules SET match_count = match_count + 1 WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name)
 	return err
 }
 
-func scanRecording(scanner rowScanner, projectName string) (model.Recording, error) {
+func scanRecording(scanner rowScanner, selector string) (model.Recording, error) {
 	var recording model.Recording
 	var capture int
 	var started string
 	var completed, expires sql.NullString
 	err := scanner.Scan(&recording.Name, &recording.Source, &recording.Target, &capture, &recording.MaxEvents,
 		&recording.MaxBodyBytes, &recording.Status, &started, &completed, &expires, &recording.EventCount)
-	recording.Project = projectName
+	recording.Project, recording.Environment = publicScope(selector)
 	recording.CaptureBodies = capture != 0
 	recording.StartedAt = parseTime(started)
 	recording.CompletedAt = parseOptionalTime(completed)
@@ -363,7 +365,7 @@ func scanRecording(scanner rowScanner, projectName string) (model.Recording, err
 	return recording, err
 }
 
-func scanFault(scanner rowScanner, projectName string) (model.FaultRule, error) {
+func scanFault(scanner rowScanner, selector string) (model.FaultRule, error) {
 	var fault model.FaultRule
 	var abort, enabled int
 	var created string
@@ -371,7 +373,7 @@ func scanFault(scanner rowScanner, projectName string) (model.FaultRule, error) 
 	err := scanner.Scan(&fault.Name, &fault.Source, &fault.Target, &fault.Method, &fault.Path, &fault.Probability,
 		&fault.LatencyMS, &fault.JitterMS, &fault.StatusCode, &abort, &enabled, &created, &expires,
 		&fault.MatchCount, &fault.Revision, &fault.ScopeSummary)
-	fault.Project = projectName
+	fault.Project, fault.Environment = publicScope(selector)
 	fault.Abort = abort != 0
 	fault.Enabled = enabled != 0
 	fault.CreatedAt = parseTime(created)

@@ -21,7 +21,7 @@ import (
 )
 
 type ExitEvent struct {
-	Project    string
+	Scope      string
 	Service    string
 	Generation int64
 	Error      error
@@ -38,7 +38,7 @@ type StartResult struct {
 }
 
 type managedProcess struct {
-	project    string
+	scope      string
 	service    string
 	generation int64
 	privateKey string
@@ -70,14 +70,18 @@ func AllocatePort() (int, error) {
 	return port, nil
 }
 
-func (m *Manager) Start(ctx context.Context, project string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string) (StartResult, error) {
+func (m *Manager) Start(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string) (StartResult, error) {
 	if definition.Kind != model.ServiceProcess {
 		return StartResult{}, errors.New("process manager only starts process services")
 	}
 	if len(definition.Command) == 0 {
 		return StartResult{}, errors.New("service command is empty")
 	}
-	key := runMapKey(project, definition.Name)
+	project, environmentName, err := model.ParseEnvironmentSelector(scope)
+	if err != nil {
+		return StartResult{}, err
+	}
+	key := runMapKey(scope, definition.Name)
 	m.mu.Lock()
 	if current := m.runs[key]; current != nil {
 		select {
@@ -124,6 +128,7 @@ func (m *Manager) Start(ctx context.Context, project string, definition model.Se
 	command.Env = append(command.Env,
 		portEnvironment+"="+strconv.Itoa(port),
 		"PORTLESS_PROJECT="+project,
+		"PORTLESS_ENVIRONMENT="+environmentName,
 		"PORTLESS_SERVICE="+definition.Name,
 		"PORTLESS_RUN_GENERATION="+strconv.FormatInt(generation, 10),
 	)
@@ -139,7 +144,7 @@ func (m *Manager) Start(ctx context.Context, project string, definition model.Se
 		stderr.Close()
 		return StartResult{}, fmt.Errorf("start %s: %w", definition.Name, err)
 	}
-	run := &managedProcess{project: project, service: definition.Name, generation: generation, privateKey: privateKey, command: command, done: make(chan struct{})}
+	run := &managedProcess{scope: scope, service: definition.Name, generation: generation, privateKey: privateKey, command: command, done: make(chan struct{})}
 	m.mu.Lock()
 	m.runs[key] = run
 	m.mu.Unlock()
@@ -149,19 +154,19 @@ func (m *Manager) Start(ctx context.Context, project string, definition model.Se
 		_ = stderr.Close()
 		close(run.done)
 		if m.onExit != nil {
-			m.onExit(ExitEvent{Project: project, Service: definition.Name, Generation: generation, Error: run.exitError, Expected: run.stopping.Load()})
+			m.onExit(ExitEvent{Scope: scope, Service: definition.Name, Generation: generation, Error: run.exitError, Expected: run.stopping.Load()})
 		}
 	}()
 	result := StartResult{PID: command.Process.Pid, Port: port, Generation: generation, PrivateRunKey: privateKey, StartedAt: startedAt, LogDirectory: logDirectory}
 	if err := health.Wait(ctx, port, definition.Health); err != nil {
-		_ = m.Stop(context.Background(), project, definition.Name, 3*time.Second)
+		_ = m.Stop(context.Background(), scope, definition.Name, 3*time.Second)
 		return result, err
 	}
 	return result, nil
 }
 
-func (m *Manager) Stop(ctx context.Context, project, service string, timeout time.Duration) error {
-	key := runMapKey(project, service)
+func (m *Manager) Stop(ctx context.Context, scope, service string, timeout time.Duration) error {
+	key := runMapKey(scope, service)
 	m.mu.Lock()
 	run := m.runs[key]
 	m.mu.Unlock()
@@ -208,10 +213,10 @@ func (m *Manager) Stop(ctx context.Context, project, service string, timeout tim
 	return nil
 }
 
-func (m *Manager) IsRunning(project, service string) bool {
+func (m *Manager) IsRunning(scope, service string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	run := m.runs[runMapKey(project, service)]
+	run := m.runs[runMapKey(scope, service)]
 	if run == nil {
 		return false
 	}
@@ -223,7 +228,7 @@ func (m *Manager) IsRunning(project, service string) bool {
 	}
 }
 
-func runMapKey(project, service string) string { return project + "\x00" + service }
+func runMapKey(scope, service string) string { return scope + "\x00" + service }
 
 func privateRunKey() (string, error) {
 	var value [12]byte

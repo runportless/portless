@@ -61,6 +61,41 @@ func ValidateProjectName(name string) error {
 	return nil
 }
 
+func ValidateEnvironmentName(name string) error {
+	if !dnsNamePattern.MatchString(name) {
+		return errors.New("environment name must be a lowercase DNS label beginning with a letter")
+	}
+	if name == "portless" || name == "localhost" {
+		return errors.New("environment name is reserved")
+	}
+	return nil
+}
+
+func ValidateSourceName(name string) error {
+	if !dnsNamePattern.MatchString(name) {
+		return errors.New("source name must be a lowercase DNS label beginning with a letter")
+	}
+	return nil
+}
+
+func EnvironmentSelector(project, environment string) string {
+	return project + "/" + environment
+}
+
+func ParseEnvironmentSelector(selector string) (string, string, error) {
+	project, environment, found := strings.Cut(selector, "/")
+	if !found || strings.Contains(environment, "/") {
+		return "", "", errors.New("environment must be addressed as project/environment")
+	}
+	if err := ValidateProjectName(project); err != nil {
+		return "", "", err
+	}
+	if err := ValidateEnvironmentName(environment); err != nil {
+		return "", "", err
+	}
+	return project, environment, nil
+}
+
 func ValidateServiceName(name string) error {
 	if !dnsNamePattern.MatchString(name) {
 		return errors.New("service name must be a lowercase DNS label beginning with a letter")

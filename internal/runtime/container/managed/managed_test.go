@@ -37,8 +37,8 @@ func TestGeneratedEnvironmentPersistsAcrossContainerRecreation(t *testing.T) {
 }
 
 func TestPrivateLabelsAreRedactedFromErrors(t *testing.T) {
-	arguments := redactArguments([]string{"run", labelInstall + "=secret-install", labelProject + "=secret-project", "image"})
-	if arguments[1] != labelInstall+"=<private>" || arguments[2] != labelProject+"=<private>" {
+	arguments := redactArguments([]string{"run", labelInstall + "=secret-install", labelEnvironment + "=secret-environment", "image"})
+	if arguments[1] != labelInstall+"=<private>" || arguments[2] != labelEnvironment+"=<private>" {
 		t.Fatalf("arguments not redacted: %#v", arguments)
 	}
 }

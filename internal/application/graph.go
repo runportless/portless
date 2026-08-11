@@ -8,10 +8,55 @@ import (
 )
 
 func startOrder(definition model.ProjectModel) ([]string, error) {
+	bindings := make([]model.ComponentBinding, 0, len(definition.Services))
+	for _, service := range definition.Services {
+		provider := model.ProviderLocal
+		if service.Kind == model.ServiceContainer {
+			provider = model.ProviderContainer
+		}
+		bindings = append(bindings, model.ComponentBinding{Service: service.Name, Provider: provider})
+	}
+	return executionOrder(definition, bindings)
+}
+
+func executionOrder(definition model.ProjectModel, bindings []model.ComponentBinding) ([]string, error) {
+	providers := make(map[string]model.ProviderKind, len(bindings))
+	for _, binding := range bindings {
+		providers[binding.Service] = binding.Provider
+	}
+	active := make(map[string]struct{})
+	for _, service := range definition.Services {
+		if providers[service.Name] == model.ProviderLocal {
+			active[service.Name] = struct{}{}
+		}
+	}
+	changed := true
+	for changed {
+		changed = false
+		for _, connection := range definition.Connections {
+			if _, ok := active[connection.Source]; !ok {
+				continue
+			}
+			provider := providers[connection.Target]
+			if provider == model.ProviderRemote {
+				continue
+			}
+			if _, ok := active[connection.Target]; !ok {
+				active[connection.Target] = struct{}{}
+				changed = true
+			}
+		}
+	}
 	services := make(map[string]struct{}, len(definition.Services))
 	indegree := make(map[string]int, len(definition.Services))
 	dependents := make(map[string][]string)
 	for _, service := range definition.Services {
+		if _, ok := active[service.Name]; !ok {
+			continue
+		}
+		if providers[service.Name] == model.ProviderRemote {
+			continue
+		}
 		services[service.Name] = struct{}{}
 		indegree[service.Name] = 0
 	}
@@ -20,10 +65,10 @@ func startOrder(definition model.ProjectModel) ([]string, error) {
 			continue
 		}
 		if _, ok := services[connection.Source]; !ok {
-			return nil, fmt.Errorf("unknown source service %s", connection.Source)
+			continue
 		}
 		if _, ok := services[connection.Target]; !ok {
-			return nil, fmt.Errorf("unknown target service %s", connection.Target)
+			continue
 		}
 		// Source depends on target, so target is emitted first.
 		indegree[connection.Source]++

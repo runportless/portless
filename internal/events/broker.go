@@ -10,11 +10,12 @@ import (
 )
 
 type Event struct {
-	ID        int64     `json:"id"`
-	Type      string    `json:"type"`
-	Project   string    `json:"project,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	Data      any       `json:"data"`
+	ID          int64     `json:"id"`
+	Type        string    `json:"type"`
+	Project     string    `json:"project,omitempty"`
+	Environment string    `json:"environment,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+	Data        any       `json:"data"`
 }
 
 type Subscription struct {
@@ -25,7 +26,7 @@ type Subscription struct {
 func (s Subscription) Close() { s.cancel() }
 
 type subscriber struct {
-	project string
+	scope   string
 	topics  map[string]struct{}
 	channel chan Event
 }
@@ -59,7 +60,7 @@ func (b *Broker) Publish(event Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for _, subscriber := range b.subscribers {
-		if subscriber.project != "" && subscriber.project != event.Project {
+		if subscriber.scope != "" && subscriber.scope != eventScope(event.Project, event.Environment) {
 			continue
 		}
 		if len(subscriber.topics) > 0 {
@@ -75,7 +76,7 @@ func (b *Broker) Publish(event Event) {
 	}
 }
 
-func (b *Broker) Subscribe(ctx context.Context, project string, topics []string) Subscription {
+func (b *Broker) Subscribe(ctx context.Context, scope string, topics []string) Subscription {
 	channel := make(chan Event, 128)
 	topicSet := make(map[string]struct{}, len(topics))
 	for _, topic := range topics {
@@ -86,7 +87,7 @@ func (b *Broker) Subscribe(ctx context.Context, project string, topics []string)
 	b.mu.Lock()
 	b.nextSubscriberID++
 	id := b.nextSubscriberID
-	b.subscribers[id] = subscriber{project: project, topics: topicSet, channel: channel}
+	b.subscribers[id] = subscriber{scope: scope, topics: topicSet, channel: channel}
 	b.mu.Unlock()
 	var once sync.Once
 	cancel := func() {
@@ -105,27 +106,28 @@ func (b *Broker) Subscribe(ctx context.Context, project string, topics []string)
 }
 
 func (b *Broker) AddTraffic(event model.TrafficEvent) model.TrafficEvent {
+	scope := eventScope(event.Project, event.Environment)
 	b.mu.Lock()
-	b.trafficSequence[event.Project]++
-	event.Sequence = b.trafficSequence[event.Project]
-	items := append(b.traffic[event.Project], event)
+	b.trafficSequence[scope]++
+	event.Sequence = b.trafficSequence[scope]
+	items := append(b.traffic[scope], event)
 	if len(items) > b.trafficLimit {
 		copy(items, items[len(items)-b.trafficLimit:])
 		items = items[:b.trafficLimit]
 	}
-	b.traffic[event.Project] = items
+	b.traffic[scope] = items
 	b.mu.Unlock()
 	topic := "traffic.tcp"
 	if event.Protocol == model.ProtocolHTTP {
 		topic = "traffic.http"
 	}
-	b.Publish(Event{Type: topic, Project: event.Project, Data: event})
+	b.Publish(Event{Type: topic, Project: event.Project, Environment: event.Environment, Data: event})
 	return event
 }
 
-func (b *Broker) RecentTraffic(project string, limit int) []model.TrafficEvent {
+func (b *Broker) RecentTraffic(scope string, limit int) []model.TrafficEvent {
 	b.mu.RLock()
-	items := b.traffic[project]
+	items := b.traffic[scope]
 	if limit <= 0 || limit > len(items) {
 		limit = len(items)
 	}
@@ -135,4 +137,11 @@ func (b *Broker) RecentTraffic(project string, limit int) []model.TrafficEvent {
 	}
 	b.mu.RUnlock()
 	return result
+}
+
+func eventScope(project, environment string) string {
+	if environment == "" {
+		return project
+	}
+	return model.EnvironmentSelector(project, environment)
 }

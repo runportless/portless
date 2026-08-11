@@ -104,28 +104,28 @@ func (m *Manager) SetPreference(value RuntimeName) error {
 	return nil
 }
 
-func (m *Manager) Start(ctx context.Context, projectName, projectKey string, service model.ServiceDefinition) (StartResult, error) {
+func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition) (StartResult, error) {
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return StartResult{}, err
 	}
-	return runtime.Start(ctx, projectName, projectKey, service)
+	return runtime.Start(ctx, environmentName, environmentKey, service)
 }
 
-func (m *Manager) StopProject(ctx context.Context, projectKey string, removeVolumes bool) error {
+func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	return runtime.StopProject(ctx, projectKey, removeVolumes)
+	return runtime.StopEnvironment(ctx, environmentKey, removeVolumes)
 }
 
-func (m *Manager) StopService(ctx context.Context, projectKey, serviceName string) error {
+func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName string) error {
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	return runtime.StopService(ctx, projectKey, serviceName)
+	return runtime.StopService(ctx, environmentKey, serviceName)
 }
 
 func (m *Manager) readyRuntime(ctx context.Context) (Runtime, error) {

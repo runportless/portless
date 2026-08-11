@@ -35,6 +35,9 @@ func TestDiscoverNestServicesAndDependenciesWithoutExecutingCommands(t *testing.
 	if len(result.Model.Connections) < 3 {
 		t.Fatalf("expected HTTP, Postgres, and Redis connections; got %#v", result.Model.Connections)
 	}
+	if len(result.Model.References) != 0 {
+		t.Fatalf("managed dependency URLs became unresolved service references: %#v", result.Model.References)
+	}
 }
 
 func writeFixture(t *testing.T, path, content string) {
