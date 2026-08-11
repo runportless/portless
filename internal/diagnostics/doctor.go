@@ -32,6 +32,7 @@ type Status string
 
 const (
 	StatusPass Status = "pass"
+	StatusInfo Status = "info"
 	StatusWarn Status = "warn"
 	StatusFail Status = "fail"
 	StatusSkip Status = "skip"
@@ -47,10 +48,11 @@ type Check struct {
 }
 
 type Summary struct {
-	Passed   int `json:"passed"`
-	Warnings int `json:"warnings"`
-	Failed   int `json:"failed"`
-	Skipped  int `json:"skipped"`
+	Passed        int `json:"passed"`
+	Informational int `json:"informational"`
+	Warnings      int `json:"warnings"`
+	Failed        int `json:"failed"`
+	Skipped       int `json:"skipped"`
 }
 
 type Report struct {
@@ -108,6 +110,8 @@ func run(ctx context.Context, paths bootstrap.Paths, scope Scope, uid int, depen
 		switch check.Status {
 		case StatusPass:
 			report.Summary.Passed++
+		case StatusInfo:
+			report.Summary.Informational++
 		case StatusWarn:
 			report.Summary.Warnings++
 		case StatusFail:
@@ -159,8 +163,16 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 	if record.TokenPath != paths.Token {
 		controlProblems = append(controlProblems, fmt.Sprintf("configured token: %s; expected: %s", record.TokenPath, paths.Token))
 	}
+	legacyRecord := record.ProtocolVersion == "" || record.InstallationID == "" || record.InstanceID == "" || record.BuildID == "" || record.StartedAt.IsZero()
+	if legacyRecord {
+		controlProblems = append(controlProblems, "authenticated daemon identity metadata is missing")
+	}
 	if len(controlProblems) > 0 {
-		checks = append(checks, failed("daemon.control_record", "daemon", "Daemon control record ownership, permissions, or paths are unsafe", strings.Join(controlProblems, "; "), "Stop the daemon, correct the data-directory ownership, and run `portless up` to recreate its control record."))
+		remediation := "Stop the daemon, correct the data-directory ownership, and run `portless up` to recreate its control record."
+		if legacyRecord && len(controlProblems) == 1 {
+			remediation = "Replace this legacy daemon once with `portless daemon restart --force`."
+		}
+		checks = append(checks, failed("daemon.control_record", "daemon", "Daemon control record ownership, permissions, or paths are unsafe", strings.Join(controlProblems, "; "), remediation))
 	} else {
 		checks = append(checks, passed("daemon.control_record", "daemon", "Daemon control record is valid", fmt.Sprintf("%s; port %d", controlDetail, record.Port)))
 	}
@@ -173,12 +185,14 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 
 	healthRecord, healthErr := dependencies.checkDaemon(ctx, paths)
 	switch {
+	case errors.Is(healthErr, bootstrap.ErrLegacyDaemon):
+		checks = append(checks, failed("daemon.api", "daemon", "Legacy daemon cannot prove its identity to this CLI", healthErr.Error(), "Replace it once with `portless daemon restart --force`. The guarded fallback verifies process ownership and command arguments before signaling it."))
 	case healthErr != nil:
-		checks = append(checks, failed("daemon.api", "daemon", "Daemon API health check failed", healthErr.Error(), "Run `portless up` again; if it still fails, inspect `"+paths.DaemonLog+"`."))
+		checks = append(checks, failed("daemon.api", "daemon", "Daemon identity or compatibility check failed", healthErr.Error(), "Run `portless daemon status`, then `portless daemon restart`; use `--force` only for a verified legacy daemon or when interrupting active environments is acceptable."))
 	case healthRecord.APIVersion != api.APIVersion:
 		checks = append(checks, failed("daemon.api", "daemon", "Daemon protocol does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.APIVersion, api.APIVersion), "Restart the Portless daemon with the current CLI."))
 	default:
-		checks = append(checks, passed("daemon.api", "daemon", "Daemon API is healthy and compatible", "API version "+healthRecord.APIVersion))
+		checks = append(checks, passed("daemon.api", "daemon", "Daemon identity is authenticated and compatible", fmt.Sprintf("protocol %s; API %s; instance %s; build %s", healthRecord.ProtocolVersion, healthRecord.APIVersion, shortIdentity(healthRecord.InstanceID), shortIdentity(healthRecord.BuildID))))
 	}
 
 	authDetail, authErr := securePath(paths.Token, uid, pathRegular)
@@ -212,18 +226,22 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 
 func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependencies dependencies) []Check {
 	checks := make([]Check, 0, 8)
+	status, inspectErr := dependencies.inspectRelay(ctx)
 	dnsContext, cancelDNS := context.WithTimeout(ctx, 2*time.Second)
 	dnsDetail, dnsErr := checkLocalhostDNS(dnsContext, dependencies.lookupIP)
 	cancelDNS()
 	if errors.Is(dnsErr, errUnsafeLocalhostResolution) {
 		checks = append(checks, failed("relay.localhost_dns", "relay", ".localhost names do not resolve exclusively to loopback", dnsErr.Error(), "Correct the local DNS or resolver configuration for the reserved .localhost domain."))
 	} else if dnsErr != nil {
-		checks = append(checks, warned("relay.localhost_dns", "relay", "System resolver does not expose .localhost addresses", dnsErr.Error(), "Browsers and curl normally map the reserved .localhost suffix themselves; if clean URLs fail there, inspect local resolver or security software."))
+		if inspectErr == nil && status.Healthy {
+			checks = append(checks, informed("relay.localhost_dns", "relay", "System resolver defers .localhost mapping to clients", dnsErr.Error()+"; the clean-URL end-to-end check succeeded"))
+		} else {
+			checks = append(checks, warned("relay.localhost_dns", "relay", "System resolver does not expose .localhost addresses", dnsErr.Error(), "Browsers and curl normally map the reserved .localhost suffix themselves; if clean URLs fail there, inspect local resolver or security software."))
+		}
 	} else {
 		checks = append(checks, passed("relay.localhost_dns", "relay", ".localhost names resolve to loopback", dnsDetail))
 	}
 
-	status, inspectErr := dependencies.inspectRelay(ctx)
 	if inspectErr != nil {
 		checks = append(checks, failed("relay.installation", "relay", "Relay installation could not be inspected", inspectErr.Error(), "Run `portless setup status`, then `portless setup` to repair it."))
 		checks = append(checks, relaySkippedChecks()...)
@@ -462,6 +480,10 @@ func passed(code, component, summary, detail string) Check {
 	return Check{Code: code, Component: component, Status: StatusPass, Summary: summary, Detail: detail}
 }
 
+func informed(code, component, summary, detail string) Check {
+	return Check{Code: code, Component: component, Status: StatusInfo, Summary: summary, Detail: detail}
+}
+
 func warned(code, component, summary, detail, remediation string) Check {
 	return Check{Code: code, Component: component, Status: StatusWarn, Summary: summary, Detail: detail, Remediation: remediation}
 }
@@ -506,4 +528,11 @@ func emptyAsUnknown(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func shortIdentity(value string) string {
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }

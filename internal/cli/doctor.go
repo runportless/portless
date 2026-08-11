@@ -44,8 +44,11 @@ func printDoctorReport(c *CLI, report diagnostics.Report) {
 			fmt.Fprintln(c.Out, "        fix: "+check.Remediation)
 		}
 	}
-	fmt.Fprintf(c.Out, "\n%d passed, %s, %d failed, %d skipped\n",
-		report.Summary.Passed, countNoun(report.Summary.Warnings, "warning", "warnings"), report.Summary.Failed, report.Summary.Skipped)
+	fmt.Fprintf(c.Out, "\n%d passed, %s, %s, %d failed, %d skipped\n",
+		report.Summary.Passed,
+		countNoun(report.Summary.Informational, "informational check", "informational checks"),
+		countNoun(report.Summary.Warnings, "warning", "warnings"),
+		report.Summary.Failed, report.Summary.Skipped)
 }
 
 func countNoun(count int, singular, plural string) string {

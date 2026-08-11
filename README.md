@@ -24,7 +24,7 @@ Processes, Postgres, and Valkey receive dynamically allocated loopback ports. Tw
 
 ## What is implemented
 
-- One lazily started, machine-local Go daemon and one native Cobra CLI executable with generated nested help and shell completion.
+- One lazily started, machine-local Go daemon with an authenticated installation/instance/build handshake, plus one native Cobra CLI executable with generated nested help and shell completion.
 - Static Spring Boot/Gradle and NestJS discovery across one or many repositories, with Postgres and Redis-compatible hints.
 - Reusable projects with independently runnable environments, per-environment checkout paths, and local, managed-container, or remote HTTP(S) providers.
 - Explicit remote classification and write policy; read-only targets reject unsafe methods before traffic leaves the machine.
@@ -74,10 +74,15 @@ The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin
 
 `portless setup` is idempotent. On macOS it installs a root-owned launchd job; on systemd Linux it installs an equivalent unit. The helper owns only `127.0.0.1:80`, drops privileges before accepting traffic, and cannot inspect or control projects independently of the user daemon. If another program already owns local port 80, setup stops with that conflict instead of replacing it. A root-owned receipt records which local user and private socket own the machine-wide relay.
 
+The daemon creates `~/.portless` and its private runtime directories with mode `0700`. When opening an existing data directory, it rejects files and symlinks, verifies ownership, and restores mode `0700` before reading daemon state.
+
 Useful commands:
 
 ```text
 portless status
+portless daemon status
+portless daemon stop
+portless daemon restart
 portless setup status
 portless doctor
 portless env list
@@ -138,7 +143,20 @@ portless doctor runtime
 portless doctor --json
 ```
 
-Each failed or warning check includes a stable code and a specific remediation. Human output is grouped by component; JSON contains the same checks for scripts and bug reports. The command exits with status 1 when a required check fails, status 0 when there are only passes or warnings, and status 2 for invalid command usage.
+Every check includes a stable code. Failed checks and warnings include specific remediation; informational checks capture useful platform behavior that requires no action. Human output is grouped by component, and JSON contains the same checks for scripts and bug reports. The command exits with status 1 when a required check fails, status 0 when there are only passes, informational results, or warnings, and status 2 for invalid command usage.
+
+Every API-using CLI command authenticates the daemon before using it. The daemon reports a stable installation fingerprint, a random per-start instance fingerprint, the API/lifecycle protocol versions, and a hash of the exact executable that started it. Those values must match the private control record and the current CLI build. A compatible daemon is reused; an authenticated older build is restarted automatically only when it has no active environments. An identity mismatch fails closed instead of trusting a health response or signaling the recorded PID.
+
+Explicit lifecycle controls are available when needed:
+
+```bash
+portless daemon status
+portless daemon status --json
+portless daemon stop
+portless daemon restart
+```
+
+`stop` and `restart` refuse to interrupt active environments. `--force` bypasses that guard and is also the migration path for a legacy daemon that predates the authenticated lifecycle endpoint. Before the legacy fallback sends a signal, it verifies that the private record still points to a process owned by the current user whose command is a Portless daemon for the same data directory. Forced shutdown can leave processes or containers unmanaged because crash adoption is not implemented yet, so it is an explicit recovery action rather than the normal workflow.
 
 ## Projects spanning several repositories
 

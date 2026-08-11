@@ -389,7 +389,14 @@ func (s *Service) EnvironmentsForPath(ctx context.Context, path string) ([]model
 	if selected, err := s.store.ContextSelection(ctx, path); err == nil {
 		return []model.Environment{s.decorateEnvironment(selected)}, nil
 	}
-	return s.store.EnvironmentsByPath(ctx, path)
+	environments, err := s.store.EnvironmentsByPath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	for index := range environments {
+		environments[index] = s.decorateEnvironment(environments[index])
+	}
+	return environments, nil
 }
 
 func (s *Service) ProjectModel(ctx context.Context, name string) (model.ProjectModel, error) {

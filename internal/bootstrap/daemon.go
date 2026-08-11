@@ -13,26 +13,25 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/portless-run/portless/internal/api"
 	"github.com/portless-run/portless/internal/application"
 	"github.com/portless-run/portless/internal/auth"
+	"github.com/portless-run/portless/internal/daemon"
 	"github.com/portless-run/portless/internal/events"
+	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/store"
 	"github.com/portless-run/portless/webui"
 )
 
 func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
-	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(paths.Logs, 0o700); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(paths.Temporary, 0o700); err != nil {
-		return err
+	for _, directory := range []string{paths.Root, paths.Logs, paths.Temporary} {
+		if err := ensurePrivateDirectory(directory); err != nil {
+			return err
+		}
 	}
 	authManager, err := auth.LoadOrCreate(paths.Token)
 	if err != nil {
@@ -41,6 +40,20 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	ownershipKey, err := loadOrCreateKey(paths.OwnershipKey)
 	if err != nil {
 		return fmt.Errorf("initialize runtime ownership key: %w", err)
+	}
+	instanceID, err := newInstanceID()
+	if err != nil {
+		return err
+	}
+	buildID, err := CurrentBuildID()
+	if err != nil {
+		return err
+	}
+	startedAt := time.Now().UTC()
+	identity := daemon.Identity{
+		Product: daemon.Product, ProtocolVersion: daemon.ProtocolVersion, APIVersion: api.APIVersion,
+		InstallationID: installationIDFromKey(ownershipKey), InstanceID: instanceID, BuildID: buildID,
+		PID: os.Getpid(), StartedAt: startedAt, ActiveEnvironments: []string{},
 	}
 	controlStore, err := store.Open(paths.Database)
 	if err != nil {
@@ -62,9 +75,28 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	defer ingressListener.Close()
 	defer removeIngressSocket(paths.Ingress)
 	port := listener.Addr().(*net.TCPAddr).Port
-	handler, err := api.New(app, authManager, webui.Assets())
+	apiHandler, err := api.New(app, authManager, webui.Assets())
 	if err != nil {
 		return err
+	}
+	shutdownRequested := make(chan struct{})
+	var shutdownOnce sync.Once
+	handler := &lifecycleHandler{
+		next: apiHandler, auth: authManager, identity: identity,
+		activeEnvironments: func(ctx context.Context) ([]string, error) {
+			environments, err := app.Environments(ctx, "")
+			if err != nil {
+				return nil, err
+			}
+			active := make([]string, 0, len(environments))
+			for _, environment := range environments {
+				if environment.Status != model.EnvironmentStopped {
+					active = append(active, model.EnvironmentSelector(environment.Project, environment.Name))
+				}
+			}
+			return active, nil
+		},
+		shutdown: func() { shutdownOnce.Do(func() { close(shutdownRequested) }) },
 	}
 	controlServer := &http.Server{
 		Handler:           handler,
@@ -78,12 +110,16 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 	}
-	record := ControlRecord{PID: os.Getpid(), Port: port, APIVersion: api.APIVersion, TokenPath: paths.Token, StartedAt: time.Now().UTC(), ProcessHint: filepath.Base(os.Args[0])}
+	record := ControlRecord{
+		PID: identity.PID, Port: port, ProtocolVersion: identity.ProtocolVersion, APIVersion: identity.APIVersion,
+		InstallationID: identity.InstallationID, InstanceID: identity.InstanceID, BuildID: identity.BuildID,
+		TokenPath: paths.Token, StartedAt: identity.StartedAt, ProcessHint: filepath.Base(os.Args[0]),
+	}
 	if err := writeControl(paths, record); err != nil {
 		return fmt.Errorf("publish daemon discovery record: %w", err)
 	}
-	defer removeOwnControl(paths)
-	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.Ingress, "pid", os.Getpid())
+	defer removeOwnControl(paths, identity.InstanceID)
+	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.Ingress, "pid", os.Getpid(), "instance", identity.InstanceID, "build", identity.BuildID[:12])
 	errChannel := make(chan error, 2)
 	go func() {
 		errChannel <- controlServer.Serve(listener)
@@ -95,6 +131,10 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	defer cancel()
 	select {
 	case <-signalContext.Done():
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
+	case <-shutdownRequested:
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))

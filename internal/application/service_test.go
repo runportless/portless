@@ -74,6 +74,37 @@ func TestCreateProjectRejectsDaemonRelativeSourcePath(t *testing.T) {
 	}
 }
 
+func TestEnvironmentsForPathDecoratesResolvedEnvironmentURLs(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
+		t.Fatal(err)
+	}
+	environments, err := app.EnvironmentsForPath(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(environments) != 1 {
+		t.Fatalf("resolved %d environments, want 1", len(environments))
+	}
+	resolved := environments[0]
+	if resolved.DashboardURL != "http://portless.localhost/environments/billing/local" {
+		t.Fatalf("dashboard URL = %q", resolved.DashboardURL)
+	}
+	if len(resolved.Services) != 1 || resolved.Services[0].IngressURL != "http://checkout.local.billing.localhost" {
+		t.Fatalf("resolved services were not decorated: %#v", resolved.Services)
+	}
+}
+
 func nestFixture(t *testing.T, root string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o700); err != nil {

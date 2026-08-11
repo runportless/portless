@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/portless-run/portless/internal/bootstrap"
 	"github.com/portless-run/portless/internal/diagnostics"
+	"github.com/portless-run/portless/internal/model"
 )
 
 func TestCobraRootHelpShowsCommandTree(t *testing.T) {
@@ -17,9 +19,71 @@ func TestCobraRootHelpShowsCommandTree(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"Available Commands:", "completion", "doctor", "env", "project", "record", "runtime"} {
+	for _, expected := range []string{"Available Commands:", "completion", "daemon", "doctor", "env", "project", "record", "runtime"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestCobraDaemonHelpAndStoppedStatus(t *testing.T) {
+	application, output, errorsOutput := newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"daemon", "--help"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	for _, expected := range []string{"status", "stop", "restart", "Inspect, stop, or restart"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("daemon help does not contain %q:\n%s", expected, output.String())
+		}
+	}
+
+	application, output, errorsOutput = newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"daemon", "status"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "Portless daemon is stopped") {
+		t.Fatalf("unexpected stopped status: %s", output.String())
+	}
+
+	application, output, errorsOutput = newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"daemon", "stop"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "already stopped") {
+		t.Fatalf("unexpected stopped result: %s", output.String())
+	}
+}
+
+func TestCobraDaemonStatusExplainsOneTimeLegacyReplacement(t *testing.T) {
+	application, _, errorsOutput := newTestCLI(t)
+	record := bootstrap.ControlRecord{PID: os.Getpid(), Port: 7331, APIVersion: "1", TokenPath: application.paths.Token}
+	content, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(application.paths.Control, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := application.Run(context.Background(), []string{"daemon", "status"}); code != 1 {
+		t.Fatalf("Run returned %d, want 1; stderr: %s", code, errorsOutput.String())
+	}
+	if !strings.Contains(errorsOutput.String(), "portless daemon restart --force") {
+		t.Fatalf("legacy daemon remediation is missing: %s", errorsOutput.String())
+	}
+}
+
+func TestPrintStatusShowsHTTPAndPublishedContainerEndpoints(t *testing.T) {
+	application, output, _ := newTestCLI(t)
+	application.printStatus(model.Environment{
+		Project: "billing", Name: "local", DashboardURL: "http://portless.localhost/environments/billing/local",
+		Services: []model.Service{
+			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess}, Status: model.ServiceReady, IngressURL: "http://checkout.local.billing.localhost", UpstreamPort: 49100},
+			{ServiceDefinition: model.ServiceDefinition{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"}, Status: model.ServiceReady, UpstreamPort: 49101},
+		},
+	})
+	for _, expected := range []string{"http://checkout.local.billing.localhost", "127.0.0.1:49101", "http://portless.localhost/environments/billing/local"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("status does not contain %q:\n%s", expected, output.String())
 		}
 	}
 }

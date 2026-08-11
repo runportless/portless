@@ -13,40 +13,62 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/portless-run/portless/internal/api"
+	"github.com/portless-run/portless/internal/daemon"
 )
 
 type ControlRecord struct {
-	PID         int       `json:"pid"`
-	Port        int       `json:"port"`
-	APIVersion  string    `json:"apiVersion"`
-	TokenPath   string    `json:"tokenPath"`
-	StartedAt   time.Time `json:"startedAt"`
-	ProcessHint string    `json:"processHint"`
+	PID             int       `json:"pid"`
+	Port            int       `json:"port"`
+	ProtocolVersion string    `json:"protocolVersion,omitempty"`
+	APIVersion      string    `json:"apiVersion"`
+	InstallationID  string    `json:"installationId,omitempty"`
+	InstanceID      string    `json:"instanceId,omitempty"`
+	BuildID         string    `json:"buildId,omitempty"`
+	TokenPath       string    `json:"tokenPath"`
+	StartedAt       time.Time `json:"startedAt"`
+	ProcessHint     string    `json:"processHint"`
 }
 
+type DaemonInspection struct {
+	Record          ControlRecord
+	Identity        daemon.Identity
+	Compatible      bool
+	CurrentBuild    bool
+	ExpectedBuildID string
+	Problems        []string
+}
+
+var ErrLegacyDaemon = errors.New("daemon predates the authenticated lifecycle protocol")
+
 func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
-	if record, err := readHealthyRecord(ctx, paths); err == nil {
-		return record, nil
-	}
-	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+	if err := ensurePrivateDirectory(paths.Root); err != nil {
 		return ControlRecord{}, err
+	}
+	if inspection, err := InspectDaemon(ctx, paths); err == nil && inspection.Compatible {
+		if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 {
+			return inspection.Record, nil
+		}
 	}
 	lock, err := os.OpenFile(paths.Lock, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return ControlRecord{}, err
 	}
 	defer lock.Close()
-	deadline := time.Now().Add(12 * time.Second)
+	lockDeadline := time.Now().Add(12 * time.Second)
 	for {
 		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			break
 		}
-		if record, healthErr := readHealthyRecord(ctx, paths); healthErr == nil {
-			return record, nil
+		if inspection, inspectErr := InspectDaemon(ctx, paths); inspectErr == nil && inspection.Compatible {
+			if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 {
+				return inspection.Record, nil
+			}
 		}
-		if time.Now().After(deadline) {
-			return ControlRecord{}, errors.New("timed out waiting for another Portless CLI to start the daemon")
+		if time.Now().After(lockDeadline) {
+			return ControlRecord{}, errors.New("timed out waiting for another Portless CLI to prepare the daemon")
 		}
 		select {
 		case <-ctx.Done():
@@ -55,15 +77,51 @@ func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 		}
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	if record, err := readHealthyRecord(ctx, paths); err == nil {
-		return record, nil
+
+	inspection, inspectErr := InspectDaemon(ctx, paths)
+	if inspectErr == nil {
+		if inspection.Compatible && inspection.CurrentBuild {
+			return inspection.Record, nil
+		}
+		if inspection.Compatible && len(inspection.Identity.ActiveEnvironments) > 0 {
+			return inspection.Record, nil
+		}
+		if _, err := stopVerifiedDaemon(ctx, paths, inspection, StopOptions{Timeout: 15 * time.Second}, false, "replace an outdated daemon"); err != nil {
+			return ControlRecord{}, err
+		}
+	} else {
+		record, recordErr := ReadControl(paths)
+		switch {
+		case recordErr == nil:
+			alive, aliveErr := processIsAlive(record.PID)
+			if aliveErr != nil {
+				return ControlRecord{}, fmt.Errorf("inspect recorded daemon process %d: %w", record.PID, aliveErr)
+			}
+			if alive {
+				return ControlRecord{}, unverifiedDaemonError(record, inspectErr)
+			}
+			removeMatchingControl(paths, record)
+		case errors.Is(recordErr, os.ErrNotExist):
+			// There is no daemon to replace.
+		default:
+			return ControlRecord{}, fmt.Errorf("the daemon control record is invalid; refusing to start a second daemon: %w", recordErr)
+		}
 	}
+
 	if err := startDaemon(paths); err != nil {
 		return ControlRecord{}, err
 	}
-	for time.Now().Before(deadline) {
-		if record, err := readHealthyRecord(ctx, paths); err == nil {
-			return record, nil
+	startupDeadline := time.Now().Add(12 * time.Second)
+	var lastError error
+	for time.Now().Before(startupDeadline) {
+		inspection, err := InspectDaemon(ctx, paths)
+		if err == nil && inspection.Compatible && inspection.CurrentBuild {
+			return inspection.Record, nil
+		}
+		if err != nil {
+			lastError = err
+		} else {
+			lastError = incompatibleDaemonError(inspection)
 		}
 		select {
 		case <-ctx.Done():
@@ -72,7 +130,9 @@ func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 		}
 	}
 	message := "daemon did not become ready; inspect " + paths.DaemonLog
-	if tail := readLogTail(paths.DaemonLog, 4096); tail != "" {
+	if lastError != nil {
+		message += ": " + lastError.Error()
+	} else if tail := readLogTail(paths.DaemonLog, 4096); tail != "" {
 		message += ": " + tail
 	}
 	return ControlRecord{}, errors.New(message)
@@ -100,23 +160,113 @@ func startDaemon(paths Paths) error {
 }
 
 func ReadControl(paths Paths) (ControlRecord, error) {
-	content, err := os.ReadFile(paths.Control)
+	content, err := readPrivateTextFile(paths.Control)
 	if err != nil {
 		return ControlRecord{}, err
 	}
 	var record ControlRecord
-	if err := json.Unmarshal(content, &record); err != nil {
+	if err := json.Unmarshal([]byte(content), &record); err != nil {
 		return ControlRecord{}, err
 	}
-	if record.Port < 1 || record.Port > 65535 || record.PID <= 0 || record.APIVersion == "" {
+	if record.Port < 1 || record.Port > 65535 || record.PID <= 0 || record.APIVersion == "" || record.TokenPath == "" {
 		return ControlRecord{}, errors.New("invalid daemon discovery record")
 	}
 	return record, nil
 }
 
-// CheckDaemon verifies an existing daemon without starting or modifying it.
+// InspectDaemon authenticates the daemon and verifies that its response matches
+// the private discovery record and this Portless installation. Compatibility is
+// reported separately so a verified older build can be stopped safely.
+func InspectDaemon(ctx context.Context, paths Paths) (DaemonInspection, error) {
+	record, err := ReadControl(paths)
+	if err != nil {
+		return DaemonInspection{}, err
+	}
+	if record.TokenPath != paths.Token {
+		return DaemonInspection{}, fmt.Errorf("daemon token path %s does not match this installation", record.TokenPath)
+	}
+	if record.ProtocolVersion == "" || record.InstallationID == "" || record.InstanceID == "" || record.BuildID == "" || record.StartedAt.IsZero() {
+		return DaemonInspection{}, fmt.Errorf("%w: identity metadata is missing", ErrLegacyDaemon)
+	}
+	token, err := readPrivateTextFile(paths.Token)
+	if err != nil {
+		return DaemonInspection{}, fmt.Errorf("read CLI authentication token: %w", err)
+	}
+	expectedInstallationID, err := InstallationID(paths)
+	if err != nil {
+		return DaemonInspection{}, err
+	}
+	identity, err := fetchDaemonIdentity(ctx, record.Port, token)
+	if err != nil {
+		return DaemonInspection{}, err
+	}
+	if identity.Product != daemon.Product {
+		return DaemonInspection{}, fmt.Errorf("unexpected daemon product %q", identity.Product)
+	}
+	if identity.PID != record.PID || identity.ProtocolVersion != record.ProtocolVersion || identity.APIVersion != record.APIVersion ||
+		identity.InstallationID != record.InstallationID || identity.InstanceID != record.InstanceID || identity.BuildID != record.BuildID ||
+		!identity.StartedAt.Equal(record.StartedAt) {
+		return DaemonInspection{}, errors.New("authenticated daemon identity does not match the discovery record")
+	}
+	if identity.InstallationID != expectedInstallationID {
+		return DaemonInspection{}, errors.New("authenticated daemon belongs to a different Portless installation")
+	}
+	expectedBuildID, err := CurrentBuildID()
+	if err != nil {
+		return DaemonInspection{}, err
+	}
+	inspection := DaemonInspection{
+		Record: record, Identity: identity, Compatible: true,
+		CurrentBuild: identity.BuildID == expectedBuildID, ExpectedBuildID: expectedBuildID,
+	}
+	if identity.ProtocolVersion != daemon.ProtocolVersion {
+		inspection.Compatible = false
+		inspection.Problems = append(inspection.Problems, fmt.Sprintf("daemon protocol %s, CLI protocol %s", identity.ProtocolVersion, daemon.ProtocolVersion))
+	}
+	if identity.APIVersion != api.APIVersion {
+		inspection.Compatible = false
+		inspection.Problems = append(inspection.Problems, fmt.Sprintf("daemon API %s, CLI API %s", identity.APIVersion, api.APIVersion))
+	}
+	if identity.BuildID != expectedBuildID {
+		inspection.Problems = append(inspection.Problems, "daemon executable differs from the current CLI executable")
+	}
+	return inspection, nil
+}
+
+// CheckDaemon verifies an existing compatible daemon without starting or
+// modifying it.
 func CheckDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
-	return readHealthyRecord(ctx, paths)
+	inspection, err := InspectDaemon(ctx, paths)
+	if err != nil {
+		return ControlRecord{}, err
+	}
+	if !inspection.Compatible || !inspection.CurrentBuild {
+		return ControlRecord{}, incompatibleDaemonError(inspection)
+	}
+	return inspection.Record, nil
+}
+
+func fetchDaemonIdentity(ctx context.Context, port int, token string) (daemon.Identity, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, daemon.IdentityPath), nil)
+	if err != nil {
+		return daemon.Identity{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 750 * time.Millisecond}
+	response, err := client.Do(request)
+	if err != nil {
+		return daemon.Identity{}, fmt.Errorf("connect to recorded daemon identity endpoint: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return daemon.Identity{}, fmt.Errorf("recorded daemon identity endpoint returned %s", response.Status)
+	}
+	var identity daemon.Identity
+	if err := json.NewDecoder(io.LimitReader(response.Body, 32<<10)).Decode(&identity); err != nil {
+		return daemon.Identity{}, fmt.Errorf("decode recorded daemon identity: %w", err)
+	}
+	return identity, nil
 }
 
 func writeControl(paths Paths, record ControlRecord) error {
@@ -139,42 +289,30 @@ func writeControl(paths Paths, record ControlRecord) error {
 	return nil
 }
 
-func removeOwnControl(paths Paths) {
+func removeOwnControl(paths Paths, instanceID string) {
 	record, err := ReadControl(paths)
-	if err == nil && record.PID == os.Getpid() {
+	if err == nil && record.PID == os.Getpid() && record.InstanceID == instanceID {
 		_ = os.Remove(paths.Control)
 	}
 }
 
-func readHealthyRecord(ctx context.Context, paths Paths) (ControlRecord, error) {
-	record, err := ReadControl(paths)
-	if err != nil {
-		return ControlRecord{}, err
+func removeMatchingControl(paths Paths, expected ControlRecord) {
+	current, err := ReadControl(paths)
+	if err != nil || current.PID != expected.PID || current.Port != expected.Port || current.InstanceID != expected.InstanceID {
+		return
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", record.Port), nil)
-	if err != nil {
-		return ControlRecord{}, err
+	_ = os.Remove(paths.Control)
+}
+
+func incompatibleDaemonError(inspection DaemonInspection) error {
+	if inspection.Compatible && !inspection.CurrentBuild {
+		return errors.New("Portless daemon is compatible but runs a different executable build")
 	}
-	client := &http.Client{Timeout: 350 * time.Millisecond}
-	response, err := client.Do(request)
-	if err != nil {
-		return ControlRecord{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return ControlRecord{}, fmt.Errorf("daemon health returned %s", response.Status)
-	}
-	var health struct {
-		Ready      bool   `json:"ready"`
-		APIVersion string `json:"apiVersion"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&health); err != nil {
-		return ControlRecord{}, err
-	}
-	if !health.Ready || health.APIVersion != record.APIVersion {
-		return ControlRecord{}, errors.New("daemon protocol is incompatible")
-	}
-	return record, nil
+	return fmt.Errorf("Portless daemon is not compatible with this CLI: %s", strings.Join(inspection.Problems, "; "))
+}
+
+func unverifiedDaemonError(record ControlRecord, cause error) error {
+	return fmt.Errorf("cannot authenticate the recorded Portless daemon at PID %d: %v; refusing to replace or signal it (run `portless daemon restart --force` only after confirming active environments may be interrupted)", record.PID, cause)
 }
 
 func readLogTail(path string, limit int64) string {

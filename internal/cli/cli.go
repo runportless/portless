@@ -858,7 +858,8 @@ func (c *CLI) findCurrent(ctx context.Context, client *bootstrap.Client) (model.
 	case 0:
 		return model.Environment{}, errors.New("this checkout is not part of a Portless environment; run `portless up` or `portless project create`")
 	case 1:
-		return environments[0], nil
+		resolved := environments[0]
+		return c.loadEnvironment(ctx, client, model.EnvironmentSelector(resolved.Project, resolved.Name))
 	default:
 		return model.Environment{}, ambiguousEnvironmentError(environments)
 	}
@@ -1020,9 +1021,19 @@ func (c *CLI) printStatus(environment model.Environment) {
 				break
 			}
 		}
-		fmt.Fprintf(c.Out, "%-23s %-11s %-11s %-14s %s\n", service.Name, provider, kind, service.Status, service.IngressURL)
+		fmt.Fprintf(c.Out, "%-23s %-11s %-11s %-14s %s\n", service.Name, provider, kind, service.Status, statusEndpoint(service))
 	}
 	fmt.Fprintln(c.Out, "\nDashboard:", environment.DashboardURL)
+}
+
+func statusEndpoint(service model.Service) string {
+	if service.IngressURL != "" {
+		return service.IngressURL
+	}
+	if service.UpstreamPort > 0 {
+		return fmt.Sprintf("127.0.0.1:%d", service.UpstreamPort)
+	}
+	return ""
 }
 
 func (c *CLI) printOperation(operation model.Operation, jsonOutput bool) {

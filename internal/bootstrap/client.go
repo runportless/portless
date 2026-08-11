@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -41,13 +39,9 @@ func Connect(ctx context.Context, paths Paths) (*Client, ControlRecord, error) {
 	if err != nil {
 		return nil, ControlRecord{}, err
 	}
-	tokenBytes, err := os.ReadFile(record.TokenPath)
+	token, err := readPrivateTextFile(paths.Token)
 	if err != nil {
 		return nil, ControlRecord{}, fmt.Errorf("read CLI authentication token: %w", err)
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-	if token == "" {
-		return nil, ControlRecord{}, errors.New("CLI authentication token is empty")
 	}
 	return &Client{BaseURL: fmt.Sprintf("http://127.0.0.1:%d", record.Port), Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}, record, nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/portless-run/portless/internal/bootstrap"
 	"github.com/portless-run/portless/internal/diagnostics"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/spf13/cobra"
@@ -131,6 +132,7 @@ func (c *CLI) rootCommand() *cobra.Command {
 	root.CompletionOptions.DisableDescriptions = true
 	root.AddCommand(
 		c.setupCommand(),
+		c.daemonCommand(),
 		c.doctorCommand(),
 		c.upCommand(),
 		c.downCommand(),
@@ -148,6 +150,54 @@ func (c *CLI) rootCommand() *cobra.Command {
 		c.versionCommand(),
 	)
 	return root
+}
+
+func (c *CLI) daemonCommand() *cobra.Command {
+	command := commandGroup("daemon", "Inspect, stop, or restart the local Portless daemon")
+
+	statusJSON := false
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Authenticate the daemon and show its identity",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.daemonStatus(cmd.Context(), statusJSON)
+		},
+	}
+	status.Flags().BoolVar(&statusJSON, "json", false, "emit JSON")
+	command.AddCommand(status)
+
+	stopOptions := bootstrap.StopOptions{Timeout: 15 * time.Second}
+	stopJSON := false
+	stop := &cobra.Command{
+		Use:   "stop",
+		Short: "Gracefully stop the authenticated daemon",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.stopDaemon(cmd.Context(), stopOptions, stopJSON)
+		},
+	}
+	stop.Flags().BoolVar(&stopOptions.Force, "force", false, "stop despite active environments or use the guarded legacy fallback")
+	stop.Flags().DurationVar(&stopOptions.Timeout, "timeout", stopOptions.Timeout, "time to wait for graceful shutdown")
+	stop.Flags().BoolVar(&stopJSON, "json", false, "emit JSON")
+	command.AddCommand(stop)
+
+	restartOptions := bootstrap.StopOptions{Timeout: 15 * time.Second}
+	restartJSON := false
+	restart := &cobra.Command{
+		Use:   "restart",
+		Short: "Stop the authenticated daemon and start the current build",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.restartDaemon(cmd.Context(), restartOptions, restartJSON)
+		},
+	}
+	restart.Flags().BoolVar(&restartOptions.Force, "force", false, "restart despite active environments or replace a guarded legacy daemon")
+	restart.Flags().DurationVar(&restartOptions.Timeout, "timeout", restartOptions.Timeout, "time to wait for graceful shutdown")
+	restart.Flags().BoolVar(&restartJSON, "json", false, "emit JSON")
+	command.AddCommand(restart)
+
+	return command
 }
 
 func (c *CLI) doctorCommand() *cobra.Command {

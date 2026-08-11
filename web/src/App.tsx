@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, APIError, environmentPath, jsonBody, setCSRF } from './api'
-import { AppChrome, type Command } from './components/Chrome'
+import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
 import type { Environment, Operation, Project, RuntimeStatus } from './types'
 
 interface Session { actor: string; browser: boolean; csrf: string }
-type Tab = 'overview' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
+type Tab = EnvironmentView
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -102,7 +102,7 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} runtime={runtimeStatus} onNavigate={navigate} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} runtime={runtimeStatus} onNavigate={navigate} commands={commands} live={live}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} runtime={runtimeStatus} onNavigate={navigate} commands={commands} live={live}>{content}</AppChrome>
 }
 
 function parseRoute(route: string): { project?: string; environment?: string; tab: Tab } {

@@ -33,7 +33,8 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := bootstrap.ControlRecord{
-		PID: os.Getpid(), Port: 7331, APIVersion: api.APIVersion,
+		PID: os.Getpid(), Port: 7331, ProtocolVersion: "1", APIVersion: api.APIVersion,
+		InstallationID: "installation", InstanceID: "instance", BuildID: "build",
 		TokenPath: paths.Token, StartedAt: time.Now().UTC(), ProcessHint: "portless-test",
 	}
 	content, err := json.Marshal(record)
@@ -102,7 +103,7 @@ func TestRelayChecksHealthyInstallation(t *testing.T) {
 	}
 }
 
-func TestRelayResolverUnavailableWarnsButUnsafeResolutionFails(t *testing.T) {
+func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testing.T) {
 	paths, err := bootstrap.ResolvePaths(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -120,8 +121,21 @@ func TestRelayResolverUnavailableWarnsButUnsafeResolutionFails(t *testing.T) {
 		return nil, errors.New("resolver does not expose .localhost")
 	}
 	report := run(context.Background(), paths, ScopeRelay, uid, unavailable)
-	if !report.Healthy || report.Summary.Warnings != 1 || report.Summary.Failed != 0 {
-		t.Fatalf("resolver limitation should be a warning: %#v", report)
+	if !report.Healthy || report.Summary.Informational != 1 || report.Summary.Warnings != 0 || report.Summary.Failed != 0 {
+		t.Fatalf("resolver limitation should be informational when clean URLs work: %#v", report)
+	}
+	if check := checkByCode(t, report, "relay.localhost_dns"); check.Status != StatusInfo || check.Remediation != "" {
+		t.Fatalf("unexpected resolver informational check: %#v", check)
+	}
+
+	unhealthy := unavailable
+	unhealthy.inspectRelay = func(context.Context) (ingress.InstallationStatus, error) {
+		return ingress.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
+	}
+	unhealthy.portListening = func(context.Context) (bool, error) { return false, nil }
+	report = run(context.Background(), paths, ScopeRelay, uid, unhealthy)
+	if report.Summary.Informational != 0 || report.Summary.Warnings != 1 || report.Summary.Failed != 1 {
+		t.Fatalf("resolver limitation should remain a warning while clean URLs are unavailable: %#v", report)
 	}
 
 	unsafe := base

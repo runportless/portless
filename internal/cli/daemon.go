@@ -1,0 +1,152 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/portless-run/portless/internal/bootstrap"
+)
+
+type daemonStatusOutput struct {
+	State              string    `json:"state"`
+	Compatible         bool      `json:"compatible"`
+	CurrentBuild       bool      `json:"currentBuild"`
+	PID                int       `json:"pid,omitempty"`
+	ProtocolVersion    string    `json:"protocolVersion,omitempty"`
+	APIVersion         string    `json:"apiVersion,omitempty"`
+	InstallationID     string    `json:"installationId,omitempty"`
+	InstanceID         string    `json:"instanceId,omitempty"`
+	BuildID            string    `json:"buildId,omitempty"`
+	ExpectedBuildID    string    `json:"expectedBuildId,omitempty"`
+	StartedAt          time.Time `json:"startedAt,omitempty"`
+	ActiveEnvironments []string  `json:"activeEnvironments"`
+	Problems           []string  `json:"problems"`
+}
+
+func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
+	inspection, err := bootstrap.InspectDaemon(ctx, c.paths)
+	if errors.Is(err, os.ErrNotExist) {
+		result := daemonStatusOutput{State: "stopped", ActiveEnvironments: []string{}, Problems: []string{}}
+		if jsonOutput {
+			return writeJSON(c.Out, result)
+		}
+		fmt.Fprintln(c.Out, "Portless daemon is stopped.")
+		return nil
+	}
+	if err != nil {
+		if errors.Is(err, bootstrap.ErrLegacyDaemon) {
+			return fmt.Errorf("daemon identity could not be verified: %w; replace it once with `portless daemon restart --force`", err)
+		}
+		return fmt.Errorf("daemon identity could not be verified: %w", err)
+	}
+	state := "running"
+	if !inspection.Compatible {
+		state = "incompatible"
+	} else if !inspection.CurrentBuild {
+		state = "outdated"
+	}
+	result := daemonStatusOutput{
+		State: state, Compatible: inspection.Compatible, CurrentBuild: inspection.CurrentBuild, PID: inspection.Identity.PID,
+		ProtocolVersion: inspection.Identity.ProtocolVersion, APIVersion: inspection.Identity.APIVersion,
+		InstallationID: inspection.Identity.InstallationID, InstanceID: inspection.Identity.InstanceID,
+		BuildID: inspection.Identity.BuildID, ExpectedBuildID: inspection.ExpectedBuildID,
+		StartedAt: inspection.Identity.StartedAt, ActiveEnvironments: inspection.Identity.ActiveEnvironments,
+		Problems: append([]string(nil), inspection.Problems...),
+	}
+	if result.ActiveEnvironments == nil {
+		result.ActiveEnvironments = []string{}
+	}
+	if result.Problems == nil {
+		result.Problems = []string{}
+	}
+	if jsonOutput {
+		return writeJSON(c.Out, result)
+	}
+	fmt.Fprintf(c.Out, "Portless daemon: %s\n", state)
+	fmt.Fprintf(c.Out, "PID: %d\n", result.PID)
+	fmt.Fprintf(c.Out, "Started: %s\n", result.StartedAt.Local().Format(time.RFC3339))
+	fmt.Fprintf(c.Out, "Instance: %s\n", shortFingerprint(result.InstanceID))
+	fmt.Fprintf(c.Out, "Build: %s\n", shortFingerprint(result.BuildID))
+	fmt.Fprintf(c.Out, "Protocol: %s  API: %s\n", result.ProtocolVersion, result.APIVersion)
+	if len(result.ActiveEnvironments) == 0 {
+		fmt.Fprintln(c.Out, "Active environments: none")
+	} else {
+		fmt.Fprintln(c.Out, "Active environments:")
+		for _, environment := range result.ActiveEnvironments {
+			fmt.Fprintln(c.Out, "  "+environment)
+		}
+	}
+	for _, problem := range result.Problems {
+		fmt.Fprintln(c.Out, "Problem: "+problem)
+	}
+	return nil
+}
+
+func (c *CLI) stopDaemon(ctx context.Context, options bootstrap.StopOptions, jsonOutput bool) error {
+	result, err := bootstrap.StopDaemon(ctx, c.paths, options)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeJSON(c.Out, result)
+	}
+	if !result.WasRunning {
+		fmt.Fprintln(c.Out, "Portless daemon is already stopped.")
+		return nil
+	}
+	fmt.Fprintf(c.Out, "Stopped Portless daemon (PID %d).\n", result.PID)
+	printForcedDaemonWarning(c, result)
+	return nil
+}
+
+func (c *CLI) restartDaemon(ctx context.Context, options bootstrap.StopOptions, jsonOutput bool) error {
+	stopped, err := bootstrap.StopDaemon(ctx, c.paths, options)
+	if err != nil {
+		return err
+	}
+	record, err := bootstrap.EnsureDaemon(ctx, c.paths)
+	if err != nil {
+		return err
+	}
+	inspection, err := bootstrap.InspectDaemon(ctx, c.paths)
+	if err != nil {
+		return err
+	}
+	problems := append([]string(nil), inspection.Problems...)
+	if problems == nil {
+		problems = []string{}
+	}
+	if jsonOutput {
+		return writeJSON(c.Out, map[string]any{"stopped": stopped, "daemon": daemonStatusOutput{
+			State: "running", Compatible: inspection.Compatible, CurrentBuild: inspection.CurrentBuild, PID: record.PID,
+			ProtocolVersion: record.ProtocolVersion, APIVersion: record.APIVersion,
+			InstallationID: record.InstallationID, InstanceID: record.InstanceID,
+			BuildID: record.BuildID, ExpectedBuildID: inspection.ExpectedBuildID,
+			StartedAt: record.StartedAt, ActiveEnvironments: inspection.Identity.ActiveEnvironments,
+			Problems: problems,
+		}})
+	}
+	fmt.Fprintf(c.Out, "Portless daemon is running (PID %d, build %s).\n", record.PID, shortFingerprint(record.BuildID))
+	printForcedDaemonWarning(c, stopped)
+	return nil
+}
+
+func printForcedDaemonWarning(c *CLI, result bootstrap.StopResult) {
+	if !result.Forced || len(result.ActiveEnvironments) == 0 {
+		return
+	}
+	fmt.Fprintln(c.Out, "Warning: these active environments were left unmanaged:")
+	for _, environment := range result.ActiveEnvironments {
+		fmt.Fprintln(c.Out, "  "+environment)
+	}
+}
+
+func shortFingerprint(value string) string {
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
