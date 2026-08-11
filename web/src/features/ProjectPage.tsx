@@ -51,6 +51,7 @@ export function ProjectPage({ project, tab, onNavigate, onChanged }: { project: 
   const activeFaults = faults.filter((fault) => fault.enabled)
   const ready = project.services.filter((service) => service.status === 'ready').length
   const trafficCount = project.services.reduce((sum, service) => sum + (service.recentRequests || 0), 0)
+	const primaryService = project.services.find((service) => service.name === project.primaryService)
 
   return (
     <div className="page project-page">
@@ -60,7 +61,7 @@ export function ProjectPage({ project, tab, onNavigate, onChanged }: { project: 
           {activeRecording && <span className="recording-indicator"><i />REC {activeRecording.name}</span>}
           {activeFaults.length > 0 && <span className="fault-indicator">▲ {activeFaults.length} ACTIVE {activeFaults.length === 1 ? 'FAULT' : 'FAULTS'}</span>}
           {project.status === 'healthy' || project.status === 'degraded' || project.status === 'failed' ? <button className="button" disabled={!!busy} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}
-          {project.primaryService && <a className="button" href={`http://${project.primaryService}.${project.name}.localhost:${new URL(project.dashboardUrl || location.origin).port}`} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
+          {primaryService?.ingressUrl && <a className="button" href={primaryService.ingressUrl} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
         </div>
       </div>
       {error && <div className="alert alert--danger"><strong>Action failed</strong><span>{error}</span><button onClick={() => setError('')}>DISMISS</button></div>}

@@ -55,13 +55,24 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 		return err
 	}
 	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
-	app.SetControlPort(port)
-	handler, err := api.New(app, authManager, webui.Assets(), port)
+	ingressListener, err := listenIngress(paths.Ingress)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
+	defer ingressListener.Close()
+	defer removeIngressSocket(paths.Ingress)
+	port := listener.Addr().(*net.TCPAddr).Port
+	handler, err := api.New(app, authManager, webui.Assets())
+	if err != nil {
+		return err
+	}
+	controlServer := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
+	ingressServer := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
@@ -72,10 +83,13 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 		return fmt.Errorf("publish daemon discovery record: %w", err)
 	}
 	defer removeOwnControl(paths)
-	slog.Info("Portless daemon ready", "port", port, "pid", os.Getpid())
-	errChannel := make(chan error, 1)
+	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.Ingress, "pid", os.Getpid())
+	errChannel := make(chan error, 2)
 	go func() {
-		errChannel <- server.Serve(listener)
+		errChannel <- controlServer.Serve(listener)
+	}()
+	go func() {
+		errChannel <- ingressServer.Serve(ingressListener)
 	}()
 	signalContext, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -83,12 +97,45 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	case <-signalContext.Done():
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
-		return server.Shutdown(shutdownContext)
+		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
 	case err := <-errChannel:
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		_ = controlServer.Shutdown(shutdownContext)
+		_ = ingressServer.Shutdown(shutdownContext)
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
+	}
+}
+
+func listenIngress(path string) (net.Listener, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("refusing to replace non-socket ingress path %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("remove stale ingress socket: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect ingress socket: %w", err)
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("listen on private ingress socket: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		listener.Close()
+		removeIngressSocket(path)
+		return nil, fmt.Errorf("protect private ingress socket: %w", err)
+	}
+	return listener, nil
+}
+
+func removeIngressSocket(path string) {
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
+		_ = os.Remove(path)
 	}
 }
 

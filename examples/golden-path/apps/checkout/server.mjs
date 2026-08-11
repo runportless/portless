@@ -17,7 +17,7 @@ const server = http.createServer(async (request, response) => {
     }
   }
   response.setHeader('content-type', 'application/json')
-  response.end(JSON.stringify({ service: 'gateway', routes: ['/checkout', '/health'] }))
+  response.end(JSON.stringify({ service: 'checkout', routes: ['/checkout', '/health'] }))
 })
 
-server.listen(port, '127.0.0.1', () => console.log(`gateway ready on ${port}`))
+server.listen(port, '127.0.0.1', () => console.log(`checkout ready on ${port}`))

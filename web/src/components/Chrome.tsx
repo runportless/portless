@@ -82,7 +82,6 @@ export function AppChrome({ projects, activeProject, runtime, children, onNaviga
             {activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong><StatusMark status={activeProject.status} /></> : <><span>projects</span><b>/</b><strong>all environments</strong></>}
           </div>
           <div className="topbar__tools">
-            <span className={live ? 'connection-state' : 'connection-state connection-state--off'}><i />{live ? 'LIVE' : 'OFFLINE'}</span>
             <button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button>
           </div>
         </header>

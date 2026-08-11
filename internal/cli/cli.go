@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/portless-run/portless/internal/bootstrap"
+	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/project/discovery"
 )
@@ -56,6 +57,8 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 	case "version", "--version", "-v":
 		fmt.Fprintln(c.Out, "portless "+Version)
 		return 0
+	case "setup":
+		err = c.setup(ctx, args[1:])
 	case "up":
 		return c.up(ctx, args[1:])
 	case "down":
@@ -94,6 +97,7 @@ func (c *CLI) help() {
 	fmt.Fprintln(c.Out, `Portless runs and observes a local application environment without a required config file.
 
 Usage:
+  portless setup
   portless up [--open|--no-open] [--name NAME]
   portless down [--volumes --yes]
   portless status [--json]
@@ -107,6 +111,42 @@ Usage:
   portless runtime status|start
   portless runtime use auto|docker|podman
   portless version`)
+}
+
+func (c *CLI) setup(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return errors.New("usage: portless setup")
+	}
+	if _, err := bootstrap.EnsureDaemon(ctx, c.paths); err != nil {
+		return err
+	}
+	if err := ingress.Check(ctx); err == nil {
+		fmt.Fprintln(c.Out, "Clean localhost URLs are already configured.")
+		fmt.Fprintln(c.Out, ingress.ControlOrigin)
+		return nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(c.Out, "Portless needs administrator approval once to install its localhost port-80 relay.")
+	if err := ingress.Install(ctx, ingress.SetupRequest{
+		Executable: executable, TargetSocket: c.paths.Ingress,
+		UID: os.Getuid(), GID: os.Getgid(),
+		Stdin: os.Stdin, Stdout: c.Out, Stderr: c.Err,
+	}); err != nil {
+		return err
+	}
+	if err := ingress.WaitUntilReady(ctx, 8*time.Second); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.Out, "Clean localhost URLs are ready.")
+	fmt.Fprintln(c.Out, ingress.ControlOrigin)
+	return nil
 }
 
 func (c *CLI) up(ctx context.Context, args []string) int {
@@ -138,6 +178,10 @@ func (c *CLI) up(ctx context.Context, args []string) int {
 	}
 	client, _, err := bootstrap.Connect(ctx, c.paths)
 	if err != nil {
+		c.printError(err)
+		return 1
+	}
+	if err := requireIngress(ctx); err != nil {
 		c.printError(err)
 		return 1
 	}
@@ -269,6 +313,9 @@ func (c *CLI) ui(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := requireIngress(ctx); err != nil {
+		return err
+	}
 	next := "/projects"
 	if project, err := c.findCurrent(ctx, client); err == nil {
 		next = "/projects/" + project.Name
@@ -290,6 +337,9 @@ func (c *CLI) open(ctx context.Context, args []string) error {
 	}
 	client, project, err := c.current(ctx)
 	if err != nil {
+		return err
+	}
+	if err := requireIngress(ctx); err != nil {
 		return err
 	}
 	url := project.DashboardURL
@@ -699,6 +749,13 @@ func (c *CLI) browserURL(ctx context.Context, client *bootstrap.Client, next str
 		return "", err
 	}
 	return result.URL, nil
+}
+
+func requireIngress(ctx context.Context) error {
+	if err := ingress.Check(ctx); err != nil {
+		return fmt.Errorf("clean localhost URLs are not configured; run `portless setup` once, then retry: %w", err)
+	}
+	return nil
 }
 
 func (c *CLI) waitOperation(ctx context.Context, client *bootstrap.Client, operation model.Operation, jsonOutput bool) (model.Operation, error) {

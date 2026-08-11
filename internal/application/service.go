@@ -46,7 +46,6 @@ func (e NameConflictError) Error() string {
 type Config struct {
 	DataDirectory   string
 	InstallationKey string
-	ControlPort     int
 }
 
 type Service struct {
@@ -57,7 +56,6 @@ type Service struct {
 	proxy                *proxy.Manager
 	dataDirectory        string
 	installationKey      string
-	controlPort          int
 	mu                   sync.RWMutex
 	projectLocks         map[string]*sync.Mutex
 	containerEnvironment map[string]map[string]string
@@ -66,8 +64,8 @@ type Service struct {
 func New(controlStore *store.Store, broker *events.Broker, config Config) *Service {
 	service := &Service{
 		store: controlStore, broker: broker, dataDirectory: config.DataDirectory,
-		installationKey: config.InstallationKey, controlPort: config.ControlPort,
-		projectLocks: make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string),
+		installationKey: config.InstallationKey,
+		projectLocks:    make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string),
 	}
 	service.proxy = proxy.NewManager(controlStore, broker)
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
@@ -81,12 +79,6 @@ func New(controlStore *store.Store, broker *events.Broker, config Config) *Servi
 }
 
 func (s *Service) Close(ctx context.Context) { s.proxy.Close(ctx) }
-
-func (s *Service) SetControlPort(port int) {
-	s.mu.Lock()
-	s.controlPort = port
-	s.mu.Unlock()
-}
 
 func (s *Service) Discover(ctx context.Context, path, requestedName string) (model.Project, []string, error) {
 	result, err := discovery.Discover(path)
@@ -815,16 +807,10 @@ func (s *Service) timeline(ctx context.Context, project, actor, eventType, subje
 }
 
 func (s *Service) decorateProject(project model.Project) model.Project {
-	s.mu.RLock()
-	port := s.controlPort
-	s.mu.RUnlock()
-	if port <= 0 {
-		return project
-	}
-	project.DashboardURL = fmt.Sprintf("http://localhost:%d/projects/%s", port, project.Name)
+	project.DashboardURL = fmt.Sprintf("http://portless.localhost/projects/%s", project.Name)
 	for index := range project.Services {
 		if project.Services[index].Kind == model.ServiceProcess {
-			project.Services[index].IngressURL = fmt.Sprintf("http://%s.%s.localhost:%d", project.Services[index].Name, project.Name, port)
+			project.Services[index].IngressURL = fmt.Sprintf("http://%s.%s.localhost", project.Services[index].Name, project.Name)
 		}
 	}
 	return project

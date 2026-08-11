@@ -24,7 +24,7 @@ func TestControlAndApplicationHostsAreSeparated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer controlStore.Close()
-	_, err = controlStore.CreateProject(context.Background(), "billing", "/tmp/api-fixture", model.ProjectModel{SuggestedName: "billing", PrimaryService: "gateway", Services: []model.ServiceDefinition{{Name: "gateway"}}})
+	_, err = controlStore.CreateProject(context.Background(), "billing", "/tmp/api-fixture", model.ProjectModel{SuggestedName: "billing", PrimaryService: "checkout", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,10 +32,10 @@ func TestControlAndApplicationHostsAreSeparated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := application.New(controlStore, events.NewBroker(), application.Config{DataDirectory: data, InstallationKey: "test-installation", ControlPort: 7331})
+	app := application.New(controlStore, events.NewBroker(), application.Config{DataDirectory: data, InstallationKey: "test-installation"})
 	defer app.Close(context.Background())
 	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>portless</html>"), Mode: fs.FileMode(0o600)}}
-	server, err := New(app, authManager, assets, 7331)
+	server, err := New(app, authManager, assets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +58,20 @@ func TestControlAndApplicationHostsAreSeparated(t *testing.T) {
 	}
 	if strings.Contains(authenticatedResponse.Body.String(), `"trusted"`) || strings.Contains(authenticatedResponse.Body.String(), "review_required") {
 		t.Fatalf("removed trust state leaked through project API: %s", authenticatedResponse.Body.String())
+	}
+	if !strings.Contains(authenticatedResponse.Body.String(), `"dashboardUrl":"http://portless.localhost/projects/billing"`) ||
+		!strings.Contains(authenticatedResponse.Body.String(), `"ingressUrl":"http://checkout.billing.localhost"`) ||
+		strings.Contains(authenticatedResponse.Body.String(), ".localhost:7331") {
+		t.Fatalf("project API did not use clean localhost URLs: %s", authenticatedResponse.Body.String())
+	}
+
+	browserClaim := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/v1/browser-claims", strings.NewReader(`{"next":"/projects/billing"}`))
+	browserClaim.Host = "127.0.0.1:7331"
+	browserClaim.Header.Set("Authorization", "Bearer "+authManager.Token())
+	browserClaimResponse := httptest.NewRecorder()
+	server.ServeHTTP(browserClaimResponse, browserClaim)
+	if browserClaimResponse.Code != http.StatusCreated || !strings.Contains(browserClaimResponse.Body.String(), `"url":"http://portless.localhost/auth/claim/`) || strings.Contains(browserClaimResponse.Body.String(), ":7331") {
+		t.Fatalf("browser claim did not use clean control origin: %d %s", browserClaimResponse.Code, browserClaimResponse.Body.String())
 	}
 
 	selectRuntime := httptest.NewRequest(http.MethodPut, "http://localhost:7331/api/v1/runtime", strings.NewReader(`{"preference":"podman"}`))
@@ -87,8 +101,8 @@ func TestControlAndApplicationHostsAreSeparated(t *testing.T) {
 		t.Fatalf("removed draft API returned %d", removedDraftResponse.Code)
 	}
 
-	applicationAPI := httptest.NewRequest(http.MethodGet, "http://gateway.billing.localhost:7331/api/v1/projects", nil)
-	applicationAPI.Host = "gateway.billing.localhost:7331"
+	applicationAPI := httptest.NewRequest(http.MethodGet, "http://checkout.billing.localhost/api/v1/projects", nil)
+	applicationAPI.Host = "checkout.billing.localhost"
 	applicationResponse := httptest.NewRecorder()
 	server.ServeHTTP(applicationResponse, applicationAPI)
 	if applicationResponse.Code != http.StatusMisdirectedRequest {

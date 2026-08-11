@@ -14,6 +14,7 @@ type Paths struct {
 	Token        string
 	OwnershipKey string
 	Lock         string
+	Ingress      string
 	Logs         string
 	Temporary    string
 }
@@ -41,6 +42,6 @@ func ResolvePaths(override string) (Paths, error) {
 		Root: root, Database: filepath.Join(root, "state.db"), Control: filepath.Join(root, "control.json"),
 		DaemonLog: filepath.Join(root, "daemon.log"), Token: filepath.Join(root, "install.key"),
 		OwnershipKey: filepath.Join(root, "ownership.key"), Lock: filepath.Join(root, "daemon.lock"),
-		Logs: filepath.Join(root, "logs"), Temporary: filepath.Join(root, "tmp"),
+		Ingress: filepath.Join(root, "ingress.sock"), Logs: filepath.Join(root, "logs"), Temporary: filepath.Join(root, "tmp"),
 	}, nil
 }

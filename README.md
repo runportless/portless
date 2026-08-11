@@ -6,17 +6,18 @@ There is no required `portless.yaml`, Docker Compose project, account, or hosted
 
 ```text
 cd billing
+portless setup  # one time per machine
 portless up
 
 # Portless discovers and starts the environment, then opens the control plane at:
-http://localhost:7331/projects/billing
+http://portless.localhost/projects/billing
 ```
 
 Application ingress is stable and readable:
 
 ```text
-http://gateway.billing.localhost:7331
-http://orders.billing.localhost:7331
+http://checkout.billing.localhost
+http://orders.billing.localhost
 ```
 
 Processes, Postgres, and Valkey receive dynamically allocated loopback ports. Two checkouts can both have a service named `postgres`, both listen on their framework's usual port internally, and still run at once.
@@ -61,12 +62,15 @@ The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin
 
 ## First run
 
-1. Install and start Docker Engine or Podman if the project needs Postgres or Redis-compatible storage.
-2. Enter a Spring Boot or NestJS repository.
-3. Run `portless up`.
-4. Use the browser dashboard to inspect and control the running environment.
+1. Run `portless setup` once. It asks for administrator approval to install a minimal localhost-only port-80 relay, then immediately drops to your user account.
+2. Install and start Docker Engine or Podman if the project needs Postgres or Redis-compatible storage.
+3. Enter a Spring Boot or NestJS repository.
+4. Run `portless up`.
+5. Use the browser dashboard to inspect and control the running environment.
 
 `portless project rescan` refreshes the discovered model while an environment is stopped. The next `portless up` uses the refreshed model immediately.
+
+`portless setup` is idempotent. On macOS it installs a root-owned launchd job; on systemd Linux it installs an equivalent unit. The helper owns only `127.0.0.1:80`, drops privileges before accepting traffic, and cannot inspect or control projects independently of the user daemon. If another program already owns local port 80, setup stops with that conflict instead of replacing it.
 
 Useful commands:
 
@@ -81,12 +85,12 @@ portless runtime use auto
 portless runtime use docker
 portless runtime use podman
 
-portless record start checkout-debug --edge gateway:orders
+portless record start checkout-debug --edge checkout:orders
 portless record stop checkout-debug
 portless record export checkout-debug
 
-portless fault add slow-orders gateway:orders --latency 2000
-portless fault add fail-payments gateway:payments --status 503
+portless fault add slow-orders checkout:orders --latency 2000
+portless fault add fail-payments checkout:payments --status 503
 portless fault clear --all
 
 portless down
@@ -122,7 +126,7 @@ The API never asks a user for values such as `prj_01J...` or `svc_01J...`. SQLit
 
 ```mermaid
 flowchart LR
-  CLI["portless CLI"] -->|"Bearer token"| API["Loopback control API"]
+  CLI["portless CLI"] -->|"Bearer token · private dynamic port"| API["Loopback control API"]
   UI["Embedded React UI"] -->|"Session + CSRF"| API
   API --> APP["Application service"]
   APP --> DB["SQLite WAL"]
@@ -130,7 +134,9 @@ flowchart LR
   APP --> CR["Docker Engine or Podman"]
   PROC --> PROXY["HTTP/TCP edge proxies"]
   CR --> PROXY
-  INGRESS["service.project.localhost"] --> PROXY
+  INGRESS["service.project.localhost · port 80"] --> RELAY["Privileged bind · unprivileged relay"]
+  RELAY -->|"private Unix socket"| API
+  API --> PROXY
   PROXY --> BUS["Bounded live event bus"]
   BUS --> UI
 ```
@@ -147,8 +153,8 @@ make
 
 # Exercise discovery against the included small environment:
 cd examples/golden-path
-../../bin/portless up --no-open
-../../bin/portless ui
+portless up --no-open
+portless ui
 ```
 
 Tests cover naming and non-leakage, discovery, SQLite idempotency, browser claims and CSRF, dependency ordering, process lifecycle, control/application host isolation, proxy traffic redaction, recording persistence, and fault application.

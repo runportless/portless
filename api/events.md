@@ -11,7 +11,7 @@ The endpoint uses the browser session cookie or CLI bearer token. Topic filters 
 ```text
 id: 4813
 event: traffic.http
-data: {"project":"billing","sequence":307,"source":"gateway","target":"orders","method":"GET","path":"/orders","status":200,"durationMs":18}
+data: {"project":"billing","sequence":307,"source":"checkout","target":"orders","method":"GET","path":"/orders","status":200,"durationMs":18}
 ```
 
 Current topics:

@@ -7,6 +7,7 @@ This repository is a runnable vertical implementation of the product direction, 
 - Named project-scoped domain model and HTTP API.
 - Static checkout discovery, direct startup, generated declaration export, and name conflict responses.
 - Singleton daemon bootstrap, private control record, CLI token, browser claim/session/CSRF flow, and embedded UI.
+- One-time macOS launchd or systemd Linux setup for clean port-80 `.localhost` URLs; the relay binds loopback as root, drops privileges, and forwards only to the private per-user Unix socket.
 - Process and Docker Engine/Podman lifecycle for the discovered first-release templates, including automatic and explicit runtime selection.
 - Stable application ingress, internal edge proxies, live event stream, redacted traffic summaries, bounded named recordings, and scoped named faults.
 - Global/project UI, topology, service detail/configuration/logs, traffic, recording, fault, timeline, and command-palette views.

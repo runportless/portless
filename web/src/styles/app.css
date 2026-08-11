@@ -74,9 +74,6 @@ main { min-height: calc(100vh - 64px); }
 .crumbs strong { color: var(--text); font-weight: 600; }
 .environment-chip { color: var(--teal); border: 1px solid var(--teal-dim); padding: 7px 10px; font-size: 10px; letter-spacing: .08em; }
 .topbar__tools { display: flex; gap: 16px; align-items: center; }
-.connection-state { color: var(--green); font-size: 10px; font-weight: 800; letter-spacing: .09em; display: flex; gap: 7px; align-items: center; }
-.connection-state i { width: 8px; height: 8px; background: var(--green); border-radius: 50%; }
-.connection-state--off { color: var(--red); }.connection-state--off i { background: var(--red); }
 .key-button { height: 36px; border: 1px solid var(--line); background: var(--surface); padding: 0 10px; color: var(--muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .key-button:hover { border-color: var(--line-bright); color: var(--text); }
 .key-button span, kbd { min-width: 20px; height: 20px; padding: 0 4px; border: 1px solid var(--line); background: var(--surface-2); display: inline-flex; align-items: center; justify-content: center; color: var(--muted); font-style: normal; font-size: 10px; }

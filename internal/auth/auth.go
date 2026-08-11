@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,9 +171,12 @@ func (m *Manager) cleanupLocked() {
 }
 
 func isControlOrigin(origin string) bool {
-	return strings.HasPrefix(origin, "http://localhost:") ||
-		strings.HasPrefix(origin, "http://127.0.0.1:") ||
-		strings.HasPrefix(origin, "http://portless.localhost:")
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "portless.localhost"
 }
 
 func randomToken(bytes int) (string, error) {

@@ -29,7 +29,6 @@ type Server struct {
 	assets    fs.FS
 	files     http.Handler
 	indexHTML []byte
-	port      int
 }
 
 type ErrorEnvelope struct {
@@ -50,12 +49,12 @@ type Remediation struct {
 	URL     string `json:"url,omitempty"`
 }
 
-func New(app *application.Service, authManager *auth.Manager, assets fs.FS, port int) (*Server, error) {
+func New(app *application.Service, authManager *auth.Manager, assets fs.FS) (*Server, error) {
 	index, err := fs.ReadFile(assets, "index.html")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded UI: %w", err)
 	}
-	return &Server{app: app, auth: authManager, assets: assets, files: http.FileServer(http.FS(assets)), indexHTML: index, port: port}, nil
+	return &Server{app: app, auth: authManager, assets: assets, files: http.FileServer(http.FS(assets)), indexHTML: index}, nil
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -150,7 +149,7 @@ func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request)
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"name": "portless", "version": "dev", "apiVersion": APIVersion, "controlPort": s.port, "telemetry": false})
+	writeJSON(writer, http.StatusOK, map[string]any{"name": "portless", "version": "dev", "apiVersion": APIVersion, "telemetry": false})
 }
 
 func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request, segments []string) {
@@ -221,7 +220,7 @@ func (s *Server) handleBrowserClaims(writer http.ResponseWriter, request *http.R
 		s.writeError(writer, err, nil)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, map[string]any{"url": fmt.Sprintf("http://localhost:%d/auth/claim/%s", s.port, code), "expiresAt": expiresAt})
+	writeJSON(writer, http.StatusCreated, map[string]any{"url": "http://portless.localhost/auth/claim/" + code, "expiresAt": expiresAt})
 }
 
 func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {
