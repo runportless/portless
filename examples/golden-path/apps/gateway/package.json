@@ -1,0 +1,6 @@
+{
+  "name": "gateway",
+  "private": true,
+  "scripts": { "start:dev": "node server.mjs" },
+  "dependencies": { "@nestjs/core": "fixture-only" }
+}

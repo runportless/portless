@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+.vscode/
+bin/
+dist/
+coverage/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+!webui/dist/
+!webui/dist/**
+*.log
+*.db
+*.db-shm
+*.db-wal
