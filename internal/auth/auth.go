@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,14 +18,16 @@ import (
 
 const SessionCookie = "portless_session"
 
+const sessionsFile = "browser-sessions.json"
+
 type claim struct {
 	next      string
 	expiresAt time.Time
 }
 
 type session struct {
-	csrf      string
-	expiresAt time.Time
+	CSRF      string    `json:"csrf"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 type Principal struct {
@@ -34,11 +37,12 @@ type Principal struct {
 }
 
 type Manager struct {
-	mu       sync.Mutex
-	token    string
-	claims   map[string]claim
-	sessions map[string]session
-	now      func() time.Time
+	mu          sync.Mutex
+	token       string
+	claims      map[string]claim
+	sessions    map[string]session
+	sessionPath string
+	now         func() time.Time
 }
 
 func LoadOrCreate(tokenPath string) (*Manager, error) {
@@ -62,7 +66,22 @@ func LoadOrCreate(tokenPath string) (*Manager, error) {
 	if err := os.Chmod(tokenPath, 0o600); err != nil {
 		return nil, err
 	}
-	return &Manager{token: value, claims: make(map[string]claim), sessions: make(map[string]session), now: time.Now}, nil
+	manager := &Manager{
+		token: value, claims: make(map[string]claim), sessions: make(map[string]session),
+		sessionPath: filepath.Join(filepath.Dir(tokenPath), sessionsFile), now: time.Now,
+	}
+	if err := manager.loadSessions(); err != nil {
+		return nil, err
+	}
+	manager.mu.Lock()
+	if manager.cleanupLocked() {
+		err = manager.saveSessionsLocked()
+	}
+	manager.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return manager, nil
 }
 
 func (m *Manager) Token() string { return m.token }
@@ -86,7 +105,7 @@ func (m *Manager) Authenticate(request *http.Request) (Principal, bool) {
 	if !ok {
 		return Principal{}, false
 	}
-	return Principal{Actor: "UI", Session: true, CSRF: current.csrf}, true
+	return Principal{Actor: "UI", Session: true, CSRF: current.CSRF}, true
 }
 
 func (m *Manager) ValidateMutation(request *http.Request, principal Principal) error {
@@ -142,21 +161,30 @@ func (m *Manager) ConsumeClaim(code string) (sessionToken, csrf, next string, ex
 	}
 	expiresAt = m.now().Add(12 * time.Hour)
 	next = pending.next
-	m.sessions[sessionToken] = session{csrf: csrf, expiresAt: expiresAt}
+	m.sessions[sessionToken] = session{CSRF: csrf, ExpiresAt: expiresAt}
+	if err = m.saveSessionsLocked(); err != nil {
+		delete(m.sessions, sessionToken)
+		return
+	}
 	return
 }
 
-func (m *Manager) Logout(request *http.Request) {
+func (m *Manager) Logout(request *http.Request) error {
 	cookie, err := request.Cookie(SessionCookie)
 	if err != nil {
-		return
+		return nil
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.sessions[cookie.Value]; !exists {
+		return nil
+	}
 	delete(m.sessions, cookie.Value)
-	m.mu.Unlock()
+	return m.saveSessionsLocked()
 }
 
-func (m *Manager) cleanupLocked() {
+func (m *Manager) cleanupLocked() bool {
+	changed := false
 	now := m.now()
 	for code, claim := range m.claims {
 		if !claim.expiresAt.After(now) {
@@ -164,10 +192,89 @@ func (m *Manager) cleanupLocked() {
 		}
 	}
 	for token, session := range m.sessions {
-		if !session.expiresAt.After(now) {
+		if !session.ExpiresAt.After(now) {
 			delete(m.sessions, token)
+			changed = true
 		}
 	}
+	return changed
+}
+
+type sessionDocument struct {
+	Version  int                `json:"version"`
+	Sessions map[string]session `json:"sessions"`
+}
+
+func (m *Manager) loadSessions() error {
+	info, err := os.Lstat(m.sessionPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect browser sessions: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("browser sessions path %s is not a regular file", m.sessionPath)
+	}
+	if err := os.Chmod(m.sessionPath, 0o600); err != nil {
+		return fmt.Errorf("protect browser sessions: %w", err)
+	}
+	content, err := os.ReadFile(m.sessionPath)
+	if err != nil {
+		return fmt.Errorf("read browser sessions: %w", err)
+	}
+	if len(content) > 1<<20 {
+		return errors.New("browser sessions file is unexpectedly large")
+	}
+	var document sessionDocument
+	if err := json.Unmarshal(content, &document); err != nil {
+		return fmt.Errorf("decode browser sessions: %w", err)
+	}
+	if document.Version != 1 {
+		return fmt.Errorf("unsupported browser sessions version %d", document.Version)
+	}
+	if document.Sessions == nil {
+		document.Sessions = make(map[string]session)
+	}
+	for token, current := range document.Sessions {
+		if strings.TrimSpace(token) == "" || strings.TrimSpace(current.CSRF) == "" || current.ExpiresAt.IsZero() {
+			return errors.New("browser sessions file contains an invalid session")
+		}
+	}
+	m.sessions = document.Sessions
+	return nil
+}
+
+func (m *Manager) saveSessionsLocked() error {
+	content, err := json.MarshalIndent(sessionDocument{Version: 1, Sessions: m.sessions}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode browser sessions: %w", err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(m.sessionPath), ".browser-sessions-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create browser sessions file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("protect temporary browser sessions: %w", err)
+	}
+	if _, err := temporary.Write(append(content, '\n')); err != nil {
+		return fmt.Errorf("write browser sessions: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync browser sessions: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close browser sessions: %w", err)
+	}
+	if err := os.Rename(temporaryPath, m.sessionPath); err != nil {
+		return fmt.Errorf("publish browser sessions: %w", err)
+	}
+	return os.Chmod(m.sessionPath, 0o600)
 }
 
 func isControlOrigin(origin string) bool {

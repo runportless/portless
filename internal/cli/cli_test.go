@@ -23,16 +23,62 @@ func TestCobraRootHelpShowsCommandTree(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"Available Commands:", "completion", "config", "daemon", "doctor", "env", "project", "record", "runtime", "--env", "--json", "--no-color"} {
+	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "project", "record", "relay", "runtime", "--env", "--json", "--no-color"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q:\n%s", expected, output.String())
 		}
+	}
+	if strings.Contains(output.String(), "Available Commands:") || strings.Contains(output.String(), "Additional Commands:") {
+		t.Fatalf("root help contains an ungrouped command section:\n%s", output.String())
 	}
 	if strings.Contains(output.String(), "\n  use ") {
 		t.Fatalf("root help still exposes the ambiguous top-level use command:\n%s", output.String())
 	}
 	if strings.Contains(output.String(), "\x1b[") {
 		t.Fatalf("automatic color escaped into redirected help output:\n%q", output.String())
+	}
+}
+
+func TestCobraRootCommandsAreGroupedByTask(t *testing.T) {
+	application, _, _ := newTestCLI(t)
+	root := application.rootCommand()
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd()
+
+	expected := map[string]string{
+		"up": rootGroupRun, "down": rootGroupRun, "status": rootGroupRun,
+		"open": rootGroupRun, "url": rootGroupRun, "ui": rootGroupRun,
+		"logs": rootGroupInspect, "traffic": rootGroupInspect, "timeline": rootGroupInspect,
+		"service": rootGroupInspect, "connection": rootGroupInspect,
+		"project": rootGroupConfigure, "env": rootGroupConfigure,
+		"record": rootGroupTest, "fault": rootGroupTest,
+		"runtime": rootGroupSystem, "setup": rootGroupSystem, "relay": rootGroupSystem, "daemon": rootGroupSystem,
+		"doctor": rootGroupSystem, "config": rootGroupSystem,
+		"completion": rootGroupOther, "help": rootGroupOther,
+	}
+
+	seen := make(map[string]bool, len(expected))
+	for _, command := range root.Commands() {
+		if !command.IsAvailableCommand() && command.Name() != "help" {
+			continue
+		}
+		want, ok := expected[command.Name()]
+		if !ok {
+			t.Errorf("unexpected top-level command %q in group %q", command.Name(), command.GroupID)
+			continue
+		}
+		seen[command.Name()] = true
+		if command.GroupID != want {
+			t.Errorf("command %q group = %q, want %q", command.Name(), command.GroupID, want)
+		}
+	}
+	for command := range expected {
+		if !seen[command] {
+			t.Errorf("expected top-level command %q was not registered", command)
+		}
+	}
+	if !root.AllChildCommandsHaveGroup() {
+		t.Fatal("at least one available top-level command has no group")
 	}
 }
 
@@ -326,6 +372,30 @@ func TestCobraDaemonStatusExplainsOneTimeLegacyReplacement(t *testing.T) {
 	}
 }
 
+func TestPrintDaemonStatusUsesExplicitVersionLabels(t *testing.T) {
+	application, output, _ := newTestCLI(t)
+	application.printDaemonStatus(daemonStatusOutput{
+		State:              "running",
+		PID:                33083,
+		InstanceID:         "f8ecffdf6d6f",
+		BuildID:            "9f15670e7324",
+		ProtocolVersion:    "2",
+		APIVersion:         "3",
+		RuntimeState:       "ready",
+		HandoffReady:       true,
+		ActiveEnvironments: []string{"golden-path/local"},
+	})
+
+	for _, expected := range []string{"Protocol Version: 2\n", "API Version: 3\n"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("daemon status does not contain %q:\n%s", expected, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "Protocol: 2  API: 3") {
+		t.Fatalf("daemon status still combines protocol and API versions:\n%s", output.String())
+	}
+}
+
 func TestPrintStatusShowsHTTPAndPublishedContainerEndpoints(t *testing.T) {
 	application, output, _ := newTestCLI(t)
 	application.printStatus(model.Environment{
@@ -528,7 +598,7 @@ func TestTrafficUsesTailFlag(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"traffic"}); code != 0 {
 		t.Fatalf("bare traffic returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"Available Commands:", "list", "List captured HTTP traffic"} {
+	for _, expected := range []string{"Available Commands:", "list", "List captured application traffic"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("traffic help does not contain %q:\n%s", expected, output.String())
 		}
@@ -556,14 +626,29 @@ func TestLogServiceSelectionAndCombinedFormatting(t *testing.T) {
 	}
 
 	application, output, _ := newTestCLI(t)
-	application.printLogs(environment, []serviceLogs{
-		{Service: "checkout", Lines: []string{"listening on 3000"}},
-		{Service: "orders", Lines: []string{"connected to postgres"}},
-	}, false)
+	application.printLogs(environment, []model.LogEntry{
+		{Service: "checkout", Message: "listening on 3000"},
+		{Service: "orders", Message: "connected to postgres"},
+	}, false, false)
 	for _, expected := range []string{"[checkout] listening on 3000", "[orders] connected to postgres"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("combined logs do not contain %q:\n%s", expected, output.String())
 		}
+	}
+}
+
+func TestTCPApplicationTrafficUsesProtocolSpecificHumanOutput(t *testing.T) {
+	application, output, _ := newTestCLI(t)
+	application.printTrafficList(model.Environment{Project: "billing", Name: "local"}, "tcp", []model.TrafficEvent{{
+		Sequence: 9, Protocol: model.ProtocolPostgres, Source: "checkout", Target: "postgres", DurationMS: 4,
+	}})
+	for _, expected := range []string{"TCP traffic", "PROTOCOL", "POSTGRES", "checkout:postgres", "ok"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("TCP traffic output does not contain %q:\n%s", expected, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "METHOD") || strings.Contains(output.String(), "CODE") {
+		t.Fatalf("TCP traffic used HTTP columns:\n%s", output.String())
 	}
 }
 
@@ -650,27 +735,25 @@ func TestCobraJSONUsageErrorsUseErrorEnvelope(t *testing.T) {
 	}
 }
 
-func TestCobraVersionSupportsHumanAndJSONOutput(t *testing.T) {
+func TestCobraVersionFlagSupportsHumanAndJSONOutput(t *testing.T) {
 	application, output, errorsOutput := newTestCLI(t)
-	if code := application.Run(context.Background(), []string{"version"}); code != 0 {
+	if code := application.Run(context.Background(), []string{"--version"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
 	if output.String() != "portless "+Version+"\n" {
 		t.Fatalf("unexpected human version output: %q", output.String())
 	}
 
-	for _, args := range [][]string{{"version", "--json"}, {"--version", "--json"}} {
-		application, output, errorsOutput = newTestCLI(t)
-		if code := application.Run(context.Background(), args); code != 0 {
-			t.Fatalf("Run(%v) returned %d; stderr: %s", args, code, errorsOutput.String())
-		}
-		var result map[string]string
-		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
-			t.Fatalf("Run(%v) did not emit valid JSON: %v\n%s", args, err, output.String())
-		}
-		if result["version"] != Version {
-			t.Fatalf("Run(%v) version = %q, want %q", args, result["version"], Version)
-		}
+	application, output, errorsOutput = newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"--version", "--json"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	var result map[string]string
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("Run did not emit valid JSON: %v\n%s", err, output.String())
+	}
+	if result["version"] != Version {
+		t.Fatalf("Run version = %q, want %q", result["version"], Version)
 	}
 }
 
@@ -688,9 +771,9 @@ func TestWriteJSONLineEmitsOneCompactDocument(t *testing.T) {
 	}
 }
 
-func TestSetupStatusJSONIncludesComputedState(t *testing.T) {
+func TestRelayStatusJSONIncludesComputedState(t *testing.T) {
 	var output bytes.Buffer
-	if err := writeSetupStatusJSON(&output, ingress.InstallationStatus{Installed: true, Running: true, Healthy: true}); err != nil {
+	if err := writeRelayStatusJSON(&output, ingress.InstallationStatus{Installed: true, Running: true, Healthy: true}); err != nil {
 		t.Fatal(err)
 	}
 	var result map[string]any
@@ -698,27 +781,70 @@ func TestSetupStatusJSONIncludesComputedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result["state"] != "ready" || result["healthy"] != true {
-		t.Fatalf("unexpected setup status: %#v", result)
+		t.Fatalf("unexpected relay status: %#v", result)
 	}
 }
 
-func TestCobraSetupHelpShowsStatusAndUninstall(t *testing.T) {
+func TestRelayRestartJSONIncludesActionAndStatus(t *testing.T) {
+	var output bytes.Buffer
+	status := ingress.InstallationStatus{Installed: true, Running: true, Healthy: true, Service: "dev.portless.ingress"}
+	if err := writeJSON(&output, relayActionOutput{
+		Action:            "restart",
+		relayStatusOutput: relayStatusOutput{State: status.State(), InstallationStatus: status},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["action"] != "restart" || result["state"] != "ready" || result["service"] != "dev.portless.ingress" {
+		t.Fatalf("unexpected relay restart output: %#v", result)
+	}
+}
+
+func TestCobraSetupIsOnlyTheFirstRunShortcut(t *testing.T) {
 	application, output, errorsOutput := newTestCLI(t)
 	if code := application.Run(context.Background(), []string{"setup", "--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"status", "uninstall", "Install, inspect, or remove"} {
-		if !strings.Contains(output.String(), expected) {
-			t.Errorf("setup help does not contain %q:\n%s", expected, output.String())
-		}
-
+	if !strings.Contains(output.String(), "Configure clean localhost URLs for first use") {
+		t.Fatalf("setup help does not describe first-run configuration:\n%s", output.String())
 	}
+	setup, _, err := application.rootCommand().Find([]string{"setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(setup.Commands()) != 0 {
+		t.Fatalf("setup still exposes lifecycle subcommands: %#v", setup.Commands())
+	}
+}
+
+func TestCobraRelayHelpShowsLifecycleCommands(t *testing.T) {
+	application, output, errorsOutput := newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"relay", "--help"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	for _, expected := range []string{"install", "status", "restart", "uninstall", "Manage the clean-URL relay"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("relay help does not contain %q:\n%s", expected, output.String())
+		}
+	}
+
 	application, output, errorsOutput = newTestCLI(t)
-	if code := application.Run(context.Background(), []string{"setup", "uninstall", "--help"}); code != 0 {
+	if code := application.Run(context.Background(), []string{"relay", "uninstall", "--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
 	if !strings.Contains(output.String(), "--force") {
 		t.Fatalf("uninstall help does not document --force:\n%s", output.String())
+	}
+
+	application, output, errorsOutput = newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"relay", "restart", "--help"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	if strings.Contains(output.String(), "--force") {
+		t.Fatalf("relay restart must not expose a force option:\n%s", output.String())
 	}
 }
 
@@ -734,6 +860,8 @@ func TestCobraUsageErrorsReturnExitCodeTwo(t *testing.T) {
 		{name: "missing provider", args: []string{"env", "bind", "checkout"}, want: "at least one of the flags", usage: "portless env bind <service>"},
 		{name: "exclusive provider", args: []string{"env", "bind", "checkout", "--local", "checkout", "--container"}, want: "none of the others can be", usage: "portless env bind <service>"},
 		{name: "invalid runtime", args: []string{"runtime", "use", "containerd"}, want: "runtime must be auto, docker, or podman", usage: "portless runtime use <auto|docker|podman>"},
+		{name: "invalid recording duration", args: []string{"record", "start", "capture", "--duration", "0s"}, want: "--duration must be greater than zero", usage: "portless record start <name>"},
+		{name: "fault without effect", args: []string{"fault", "add", "slow", "checkout:orders"}, want: "define at least one effect", usage: "portless fault add <name> <source:target>"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -762,8 +890,11 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless config color":    runAction,
 		"portless config reset":    runAction,
 		"portless setup":           runAction,
-		"portless setup status":    runAction,
-		"portless setup uninstall": runAction,
+		"portless relay":           showHelp,
+		"portless relay install":   runAction,
+		"portless relay status":    runAction,
+		"portless relay restart":   runAction,
+		"portless relay uninstall": runAction,
 		"portless daemon":          showHelp,
 		"portless daemon status":   runAction,
 		"portless daemon stop":     runAction,
@@ -773,22 +904,39 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless down":            runAction,
 		"portless status":          runAction,
 		"portless open":            runAction,
+		"portless url":             runAction,
 		"portless ui":              runAction,
 		"portless logs":            runAction,
 		"portless traffic":         showHelp,
 		"portless traffic list":    runAction,
+		"portless traffic show":    showHelp,
+		"portless service":         showHelp,
+		"portless service list":    runAction,
+		"portless service show":    showHelp,
+		"portless service config":  showHelp,
+		"portless service start":   showHelp,
+		"portless service stop":    showHelp,
+		"portless service restart": showHelp,
+		"portless connection":      showHelp,
+		"portless connection list": runAction,
+		"portless connection show": showHelp,
+		"portless timeline":        runAction,
 		"portless record":          showHelp,
 		"portless record list":     runAction,
 		"portless record start":    showHelp,
 		"portless record stop":     runAction,
+		"portless record show":     showHelp,
 		"portless record export":   showHelp,
 		"portless record delete":   showHelp,
 		"portless fault":           showHelp,
 		"portless fault list":      runAction,
 		"portless fault add":       showHelp,
+		"portless fault show":      showHelp,
 		"portless fault disable":   showHelp,
 		"portless fault clear":     runAction,
 		"portless project":         showHelp,
+		"portless project list":    runAction,
+		"portless project show":    runAction,
 		"portless project create":  showHelp,
 		"portless project export":  runAction,
 		"portless project rename":  showHelp,
@@ -807,7 +955,6 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless runtime status":  runAction,
 		"portless runtime start":   runAction,
 		"portless runtime use":     showHelp,
-		"portless version":         runAction,
 	}
 
 	application, _, _ := newTestCLI(t)
@@ -917,6 +1064,21 @@ func TestCobraGeneratesShellCompletion(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "#compdef portless") || !strings.Contains(output.String(), "_portless") {
 		t.Fatalf("unexpected completion output:\n%s", output.String())
+	}
+}
+
+func TestDynamicCompletionNeverStartsAStoppedDaemon(t *testing.T) {
+	application, _, _ := newTestCLI(t)
+	command := application.rootCommand()
+	values, directive := application.complete(completionServices)(command, nil, "")
+	if len(values) != 0 {
+		t.Fatalf("completion returned values without a daemon: %#v", values)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("completion directive = %v, want no file completion", directive)
+	}
+	if _, err := os.Stat(application.paths.Control); !os.IsNotExist(err) {
+		t.Fatalf("dynamic completion contacted or started the daemon: %v", err)
 	}
 }
 

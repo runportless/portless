@@ -16,19 +16,46 @@ import (
 
 	"github.com/portless-run/portless/internal/application"
 	"github.com/portless-run/portless/internal/auth"
+	"github.com/portless-run/portless/internal/daemon"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/store"
 )
 
-const APIVersion = "1"
+const APIVersion = "3"
 
 type Server struct {
-	app       *application.Service
-	auth      *auth.Manager
-	assets    fs.FS
-	files     http.Handler
-	indexHTML []byte
+	app           *application.Service
+	auth          *auth.Manager
+	daemonControl DaemonControl
+	assets        fs.FS
+	files         http.Handler
+	indexHTML     []byte
+}
+
+type DaemonControl interface {
+	Status(context.Context) (daemon.Identity, error)
+	Restart(context.Context, string) (daemon.ShutdownResponse, error)
+}
+
+type daemonStatusResponse struct {
+	State              string    `json:"state"`
+	PID                int       `json:"pid"`
+	StartedAt          time.Time `json:"startedAt"`
+	InstanceID         string    `json:"instanceId"`
+	BuildID            string    `json:"buildId"`
+	ProtocolVersion    string    `json:"protocolVersion"`
+	APIVersion         string    `json:"apiVersion"`
+	HandoffReady       bool      `json:"handoffReady"`
+	RecoveryProblems   []string  `json:"recoveryProblems"`
+	ActiveEnvironments []string  `json:"activeEnvironments"`
+}
+
+type daemonRestartResponse struct {
+	Restarting         bool     `json:"restarting"`
+	PreviousInstanceID string   `json:"previousInstanceId"`
+	Handoff            bool     `json:"handoff"`
+	ActiveEnvironments []string `json:"activeEnvironments"`
 }
 
 type ErrorEnvelope struct {
@@ -49,12 +76,12 @@ type Remediation struct {
 	URL     string `json:"url,omitempty"`
 }
 
-func New(app *application.Service, authManager *auth.Manager, assets fs.FS) (*Server, error) {
+func New(app *application.Service, authManager *auth.Manager, assets fs.FS, daemonControl DaemonControl) (*Server, error) {
 	index, err := fs.ReadFile(assets, "index.html")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded UI: %w", err)
 	}
-	return &Server{app: app, auth: authManager, assets: assets, files: http.FileServer(http.FS(assets)), indexHTML: index}, nil
+	return &Server{app: app, auth: authManager, daemonControl: daemonControl, assets: assets, files: http.FileServer(http.FS(assets)), indexHTML: index}, nil
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -130,6 +157,8 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	switch segments[0] {
 	case "system":
 		s.handleSystem(writer, request)
+	case "daemon":
+		s.handleDaemon(writer, request, segments)
 	case "runtime":
 		s.handleRuntime(writer, request, segments)
 	case "session":
@@ -143,6 +172,70 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	default:
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "API route not found"})
 	}
+}
+
+func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request, segments []string) {
+	if s.daemonControl == nil {
+		writeAPIError(writer, http.StatusServiceUnavailable, APIError{Code: "DAEMON_CONTROL_UNAVAILABLE", Message: "daemon lifecycle information is unavailable", Remediation: []Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+		return
+	}
+	if len(segments) == 1 {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
+			return
+		}
+		identity, err := s.daemonControl.Status(request.Context())
+		if err != nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, APIError{Code: "DAEMON_STATE_UNAVAILABLE", Message: err.Error(), Remediation: []Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+			return
+		}
+		writeJSON(writer, http.StatusOK, daemonStatusResponse{
+			State: identity.State, PID: identity.PID, StartedAt: identity.StartedAt,
+			InstanceID: identity.InstanceID, BuildID: identity.BuildID,
+			ProtocolVersion: identity.ProtocolVersion, APIVersion: identity.APIVersion,
+			HandoffReady:       identity.HandoffReady,
+			RecoveryProblems:   nonNil(append([]string(nil), identity.RecoveryProblems...)),
+			ActiveEnvironments: nonNil(append([]string(nil), identity.ActiveEnvironments...)),
+		})
+		return
+	}
+	if len(segments) != 2 || segments[1] != "restart" {
+		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "daemon route not found"})
+		return
+	}
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var input struct {
+		InstanceID string `json:"instanceId"`
+	}
+	if err := decodeJSON(request, &input); err != nil {
+		writeDecodeError(writer, err)
+		return
+	}
+	if strings.TrimSpace(input.InstanceID) == "" {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "DAEMON_INSTANCE_REQUIRED", Message: "instanceId is required"})
+		return
+	}
+	result, err := s.daemonControl.Restart(request.Context(), input.InstanceID)
+	if err != nil {
+		var lifecycleError *daemon.LifecycleError
+		if errors.As(err, &lifecycleError) {
+			details := map[string]any{
+				"activeEnvironments": nonNil(append([]string(nil), lifecycleError.ActiveEnvironments...)),
+				"problems":           nonNil(append([]string(nil), lifecycleError.Problems...)),
+			}
+			writeAPIError(writer, http.StatusConflict, APIError{Code: lifecycleError.Code, Message: lifecycleError.Message, Details: details, Remediation: []Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+			return
+		}
+		writeAPIError(writer, http.StatusInternalServerError, APIError{Code: "DAEMON_RESTART_FAILED", Message: err.Error(), Remediation: []Remediation{{Label: "Restart from the CLI", Command: "portless daemon restart"}}})
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, daemonRestartResponse{
+		Restarting: true, PreviousInstanceID: result.InstanceID, Handoff: result.Handoff,
+		ActiveEnvironments: nonNil(append([]string(nil), result.ActiveEnvironments...)),
+	})
 }
 
 func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request) {
@@ -192,7 +285,10 @@ func (s *Server) handleSession(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if len(segments) == 2 && segments[1] == "logout" && request.Method == http.MethodPost {
-		s.auth.Logout(request)
+		if err := s.auth.Logout(request); err != nil {
+			writeAPIError(writer, http.StatusInternalServerError, APIError{Code: "SESSION_LOGOUT_FAILED", Message: err.Error()})
+			return
+		}
 		http.SetCookie(writer, &http.Cookie{Name: auth.SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -229,12 +325,17 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 	if len(segments) == 1 {
 		switch request.Method {
 		case http.MethodGet:
+			limit, limitErr := queryLimit(request, 100, 1000)
+			if limitErr != nil {
+				writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+				return
+			}
 			projects, err := s.app.Projects(ctx)
 			if err != nil {
 				s.writeError(writer, err, nil)
 				return
 			}
-			writeJSON(writer, http.StatusOK, map[string]any{"projects": nonNil(projects)})
+			writeJSON(writer, http.StatusOK, map[string]any{"projects": limited(nonNil(projects), limit)})
 		case http.MethodPost:
 			var input struct {
 				Name    string                    `json:"name"`
@@ -344,12 +445,17 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 	if len(segments) == 1 {
 		switch request.Method {
 		case http.MethodGet:
+			limit, limitErr := queryLimit(request, 100, 1000)
+			if limitErr != nil {
+				writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+				return
+			}
 			environments, err := s.app.Environments(ctx, request.URL.Query().Get("project"))
 			if err != nil {
 				s.writeError(writer, err, nil)
 				return
 			}
-			writeJSON(writer, http.StatusOK, map[string]any{"environments": nonNil(environments)})
+			writeJSON(writer, http.StatusOK, map[string]any{"environments": limited(nonNil(environments), limit)})
 		case http.MethodPost:
 			var input struct {
 				Project string `json:"project"`
@@ -612,7 +718,12 @@ func (s *Server) handleServices(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if len(segments) == 4 && request.Method == http.MethodGet {
-		writeJSON(writer, http.StatusOK, map[string]any{"services": nonNil(current.Services)})
+		limit, limitErr := queryLimit(request, 250, 1000)
+		if limitErr != nil {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"services": limited(nonNil(current.Services), limit)})
 		return
 	}
 	if len(segments) < 5 {
@@ -636,14 +747,21 @@ func (s *Server) handleServices(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if len(segments) == 6 && segments[5] == "configuration" && request.Method == http.MethodGet {
-		writeJSON(writer, http.StatusOK, maskedConfiguration(selected.ServiceDefinition))
+		configuration, err := s.app.ServiceConfiguration(request.Context(), project, environment, serviceName)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "service": serviceName})
+			return
+		}
+		writeJSON(writer, http.StatusOK, configuration)
 		return
 	}
 	if len(segments) == 6 && request.Method == http.MethodPost {
 		var operation model.Operation
 		var actionErr error
 		switch segments[5] {
-		case "start", "restart":
+		case "start":
+			operation, actionErr = s.app.StartService(request.Context(), project, environment, serviceName, principal.Actor)
+		case "restart":
 			operation, actionErr = s.app.RestartService(request.Context(), project, environment, serviceName, principal.Actor)
 		case "stop":
 			operation, actionErr = s.app.StopService(request.Context(), project, environment, serviceName, principal.Actor)
@@ -666,17 +784,22 @@ func (s *Server) handleConnections(writer http.ResponseWriter, request *http.Req
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	current, err := s.app.Environment(request.Context(), project, environment)
+	connections, err := s.app.Connections(request.Context(), project, environment)
 	if err != nil {
 		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
 	if len(segments) == 4 {
-		writeJSON(writer, http.StatusOK, map[string]any{"connections": nonNil(current.Connections)})
+		limit, limitErr := queryLimit(request, 250, 1000)
+		if limitErr != nil {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"connections": limited(nonNil(connections), limit)})
 		return
 	}
 	if len(segments) == 6 {
-		for _, connection := range current.Connections {
+		for _, connection := range connections {
 			if connection.Source == segments[4] && connection.Target == segments[5] {
 				writeJSON(writer, http.StatusOK, connection)
 				return
@@ -693,17 +816,23 @@ func (s *Server) handleLogs(writer http.ResponseWriter, request *http.Request, p
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	service := request.URL.Query().Get("service")
-	if service == "" {
-		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "SERVICE_REQUIRED", Message: "the service query parameter is required"})
+	limit, err := queryLimit(request, 500, 10_000)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: err.Error()})
 		return
 	}
-	lines, err := s.app.Logs(request.Context(), project, environment, service, queryInt(request, "limit", 500))
+	since, err := querySince(request)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_SINCE", Message: err.Error()})
+		return
+	}
+	service := request.URL.Query().Get("service")
+	entries, err := s.app.Logs(request.Context(), project, environment, service, limit, since)
 	if err != nil {
 		s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "service": service})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"project": project, "environment": environment, "service": service, "lines": nonNil(lines)})
+	writeJSON(writer, http.StatusOK, map[string]any{"project": project, "environment": environment, "service": service, "entries": nonNil(entries)})
 }
 
 func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
@@ -711,36 +840,78 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	if len(segments) < 5 || (segments[4] != "http" && segments[4] != "tcp") {
+	if len(segments) != 4 && len(segments) != 5 {
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "traffic route not found"})
 		return
 	}
-	protocol := model.ProtocolHTTP
-	if segments[4] == "tcp" {
-		protocol = model.ProtocolTCP
+	if _, err := s.app.Environment(request.Context(), project, environment); err != nil {
+		s.writeError(writer, err, environmentSubject(project, environment))
+		return
 	}
-	all := s.app.Traffic(project, environment, queryInt(request, "limit", 250))
-	filtered := make([]model.TrafficEvent, 0, len(all))
-	for _, event := range all {
-		isHTTP := event.Protocol == model.ProtocolHTTP
-		if (protocol == model.ProtocolHTTP && isHTTP) || (protocol == model.ProtocolTCP && !isHTTP) {
-			filtered = append(filtered, event)
-		}
-	}
-	if len(segments) == 6 {
-		sequence, err := strconv.ParseInt(segments[5], 10, 64)
-		if err != nil {
-			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_TRAFFIC_SEQUENCE", Message: "traffic sequence must be an integer"})
+	if len(segments) == 5 {
+		sequence, err := strconv.ParseInt(segments[4], 10, 64)
+		if err != nil || sequence <= 0 {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_TRAFFIC_SEQUENCE", Message: "traffic sequence must be a positive integer"})
 			return
 		}
-		for _, event := range filtered {
-			if event.Sequence == sequence {
-				writeJSON(writer, http.StatusOK, event)
+		event, err := s.app.TrafficEvent(request.Context(), project, environment, sequence)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeAPIError(writer, http.StatusNotFound, APIError{Code: "TRAFFIC_NOT_FOUND", Message: "traffic event is no longer in the live buffer or a retained recording", Remediation: []Remediation{{Label: "Capture durable traffic", Command: "portless record start debug"}}})
 				return
 			}
+			s.writeError(writer, err, environmentSubject(project, environment))
+			return
 		}
-		s.writeError(writer, store.ErrNotFound, environmentSubject(project, environment))
+		writeJSON(writer, http.StatusOK, event)
 		return
+	}
+	protocol := request.URL.Query().Get("protocol")
+	if protocol == "" {
+		protocol = string(model.ProtocolHTTP)
+	}
+	if protocol != string(model.ProtocolHTTP) && protocol != string(model.ProtocolTCP) {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_TRAFFIC_PROTOCOL", Message: "protocol must be http or tcp"})
+		return
+	}
+	limit, err := queryLimit(request, 250, 1000)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: err.Error()})
+		return
+	}
+	all := s.app.Traffic(project, environment, 1000)
+	filtered := make([]model.TrafficEvent, 0, len(all))
+	service := request.URL.Query().Get("service")
+	source := request.URL.Query().Get("source")
+	target := request.URL.Query().Get("target")
+	if edge := request.URL.Query().Get("edge"); edge != "" {
+		var found bool
+		source, target, found = strings.Cut(edge, ":")
+		if !found || source == "" || target == "" || strings.Contains(target, ":") {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_EDGE", Message: "edge must use source:target"})
+			return
+		}
+	}
+	after, err := queryNonNegativeInt64(request, "after")
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_AFTER", Message: err.Error()})
+		return
+	}
+	for _, event := range all {
+		isHTTP := event.Protocol == model.ProtocolHTTP
+		if (protocol == string(model.ProtocolHTTP) && !isHTTP) || (protocol == string(model.ProtocolTCP) && isHTTP) {
+			continue
+		}
+		if service != "" && event.Source != service && event.Target != service {
+			continue
+		}
+		if (source != "" && event.Source != source) || (target != "" && event.Target != target) || event.Sequence <= after {
+			continue
+		}
+		filtered = append(filtered, trafficSummary(event))
+		if len(filtered) == limit {
+			break
+		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"traffic": filtered})
 }
@@ -781,7 +952,13 @@ func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request,
 			if !open {
 				return
 			}
-			payload, _ := json.Marshal(event.Data)
+			data := event.Data
+			if event.Type == "traffic.http" || event.Type == "traffic.tcp" {
+				if traffic, ok := event.Data.(model.TrafficEvent); ok {
+					data = trafficSummary(traffic)
+				}
+			}
+			payload, _ := json.Marshal(data)
 			_, _ = fmt.Fprintf(writer, "id: %d\nevent: %s\ndata: %s\n\n", event.ID, event.Type, payload)
 			flusher.Flush()
 		}
@@ -793,12 +970,17 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 	if len(segments) == 4 {
 		switch request.Method {
 		case http.MethodGet:
+			limit, limitErr := queryLimit(request, 100, 1000)
+			if limitErr != nil {
+				writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+				return
+			}
 			recordings, err := s.app.Recordings(ctx, project, environment)
 			if err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
-			writeJSON(writer, http.StatusOK, map[string]any{"recordings": nonNil(recordings)})
+			writeJSON(writer, http.StatusOK, map[string]any{"recordings": limited(nonNil(recordings), limit)})
 		case http.MethodPost:
 			var recording model.Recording
 			if err := decodeJSON(request, &recording); err != nil {
@@ -825,7 +1007,7 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 	if len(segments) == 5 {
 		switch request.Method {
 		case http.MethodGet:
-			recording, err := findRecording(ctx, s.app, project, environment, name)
+			recording, err := s.app.Recording(ctx, project, environment, name)
 			if err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
@@ -847,7 +1029,7 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
-		recording, _ := findRecording(ctx, s.app, project, environment, name)
+		recording, _ := s.app.Recording(ctx, project, environment, name)
 		writeJSON(writer, http.StatusOK, recording)
 		return
 	}
@@ -869,12 +1051,17 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 	if len(segments) == 4 {
 		switch request.Method {
 		case http.MethodGet:
+			limit, limitErr := queryLimit(request, 100, 1000)
+			if limitErr != nil {
+				writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+				return
+			}
 			faults, err := s.app.Faults(ctx, project, environment)
 			if err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
-			writeJSON(writer, http.StatusOK, map[string]any{"faults": nonNil(faults)})
+			writeJSON(writer, http.StatusOK, map[string]any{"faults": limited(nonNil(faults), limit)})
 		case http.MethodPost:
 			var fault model.FaultRule
 			if err := decodeJSON(request, &fault); err != nil {
@@ -905,7 +1092,7 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 	if len(segments) == 5 {
 		name := segments[4]
 		if request.Method == http.MethodGet {
-			fault, err := findFault(ctx, s.app, project, environment, name)
+			fault, err := s.app.Fault(ctx, project, environment, name)
 			if err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
@@ -927,7 +1114,12 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 
 func (s *Server) handleOperations(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
 	if request.Method == http.MethodGet && len(segments) == 4 {
-		operations, err := s.app.Operations(request.Context(), project, environment, queryInt(request, "limit", 100))
+		limit, limitErr := queryLimit(request, 100, 500)
+		if limitErr != nil {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+			return
+		}
+		operations, err := s.app.Operations(request.Context(), project, environment, limit)
 		if err != nil {
 			s.writeError(writer, err, environmentSubject(project, environment))
 			return
@@ -937,6 +1129,10 @@ func (s *Server) handleOperations(writer http.ResponseWriter, request *http.Requ
 	}
 	if request.Method != http.MethodGet || len(segments) < 5 {
 		writeAPIError(writer, http.StatusNotImplemented, APIError{Code: "OPERATION_CANCEL_UNAVAILABLE", Message: "operation cancellation is not available after execution has begun"})
+		return
+	}
+	if len(segments) != 5 && !(len(segments) == 6 && segments[5] == "events") {
+		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "operation route not found"})
 		return
 	}
 	number, err := strconv.ParseInt(segments[4], 10, 64)
@@ -961,7 +1157,12 @@ func (s *Server) handleTimeline(writer http.ResponseWriter, request *http.Reques
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	events, err := s.app.Timeline(request.Context(), project, environment, queryInt(request, "limit", 250))
+	limit, limitErr := queryLimit(request, 250, 1000)
+	if limitErr != nil {
+		writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
+		return
+	}
+	events, err := s.app.Timeline(request.Context(), project, environment, limit)
 	if err != nil {
 		s.writeError(writer, err, environmentSubject(project, environment))
 		return
@@ -1100,12 +1301,42 @@ func isMutation(method string) bool {
 	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
 }
 
-func queryInt(request *http.Request, key string, fallback int) int {
-	value, err := strconv.Atoi(request.URL.Query().Get(key))
-	if err != nil || value <= 0 {
-		return fallback
+func queryLimit(request *http.Request, fallback, maximum int) (int, error) {
+	value := request.URL.Query().Get("limit")
+	if value == "" {
+		return fallback, nil
 	}
-	return value
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 || parsed > maximum {
+		return 0, fmt.Errorf("limit must be between 1 and %d", maximum)
+	}
+	return parsed, nil
+}
+
+func queryNonNegativeInt64(request *http.Request, key string) (int64, error) {
+	value := request.URL.Query().Get(key)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", key)
+	}
+	return parsed, nil
+}
+
+func querySince(request *http.Request) (time.Time, error) {
+	value := request.URL.Query().Get("since")
+	if value == "" {
+		return time.Time{}, nil
+	}
+	if duration, err := time.ParseDuration(value); err == nil && duration >= 0 {
+		return time.Now().UTC().Add(-duration), nil
+	}
+	if timestamp, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return timestamp, nil
+	}
+	return time.Time{}, errors.New("since must be a duration such as 10m or an RFC3339 timestamp")
 }
 
 func nonNil[T any](items []T) []T {
@@ -1115,47 +1346,19 @@ func nonNil[T any](items []T) []T {
 	return items
 }
 
-func findRecording(ctx context.Context, app *application.Service, project, environment, name string) (model.Recording, error) {
-	items, err := app.Recordings(ctx, project, environment)
-	if err != nil {
-		return model.Recording{}, err
+func limited[T any](items []T, limit int) []T {
+	if len(items) > limit {
+		return items[:limit]
 	}
-	for _, item := range items {
-		if strings.EqualFold(item.Name, name) {
-			return item, nil
-		}
-	}
-	return model.Recording{}, store.ErrNotFound
+	return items
 }
 
-func findFault(ctx context.Context, app *application.Service, project, environment, name string) (model.FaultRule, error) {
-	items, err := app.Faults(ctx, project, environment)
-	if err != nil {
-		return model.FaultRule{}, err
-	}
-	for _, item := range items {
-		if strings.EqualFold(item.Name, name) {
-			return item, nil
-		}
-	}
-	return model.FaultRule{}, store.ErrNotFound
+func trafficSummary(event model.TrafficEvent) model.TrafficEvent {
+	event.RequestHeaders = nil
+	event.ResponseHeaders = nil
+	return event
 }
 
 func environmentSubject(project, environment string) map[string]any {
 	return map[string]any{"project": project, "environment": environment}
-}
-
-func maskedConfiguration(definition model.ServiceDefinition) map[string]any {
-	environment := make([]map[string]any, 0, len(definition.Environment))
-	for name := range definition.Environment {
-		classification := "public"
-		value := definition.Environment[name]
-		upper := strings.ToUpper(name)
-		if strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "SECRET") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "KEY") {
-			classification = "masked"
-			value = "••••••••"
-		}
-		environment = append(environment, map[string]any{"key": name, "value": value, "classification": classification, "source": "discovered model"})
-	}
-	return map[string]any{"service": definition.Name, "command": definition.Command, "workingDirectory": definition.WorkingDirectory, "portEnvironment": definition.PortEnvironment, "environment": environment, "health": definition.Health}
 }

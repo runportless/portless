@@ -8,23 +8,25 @@ This repository is a runnable vertical implementation of the product direction, 
 - Static single- and multi-checkout discovery, cross-source dependency compilation, generated declaration export, and name conflict responses.
 - Environment cloning, per-checkout selection, per-environment Git-worktree paths, and independently mutable component providers.
 - Local process, managed Docker/Podman container, and remote HTTP(S) providers with classification, health checks, and local read-only enforcement.
-- Singleton daemon bootstrap, authenticated installation/instance/executable identity, guarded status/stop/restart controls, safe automatic replacement of inactive outdated builds, private control record, read-only doctor diagnostics, Cobra command tree with generated shell completion, CLI token, browser claim/session/CSRF flow, and embedded UI.
-- Idempotent macOS launchd or systemd Linux setup, status, repair, and uninstall for clean port-80 `.localhost` URLs, with a root-owned ownership receipt; the relay binds loopback as root, drops privileges, and forwards only to the private per-user Unix socket.
-- Process and Docker Engine/Podman lifecycle for the discovered first-release templates, including automatic and explicit runtime selection.
-- Stable application ingress, internal edge proxies, live event stream, redacted traffic summaries, bounded named recordings, and scoped named faults.
+- Singleton daemon bootstrap, authenticated installation/instance/executable identity, guarded CLI and UI status/restart controls, automatic replacement of handoff-ready outdated builds, startup runtime reconciliation, private control record, read-only doctor diagnostics, Cobra command tree with generated shell completion, CLI token, restart-safe browser claim/session/CSRF flow, and embedded UI.
+- Idempotent macOS launchd or systemd Linux first-run setup plus explicit relay install, status, restart, repair, and uninstall commands for clean port-80 `.localhost` URLs, with a root-owned ownership receipt; the relay binds loopback as root, drops privileges, and forwards only to the private per-user Unix socket.
+- Persistent authenticated process supervisors and label-owned Docker Engine/Podman lifecycle for the discovered first-release templates, including daemon-crash adoption, automatic and explicit runtime selection, per-service start/stop/restart operations, and restart accounting.
+- Stable application ingress, effective-connection inspection, internal edge proxies, a unified filtered HTTP/TCP traffic API, traffic detail with redacted request/response headers, bounded named recordings, and scoped named faults.
+- Structured process and container logs across generations, merged service views, time and count filters, 10-generation retention, and a 16 MiB cap per generation stream.
+- Human-first CLI inspection for projects, services, effective connections, timelines, recordings, and faults; every command also supports machine-readable `--json` output.
+- Context-aware shell completion for environment selectors and daemon-owned names. Completion is quiet and never starts or replaces the daemon.
 - Project/environment UI, provider and source configuration, topology, service detail/configuration/logs, traffic, recording, fault, timeline, and command-palette views.
-- A greenfield SQLite schema with durable logical project, environment, runtime, operation, timeline, recording, fault, and recorded-traffic state.
+- A greenfield SQLite schema with durable logical project, environment, daemon ownership, service/supervisor runtime, dependency-listener, operation, timeline, recording, fault, and recorded-traffic state.
 - Unit and integration coverage for the principal lifecycle, routing, and experiment paths.
 
 ## Deliberately deferred from a hardened public release
 
-- Crash reconciliation that re-adopts host processes after the daemon itself is killed. Containers remain owned and discoverable by labels, but this build does not fully reconstruct all proxy targets after restart. For that reason, ordinary daemon stop/restart and automatic build replacement refuse active environments; the explicit `--force` recovery path warns that resources may be left unmanaged.
+- Zero-gap daemon upgrades and automatic rollback. A safe handoff keeps application processes and containers alive and restores their ingress and dependency listeners on the same ports, but requests can briefly fail while the old daemon releases listeners and the new daemon verifies ownership. If a supervisor, container label, or saved listener cannot be authenticated, Portless marks the service `unknown` and refuses to launch a duplicate; recovery remains an explicit operator action.
 - Editable discovery overrides beyond source paths, change previews, and declaration import.
-- Log rotation and push-based log SSE. Logs are per-generation and the CLI follows them by bounded polling.
+- Push-based log SSE and byte-level rotation within an active generation. The CLI follows retained structured logs by bounded polling; generation count and file size are capped.
 - Optional request/response body capture, query-value redaction, HAR export, and traffic table virtualization. The current recorder is metadata-first and JSON-only.
 - TCP-specific reset/drop-after-byte effects. TCP edges support delay/rejection through the shared fault model; advanced stream effects remain.
 - Operation cancellation, bounded-parallel graph execution, long-lived port lease recovery, and resource-cap enforcement under load.
-- Container-engine log aggregation in the service log drawer.
 - Windows support, nerdctl adapters, packaging, notarization, upgrade rollback tooling, SBOM generation, and release soak tests.
 
 These items should be treated as release gates, not hidden behavior. The architecture keeps them behind store, runtime, proxy, and API boundaries so they can be added without changing the public naming model or user workflow.

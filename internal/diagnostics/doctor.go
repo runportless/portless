@@ -194,6 +194,13 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 	default:
 		checks = append(checks, passed("daemon.api", "daemon", "Daemon identity is authenticated and compatible", fmt.Sprintf("protocol %s; API %s; instance %s; build %s", healthRecord.ProtocolVersion, healthRecord.APIVersion, shortIdentity(healthRecord.InstanceID), shortIdentity(healthRecord.BuildID))))
 	}
+	if healthErr == nil {
+		if len(healthRecord.RecoveryProblems) > 0 {
+			checks = append(checks, failed("daemon.runtime_recovery", "daemon", "One or more service runtimes could not be recovered", strings.Join(healthRecord.RecoveryProblems, "; "), "Run `portless status` and inspect affected service logs. Stop orphaned services before starting replacements."))
+		} else {
+			checks = append(checks, passed("daemon.runtime_recovery", "daemon", "Persisted runtime ownership and proxy routes are consistent", "daemon state "+healthRecord.State))
+		}
+	}
 
 	authDetail, authErr := securePath(paths.Token, uid, pathRegular)
 	if authErr == nil {
@@ -243,7 +250,7 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 	}
 
 	if inspectErr != nil {
-		checks = append(checks, failed("relay.installation", "relay", "Relay installation could not be inspected", inspectErr.Error(), "Run `portless setup status`, then `portless setup` to repair it."))
+		checks = append(checks, failed("relay.installation", "relay", "Relay installation could not be inspected", inspectErr.Error(), "Run `portless relay status`, then `portless relay install` to repair it."))
 		checks = append(checks, relaySkippedChecks()...)
 		checks = append(checks, portCheck(ctx, false, dependencies))
 		checks = append(checks, skipped("relay.end_to_end", "relay", "End-to-end routing was not checked"))
@@ -257,7 +264,7 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 		return checks
 	}
 	if !status.Installed {
-		checks = append(checks, failed("relay.installation", "relay", "Clean-URL relay is not installed", status.ConfigurationPath, "Run `portless setup`."))
+		checks = append(checks, failed("relay.installation", "relay", "Clean-URL relay is not installed", status.ConfigurationPath, "Run `portless relay install` or `portless setup`."))
 		checks = append(checks, relaySkippedChecks()...)
 		checks = append(checks, portCheck(ctx, false, dependencies))
 		checks = append(checks, skipped("relay.end_to_end", "relay", "End-to-end routing was not checked"))
@@ -272,31 +279,31 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 		missing = append(missing, status.ConfigurationPath)
 	}
 	if len(missing) > 0 {
-		checks = append(checks, failed("relay.installation", "relay", "Relay installation is incomplete", "missing: "+strings.Join(missing, ", "), "Run `portless setup` to repair the relay."))
+		checks = append(checks, failed("relay.installation", "relay", "Relay installation is incomplete", "missing: "+strings.Join(missing, ", "), "Run `portless relay install` to repair the relay."))
 	} else {
 		checks = append(checks, passed("relay.installation", "relay", "Relay helper and service configuration are installed", status.Service))
 	}
 
 	switch {
 	case !status.ReceiptPresent:
-		checks = append(checks, warned("relay.receipt", "relay", "Relay ownership receipt is missing", "This is a legacy or partially completed installation.", "Run `portless setup` to create a current receipt."))
+		checks = append(checks, warned("relay.receipt", "relay", "Relay ownership receipt is missing", "This is a legacy or partially completed installation.", "Run `portless relay install` to create a current receipt."))
 	case status.OwnerUID <= 0:
-		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is invalid", status.Problem, "Run `portless setup uninstall --force`, then `portless setup`."))
+		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is invalid", status.Problem, "Run `portless relay uninstall --force`, then `portless relay install`."))
 	default:
 		checks = append(checks, passed("relay.receipt", "relay", "Relay ownership receipt is valid", status.ReceiptPath))
 	}
 
 	switch {
 	case status.OwnerUID <= 0:
-		checks = append(checks, failed("relay.ownership", "relay", "Relay owner could not be determined", status.Problem, "Run `portless setup uninstall --force`, then `portless setup`."))
+		checks = append(checks, failed("relay.ownership", "relay", "Relay owner could not be determined", status.Problem, "Run `portless relay uninstall --force`, then `portless relay install`."))
 	case status.OwnerUID != uid:
-		checks = append(checks, failed("relay.ownership", "relay", "Relay belongs to a different local user", fmt.Sprintf("configured UID %d; current UID %d", status.OwnerUID, uid), "Run `portless setup uninstall --force` before installing it for this user."))
+		checks = append(checks, failed("relay.ownership", "relay", "Relay belongs to a different local user", fmt.Sprintf("configured UID %d; current UID %d", status.OwnerUID, uid), "Run `portless relay uninstall --force` before installing it for this user."))
 	default:
 		checks = append(checks, passed("relay.ownership", "relay", "Relay belongs to the current user", fmt.Sprintf("UID %d, GID %d", status.OwnerUID, status.OwnerGID)))
 	}
 
 	if status.TargetSocket != paths.Ingress {
-		checks = append(checks, failed("relay.target", "relay", "Relay targets a different daemon socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.TargetSocket), paths.Ingress), "Run `portless setup` to repair the relay target."))
+		checks = append(checks, failed("relay.target", "relay", "Relay targets a different daemon socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.TargetSocket), paths.Ingress), "Run `portless relay install` to repair the relay target."))
 	} else {
 		checks = append(checks, passed("relay.target", "relay", "Relay targets the current daemon socket", status.TargetSocket))
 	}
@@ -304,13 +311,13 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 	if status.Running {
 		checks = append(checks, passed("relay.service", "relay", "Relay system service is running", status.Service))
 	} else {
-		checks = append(checks, failed("relay.service", "relay", "Relay system service is not running", status.Problem, "Run `portless setup` to repair and start it."))
+		checks = append(checks, failed("relay.service", "relay", "Relay system service is not running", status.Problem, "Run `portless relay restart`; use `portless relay install` if restart fails."))
 	}
 	checks = append(checks, portCheck(ctx, true, dependencies))
 	if status.Healthy {
 		checks = append(checks, passed("relay.end_to_end", "relay", "Clean URL reaches the Portless daemon", ingress.ControlOrigin))
 	} else {
-		checks = append(checks, failed("relay.end_to_end", "relay", "Clean URL cannot reach the Portless daemon", status.HealthError, "Run `portless doctor daemon`, then `portless setup` once the daemon is healthy."))
+		checks = append(checks, failed("relay.end_to_end", "relay", "Clean URL cannot reach the Portless daemon", status.HealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
 	}
 	return checks
 }
@@ -360,10 +367,10 @@ func portCheck(ctx context.Context, installed bool, dependencies dependencies) C
 		return passed("relay.port_80", "relay", "A listener is accepting connections on 127.0.0.1:80", ingress.DefaultListenAddress)
 	}
 	if installed {
-		return failed("relay.port_80", "relay", "Nothing is listening on 127.0.0.1:80", "The relay is installed but is not accepting connections.", "Run `portless setup` to repair and start it.")
+		return failed("relay.port_80", "relay", "Nothing is listening on 127.0.0.1:80", "The relay is installed but is not accepting connections.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
 	}
 	if listening {
-		return failed("relay.port_80", "relay", "Port 80 is occupied by an unrecognized listener", ingress.DefaultListenAddress, "Stop the process using 127.0.0.1:80, then run `portless setup`.")
+		return failed("relay.port_80", "relay", "Port 80 is occupied by an unrecognized listener", ingress.DefaultListenAddress, "Stop the process using 127.0.0.1:80, then run `portless relay restart`.")
 	}
 	return passed("relay.port_80", "relay", "Port 80 appears available for Portless", ingress.DefaultListenAddress)
 }

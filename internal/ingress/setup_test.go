@@ -126,6 +126,21 @@ func TestValidateUninstallOwnership(t *testing.T) {
 	}
 }
 
+func TestValidateOwnershipRejectsUnknownAndOtherUsers(t *testing.T) {
+	if err := ValidateOwnership(InstallationStatus{OwnerUID: 501}, 501); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateOwnership(InstallationStatus{OwnerUID: 502}, 501); err == nil || !strings.Contains(err.Error(), "belongs to user ID 502") {
+		t.Fatalf("unexpected cross-user error: %v", err)
+	}
+	if err := ValidateOwnership(InstallationStatus{}, 501); err == nil || !strings.Contains(err.Error(), "could not be determined") {
+		t.Fatalf("unexpected unknown-owner error: %v", err)
+	}
+	if err := ValidateOwnership(InstallationStatus{OwnerUID: 501}, 0); err == nil || !strings.Contains(err.Error(), "non-root requesting user") {
+		t.Fatalf("unexpected root-request error: %v", err)
+	}
+}
+
 func TestRelayArgumentValues(t *testing.T) {
 	uid, gid, socket, err := relayArgumentValues([]string{
 		"/helper", "__ingress", "--socket", "/Users/dev/.portless/ingress.sock", "--uid", "501", "--gid", "20",

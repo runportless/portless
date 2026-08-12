@@ -12,6 +12,9 @@ func DeriveEnvironmentStatus(services []Service, activeOperation string) (Enviro
 	}
 	ready := 0
 	running := 0
+	starting := false
+	recovering := false
+	stopping := false
 	for _, service := range services {
 		switch service.Status {
 		case ServiceFailed:
@@ -30,12 +33,28 @@ func DeriveEnvironmentStatus(services []Service, activeOperation string) (Enviro
 		case ServiceReady:
 			ready++
 			running++
-		case ServiceStarting, ServiceStopping:
+		case ServiceStarting:
+			starting = true
+			running++
+		case ServiceRecovering:
+			recovering = true
+			running++
+		case ServiceStopping:
+			stopping = true
 			running++
 		}
 	}
 	if ready == len(services) {
 		return EnvironmentHealthy, ""
+	}
+	if recovering {
+		return EnvironmentRecovering, "services are being recovered"
+	}
+	if starting {
+		return EnvironmentStarting, "services are starting"
+	}
+	if stopping {
+		return EnvironmentStopping, "services are stopping"
 	}
 	if running == 0 {
 		return EnvironmentStopped, ""

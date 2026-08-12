@@ -3,7 +3,7 @@ import { api, APIError, environmentPath, jsonBody, setCSRF } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
-import type { Environment, Operation, Project, RuntimeStatus } from './types'
+import type { DaemonRestart, DaemonStatus, Environment, Operation, Project, RuntimeStatus } from './types'
 
 interface Session { actor: string; browser: boolean; csrf: string }
 type Tab = EnvironmentView
@@ -13,6 +13,7 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [environments, setEnvironments] = useState<Environment[]>([])
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
   const [route, setRoute] = useState(() => `${location.pathname}${location.search}`)
   const [loading, setLoading] = useState(true)
   const [authRequired, setAuthRequired] = useState(false)
@@ -35,12 +36,19 @@ export function App() {
     }
   }, [])
 
+  const refreshDaemon = useCallback(async () => {
+    const status = await api<DaemonStatus>('/daemon')
+    setDaemonStatus(status)
+    return status
+  }, [])
+
   useEffect(() => {
     const initialize = async () => {
       try {
         const value = await api<Session>('/session')
         setSession(value); setCSRF(value.csrf)
         await refresh()
+        void refreshDaemon().catch(() => undefined)
       } catch (error) {
         if (error instanceof APIError && error.status === 401) setAuthRequired(true)
       } finally { setLoading(false) }
@@ -49,7 +57,7 @@ export function App() {
     const popstate = () => setRoute(`${location.pathname}${location.search}`)
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
-  }, [refresh])
+  }, [refresh, refreshDaemon])
 
   useEffect(() => {
     if (!session) return
@@ -81,8 +89,11 @@ export function App() {
     const status = await api<RuntimeStatus>('/runtime/start', { method: 'POST' })
     setRuntimeStatus(status)
   }, [])
+  const restartDaemon = useCallback(async (instanceId: string) => {
+    return api<DaemonRestart>('/daemon/restart', { method: 'POST', ...jsonBody({ instanceId }) })
+  }, [])
   const commands = useMemo<Command[]>(() => activeEnvironment ? [
-    { group: 'Actions', label: activeEnvironment.status === 'healthy' ? 'Stop environment' : 'Start environment', detail: `${activeEnvironment.project}/${activeEnvironment.name}`, run: () => void mutateEnvironment(activeEnvironment.status === 'healthy' ? 'down' : 'up') },
+    ...(activeEnvironment.status === 'recovering' ? [] : [{ group: 'Actions', label: activeEnvironment.status === 'stopped' ? 'Start environment' : 'Stop environment', detail: `${activeEnvironment.project}/${activeEnvironment.name}`, run: () => void mutateEnvironment(activeEnvironment.status === 'stopped' ? 'up' : 'down') } as Command]),
     { group: 'Views', label: 'Configure providers', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'bindings')) },
     { group: 'Views', label: 'Inspect live traffic', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'traffic')) },
     { group: 'Views', label: 'Introduce a fault', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'faults')) },
@@ -102,7 +113,7 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} runtime={runtimeStatus} onNavigate={navigate} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} runtime={runtimeStatus} onNavigate={navigate} commands={commands} live={live}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} runtime={runtimeStatus} daemon={daemonStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
 }
 
 function parseRoute(route: string): { project?: string; environment?: string; tab: Tab } {

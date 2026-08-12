@@ -24,4 +24,21 @@ Current topics:
 - `traffic.http`
 - `traffic.tcp`
 
+After a daemon handoff, snapshot responses can temporarily report environment
+and service state as `recovering`. The replacement daemon does not emit a
+synthetic replay for state changes that occurred while it was absent; clients
+must reload snapshots after reconnecting. A completed reconciliation emits the
+normal `environment.state`/`service.state` updates for subsequent changes, and
+the durable timeline includes an `environment.reconciled` entry.
+
 The broker is intentionally bounded and nonblocking. A slow UI is never allowed to stall proxied application traffic. Subscriptions are isolated by project and environment. Snapshot endpoints are authoritative after a reconnect; the UI reloads environment, timeline, recording, and fault state when it observes a lifecycle event.
+
+Traffic snapshots use the unified endpoint:
+
+```text
+GET /api/v1/environments/{projectName}/{environmentName}/traffic?protocol=http&after=307&limit=250
+GET /api/v1/environments/{projectName}/{environmentName}/traffic?protocol=tcp&edge=checkout:postgres
+GET /api/v1/environments/{projectName}/{environmentName}/traffic/308
+```
+
+`protocol=tcp` includes raw TCP and protocol-aware Postgres and Redis events. The detail response includes captured request and response headers for HTTP traffic; credential-bearing headers are redacted before an event enters the broker or a recording.

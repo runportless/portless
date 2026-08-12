@@ -37,6 +37,7 @@ type CLI struct {
 	colorPreference     colorPreference
 	colorSource         string
 	environmentOverride string
+	completionCache     map[string][]string
 }
 
 type discoverResponse struct {
@@ -58,9 +59,14 @@ type browserOutput struct {
 	Error   string `json:"error,omitempty"`
 }
 
-type setupStatusOutput struct {
+type relayStatusOutput struct {
 	State string `json:"state"`
 	ingress.InstallationStatus
+}
+
+type relayActionOutput struct {
+	Action string `json:"action"`
+	relayStatusOutput
 }
 
 type actionOutput struct {
@@ -72,15 +78,10 @@ type actionOutput struct {
 	Status      string `json:"status,omitempty"`
 }
 
-type serviceLogs struct {
-	Service string   `json:"service"`
-	Lines   []string `json:"lines"`
-}
-
 type logsOutput struct {
-	Project     string        `json:"project"`
-	Environment string        `json:"environment"`
-	Logs        []serviceLogs `json:"logs"`
+	Project     string           `json:"project"`
+	Environment string           `json:"environment"`
+	Entries     []model.LogEntry `json:"entries"`
 }
 
 type environmentContextOutput struct {
@@ -111,7 +112,7 @@ func New(out, errOut io.Writer, dataDirectory string) (*CLI, error) {
 	return &CLI{Out: out, Err: errOut, paths: paths}, nil
 }
 
-func (c *CLI) setup(ctx context.Context, jsonOutput bool) error {
+func (c *CLI) installRelay(ctx context.Context, jsonOutput bool) error {
 	if _, err := bootstrap.EnsureDaemon(ctx, c.paths); err != nil {
 		return err
 	}
@@ -121,14 +122,14 @@ func (c *CLI) setup(ctx context.Context, jsonOutput bool) error {
 		return err
 	}
 	if status.Installed && status.OwnerUID <= 0 {
-		return errors.New("the existing clean-URL relay owner could not be determined; inspect `portless setup status`, then remove it with `portless setup uninstall --force`")
+		return errors.New("the existing clean-URL relay owner could not be determined; inspect `portless relay status`, then remove it with `portless relay uninstall --force`")
 	}
 	if status.Installed && status.OwnerUID != uid {
-		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless setup uninstall --force` before installing it for this user", status.OwnerUID)
+		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless relay uninstall --force` before installing it for this user", status.OwnerUID)
 	}
 	if status.Healthy && status.TargetSocket == c.paths.Ingress && status.ReceiptPresent {
 		if jsonOutput {
-			return writeSetupStatusJSON(c.Out, status)
+			return writeRelayStatusJSON(c.Out, status)
 		}
 		fmt.Fprintln(c.Out, "Clean localhost URLs are already configured.")
 		fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
@@ -163,25 +164,27 @@ func (c *CLI) setup(ctx context.Context, jsonOutput bool) error {
 		if err != nil {
 			return err
 		}
-		return writeSetupStatusJSON(c.Out, ready)
+		return writeRelayStatusJSON(c.Out, ready)
 	}
 	fmt.Fprintln(c.Out, "Clean localhost URLs are", c.success(c.Out, "ready")+".")
 	fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
 	return nil
 }
 
-func (c *CLI) setupStatus(ctx context.Context, jsonOutput bool) error {
+func (c *CLI) relayStatus(ctx context.Context, jsonOutput bool) error {
 	status, err := ingress.Inspect(ctx)
 	if err != nil {
 		return err
 	}
 	if jsonOutput {
-		return writeSetupStatusJSON(c.Out, status)
+		return writeRelayStatusJSON(c.Out, status)
 	}
-	fmt.Fprintln(c.Out, c.heading(c.Out, "Clean URL relay:"), c.state(c.Out, status.State()))
+	fmt.Fprintln(c.Out, c.heading(c.Out, "Portless relay:"), c.state(c.Out, status.State()))
 	fmt.Fprintln(c.Out, "Platform:", status.Platform)
+	fmt.Fprintln(c.Out, "Listener:", ingress.DefaultListenAddress)
+	fmt.Fprintln(c.Out, "Control URL:", ingress.ControlOrigin)
 	if !status.Installed {
-		fmt.Fprintln(c.Out, "Run `portless setup` to install it.")
+		fmt.Fprintln(c.Out, "Run `portless relay install` or `portless setup` to install it.")
 		return nil
 	}
 	fmt.Fprintln(c.Out, "Service:", status.Service)
@@ -191,7 +194,10 @@ func (c *CLI) setupStatus(ctx context.Context, jsonOutput bool) error {
 		fmt.Fprintln(c.Out, "Owner: unknown")
 	}
 	if status.TargetSocket != "" {
-		fmt.Fprintln(c.Out, "Target socket:", status.TargetSocket)
+		fmt.Fprintln(c.Out, "Forwards to:", status.TargetSocket)
+	}
+	if status.InstalledAt != nil {
+		fmt.Fprintln(c.Out, "Installed:", status.InstalledAt.Local().Format(time.RFC3339))
 	}
 	fmt.Fprintln(c.Out, "Helper:", status.HelperPath)
 	fmt.Fprintln(c.Out, "Configuration:", status.ConfigurationPath)
@@ -205,7 +211,59 @@ func (c *CLI) setupStatus(ctx context.Context, jsonOutput bool) error {
 	return nil
 }
 
-func (c *CLI) uninstallSetup(ctx context.Context, force, jsonOutput bool) error {
+func (c *CLI) restartRelay(ctx context.Context, jsonOutput bool) error {
+	status, err := ingress.Inspect(ctx)
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return errors.New("the Portless clean-URL relay is not installed; run `portless relay install`")
+	}
+	uid, _ := requestingUserIDs()
+	if err := ingress.ValidateOwnership(status, uid); err != nil {
+		return err
+	}
+	if status.TargetSocket != "" && status.TargetSocket != c.paths.Ingress {
+		return fmt.Errorf("the relay targets %s, but this Portless installation uses %s; run `portless relay install` to repair it", status.TargetSocket, c.paths.Ingress)
+	}
+	if _, err := bootstrap.EnsureDaemon(ctx, c.paths); err != nil {
+		return err
+	}
+	executable, err := resolvedExecutable()
+	if err != nil {
+		return err
+	}
+	if !jsonOutput {
+		fmt.Fprintln(c.Out, "Restarting the Portless localhost relay requires administrator approval.")
+	}
+	restartOutput := c.Out
+	if jsonOutput {
+		restartOutput = c.Err
+	}
+	if err := ingress.Restart(ctx, ingress.RestartRequest{
+		Executable: executable, UID: uid, Stdin: os.Stdin, Stdout: restartOutput, Stderr: c.Err,
+	}); err != nil {
+		return err
+	}
+	if err := ingress.WaitUntilReady(ctx, 8*time.Second); err != nil {
+		return err
+	}
+	ready, err := ingress.Inspect(ctx)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeJSON(c.Out, relayActionOutput{
+			Action:            "restart",
+			relayStatusOutput: relayStatusOutput{State: ready.State(), InstallationStatus: ready},
+		})
+	}
+	fmt.Fprintln(c.Out, "Clean-URL relay restarted and", c.success(c.Out, "ready")+".")
+	fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
+	return nil
+}
+
+func (c *CLI) uninstallRelay(ctx context.Context, force, jsonOutput bool) error {
 	status, err := ingress.Inspect(ctx)
 	if err != nil {
 		return err
@@ -253,7 +311,7 @@ func (c *CLI) uninstallSetup(ctx context.Context, force, jsonOutput bool) error 
 		return writeJSON(c.Out, actionOutput{Action: "uninstall", Name: status.Service, Status: "removed"})
 	}
 	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80.")
-	fmt.Fprintln(c.Out, "Running environments were not stopped, but their clean localhost URLs are unavailable until `portless setup` is run again.")
+	fmt.Fprintln(c.Out, "Running environments were not stopped, but their clean localhost URLs are unavailable until `portless relay install` or `portless setup` is run.")
 	return nil
 }
 
@@ -373,7 +431,9 @@ func (c *CLI) down(ctx context.Context, selector string, options downOptions) er
 		return err
 	}
 	if options.wait {
-		operation, err = c.waitOperation(ctx, client, operation, c.jsonOutput)
+		waitContext, cancel := context.WithTimeout(ctx, options.timeout)
+		defer cancel()
+		operation, err = c.waitOperation(waitContext, client, operation, c.jsonOutput)
 		if err != nil {
 			return err
 		}
@@ -518,52 +578,72 @@ func (c *CLI) open(ctx context.Context, requestedService string) error {
 	return launchErr
 }
 
-func (c *CLI) logs(ctx context.Context, requestedService string, options streamOptions) error {
+func (c *CLI) logs(ctx context.Context, requestedService string, options logsOptions) error {
+	if err := validLimit(options.limit, 10_000); err != nil {
+		return err
+	}
+	if options.since < 0 {
+		return usageError("--since cannot be negative")
+	}
 	client, environment, err := c.current(ctx)
 	if err != nil {
 		return err
 	}
-	services, err := logServiceNames(environment, requestedService)
-	if err != nil {
+	if _, err := logServiceNames(environment, requestedService); err != nil {
 		return err
 	}
-	seen := make(map[string]int, len(services))
+	seen := make(map[string]struct{})
+	var cursor time.Time
+	initial := true
 	for {
-		batches := make([]serviceLogs, 0, len(services))
-		for _, service := range services {
-			var response struct {
-				Lines []string `json:"lines"`
-			}
-			path := environmentAPI(environment) + "/logs?service=" + url.QueryEscape(service) + "&limit=2000"
-			if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
-				return err
-			}
-			response.Lines = nonNilStrings(response.Lines)
-			batches = append(batches, serviceLogs{Service: service, Lines: response.Lines})
-			start := seen[service]
-			if start > len(response.Lines) {
-				start = 0
-			}
-			if options.tail {
-				for _, line := range response.Lines[start:] {
-					if c.jsonOutput {
-						if err := writeJSONLine(c.Out, map[string]any{"project": environment.Project, "environment": environment.Name, "service": service, "line": line}); err != nil {
-							return err
-						}
-					} else {
-						c.printLogLine(service, line, len(services) > 1)
-					}
-				}
-			}
-			seen[service] = len(response.Lines)
+		var response struct {
+			Entries []model.LogEntry `json:"entries"`
+		}
+		query := url.Values{"limit": {strconv.Itoa(options.limit)}}
+		if requestedService != "" {
+			query.Set("service", requestedService)
+		}
+		if !cursor.IsZero() {
+			query.Set("since", cursor.Format(time.RFC3339Nano))
+		} else if options.since > 0 {
+			query.Set("since", options.since.String())
+		}
+		path := environmentAPI(environment) + "/logs?" + query.Encode()
+		if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
+			return err
+		}
+		if response.Entries == nil {
+			response.Entries = []model.LogEntry{}
 		}
 		if !options.tail {
 			if c.jsonOutput {
-				return writeJSON(c.Out, logsOutput{Project: environment.Project, Environment: environment.Name, Logs: batches})
+				return writeJSON(c.Out, logsOutput{Project: environment.Project, Environment: environment.Name, Entries: response.Entries})
 			}
-			c.printLogs(environment, batches, requestedService != "")
+			c.printLogs(environment, response.Entries, requestedService != "", options.timestamps)
 			return nil
 		}
+		for _, entry := range response.Entries {
+			if entry.Timestamp.After(cursor) {
+				cursor = entry.Timestamp
+				seen = make(map[string]struct{})
+			}
+			key := logEntryKey(entry)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			if c.jsonOutput {
+				if err := writeJSONLine(c.Out, entry); err != nil {
+					return err
+				}
+			} else {
+				c.printLogEntry(entry, requestedService == "", options.timestamps)
+			}
+		}
+		if initial && len(response.Entries) == 0 && !c.jsonOutput {
+			c.printLogs(environment, response.Entries, requestedService != "", options.timestamps)
+		}
+		initial = false
 		select {
 		case <-ctx.Done():
 			return nil
@@ -588,33 +668,48 @@ func logServiceNames(environment model.Environment, requested string) ([]string,
 	return services, nil
 }
 
-func (c *CLI) printLogs(environment model.Environment, batches []serviceLogs, singleService bool) {
-	lineCount := 0
-	for _, batch := range batches {
-		lineCount += len(batch.Lines)
-		for _, line := range batch.Lines {
-			c.printLogLine(batch.Service, line, !singleService)
-		}
+func (c *CLI) printLogs(environment model.Environment, entries []model.LogEntry, singleService, timestamps bool) {
+	for _, entry := range entries {
+		c.printLogEntry(entry, !singleService, timestamps)
 	}
-	if lineCount > 0 {
+	if len(entries) > 0 {
 		return
 	}
-	if singleService && len(batches) == 1 {
-		fmt.Fprintf(c.Out, "No logs for %s.\n", batches[0].Service)
+	if singleService {
+		fmt.Fprintln(c.Out, "No logs for the selected service.")
 		return
 	}
 	fmt.Fprintf(c.Out, "No logs for %s/%s.\n", environment.Project, environment.Name)
 }
 
-func (c *CLI) printLogLine(service, line string, includeService bool) {
+func (c *CLI) printLogEntry(entry model.LogEntry, includeService, timestamps bool) {
+	prefix := ""
+	if timestamps {
+		prefix = entry.Timestamp.Local().Format("15:04:05.000") + " "
+	}
 	if includeService {
-		fmt.Fprintf(c.Out, "%s %s\n", c.accent(c.Out, "["+service+"]"), line)
+		fmt.Fprintf(c.Out, "%s%s %s\n", prefix, c.accent(c.Out, "["+entry.Service+"]"), entry.Message)
 		return
 	}
-	fmt.Fprintln(c.Out, line)
+	fmt.Fprintln(c.Out, prefix+entry.Message)
 }
 
-func (c *CLI) traffic(ctx context.Context, selector string, options streamOptions) error {
+func logEntryKey(entry model.LogEntry) string {
+	return entry.Timestamp.Format(time.RFC3339Nano) + "\x00" + entry.Service + "\x00" + entry.Stream + "\x00" + strconv.FormatInt(entry.Generation, 10) + "\x00" + entry.Message
+}
+
+func (c *CLI) traffic(ctx context.Context, options trafficOptions) error {
+	if options.protocol != "http" && options.protocol != "tcp" {
+		return usageError("--protocol must be http or tcp")
+	}
+	if err := validLimit(options.limit, 1000); err != nil {
+		return err
+	}
+	if options.edge != "" {
+		if source, target, err := parseEdge(options.edge); err != nil || source == "" || target == "" {
+			return usageError("--edge must use source:target")
+		}
+	}
 	client, environment, err := c.current(ctx)
 	if err != nil {
 		return err
@@ -622,20 +717,19 @@ func (c *CLI) traffic(ctx context.Context, selector string, options streamOption
 	var response struct {
 		Traffic []model.TrafficEvent `json:"traffic"`
 	}
-	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/traffic/http?limit=250", nil, &response); err != nil {
+	query := trafficQuery(options, 0)
+	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/traffic?"+query.Encode(), nil, &response); err != nil {
 		return err
 	}
 	traffic := make([]model.TrafficEvent, 0, len(response.Traffic))
 	for index := len(response.Traffic) - 1; index >= 0; index-- {
-		if matchesTraffic(response.Traffic[index], selector) {
-			traffic = append(traffic, response.Traffic[index])
-		}
+		traffic = append(traffic, response.Traffic[index])
 	}
 	if !options.tail {
 		if c.jsonOutput {
 			return writeJSON(c.Out, map[string]any{"project": environment.Project, "environment": environment.Name, "traffic": traffic})
 		}
-		c.printTrafficList(environment, traffic)
+		c.printTrafficList(environment, options.protocol, traffic)
 		return nil
 	}
 	if c.jsonOutput {
@@ -645,12 +739,53 @@ func (c *CLI) traffic(ctx context.Context, selector string, options streamOption
 			}
 		}
 	} else {
-		c.printTrafficList(environment, traffic)
+		c.printTrafficList(environment, options.protocol, traffic)
 	}
-	return c.followTraffic(ctx, client, environment, selector, c.jsonOutput)
+	seen := make(map[int64]struct{}, len(traffic))
+	for _, event := range traffic {
+		seen[event.Sequence] = struct{}{}
+	}
+	return c.followTraffic(ctx, client, environment, options, seen, c.jsonOutput)
 }
 
-func (c *CLI) listRecordings(ctx context.Context) error {
+func trafficQuery(options trafficOptions, after int64) url.Values {
+	query := url.Values{"protocol": {options.protocol}, "limit": {strconv.Itoa(options.limit)}}
+	if options.service != "" {
+		query.Set("service", options.service)
+	}
+	if options.edge != "" {
+		query.Set("edge", options.edge)
+	}
+	if after > 0 {
+		query.Set("after", strconv.FormatInt(after, 10))
+	}
+	return query
+}
+
+func (c *CLI) showTraffic(ctx context.Context, sequenceValue string) error {
+	sequence, err := strconv.ParseInt(sequenceValue, 10, 64)
+	if err != nil || sequence <= 0 {
+		return usageError("traffic sequence must be a positive integer")
+	}
+	client, environment, err := c.current(ctx)
+	if err != nil {
+		return err
+	}
+	var event model.TrafficEvent
+	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/traffic/"+strconv.FormatInt(sequence, 10), nil, &event); err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, event)
+	}
+	c.printTrafficDetail(event)
+	return nil
+}
+
+func (c *CLI) listRecordings(ctx context.Context, limit int) error {
+	if err := validLimit(limit, 1000); err != nil {
+		return err
+	}
 	client, environment, err := c.current(ctx)
 	if err != nil {
 		return err
@@ -658,12 +793,13 @@ func (c *CLI) listRecordings(ctx context.Context) error {
 	var response struct {
 		Recordings []model.Recording `json:"recordings"`
 	}
-	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/recordings", nil, &response); err != nil {
+	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/recordings?limit="+strconv.Itoa(limit), nil, &response); err != nil {
 		return err
 	}
 	if response.Recordings == nil {
 		response.Recordings = []model.Recording{}
 	}
+	response.Recordings = truncate(response.Recordings, limit)
 	if c.jsonOutput {
 		return writeJSON(c.Out, response)
 	}
@@ -680,9 +816,15 @@ func (c *CLI) listRecordings(ctx context.Context) error {
 }
 
 func (c *CLI) startRecording(ctx context.Context, name string, options recordingOptions) error {
+	if options.duration <= 0 || options.duration > time.Hour {
+		return usageError("--duration must be greater than zero and no more than 1h")
+	}
+	if options.maxEvents < 1 || options.maxEvents > 100_000 {
+		return usageError("--max-events must be between 1 and 100000")
+	}
 	source, target, err := parseEdge(options.edge)
 	if err != nil {
-		return err
+		return usageError("--edge must use source:target")
 	}
 	client, environment, err := c.current(ctx)
 	if err != nil {
@@ -726,7 +868,7 @@ func (c *CLI) stopRecording(ctx context.Context, requestedName string) error {
 	return nil
 }
 
-func (c *CLI) exportRecording(ctx context.Context, name string) error {
+func (c *CLI) exportRecording(ctx context.Context, name string, options exportOptions) error {
 	client, environment, err := c.current(ctx)
 	if err != nil {
 		return err
@@ -736,8 +878,18 @@ func (c *CLI) exportRecording(ctx context.Context, name string) error {
 	if err := client.Do(ctx, http.MethodGet, path, nil, &content); err != nil {
 		return err
 	}
-	_, err = c.Out.Write(content)
-	return err
+	if options.output == "-" {
+		_, err = c.Out.Write(content)
+		return err
+	}
+	if err := writePrivateFile(options.output, content, options.force); err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "export", Project: environment.Project, Environment: environment.Name, Name: name, Path: options.output, Status: "written"})
+	}
+	fmt.Fprintln(c.Out, "wrote", options.output)
+	return nil
 }
 
 func (c *CLI) deleteRecording(ctx context.Context, name string) error {
@@ -756,7 +908,10 @@ func (c *CLI) deleteRecording(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *CLI) listFaults(ctx context.Context) error {
+func (c *CLI) listFaults(ctx context.Context, limit int) error {
+	if err := validLimit(limit, 1000); err != nil {
+		return err
+	}
 	client, environment, err := c.current(ctx)
 	if err != nil {
 		return err
@@ -764,12 +919,13 @@ func (c *CLI) listFaults(ctx context.Context) error {
 	var response struct {
 		Faults []model.FaultRule `json:"faults"`
 	}
-	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/faults", nil, &response); err != nil {
+	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/faults?limit="+strconv.Itoa(limit), nil, &response); err != nil {
 		return err
 	}
 	if response.Faults == nil {
 		response.Faults = []model.FaultRule{}
 	}
+	response.Faults = truncate(response.Faults, limit)
 	if c.jsonOutput {
 		return writeJSON(c.Out, response)
 	}
@@ -792,7 +948,22 @@ func (c *CLI) listFaults(ctx context.Context) error {
 func (c *CLI) addFault(ctx context.Context, name, edge string, options faultOptions) error {
 	source, target, err := parseEdge(edge)
 	if err != nil || source == "" || target == "" {
-		return errors.New("edge must be source:target")
+		return usageError("edge must use source:target")
+	}
+	if options.duration <= 0 || options.duration > time.Hour {
+		return usageError("--duration must be greater than zero and no more than 1h")
+	}
+	if options.probability <= 0 || options.probability > 1 {
+		return usageError("--probability must be greater than zero and no more than 1")
+	}
+	if options.latency < 0 || options.jitter < 0 || options.latency+options.jitter > 60_000 {
+		return usageError("--latency plus --jitter must be between 0 and 60000 milliseconds")
+	}
+	if options.status != 0 && (options.status < 400 || options.status > 599) {
+		return usageError("--status must be between 400 and 599")
+	}
+	if options.latency == 0 && options.jitter == 0 && options.status == 0 && !options.abort {
+		return usageError("define at least one effect with --latency, --jitter, --status, or --abort")
 	}
 	client, environment, err := c.current(ctx)
 	if err != nil {
@@ -939,15 +1110,19 @@ func (c *CLI) forgetProject(ctx context.Context) error {
 	return nil
 }
 
-func (c *CLI) listEnvironments(ctx context.Context, project string) error {
+func (c *CLI) listEnvironments(ctx context.Context, project string, limit int) error {
+	if err := validLimit(limit, 1000); err != nil {
+		return err
+	}
 	client, _, err := bootstrap.Connect(ctx, c.paths)
 	if err != nil {
 		return err
 	}
-	path := "/api/v1/environments"
+	query := url.Values{"limit": {strconv.Itoa(limit)}}
 	if project != "" {
-		path += "?project=" + url.QueryEscape(project)
+		query.Set("project", project)
 	}
+	path := "/api/v1/environments?" + query.Encode()
 	var response struct {
 		Environments []model.Environment `json:"environments"`
 	}
@@ -957,6 +1132,7 @@ func (c *CLI) listEnvironments(ctx context.Context, project string) error {
 	if response.Environments == nil {
 		response.Environments = []model.Environment{}
 	}
+	response.Environments = truncate(response.Environments, limit)
 	if c.jsonOutput {
 		return writeJSON(c.Out, response)
 	}
@@ -1416,7 +1592,7 @@ func (c *CLI) browserURL(ctx context.Context, client *bootstrap.Client, next str
 
 func requireIngress(ctx context.Context) error {
 	if err := ingress.Check(ctx); err != nil {
-		return fmt.Errorf("clean localhost URLs are not configured; run `portless setup` once, then retry: %w", err)
+		return fmt.Errorf("clean localhost URLs are not configured; run `portless relay install` or `portless setup`, then retry: %w", err)
 	}
 	return nil
 }
@@ -1445,14 +1621,20 @@ func (c *CLI) waitOperation(ctx context.Context, client *bootstrap.Client, opera
 	}
 }
 
-func (c *CLI) followTraffic(ctx context.Context, client *bootstrap.Client, environment model.Environment, selector string, jsonOutput bool) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.BaseURL+environmentAPI(environment)+"/stream?topic=traffic.http", nil)
+func (c *CLI) followTraffic(ctx context.Context, client *bootstrap.Client, environment model.Environment, options trafficOptions, seen map[int64]struct{}, jsonOutput bool) error {
+	topic := "traffic.http"
+	if options.protocol == "tcp" {
+		topic = "traffic.tcp"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.BaseURL+environmentAPI(environment)+"/stream?topic="+url.QueryEscape(topic), nil)
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.Token)
 	request.Header.Set("Accept", "text/event-stream")
-	response, err := client.HTTP.Do(request)
+	streamClient := *client.HTTP
+	streamClient.Timeout = 0
+	response, err := streamClient.Do(request)
 	if err != nil {
 		return err
 	}
@@ -1460,7 +1642,34 @@ func (c *CLI) followTraffic(ctx context.Context, client *bootstrap.Client, envir
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("traffic stream returned %s", response.Status)
 	}
+	last := int64(0)
+	for sequence := range seen {
+		if sequence > last {
+			last = sequence
+		}
+	}
+	var replay struct {
+		Traffic []model.TrafficEvent `json:"traffic"`
+	}
+	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/traffic?"+trafficQuery(options, last).Encode(), nil, &replay); err != nil {
+		return err
+	}
+	for index := len(replay.Traffic) - 1; index >= 0; index-- {
+		event := replay.Traffic[index]
+		if _, exists := seen[event.Sequence]; exists {
+			continue
+		}
+		seen[event.Sequence] = struct{}{}
+		if jsonOutput {
+			if err := writeJSONLine(c.Out, event); err != nil {
+				return err
+			}
+		} else {
+			c.printTraffic(event)
+		}
+	}
 	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1<<20)
 	eventType := ""
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -1468,9 +1677,13 @@ func (c *CLI) followTraffic(ctx context.Context, client *bootstrap.Client, envir
 			eventType = strings.TrimPrefix(line, "event: ")
 			continue
 		}
-		if strings.HasPrefix(line, "data: ") && eventType == "traffic.http" {
+		if strings.HasPrefix(line, "data: ") && eventType == topic {
 			var event model.TrafficEvent
-			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) == nil && matchesTraffic(event, selector) {
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) == nil && matchesTrafficOptions(event, options) {
+				if _, exists := seen[event.Sequence]; exists {
+					continue
+				}
+				seen[event.Sequence] = struct{}{}
 				if jsonOutput {
 					if err := writeJSONLine(c.Out, event); err != nil {
 						return err
@@ -1529,13 +1742,18 @@ func (c *CLI) printOperation(operation model.Operation) {
 	fmt.Fprintf(c.Out, "%s operation %d %s\n", operation.Type, operation.Number, c.state(c.Out, operation.State))
 }
 
-func (c *CLI) printTrafficList(environment model.Environment, events []model.TrafficEvent) {
-	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, "HTTP traffic"), environment.Project, environment.Name)
+func (c *CLI) printTrafficList(environment model.Environment, protocol string, events []model.TrafficEvent) {
+	title := strings.ToUpper(protocol) + " traffic"
+	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, title), environment.Project, environment.Name)
 	if len(events) == 0 {
-		fmt.Fprintln(c.Out, c.muted(c.Out, "No HTTP traffic captured."))
+		fmt.Fprintln(c.Out, c.muted(c.Out, "No "+strings.ToUpper(protocol)+" traffic captured."))
 		return
 	}
-	fmt.Fprintln(c.Out, c.muted(c.Out, "SEQ    METHOD  PATH               CODE  TIME    EDGE"))
+	if protocol == "http" {
+		fmt.Fprintln(c.Out, c.muted(c.Out, "SEQ    METHOD  PATH               CODE  TIME    EDGE"))
+	} else {
+		fmt.Fprintln(c.Out, c.muted(c.Out, "SEQ    PROTOCOL   TIME    EDGE                         RESULT"))
+	}
 	for _, event := range events {
 		c.printTraffic(event)
 	}
@@ -1545,6 +1763,17 @@ func (c *CLI) printTraffic(event model.TrafficEvent) {
 	fault := ""
 	if event.Fault != "" {
 		fault = " fault=" + event.Fault
+	}
+	if event.Protocol != model.ProtocolHTTP {
+		result := "ok"
+		if event.Error != "" {
+			result = c.failure(c.Out, event.Error)
+		}
+		if event.Fault != "" {
+			result = c.warning(c.Out, "fault="+event.Fault)
+		}
+		fmt.Fprintf(c.Out, "#%-5d %-10s %5dms %-28s %s\n", event.Sequence, strings.ToUpper(string(event.Protocol)), event.DurationMS, event.Source+":"+event.Target, result)
+		return
 	}
 	status := fmt.Sprintf("%4d", event.Status)
 	switch {
@@ -1558,7 +1787,36 @@ func (c *CLI) printTraffic(event model.TrafficEvent) {
 	if fault != "" {
 		fault = c.warning(c.Out, fault)
 	}
-	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %s %5dms %s:%s%s\n", event.Sequence, event.Method, event.Path, status, event.DurationMS, event.Source, event.Target, fault)
+	method := event.Method
+	path := event.Path
+	if method == "" {
+		method = strings.ToUpper(string(event.Protocol))
+	}
+	if path == "" {
+		path = "session"
+	}
+	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %s %5dms %s:%s%s\n", event.Sequence, method, path, status, event.DurationMS, event.Source, event.Target, fault)
+}
+
+func (c *CLI) printTrafficDetail(event model.TrafficEvent) {
+	fmt.Fprintf(c.Out, "%s #%d\n\n", c.heading(c.Out, strings.ToUpper(string(event.Protocol))+" traffic"), event.Sequence)
+	fmt.Fprintf(c.Out, "  %-18s %s → %s\n", "Edge:", event.Source, event.Target)
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Provider:", emptyAs(string(event.TargetProvider), "unknown"))
+	if event.Method != "" {
+		fmt.Fprintf(c.Out, "  %-18s %s %s\n", "Request:", event.Method, event.Path)
+	}
+	if event.Status != 0 {
+		fmt.Fprintf(c.Out, "  %-18s %d\n", "Status:", event.Status)
+	}
+	fmt.Fprintf(c.Out, "  %-18s %dms\n", "Duration:", event.DurationMS)
+	fmt.Fprintf(c.Out, "  %-18s %d / %d\n", "Bytes in / out:", event.RequestBytes, event.ResponseBytes)
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Fault:", emptyAs(event.Fault, "none"))
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Recording:", emptyAs(event.Recording, "none"))
+	if event.Error != "" {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Error:", c.failure(c.Out, event.Error))
+	}
+	printHeaderMap(c.Out, "Request headers", event.RequestHeaders)
+	printHeaderMap(c.Out, "Response headers", event.ResponseHeaders)
 }
 
 func (c *CLI) printError(err error) {
@@ -1677,8 +1935,8 @@ func writeJSONLine(writer io.Writer, value any) error {
 	return encoder.Encode(value)
 }
 
-func writeSetupStatusJSON(writer io.Writer, status ingress.InstallationStatus) error {
-	return writeJSON(writer, setupStatusOutput{State: status.State(), InstallationStatus: status})
+func writeRelayStatusJSON(writer io.Writer, status ingress.InstallationStatus) error {
+	return writeJSON(writer, relayStatusOutput{State: status.State(), InstallationStatus: status})
 }
 
 func (c *CLI) printEnvironmentListHeader() {

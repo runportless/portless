@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -69,17 +70,24 @@ func TestLifecycleHandlerRefusesActiveShutdownUnlessForced(t *testing.T) {
 		t.Fatal(err)
 	}
 	var shutdowns atomic.Int32
+	var handoffReady atomic.Bool
 	handler := &lifecycleHandler{
 		next: http.NotFoundHandler(), auth: authManager,
 		identity: daemon.Identity{Product: daemon.Product, InstanceID: "instance"},
 		activeEnvironments: func(context.Context) ([]string, error) {
 			return []string{"billing/local"}, nil
 		},
+		handoffStatus: func(context.Context) (bool, []string) {
+			if handoffReady.Load() {
+				return true, nil
+			}
+			return false, []string{"checkout has no recoverable supervisor"}
+		},
 		shutdown: func() { shutdowns.Add(1) },
 	}
 
-	request := func(instance string, force bool) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(daemon.ShutdownRequest{InstanceID: instance, Force: force})
+	request := func(instance string, force, handoff bool) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(daemon.ShutdownRequest{InstanceID: instance, Force: force, Handoff: handoff})
 		httpRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+daemon.ShutdownPath, bytes.NewReader(body))
 		httpRequest.Header.Set("Authorization", "Bearer "+authManager.Token())
 		response := httptest.NewRecorder()
@@ -87,14 +95,71 @@ func TestLifecycleHandlerRefusesActiveShutdownUnlessForced(t *testing.T) {
 		return response
 	}
 
-	if response := request("other-instance", true); response.Code != http.StatusConflict || shutdowns.Load() != 0 {
+	if response := request("other-instance", true, false); response.Code != http.StatusConflict || shutdowns.Load() != 0 {
 		t.Fatalf("instance mismatch returned %d and %d shutdowns", response.Code, shutdowns.Load())
 	}
-	if response := request("instance", false); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "billing/local") || shutdowns.Load() != 0 {
+	if response := request("instance", false, false); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "billing/local") || shutdowns.Load() != 0 {
 		t.Fatalf("active shutdown returned %d, body %s, shutdowns %d", response.Code, response.Body.String(), shutdowns.Load())
 	}
-	if response := request("instance", true); response.Code != http.StatusAccepted || shutdowns.Load() != 1 {
+	if response := request("instance", false, true); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "recoverable supervisor") || shutdowns.Load() != 0 {
+		t.Fatalf("unsafe handoff returned %d, body %s, shutdowns %d", response.Code, response.Body.String(), shutdowns.Load())
+	}
+	handoffReady.Store(true)
+	if response := request("instance", false, true); response.Code != http.StatusAccepted || shutdowns.Load() != 1 {
+		t.Fatalf("safe handoff returned %d, body %s, shutdowns %d", response.Code, response.Body.String(), shutdowns.Load())
+	}
+	if response := request("instance", true, false); response.Code != http.StatusAccepted || shutdowns.Load() != 2 {
 		t.Fatalf("forced shutdown returned %d, body %s, shutdowns %d", response.Code, response.Body.String(), shutdowns.Load())
+	}
+}
+
+func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
+	var replacements atomic.Int32
+	handoffReady := false
+	handler := &lifecycleHandler{
+		identity: daemon.Identity{Product: daemon.Product, InstanceID: "instance", State: "ready", RecoveryProblems: []string{"reconciliation warning"}},
+		activeEnvironments: func(context.Context) ([]string, error) {
+			return []string{"billing/local"}, nil
+		},
+		handoffStatus: func(context.Context) (bool, []string) {
+			if handoffReady {
+				return true, nil
+			}
+			return false, []string{"checkout has no recoverable supervisor"}
+		},
+		replace: func() { replacements.Add(1) },
+	}
+
+	if _, err := handler.Restart(context.Background(), "other-instance"); err == nil {
+		t.Fatal("restart accepted a stale daemon instance")
+	} else {
+		var lifecycleError *daemon.LifecycleError
+		if !errors.As(err, &lifecycleError) || lifecycleError.Code != "DAEMON_INSTANCE_CHANGED" {
+			t.Fatalf("stale restart error = %#v, want DAEMON_INSTANCE_CHANGED", err)
+		}
+	}
+	if _, err := handler.Restart(context.Background(), "instance"); err == nil {
+		t.Fatal("restart accepted an unsafe active handoff")
+	} else {
+		var lifecycleError *daemon.LifecycleError
+		if !errors.As(err, &lifecycleError) || lifecycleError.Code != "HANDOFF_UNAVAILABLE" || len(lifecycleError.Problems) != 2 {
+			t.Fatalf("unsafe restart error = %#v", err)
+		}
+	}
+	if replacements.Load() != 0 {
+		t.Fatalf("unsafe restart scheduled %d replacements", replacements.Load())
+	}
+
+	handoffReady = true
+	result, err := handler.Restart(context.Background(), "instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Stopping || !result.Handoff || result.InstanceID != "instance" || strings.Join(result.ActiveEnvironments, ",") != "billing/local" {
+		t.Fatalf("unexpected restart result: %#v", result)
+	}
+	if replacements.Load() != 1 {
+		t.Fatalf("safe restart scheduled %d replacements, want 1", replacements.Load())
 	}
 }
 

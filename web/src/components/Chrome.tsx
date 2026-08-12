@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Environment, Project, RuntimeStatus } from '../types'
+import type { DaemonRestart, DaemonStatus, Environment, Project, RuntimeStatus } from '../types'
+import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
@@ -7,19 +8,24 @@ export type EnvironmentView = 'overview' | 'bindings' | 'traffic' | 'recordings'
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, runtime, children, onNavigate, commands, live = true }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, runtime, daemon, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
   activeEnvironment?: Environment
   activeView: EnvironmentView
   runtime?: RuntimeStatus | null
+  daemon: DaemonStatus | null
   children: ReactNode
   onNavigate: (path: string) => void
   commands: Command[]
   live?: boolean
+  onDaemonRefresh: () => Promise<DaemonStatus>
+  onDaemonRestart: (instanceId: string) => Promise<DaemonRestart>
+  onDaemonReconnected: () => Promise<void>
 }) {
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [daemonOpen, setDaemonOpen] = useState(false)
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(readExpandedProjects)
   const scopedProject = activeEnvironment?.project ?? activeProject?.name
 
@@ -65,6 +71,14 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     })
   }
 
+  const inspectDaemon = () => {
+    setPaletteOpen(false)
+    setDaemonOpen(true)
+    void onDaemonRefresh().catch(() => undefined)
+  }
+
+  const daemonLabel = live ? `daemon ${daemon?.state === 'ready' ? 'ready' : daemon?.state ?? 'connected'}` : 'daemon reconnecting'
+
   return <div className="shell">
     <aside className="sidebar">
       <button className="brand" onClick={() => onNavigate('/projects')} aria-label="Portless projects"><span className="brand__signal"><i /><i /><i /></span><span>portless</span><small>local</small></button>
@@ -102,13 +116,14 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
           </nav>
         </>}
       </div>
-      <div className="sidebar__footer"><span className={live ? 'live-dot' : 'live-dot live-dot--off'} />{live ? 'daemon connected' : 'reconnecting'}{runtime?.selected && <small>{runtime.selected}</small>}</div>
+      <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
-      <header className="topbar"><div className="crumbs"><span className="environment-chip">LOCAL</span>{activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
+      <header className="topbar"><div className="crumbs"><span className="environment-chip">LOCAL</span>{activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
+    {daemonOpen && <DaemonDrawer status={daemon} runtime={runtime ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
   </div>
 }
 

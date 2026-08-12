@@ -34,7 +34,7 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 	}
 	record := bootstrap.ControlRecord{
 		PID: os.Getpid(), Port: 7331, ProtocolVersion: "1", APIVersion: api.APIVersion,
-		InstallationID: "installation", InstanceID: "instance", BuildID: "build",
+		InstallationID: "installation", InstanceID: "instance", BuildID: "build", State: "ready", HandoffReady: true,
 		TokenPath: paths.Token, StartedAt: time.Now().UTC(), ProcessHint: "portless-test",
 	}
 	content, err := json.Marshal(record)
@@ -59,7 +59,7 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 		processAlive:       func(int) error { return nil },
 	}
 	report := run(context.Background(), paths, ScopeDaemon, os.Getuid(), dependencies)
-	if !report.Healthy || report.Summary.Passed != 6 || report.Summary.Failed != 0 {
+	if !report.Healthy || report.Summary.Passed != 7 || report.Summary.Failed != 0 {
 		t.Fatalf("unexpected daemon report: %#v", report)
 	}
 	for _, check := range report.Checks {
@@ -164,8 +164,8 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 5 {
 		t.Fatalf("unexpected missing relay report: %#v", report)
 	}
-	if checkByCode(t, report, "relay.installation").Remediation != "Run `portless setup`." {
-		t.Fatalf("missing relay did not provide setup remediation: %#v", report)
+	if checkByCode(t, report, "relay.installation").Remediation != "Run `portless relay install` or `portless setup`." {
+		t.Fatalf("missing relay did not provide install remediation: %#v", report)
 	}
 	if check := checkByCode(t, report, "relay.port_80"); check.Status != StatusFail || check.Summary != "Port 80 is occupied by an unrecognized listener" {
 		t.Fatalf("unexpected port conflict check: %#v", check)

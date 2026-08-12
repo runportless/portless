@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, connectEvents, jsonBody, environmentPath } from '../api'
-import type { ComponentBinding, FaultRule, Operation, Environment, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficEvent, WritePolicy } from '../types'
+import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficEvent, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 
 type Tab = 'overview' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
@@ -60,7 +60,7 @@ export function EnvironmentPage({ environment, tab, onNavigate, onChanged }: { e
         <div className="project-actions">
           {activeRecording && <span className="recording-indicator"><i />REC {activeRecording.name}</span>}
           {activeFaults.length > 0 && <span className="fault-indicator">▲ {activeFaults.length} ACTIVE {activeFaults.length === 1 ? 'FAULT' : 'FAULTS'}</span>}
-          {environment.status === 'healthy' || environment.status === 'degraded' || environment.status === 'failed' ? <button className="button" disabled={!!busy} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}
+          {environment.status !== 'stopped' ? <button className="button" disabled={!!busy || environment.status === 'recovering'} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : environment.status === 'recovering' ? 'RECOVERING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}
           {primaryService?.ingressUrl && <a className="button" href={primaryService.ingressUrl} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
         </div>
       </div>
@@ -126,13 +126,13 @@ function Overview({ environment, timeline, ready, activeFaults, activeRecording,
 }
 
 function ServiceDrawer({ environment, service, onClose, onChanged }: { environment: Environment; service: Service; onClose: () => void; onChanged: () => void }) {
-  const [logs, setLogs] = useState<string[]>([])
+  const [logs, setLogs] = useState<LogEntry[]>([])
   const [configuration, setConfiguration] = useState<{ environment?: Array<{ key: string; value: string; classification: string; source: string }> } | null>(null)
   const [drawerTab, setDrawerTab] = useState<'details' | 'logs' | 'configuration'>('details')
   const [busy, setBusy] = useState('')
   const base = environmentPath(environment, `/services/${encodeURIComponent(service.name)}`)
   useEffect(() => {
-    api<{ lines: string[] }>(`${environmentPath(environment, '/logs')}?service=${encodeURIComponent(service.name)}&limit=500`).then((value) => setLogs(value.lines)).catch(() => setLogs([]))
+    api<{ entries: LogEntry[] }>(`${environmentPath(environment, '/logs')}?service=${encodeURIComponent(service.name)}&limit=500`).then((value) => setLogs(value.entries)).catch(() => setLogs([]))
     api<typeof configuration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
   }, [base, environment.name, service.name])
   const action = async (name: 'restart' | 'stop' | 'start') => {
@@ -150,7 +150,7 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
           <section className="drawer-section"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.template} container`}</pre></section>
           <section className="drawer-section"><div className="eyebrow">HEALTH</div><p><StatusMark status={service.status} /> {service.health.kind}{service.health.path ? ` ${service.health.path}` : ''}</p><small>{service.reason || 'No current readiness error.'}</small></section>
         </>}
-        {drawerTab === 'logs' && <div className="log-view"><div className="log-view__meta">last {logs.length} lines · stdout + stderr</div><pre>{logs.length ? logs.map((line, index) => <span key={index}><i>{String(index + 1).padStart(3, '0')}</i>{line}{'\n'}</span>) : 'No logs captured for this generation.'}</pre></div>}
+        {drawerTab === 'logs' && <div className="log-view"><div className="log-view__meta">last {logs.length} lines · stdout + stderr</div><pre>{logs.length ? logs.map((entry, index) => <span key={`${entry.timestamp}-${entry.stream}-${index}`}><i>{new Date(entry.timestamp).toLocaleTimeString()}</i>{entry.message}{'\n'}</span>) : 'No logs captured for this service.'}</pre></div>}
         {drawerTab === 'configuration' && <div className="config-table"><div className="config-row config-row--head"><span>KEY</span><span>EFFECTIVE VALUE</span><span>SOURCE</span></div>{configuration?.environment?.map((item) => <div className="config-row" key={item.key}><code>{item.key}</code><span className={item.classification === 'masked' ? 'masked-value' : ''}>{item.value}</span><small>{item.source} · {item.classification}</small></div>)}{!configuration?.environment?.length && <div className="empty-row">No static environment values were discovered. Connection bindings are generated at runtime.</div>}</div>}
       </div>
     </aside>
@@ -165,18 +165,25 @@ function TrafficPanel({ environment }: { environment: Environment }) {
   const [filter, setFilter] = useState('')
   const [paused, setPaused] = useState(false)
   useEffect(() => {
-    api<{ traffic: TrafficEvent[] }>(environmentPath(environment, '/traffic/http?limit=500')).then((value) => setTraffic(value.traffic)).catch(() => setTraffic([]))
+    api<{ traffic: TrafficEvent[] }>(environmentPath(environment, '/traffic?protocol=http&limit=500')).then((value) => setTraffic(value.traffic)).catch(() => setTraffic([]))
     return connectEvents(environment, ['traffic.http'], (type, value) => {
       if (type === 'traffic.http' && !paused) setTraffic((items) => [value as TrafficEvent, ...items].slice(0, 1000))
     })
   }, [environment.project, environment.name, paused])
+  const inspect = async (event: TrafficEvent) => {
+    try {
+      setSelected(await api<TrafficEvent>(environmentPath(environment, `/traffic/${event.sequence}`)))
+    } catch {
+      setSelected(event)
+    }
+  }
   const filtered = traffic.filter((event) => `${event.method} ${event.path} ${event.source} ${event.target} ${event.status}`.toLowerCase().includes(filter.toLowerCase()))
   return <section className="panel traffic-panel">
     <div className="panel-title traffic-toolbar"><span>LIVE HTTP TRAFFIC</span><div><span className="live-count"><i />{paused ? 'PAUSED' : 'STREAMING'}</span><button className="button button--small" onClick={() => setPaused((value) => !value)}>{paused ? 'RESUME' : 'PAUSE'}</button><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="filter method, path, edge…" /></div></div>
     <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Method</span><span>Path</span><span>Edge</span><span>Status</span><span>Duration</span><span>Fault / recording</span></div>
-    {filtered.map((event) => <button className="table-row traffic-row" key={event.sequence} onClick={() => setSelected(event)}><code>#{event.sequence}</code><span>{new Date(event.startedAt).toLocaleTimeString()}</span><strong>{event.method || event.protocol.toUpperCase()}</strong><code className="truncate">{event.path || 'TCP session'}</code><span>{event.source}<i className="edge-arrow">→</i>{event.target}</span><span className={(event.status || 0) >= 500 ? 'danger-text' : (event.status || 0) >= 400 ? 'warning-text' : ''}>{event.status || '—'}</span><span>{duration(event.durationMs)}</span><span>{event.fault ? <b className="fault-chip">▲ {event.fault}</b> : event.recording ? <b className="record-chip">● {event.recording}</b> : '—'}</span></button>)}
+    {filtered.map((event) => <button className="table-row traffic-row" key={event.sequence} onClick={() => inspect(event)}><code>#{event.sequence}</code><span>{new Date(event.startedAt).toLocaleTimeString()}</span><strong>{event.method || event.protocol.toUpperCase()}</strong><code className="truncate">{event.path || 'TCP session'}</code><span>{event.source}<i className="edge-arrow">→</i>{event.target}</span><span className={(event.status || 0) >= 500 ? 'danger-text' : (event.status || 0) >= 400 ? 'warning-text' : ''}>{event.status || '—'}</span><span>{duration(event.durationMs)}</span><span>{event.fault ? <b className="fault-chip">▲ {event.fault}</b> : event.recording ? <b className="record-chip">● {event.recording}</b> : '—'}</span></button>)}
     {filtered.length === 0 && <div className="empty-row">No matching HTTP traffic yet. Requests through <code>service.{environment.name}.{environment.project}.localhost</code> or a discovered HTTP edge appear here.</div>}
-    {selected && <div className="traffic-detail"><header><div><span className="eyebrow">HTTP TRAFFIC #{selected.sequence}</span><h3>{selected.method} {selected.path}</h3></div><button onClick={() => setSelected(null)}>×</button></header><div className="detail-grid"><Detail label="EDGE" value={`${selected.source} → ${selected.target}`} /><Detail label="STATUS" value={String(selected.status || '—')} /><Detail label="DURATION" value={duration(selected.durationMs)} /><Detail label="REQUEST" value={`${selected.requestBytes} B`} /><Detail label="RESPONSE" value={`${selected.responseBytes} B`} /><Detail label="FAULT" value={selected.fault || 'none'} /></div><div className="drawer-section"><div className="eyebrow">REDACTED REQUEST HEADERS</div><pre>{JSON.stringify(selected.headers || {}, null, 2)}</pre></div></div>}
+    {selected && <div className="traffic-detail"><header><div><span className="eyebrow">HTTP TRAFFIC #{selected.sequence}</span><h3>{selected.method} {selected.path}</h3></div><button onClick={() => setSelected(null)}>×</button></header><div className="detail-grid"><Detail label="EDGE" value={`${selected.source} → ${selected.target}`} /><Detail label="STATUS" value={String(selected.status || '—')} /><Detail label="DURATION" value={duration(selected.durationMs)} /><Detail label="REQUEST" value={`${selected.requestBytes} B`} /><Detail label="RESPONSE" value={`${selected.responseBytes} B`} /><Detail label="FAULT" value={selected.fault || 'none'} /></div><div className="drawer-section"><div className="eyebrow">REDACTED REQUEST HEADERS</div><pre>{JSON.stringify(selected.requestHeaders || {}, null, 2)}</pre></div><div className="drawer-section"><div className="eyebrow">REDACTED RESPONSE HEADERS</div><pre>{JSON.stringify(selected.responseHeaders || {}, null, 2)}</pre></div></div>}
   </section>
 }
 

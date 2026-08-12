@@ -20,6 +20,7 @@ import (
 
 type StopOptions struct {
 	Force   bool
+	Handoff bool
 	Timeout time.Duration
 }
 
@@ -85,10 +86,14 @@ func stopVerifiedDaemon(ctx context.Context, paths Paths, inspection DaemonInspe
 		options.Timeout = 15 * time.Second
 	}
 	active := append([]string(nil), inspection.Identity.ActiveEnvironments...)
-	if len(active) > 0 && !options.Force {
+	if len(active) > 0 && !options.Force && !(options.Handoff && inspection.Identity.HandoffReady) {
 		return StopResult{}, &ActiveEnvironmentsError{Environments: active}
 	}
-	response, err := requestDaemonShutdown(ctx, inspection, options.Force, reason)
+	// Older authenticated lifecycle protocols do not know the handoff field and
+	// may reject it under strict JSON decoding. They can still perform an ordinary
+	// or forced shutdown; only current-protocol daemons receive a handoff request.
+	handoff := options.Handoff && inspection.Identity.ProtocolVersion == daemon.ProtocolVersion
+	response, err := requestDaemonShutdown(ctx, inspection, options.Force, handoff, reason)
 	if err != nil {
 		return StopResult{}, err
 	}
@@ -122,8 +127,8 @@ func stopVerifiedDaemon(ctx context.Context, paths Paths, inspection DaemonInspe
 	return result, nil
 }
 
-func requestDaemonShutdown(ctx context.Context, inspection DaemonInspection, force bool, reason string) (daemon.ShutdownResponse, error) {
-	payload, err := json.Marshal(daemon.ShutdownRequest{InstanceID: inspection.Identity.InstanceID, Force: force, Reason: reason})
+func requestDaemonShutdown(ctx context.Context, inspection DaemonInspection, force, handoff bool, reason string) (daemon.ShutdownResponse, error) {
+	payload, err := json.Marshal(daemon.ShutdownRequest{InstanceID: inspection.Identity.InstanceID, Force: force, Handoff: handoff, Reason: reason})
 	if err != nil {
 		return daemon.ShutdownResponse{}, err
 	}

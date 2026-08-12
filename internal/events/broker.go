@@ -125,6 +125,16 @@ func (b *Broker) AddTraffic(event model.TrafficEvent) model.TrafficEvent {
 	return event
 }
 
+// EnsureTrafficSequence restores the high-water mark of durable traffic when a
+// daemon starts so a new live event cannot replace an event kept by a recording.
+func (b *Broker) EnsureTrafficSequence(scope string, sequence int64) {
+	b.mu.Lock()
+	if b.trafficSequence[scope] < sequence {
+		b.trafficSequence[scope] = sequence
+	}
+	b.mu.Unlock()
+}
+
 func (b *Broker) RecentTraffic(scope string, limit int) []model.TrafficEvent {
 	b.mu.RLock()
 	items := b.traffic[scope]

@@ -15,10 +15,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/runtime/container"
+	"github.com/portless-run/portless/internal/runtime/logstore"
 )
 
 const (
@@ -27,6 +29,7 @@ const (
 	labelEnvironment     = "dev.portless.environment.key"
 	labelEnvironmentName = "dev.portless.environment.name"
 	labelService         = "dev.portless.service.name"
+	labelGeneration      = "dev.portless.service.generation"
 )
 
 type Engine interface {
@@ -43,10 +46,16 @@ type Manager struct {
 	installationKey string
 	temporaryRoot   string
 	credentialsRoot string
+	mu              sync.Mutex
+	collectors      map[string]*logCollector
+}
+
+type logCollector struct {
+	cancel context.CancelFunc
 }
 
 func New(engine Engine, installationKey, temporaryRoot string) *Manager {
-	return &Manager{engine: engine, installationKey: installationKey, temporaryRoot: temporaryRoot, credentialsRoot: filepath.Join(filepath.Dir(temporaryRoot), "secrets")}
+	return &Manager{engine: engine, installationKey: installationKey, temporaryRoot: temporaryRoot, credentialsRoot: filepath.Join(filepath.Dir(temporaryRoot), "secrets"), collectors: make(map[string]*logCollector)}
 }
 
 func (m *Manager) Name() container.RuntimeName { return m.engine.Name() }
@@ -57,7 +66,7 @@ func (m *Manager) StartHost(ctx context.Context) container.ProbeResult {
 	return m.engine.StartHost(ctx)
 }
 
-func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition) (container.StartResult, error) {
+func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (container.StartResult, error) {
 	if service.Kind != model.ServiceContainer {
 		return container.StartResult{}, errors.New("container runtime only starts container services")
 	}
@@ -73,9 +82,13 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 		return container.StartResult{}, err
 	}
 	containerName := resourceName("portless", environmentName, service.Name, suffix)
+	logDirectory := filepath.Join(logsRoot, service.Name, strconv.FormatInt(generation, 10))
 	if running, port := m.inspectRunning(ctx, containerName, servicePort(service)); running {
 		environment, _ := m.inspectEnvironment(ctx, containerName)
-		return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC()}, nil
+		if err := m.startLogCollector(containerName, service.Name, generation, logDirectory); err != nil {
+			return container.StartResult{}, err
+		}
+		return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC(), LogDirectory: logDirectory}, nil
 	}
 	_ = m.run(ctx, "rm", "-f", containerName)
 	image, defaults, healthCommand, err := template(service)
@@ -107,6 +120,7 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 		"--label", labelEnvironment + "=" + environmentKey,
 		"--label", labelEnvironmentName + "=" + environmentName,
 		"--label", labelService + "=" + service.Name,
+		"--label", labelGeneration + "=" + strconv.FormatInt(generation, 10),
 		"--env-file", envFile,
 		"-p", "127.0.0.1::" + strconv.Itoa(servicePort(service)),
 		"-v", m.engine.VolumeMount(volumeName, volumePath(service)),
@@ -124,7 +138,87 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 		_ = m.run(context.Background(), "rm", "-f", containerName)
 		return container.StartResult{}, err
 	}
-	return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC()}, nil
+	if err := m.startLogCollector(containerName, service.Name, generation, logDirectory); err != nil {
+		_ = m.run(context.Background(), "rm", "-f", containerName)
+		return container.StartResult{}, err
+	}
+	return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC(), LogDirectory: logDirectory}, nil
+}
+
+func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (container.StartResult, error) {
+	if service.Kind != model.ServiceContainer {
+		return container.StartResult{}, errors.New("only container services can be adopted")
+	}
+	name, port, err := m.verifyAdoptableContainer(ctx, environmentKey, service, generation, "")
+	if err != nil {
+		return container.StartResult{}, err
+	}
+	_, _, healthCommand, err := template(service)
+	if err != nil {
+		return container.StartResult{}, err
+	}
+	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
+	err = m.waitForHealth(healthCtx, name, healthCommand)
+	healthCancel()
+	if err != nil {
+		return container.StartResult{}, err
+	}
+	environment, err := m.inspectEnvironment(ctx, name)
+	if err != nil {
+		return container.StartResult{}, fmt.Errorf("inspect managed %s environment: %w", service.Name, err)
+	}
+	logDirectory := filepath.Join(logsRoot, service.Name, strconv.FormatInt(generation, 10))
+	if err := m.startLogCollector(name, service.Name, generation, logDirectory); err != nil {
+		return container.StartResult{}, err
+	}
+	return container.StartResult{
+		ContainerName: name, Port: port, Environment: environment,
+		StartedAt: time.Now().UTC(), LogDirectory: logDirectory,
+	}, nil
+}
+
+func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) error {
+	_, _, err := m.verifyAdoptableContainer(ctx, environmentKey, service, generation, containerName)
+	return err
+}
+
+func (m *Manager) verifyAdoptableContainer(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, expectedName string) (string, int, error) {
+	if result := m.Probe(ctx); result.State != "ready" {
+		return "", 0, errors.New(result.Reason)
+	}
+	output, err := m.output(ctx, "ps", "-a",
+		"--filter", "label="+labelOwner+"=true",
+		"--filter", "label="+labelInstall+"="+m.installationKey,
+		"--filter", "label="+labelEnvironment+"="+environmentKey,
+		"--filter", "label="+labelService+"="+service.Name,
+		"--format", "{{.Names}}")
+	if err != nil {
+		return "", 0, fmt.Errorf("find managed %s container: %w", service.Name, err)
+	}
+	names := nonemptyLines(string(output))
+	if len(names) == 0 {
+		return "", 0, fmt.Errorf("managed %s container is missing", service.Name)
+	}
+	if len(names) != 1 {
+		return "", 0, fmt.Errorf("found %d managed %s containers; refusing ambiguous adoption", len(names), service.Name)
+	}
+	name := names[0]
+	if expectedName != "" && name != expectedName {
+		return "", 0, fmt.Errorf("managed container %s does not match persisted container %s", name, expectedName)
+	}
+	encodedGeneration, labelErr := m.inspectLabel(ctx, name, labelGeneration)
+	if labelErr != nil || encodedGeneration == "" {
+		return "", 0, fmt.Errorf("managed %s container has no recoverable generation label", service.Name)
+	}
+	actual, parseErr := strconv.ParseInt(encodedGeneration, 10, 64)
+	if parseErr != nil || actual != generation {
+		return "", 0, fmt.Errorf("managed %s container generation does not match persisted generation %d", service.Name, generation)
+	}
+	running, port := m.inspectRunning(ctx, name, servicePort(service))
+	if !running || port == 0 {
+		return "", 0, fmt.Errorf("managed %s container is not running", service.Name)
+	}
+	return name, port, nil
 }
 
 func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {
@@ -136,6 +230,7 @@ func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, re
 		if err := m.run(ctx, "rm", "-f", name); err != nil {
 			return fmt.Errorf("remove container %s: %w", name, err)
 		}
+		m.stopLogCollector(name)
 	}
 	if removeVolumes {
 		volumes, err := m.ownedResources(ctx, "volume", environmentKey)
@@ -176,8 +271,69 @@ func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName s
 		if err := m.run(ctx, "rm", "-f", name); err != nil {
 			return fmt.Errorf("remove managed %s container: %w", serviceName, err)
 		}
+		m.stopLogCollector(name)
 	}
 	return nil
+}
+
+func (m *Manager) Close() {
+	m.mu.Lock()
+	collectors := make([]*logCollector, 0, len(m.collectors))
+	for name, collector := range m.collectors {
+		collectors = append(collectors, collector)
+		delete(m.collectors, name)
+	}
+	m.mu.Unlock()
+	for _, collector := range collectors {
+		collector.cancel()
+	}
+}
+
+func (m *Manager) startLogCollector(containerName, service string, generation int64, directory string) error {
+	m.stopLogCollector(containerName)
+	stdout, err := logstore.OpenSink(directory, service, "stdout", generation)
+	if err != nil {
+		return err
+	}
+	stderr, err := logstore.OpenSink(directory, service, "stderr", generation)
+	if err != nil {
+		_ = stdout.Close()
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	command := exec.CommandContext(ctx, m.engine.Binary(), "logs", "--follow", containerName)
+	command.Stdout, command.Stderr = stdout, stderr
+	if err := command.Start(); err != nil {
+		cancel()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return fmt.Errorf("collect %s logs: %w", service, err)
+	}
+	collector := &logCollector{cancel: cancel}
+	m.mu.Lock()
+	m.collectors[containerName] = collector
+	m.mu.Unlock()
+	go func() {
+		_ = command.Wait()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		m.mu.Lock()
+		if m.collectors[containerName] == collector {
+			delete(m.collectors, containerName)
+		}
+		m.mu.Unlock()
+	}()
+	return nil
+}
+
+func (m *Manager) stopLogCollector(containerName string) {
+	m.mu.Lock()
+	collector := m.collectors[containerName]
+	delete(m.collectors, containerName)
+	m.mu.Unlock()
+	if collector != nil {
+		collector.cancel()
+	}
 }
 
 func (m *Manager) ensureNetwork(ctx context.Context, name, environmentName, environmentKey string) error {
@@ -231,6 +387,14 @@ func (m *Manager) inspectEnvironment(ctx context.Context, name string) (map[stri
 		}
 	}
 	return result, nil
+}
+
+func (m *Manager) inspectLabel(ctx context.Context, name, label string) (string, error) {
+	output, err := m.output(ctx, "inspect", "--format", "{{ index .Config.Labels \""+label+"\" }}", name)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (m *Manager) waitForPort(ctx context.Context, name string, containerPort int) (int, error) {

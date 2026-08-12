@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestListenIngressCreatesPrivateUnixSocket(t *testing.T) {
@@ -38,5 +40,33 @@ func TestListenIngressRefusesToReplaceFile(t *testing.T) {
 	content, err := os.ReadFile(path)
 	if err != nil || string(content) != "keep me" {
 		t.Fatalf("existing file changed: content=%q err=%v", content, err)
+	}
+}
+
+func TestExecutableWatcherRequestsSafeReplacement(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "portless")
+	if err := os.WriteFile(executable, []byte("first-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	buildID, err := BuildIDForPath(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	replacement := make(chan struct{}, 1)
+	go watchExecutable(ctx, executable, buildID, func(context.Context) (bool, []string) {
+		return true, nil
+	}, replacement)
+
+	// Let the watcher capture the original file identity before replacing it.
+	time.Sleep(50 * time.Millisecond)
+	if err := os.WriteFile(executable, []byte("second-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-replacement:
+	case <-time.After(5 * time.Second):
+		t.Fatal("updated executable did not request a safe daemon replacement")
 	}
 }

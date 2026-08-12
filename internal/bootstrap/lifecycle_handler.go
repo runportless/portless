@@ -18,7 +18,9 @@ type lifecycleHandler struct {
 	auth               *auth.Manager
 	identity           daemon.Identity
 	activeEnvironments func(context.Context) ([]string, error)
+	handoffStatus      func(context.Context) (bool, []string)
 	shutdown           func()
+	replace            func()
 }
 
 func (h *lifecycleHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -49,13 +51,11 @@ func (h *lifecycleHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 			writeDaemonError(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil)
 			return
 		}
-		active, err := h.currentActiveEnvironments(request.Context())
+		identity, err := h.Status(request.Context())
 		if err != nil {
 			writeDaemonError(writer, http.StatusInternalServerError, "DAEMON_STATE_UNAVAILABLE", err.Error(), nil)
 			return
 		}
-		identity := h.identity
-		identity.ActiveEnvironments = active
 		writeDaemonJSON(writer, http.StatusOK, identity)
 	case daemon.ShutdownPath:
 		if request.Method != http.MethodPost {
@@ -80,12 +80,72 @@ func (h *lifecycleHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 			return
 		}
 		if len(active) > 0 && !input.Force {
-			writeDaemonError(writer, http.StatusConflict, "ACTIVE_ENVIRONMENTS", "daemon is managing active environments", active)
-			return
+			if !input.Handoff {
+				writeDaemonError(writer, http.StatusConflict, "ACTIVE_ENVIRONMENTS", "daemon is managing active environments", active, nil)
+				return
+			}
+			ready, problems := false, []string{"runtime handoff is not configured"}
+			if h.handoffStatus != nil {
+				ready, problems = h.handoffStatus(request.Context())
+			}
+			if !ready {
+				writeDaemonError(writer, http.StatusConflict, "HANDOFF_UNAVAILABLE", "active environments cannot be safely handed off", active, problems)
+				return
+			}
 		}
-		writeDaemonJSON(writer, http.StatusAccepted, daemon.ShutdownResponse{Stopping: true, InstanceID: h.identity.InstanceID, ActiveEnvironments: active})
+		writeDaemonJSON(writer, http.StatusAccepted, daemon.ShutdownResponse{Stopping: true, Handoff: input.Handoff, InstanceID: h.identity.InstanceID, ActiveEnvironments: active})
 		h.shutdown()
 	}
+}
+
+func (h *lifecycleHandler) Status(ctx context.Context) (daemon.Identity, error) {
+	active, err := h.currentActiveEnvironments(ctx)
+	if err != nil {
+		return daemon.Identity{}, err
+	}
+	identity := h.identity
+	identity.ActiveEnvironments = active
+	identity.RecoveryProblems = append([]string(nil), h.identity.RecoveryProblems...)
+	if h.handoffStatus != nil {
+		ready, problems := h.handoffStatus(ctx)
+		identity.HandoffReady = ready
+		identity.RecoveryProblems = append(identity.RecoveryProblems, problems...)
+	}
+	if identity.RecoveryProblems == nil {
+		identity.RecoveryProblems = []string{}
+	}
+	return identity, nil
+}
+
+func (h *lifecycleHandler) Restart(ctx context.Context, instanceID string) (daemon.ShutdownResponse, error) {
+	identity, err := h.Status(ctx)
+	if err != nil {
+		return daemon.ShutdownResponse{}, err
+	}
+	if instanceID == "" || instanceID != identity.InstanceID {
+		return daemon.ShutdownResponse{}, &daemon.LifecycleError{
+			Code: "DAEMON_INSTANCE_CHANGED", Message: "daemon instance changed; refresh its status before restarting",
+			ActiveEnvironments: identity.ActiveEnvironments,
+		}
+	}
+	if len(identity.ActiveEnvironments) > 0 && !identity.HandoffReady {
+		return daemon.ShutdownResponse{}, &daemon.LifecycleError{
+			Code: "HANDOFF_UNAVAILABLE", Message: "active environments cannot be safely handed off",
+			ActiveEnvironments: identity.ActiveEnvironments, Problems: identity.RecoveryProblems,
+		}
+	}
+	if h.replace == nil {
+		return daemon.ShutdownResponse{}, &daemon.LifecycleError{
+			Code: "DAEMON_RESTART_UNAVAILABLE", Message: "daemon replacement is not configured",
+			ActiveEnvironments: identity.ActiveEnvironments,
+		}
+	}
+	result := daemon.ShutdownResponse{
+		Stopping: true, Handoff: true, InstanceID: identity.InstanceID,
+		ActiveEnvironments: append([]string(nil), identity.ActiveEnvironments...),
+	}
+	h.replace()
+	return result, nil
 }
 
 func (h *lifecycleHandler) currentActiveEnvironments(ctx context.Context) ([]string, error) {
@@ -113,8 +173,12 @@ func isDaemonControlHost(value string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "portless.localhost"
 }
 
-func writeDaemonError(writer http.ResponseWriter, status int, code, message string, active []string) {
-	writeDaemonJSON(writer, status, daemon.ErrorResponse{Error: daemon.Error{Code: code, Message: message, ActiveEnvironments: active}})
+func writeDaemonError(writer http.ResponseWriter, status int, code, message string, active []string, problems ...[]string) {
+	details := []string(nil)
+	if len(problems) > 0 {
+		details = problems[0]
+	}
+	writeDaemonJSON(writer, status, daemon.ErrorResponse{Error: daemon.Error{Code: code, Message: message, ActiveEnvironments: active, Problems: details}})
 }
 
 func writeDaemonJSON(writer http.ResponseWriter, status int, value any) {

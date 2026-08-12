@@ -32,6 +32,15 @@ type reportedCommandError struct{}
 
 func (*reportedCommandError) Error() string { return "command reported failures" }
 
+const (
+	rootGroupRun       = "run"
+	rootGroupInspect   = "inspect"
+	rootGroupConfigure = "configure"
+	rootGroupTest      = "test"
+	rootGroupSystem    = "system"
+	rootGroupOther     = "other"
+)
+
 func usageError(message string, arguments ...any) error {
 	return &commandUsageError{err: fmt.Errorf(message, arguments...)}
 }
@@ -59,10 +68,36 @@ type downOptions struct {
 	volumes bool
 	yes     bool
 	wait    bool
+	timeout time.Duration
 }
 
-type streamOptions struct {
-	tail bool
+type logsOptions struct {
+	tail       bool
+	limit      int
+	since      time.Duration
+	timestamps bool
+}
+
+type trafficOptions struct {
+	tail     bool
+	protocol string
+	limit    int
+	service  string
+	edge     string
+}
+
+type listOptions struct {
+	limit int
+}
+
+type serviceActionOptions struct {
+	wait    bool
+	timeout time.Duration
+}
+
+type exportOptions struct {
+	output string
+	force  bool
 }
 
 type recordingOptions struct {
@@ -92,6 +127,7 @@ type bindingOptions struct {
 }
 
 func (c *CLI) Run(ctx context.Context, args []string) int {
+	c.completionCache = nil
 	c.jsonOutput = jsonFlagRequested(args)
 	c.noColor = boolFlagRequested(args, "no-color")
 	c.completionOutput = isCompletionRequest(args)
@@ -192,28 +228,47 @@ func (c *CLI) rootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVar(&c.jsonOutput, "json", c.jsonOutput, "emit JSON (JSON Lines for streaming commands)")
 	root.PersistentFlags().BoolVar(&c.noColor, "no-color", c.noColor, "disable color for this invocation")
 	root.PersistentFlags().StringVar(&c.environmentOverride, "env", "", "use project/environment for this invocation without changing the checkout selection")
-	_ = root.RegisterFlagCompletionFunc("env", cobra.NoFileCompletions)
+	_ = root.RegisterFlagCompletionFunc("env", c.complete(completionEnvironments))
 	root.CompletionOptions.DisableDescriptions = true
+	root.AddGroup(
+		&cobra.Group{ID: rootGroupRun, Title: c.heading(c.Out, "Environment:")},
+		&cobra.Group{ID: rootGroupInspect, Title: c.heading(c.Out, "Observe:")},
+		&cobra.Group{ID: rootGroupConfigure, Title: c.heading(c.Out, "Projects:")},
+		&cobra.Group{ID: rootGroupTest, Title: c.heading(c.Out, "Traffic:")},
+		&cobra.Group{ID: rootGroupSystem, Title: c.heading(c.Out, "Administration:")},
+		&cobra.Group{ID: rootGroupOther, Title: c.heading(c.Out, "Help:")},
+	)
+	root.SetHelpCommandGroupID(rootGroupOther)
+	root.SetCompletionCommandGroupID(rootGroupOther)
 	root.AddCommand(
-		c.configCommand(),
-		c.setupCommand(),
-		c.daemonCommand(),
-		c.doctorCommand(),
-		c.upCommand(),
-		c.downCommand(),
-		c.statusCommand(),
-		c.openCommand(),
-		c.uiCommand(),
-		c.logsCommand(),
-		c.trafficCommand(),
-		c.recordCommand(),
-		c.faultCommand(),
-		c.projectCommand(),
-		c.environmentCommand(),
-		c.runtimeCommand(),
-		c.versionCommand(),
+		inRootGroup(rootGroupRun, c.upCommand()),
+		inRootGroup(rootGroupRun, c.downCommand()),
+		inRootGroup(rootGroupRun, c.statusCommand()),
+		inRootGroup(rootGroupRun, c.openCommand()),
+		inRootGroup(rootGroupRun, c.urlCommand()),
+		inRootGroup(rootGroupRun, c.uiCommand()),
+		inRootGroup(rootGroupInspect, c.logsCommand()),
+		inRootGroup(rootGroupInspect, c.trafficCommand()),
+		inRootGroup(rootGroupInspect, c.timelineCommand()),
+		inRootGroup(rootGroupInspect, c.serviceCommand()),
+		inRootGroup(rootGroupInspect, c.connectionCommand()),
+		inRootGroup(rootGroupConfigure, c.projectCommand()),
+		inRootGroup(rootGroupConfigure, c.environmentCommand()),
+		inRootGroup(rootGroupTest, c.recordCommand()),
+		inRootGroup(rootGroupTest, c.faultCommand()),
+		inRootGroup(rootGroupSystem, c.runtimeCommand()),
+		inRootGroup(rootGroupSystem, c.setupCommand()),
+		inRootGroup(rootGroupSystem, c.relayCommand()),
+		inRootGroup(rootGroupSystem, c.daemonCommand()),
+		inRootGroup(rootGroupSystem, c.doctorCommand()),
+		inRootGroup(rootGroupSystem, c.configCommand()),
 	)
 	return root
+}
+
+func inRootGroup(groupID string, command *cobra.Command) *cobra.Command {
+	command.GroupID = groupID
+	return command
 }
 
 func (c *CLI) configCommand() *cobra.Command {
@@ -310,23 +365,47 @@ func (c *CLI) doctorCommand() *cobra.Command {
 }
 
 func (c *CLI) setupCommand() *cobra.Command {
-	command := &cobra.Command{
+	return &cobra.Command{
 		Use:   "setup",
-		Short: "Install, inspect, or remove the localhost port-80 relay",
+		Short: "Configure clean localhost URLs for first use",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.setup(cmd.Context(), c.jsonOutput)
+			return c.installRelay(cmd.Context(), c.jsonOutput)
 		},
 	}
+}
+
+func (c *CLI) relayCommand() *cobra.Command {
+	command := commandGroup("relay", "Manage the clean-URL relay")
+	install := &cobra.Command{
+		Use:   "install",
+		Short: "Install or repair the localhost port-80 relay",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.installRelay(cmd.Context(), c.jsonOutput)
+		},
+	}
+	command.AddCommand(install)
+
 	status := &cobra.Command{
 		Use:   "status",
 		Short: "Show clean-URL relay installation and health",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.setupStatus(cmd.Context(), c.jsonOutput)
+			return c.relayStatus(cmd.Context(), c.jsonOutput)
 		},
 	}
 	command.AddCommand(status)
+
+	restart := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the installed clean-URL relay",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.restartRelay(cmd.Context(), c.jsonOutput)
+		},
+	}
+	command.AddCommand(restart)
 
 	force := false
 	uninstall := &cobra.Command{
@@ -335,7 +414,7 @@ func (c *CLI) setupCommand() *cobra.Command {
 		Short:   "Remove only the privileged clean-URL relay",
 		Args:    usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.uninstallSetup(cmd.Context(), force, c.jsonOutput)
+			return c.uninstallRelay(cmd.Context(), force, c.jsonOutput)
 		},
 	}
 	uninstall.Flags().BoolVar(&force, "force", false, "remove an installation owned by another or unknown user")
@@ -366,15 +445,14 @@ func (c *CLI) upCommand() *cobra.Command {
 	flags.DurationVar(&options.timeout, "timeout", options.timeout, "startup timeout")
 	flags.BoolVar(&options.open, "open", options.open, "open the dashboard")
 	flags.BoolVar(&noOpen, "no-open", false, "do not open a browser")
-	flags.BoolVar(&options.wait, "wait", options.wait, "wait for readiness")
 	flags.BoolVar(&noWait, "no-wait", false, "return after the operation is accepted")
 	command.MarkFlagsMutuallyExclusive("open", "no-open")
-	command.MarkFlagsMutuallyExclusive("wait", "no-wait")
 	return command
 }
 
 func (c *CLI) downCommand() *cobra.Command {
-	options := downOptions{wait: true}
+	options := downOptions{wait: true, timeout: 3 * time.Minute}
+	noWait := false
 	command := &cobra.Command{
 		Use:   "down",
 		Short: "Stop an environment",
@@ -383,12 +461,17 @@ func (c *CLI) downCommand() *cobra.Command {
 			if options.volumes && !options.yes {
 				return usageError("--volumes permanently deletes managed database/cache data; repeat with --yes")
 			}
-			return c.down(cmd.Context(), "", options)
+			effective := options
+			if noWait {
+				effective.wait = false
+			}
+			return c.down(cmd.Context(), "", effective)
 		},
 	}
 	command.Flags().BoolVar(&options.volumes, "volumes", false, "remove managed data volumes")
 	command.Flags().BoolVar(&options.yes, "yes", false, "confirm volume deletion")
-	command.Flags().BoolVar(&options.wait, "wait", true, "wait for shutdown")
+	command.Flags().BoolVar(&noWait, "no-wait", false, "return after the operation is accepted")
+	command.Flags().DurationVar(&options.timeout, "timeout", options.timeout, "shutdown timeout")
 	return command
 }
 
@@ -405,7 +488,7 @@ func (c *CLI) statusCommand() *cobra.Command {
 }
 
 func (c *CLI) openCommand() *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "open [service]",
 		Short: "Open an application service in the browser",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
@@ -413,6 +496,21 @@ func (c *CLI) openCommand() *cobra.Command {
 			return c.open(cmd.Context(), firstArg(args))
 		},
 	}
+	command.ValidArgsFunction = c.complete(completionServices)
+	return command
+}
+
+func (c *CLI) urlCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "url [service]",
+		Short: "Print an application service URL",
+		Args:  usageArgs(cobra.MaximumNArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.printURL(cmd.Context(), firstArg(args))
+		},
+	}
+	command.ValidArgsFunction = c.complete(completionServices)
+	return command
 }
 
 func (c *CLI) uiCommand() *cobra.Command {
@@ -427,7 +525,7 @@ func (c *CLI) uiCommand() *cobra.Command {
 }
 
 func (c *CLI) logsCommand() *cobra.Command {
-	options := streamOptions{}
+	options := logsOptions{limit: 500}
 	command := &cobra.Command{
 		Use:   "logs [service]",
 		Short: "Read logs from every service or one named service",
@@ -437,37 +535,107 @@ func (c *CLI) logsCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVarP(&options.tail, "tail", "t", false, "keep streaming new log lines")
+	command.Flags().IntVar(&options.limit, "limit", options.limit, "maximum log entries")
+	command.Flags().DurationVar(&options.since, "since", 0, "only show entries this recent, such as 10m")
+	command.Flags().BoolVar(&options.timestamps, "timestamps", false, "show timestamps in human-readable output")
+	command.ValidArgsFunction = c.complete(completionServices)
 	return command
 }
 
 func (c *CLI) trafficCommand() *cobra.Command {
-	command := commandGroup("traffic", "Inspect HTTP traffic")
-	options := streamOptions{}
+	command := commandGroup("traffic", "Inspect local application traffic")
+	options := trafficOptions{protocol: "http", limit: 250}
 	list := &cobra.Command{
-		Use:     "list [service|source:target]",
+		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List captured HTTP traffic",
-		Args:    usageArgs(cobra.MaximumNArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.traffic(cmd.Context(), firstArg(args), options)
+		Short:   "List captured application traffic",
+		Args:    usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.traffic(cmd.Context(), options)
 		},
 	}
 	list.Flags().BoolVarP(&options.tail, "tail", "t", false, "stream live traffic")
-	command.AddCommand(list)
+	list.Flags().StringVar(&options.protocol, "protocol", options.protocol, "protocol family: http or tcp")
+	list.Flags().IntVar(&options.limit, "limit", options.limit, "maximum traffic events")
+	list.Flags().StringVar(&options.service, "service", "", "match traffic where the service is either endpoint")
+	list.Flags().StringVar(&options.edge, "edge", "", "match one directed source:target edge")
+	list.MarkFlagsMutuallyExclusive("service", "edge")
+	_ = list.RegisterFlagCompletionFunc("service", c.complete(completionServices))
+	_ = list.RegisterFlagCompletionFunc("edge", c.complete(completionConnections))
+	show := &cobra.Command{
+		Use:   "show <sequence>",
+		Short: "Show one captured traffic event",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE:  func(cmd *cobra.Command, args []string) error { return c.showTraffic(cmd.Context(), args[0]) },
+	}
+	show.ValidArgsFunction = c.complete(completionTraffic)
+	command.AddCommand(list, show)
+	return command
+}
+
+func (c *CLI) serviceCommand() *cobra.Command {
+	command := commandGroup("service", "Inspect and manage services")
+	listOptions := listOptions{limit: 250}
+	list := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List services", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error { return c.listServices(cmd.Context(), listOptions.limit) }}
+	list.Flags().IntVar(&listOptions.limit, "limit", listOptions.limit, "maximum services")
+	show := &cobra.Command{Use: "show <service>", Short: "Show service details", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error { return c.showService(cmd.Context(), args[0]) }}
+	config := &cobra.Command{Use: "config <service>", Short: "Show effective service configuration", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+		return c.showServiceConfiguration(cmd.Context(), args[0])
+	}}
+	show.ValidArgsFunction = c.complete(completionServices)
+	config.ValidArgsFunction = c.complete(completionServices)
+	command.AddCommand(list, show, config)
+	for _, action := range []string{"start", "stop", "restart"} {
+		action := action
+		options := &serviceActionOptions{wait: true, timeout: 2 * time.Minute}
+		noWait := false
+		child := &cobra.Command{Use: action + " <service>", Short: strings.ToUpper(action[:1]) + action[1:] + " a service", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+			effective := *options
+			if noWait {
+				effective.wait = false
+			}
+			return c.serviceAction(cmd.Context(), action, args[0], effective)
+		}}
+		child.Flags().BoolVar(&noWait, "no-wait", false, "return after the operation is accepted")
+		child.Flags().DurationVar(&options.timeout, "timeout", options.timeout, "time to wait for completion")
+		child.ValidArgsFunction = c.complete(completionServices)
+		command.AddCommand(child)
+	}
+	return command
+}
+
+func (c *CLI) connectionCommand() *cobra.Command {
+	command := commandGroup("connection", "Inspect effective service connections")
+	options := listOptions{limit: 250}
+	list := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List effective connections", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error { return c.listConnections(cmd.Context(), options.limit) }}
+	list.Flags().IntVar(&options.limit, "limit", options.limit, "maximum connections")
+	show := &cobra.Command{Use: "show <source:target>", Short: "Explain one effective connection", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error { return c.showConnection(cmd.Context(), args[0]) }}
+	show.ValidArgsFunction = c.complete(completionConnections)
+	command.AddCommand(list, show)
+	return command
+}
+
+func (c *CLI) timelineCommand() *cobra.Command {
+	options := listOptions{limit: 50}
+	command := &cobra.Command{Use: "timeline", Short: "Show durable environment history", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error { return c.timeline(cmd.Context(), options.limit) }}
+	command.Flags().IntVar(&options.limit, "limit", options.limit, "maximum timeline events")
 	return command
 }
 
 func (c *CLI) recordCommand() *cobra.Command {
 	command := commandGroup("record", "Capture bounded local traffic recordings")
 
-	command.AddCommand(&cobra.Command{
+	recordListOptions := listOptions{limit: 100}
+	recordList := &cobra.Command{
 		Use:   "list",
 		Short: "List recordings",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.listRecordings(cmd.Context())
+			return c.listRecordings(cmd.Context(), recordListOptions.limit)
 		},
-	})
+	}
+	recordList.Flags().IntVar(&recordListOptions.limit, "limit", recordListOptions.limit, "maximum recordings")
+	command.AddCommand(recordList)
 
 	options := recordingOptions{duration: 15 * time.Minute, maxEvents: 10000}
 	start := &cobra.Command{
@@ -481,45 +649,71 @@ func (c *CLI) recordCommand() *cobra.Command {
 	start.Flags().StringVar(&options.edge, "edge", "", "source:target scope")
 	start.Flags().DurationVar(&options.duration, "duration", options.duration, "automatic stop time")
 	start.Flags().Int64Var(&options.maxEvents, "max-events", options.maxEvents, "maximum retained events")
+	_ = start.RegisterFlagCompletionFunc("edge", c.complete(completionConnections))
 	command.AddCommand(start)
 
-	command.AddCommand(&cobra.Command{
+	stop := &cobra.Command{
 		Use:   "stop [name]",
 		Short: "Stop a recording, or the active recording when unnamed",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return c.stopRecording(cmd.Context(), firstArg(args))
 		},
-	})
-	command.AddCommand(&cobra.Command{
+	}
+	stop.ValidArgsFunction = c.complete(completionRecordings)
+	command.AddCommand(stop)
+	show := &cobra.Command{
+		Use:   "show <name>",
+		Short: "Show recording details",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE:  func(cmd *cobra.Command, args []string) error { return c.showRecording(cmd.Context(), args[0]) },
+	}
+	show.ValidArgsFunction = c.complete(completionRecordings)
+	command.AddCommand(show)
+	exportOptions := exportOptions{output: "-"}
+	export := &cobra.Command{
 		Use:   "export <name>",
 		Short: "Export a recording as JSON",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.exportRecording(cmd.Context(), args[0])
+			return c.exportRecording(cmd.Context(), args[0], exportOptions)
 		},
-	})
-	command.AddCommand(&cobra.Command{
+	}
+	export.Flags().StringVarP(&exportOptions.output, "output", "o", exportOptions.output, "output path, or - for stdout")
+	export.Flags().BoolVar(&exportOptions.force, "force", false, "overwrite an existing output file")
+	export.ValidArgsFunction = c.complete(completionRecordings)
+	command.AddCommand(export)
+	deleteYes := false
+	deleteCommand := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Delete a recording",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !deleteYes {
+				return usageError("recording deletion is permanent; repeat with --yes")
+			}
 			return c.deleteRecording(cmd.Context(), args[0])
 		},
-	})
+	}
+	deleteCommand.Flags().BoolVar(&deleteYes, "yes", false, "confirm recording deletion")
+	deleteCommand.ValidArgsFunction = c.complete(completionRecordings)
+	command.AddCommand(deleteCommand)
 	return command
 }
 
 func (c *CLI) faultCommand() *cobra.Command {
 	command := commandGroup("fault", "Introduce scoped failures into local traffic")
-	command.AddCommand(&cobra.Command{
+	faultListOptions := listOptions{limit: 100}
+	faultList := &cobra.Command{
 		Use:   "list",
 		Short: "List fault rules",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.listFaults(cmd.Context())
+			return c.listFaults(cmd.Context(), faultListOptions.limit)
 		},
-	})
+	}
+	faultList.Flags().IntVar(&faultListOptions.limit, "limit", faultListOptions.limit, "maximum fault rules")
+	command.AddCommand(faultList)
 
 	options := faultOptions{probability: 1, duration: 10 * time.Minute}
 	add := &cobra.Command{
@@ -538,16 +732,32 @@ func (c *CLI) faultCommand() *cobra.Command {
 	add.Flags().StringVar(&options.method, "method", "", "HTTP method filter")
 	add.Flags().StringVar(&options.path, "path", "", "HTTP path glob")
 	add.Flags().DurationVar(&options.duration, "duration", options.duration, "automatic expiry")
+	add.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) == 1 {
+			return c.complete(completionConnections)(cmd, args, toComplete)
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
 	command.AddCommand(add)
 
-	command.AddCommand(&cobra.Command{
+	show := &cobra.Command{
+		Use:   "show <name>",
+		Short: "Show fault rule details",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE:  func(cmd *cobra.Command, args []string) error { return c.showFault(cmd.Context(), args[0]) },
+	}
+	show.ValidArgsFunction = c.complete(completionFaults)
+	command.AddCommand(show)
+	disable := &cobra.Command{
 		Use:   "disable <name>",
 		Short: "Disable a fault rule",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return c.disableFault(cmd.Context(), args[0])
 		},
-	})
+	}
+	disable.ValidArgsFunction = c.complete(completionFaults)
+	command.AddCommand(disable)
 	clear := &cobra.Command{
 		Use:   "clear",
 		Short: "Disable all active fault rules",
@@ -556,13 +766,20 @@ func (c *CLI) faultCommand() *cobra.Command {
 			return c.clearFaults(cmd.Context())
 		},
 	}
-	clear.Flags().Bool("all", false, "disable all active fault rules")
 	command.AddCommand(clear)
 	return command
 }
 
 func (c *CLI) projectCommand() *cobra.Command {
 	command := commandGroup("project", "Manage logical projects")
+	projectListOptions := listOptions{limit: 100}
+	projectList := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List projects", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+		return c.listProjects(cmd.Context(), projectListOptions.limit)
+	}}
+	projectList.Flags().IntVar(&projectListOptions.limit, "limit", projectListOptions.limit, "maximum projects")
+	projectShow := &cobra.Command{Use: "show [project]", Short: "Show project sources, environments, services, and connections", Args: usageArgs(cobra.MaximumNArgs(1)), RunE: func(cmd *cobra.Command, args []string) error { return c.showProject(cmd.Context(), firstArg(args)) }}
+	projectShow.ValidArgsFunction = c.complete(completionProjects)
+	command.AddCommand(projectList, projectShow)
 
 	var sources []string
 	create := &cobra.Command{
@@ -617,16 +834,17 @@ func (c *CLI) environmentCommand() *cobra.Command {
 	command := commandGroup("env", "Manage project environments")
 	command.Aliases = []string{"environment"}
 
-	command.AddCommand(&cobra.Command{
+	selectCommand := &cobra.Command{
 		Use:               "select <project/environment>",
 		Short:             "Select an environment for the current checkout",
 		Example:           "  portless env select billing/local",
 		Args:              usageArgs(cobra.ExactArgs(1)),
-		ValidArgsFunction: cobra.NoFileCompletions,
+		ValidArgsFunction: c.complete(completionEnvironments),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return c.selectEnvironment(cmd.Context(), args[0])
 		},
-	})
+	}
+	command.AddCommand(selectCommand)
 	command.AddCommand(&cobra.Command{
 		Use:   "current",
 		Short: "Show the effective environment and how it was resolved",
@@ -644,14 +862,18 @@ func (c *CLI) environmentCommand() *cobra.Command {
 		},
 	})
 
-	command.AddCommand(&cobra.Command{
+	environmentListOptions := listOptions{limit: 100}
+	environmentList := &cobra.Command{
 		Use:   "list [project]",
 		Short: "List environments",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.listEnvironments(cmd.Context(), firstArg(args))
+			return c.listEnvironments(cmd.Context(), firstArg(args), environmentListOptions.limit)
 		},
-	})
+	}
+	environmentList.Flags().IntVar(&environmentListOptions.limit, "limit", environmentListOptions.limit, "maximum environments")
+	environmentList.ValidArgsFunction = c.complete(completionProjects)
+	command.AddCommand(environmentList)
 
 	from := ""
 	clone := &cobra.Command{
@@ -663,6 +885,7 @@ func (c *CLI) environmentCommand() *cobra.Command {
 		},
 	}
 	clone.Flags().StringVar(&from, "from", "", "source environment (defaults to the selected environment)")
+	_ = clone.RegisterFlagCompletionFunc("from", c.completeEnvironmentNames())
 	command.AddCommand(clone)
 
 	options := bindingOptions{}
@@ -706,6 +929,8 @@ func (c *CLI) environmentCommand() *cobra.Command {
 	bind.MarkFlagsMutuallyExclusive("local", "container", "remote")
 	_ = bind.RegisterFlagCompletionFunc("classification", fixedCompletions("development", "qa", "staging", "unknown"))
 	_ = bind.RegisterFlagCompletionFunc("write-policy", fixedCompletions("read-only", "read-write"))
+	_ = bind.RegisterFlagCompletionFunc("local", c.complete(completionSources))
+	bind.ValidArgsFunction = c.complete(completionServices)
 	command.AddCommand(bind)
 
 	sourcePath := ""
@@ -719,6 +944,7 @@ func (c *CLI) environmentCommand() *cobra.Command {
 	}
 	source.Flags().StringVar(&sourcePath, "path", "", "source checkout path")
 	_ = source.MarkFlagRequired("path")
+	source.ValidArgsFunction = c.complete(completionSources)
 	command.AddCommand(source)
 
 	command.AddCommand(&cobra.Command{
@@ -778,21 +1004,6 @@ func (c *CLI) runtimeCommand() *cobra.Command {
 	}
 	command.AddCommand(use)
 	return command
-}
-
-func (c *CLI) versionCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print the Portless version",
-		Args:  usageArgs(cobra.NoArgs),
-		RunE: func(_ *cobra.Command, _ []string) error {
-			if c.jsonOutput {
-				return writeJSON(c.Out, map[string]string{"version": Version})
-			}
-			fmt.Fprintln(c.Out, "portless "+Version)
-			return nil
-		},
-	}
 }
 
 func jsonFlagRequested(args []string) bool {

@@ -14,6 +14,7 @@ type fakeRuntime struct {
 	name       RuntimeName
 	probe      ProbeResult
 	startCalls int
+	adoptCalls int
 }
 
 func (r *fakeRuntime) Name() RuntimeName { return r.name }
@@ -26,8 +27,12 @@ func (r *fakeRuntime) StartHost(context.Context) ProbeResult {
 	r.startCalls++
 	return r.Probe(context.Background())
 }
-func (r *fakeRuntime) Start(context.Context, string, string, model.ServiceDefinition) (StartResult, error) {
+func (r *fakeRuntime) Start(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error) {
 	return StartResult{}, nil
+}
+func (r *fakeRuntime) Adopt(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error) {
+	r.adoptCalls++
+	return StartResult{ContainerName: "adopted", Port: 54321}, nil
 }
 func (r *fakeRuntime) StopEnvironment(context.Context, string, bool) error { return nil }
 func (r *fakeRuntime) StopService(context.Context, string, string) error {
@@ -69,6 +74,23 @@ func TestAutomaticSelectionStaysStableAcrossRestart(t *testing.T) {
 	status := NewManager(statePath, podman, docker).Status(context.Background())
 	if status.Selected != RuntimeDocker || status.State != "failed" {
 		t.Fatalf("silently switched away from persisted runtime: %#v", status)
+	}
+}
+
+func TestAdoptUsesThePersistedSelectedRuntime(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "runtime.json")
+	docker := &fakeRuntime{name: RuntimeDocker, probe: ProbeResult{State: "ready"}}
+	podman := &fakeRuntime{name: RuntimePodman, probe: ProbeResult{State: "ready"}}
+	manager := NewManager(statePath, docker, podman)
+	if err := manager.SetPreference(RuntimeDocker); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Adopt(context.Background(), "billing-local", "private", model.ServiceDefinition{Name: "postgres", Kind: model.ServiceContainer}, 2, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ContainerName != "adopted" || docker.adoptCalls != 1 || podman.adoptCalls != 0 {
+		t.Fatalf("adoption used the wrong runtime: result=%#v docker=%d podman=%d", result, docker.adoptCalls, podman.adoptCalls)
 	}
 }
 

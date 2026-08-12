@@ -415,7 +415,7 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	if err != nil {
 		return model.Environment{}, err
 	}
-	for _, table := range []string{"service_runtime", "environment_sources", "environment_bindings"} {
+	for _, table := range []string{"connection_runtime", "service_runtime", "environment_sources", "environment_bindings"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE environment_key = ?", key); err != nil {
 			return model.Environment{}, err
 		}
@@ -551,15 +551,40 @@ func (s *Store) SetEnvironmentStatus(ctx context.Context, projectName, environme
 }
 
 type ServiceRuntimeUpdate struct {
-	Status        model.ServiceStatus
-	Reason        string
-	Generation    int64
-	PID           int
-	UpstreamPort  int
-	StartedAt     *time.Time
-	RestartCount  int64
-	LogPath       string
-	PrivateRunKey string
+	Status           model.ServiceStatus
+	Reason           string
+	Generation       int64
+	PID              int
+	UpstreamPort     int
+	StartedAt        *time.Time
+	RestartCount     int64
+	LogPath          string
+	PrivateRunKey    string
+	OwnerInstanceID  string
+	SupervisorSocket string
+	SupervisorState  string
+	SupervisorPID    int
+	ContainerName    string
+	ObservedAt       *time.Time
+}
+
+type ServiceRuntimeRecord struct {
+	ServiceName      string
+	Status           model.ServiceStatus
+	Reason           string
+	Generation       int64
+	PID              int
+	UpstreamPort     int
+	StartedAt        *time.Time
+	RestartCount     int64
+	LogPath          string
+	PrivateRunKey    string
+	OwnerInstanceID  string
+	SupervisorSocket string
+	SupervisorState  string
+	SupervisorPID    int
+	ContainerName    string
+	ObservedAt       *time.Time
 }
 
 func (s *Store) SetServiceRuntime(ctx context.Context, selector, serviceName string, update ServiceRuntimeUpdate) error {
@@ -571,11 +596,60 @@ func (s *Store) SetServiceRuntime(ctx context.Context, selector, serviceName str
 	if update.StartedAt != nil {
 		started = update.StartedAt.UTC().Format(time.RFC3339Nano)
 	}
+	var observed any
+	if update.ObservedAt != nil {
+		observed = update.ObservedAt.UTC().Format(time.RFC3339Nano)
+	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE service_runtime SET status = ?, reason = ?, generation = ?, pid = ?, upstream_port = ?,
-  started_at = ?, restart_count = ?, log_path = ?, private_run_key = ?
+  started_at = ?, restart_count = ?, log_path = ?, private_run_key = ?, owner_instance_id = ?,
+  supervisor_socket = ?, supervisor_state = ?, supervisor_pid = ?, container_name = ?, observed_at = ?
 WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, update.Status, update.Reason, update.Generation,
-		update.PID, update.UpstreamPort, started, update.RestartCount, update.LogPath, update.PrivateRunKey, key, serviceName)
+		update.PID, update.UpstreamPort, started, update.RestartCount, update.LogPath, update.PrivateRunKey,
+		update.OwnerInstanceID, update.SupervisorSocket, update.SupervisorState, update.SupervisorPID, update.ContainerName, observed, key, serviceName)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ServiceRuntime(ctx context.Context, selector, serviceName string) (ServiceRuntimeRecord, error) {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return ServiceRuntimeRecord{}, err
+	}
+	var result ServiceRuntimeRecord
+	var status string
+	var started, observed sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+SELECT service_name, status, reason, generation, pid, upstream_port, started_at, restart_count,
+       log_path, private_run_key, owner_instance_id, supervisor_socket, supervisor_state, supervisor_pid, container_name, observed_at
+FROM service_runtime WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, key, serviceName).Scan(
+		&result.ServiceName, &status, &result.Reason, &result.Generation, &result.PID, &result.UpstreamPort,
+		&started, &result.RestartCount, &result.LogPath, &result.PrivateRunKey, &result.OwnerInstanceID,
+		&result.SupervisorSocket, &result.SupervisorState, &result.SupervisorPID, &result.ContainerName, &observed,
+	)
+	if err != nil {
+		return ServiceRuntimeRecord{}, mapSQLError(err)
+	}
+	result.Status = model.ServiceStatus(status)
+	result.StartedAt = parseOptionalTime(started)
+	result.ObservedAt = parseOptionalTime(observed)
+	return result, nil
+}
+
+func (s *Store) SetServiceStatus(ctx context.Context, selector, serviceName string, status model.ServiceStatus, reason string) error {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE service_runtime SET status = ?, reason = ?
+WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, status, reason, key, serviceName)
 	if err != nil {
 		return err
 	}

@@ -1,10 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Environment, Project } from '../types'
+import type { DaemonStatus, Environment, Project } from '../types'
 import { AppChrome } from './Chrome'
 
 const project = { name: 'billing' } as Project
 const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
+const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
 
 function renderChrome(activeEnvironment?: Environment, activeView: 'overview' | 'traffic' = 'overview') {
   return renderToStaticMarkup(
@@ -15,7 +16,11 @@ function renderChrome(activeEnvironment?: Environment, activeView: 'overview' | 
       activeEnvironment={activeEnvironment}
       activeView={activeView}
       commands={[]}
+      daemon={daemon}
       onNavigate={() => undefined}
+      onDaemonRefresh={async () => daemon}
+      onDaemonRestart={async (instanceId) => ({ restarting: true, previousInstanceId: instanceId, handoff: true, activeEnvironments: [] })}
+      onDaemonReconnected={async () => undefined}
     >
       <div>content</div>
     </AppChrome>,
@@ -33,6 +38,8 @@ describe('application navigation', () => {
     expect(markup).not.toContain('Providers')
     expect(markup).not.toContain('Traffic')
     expect(markup).not.toContain('Timeline')
+    expect(markup).toContain('daemon ready')
+    expect(markup).toContain('aria-expanded="false"')
   })
 
   it('shows and selects views only for the active environment', () => {

@@ -104,12 +104,50 @@ func (m *Manager) SetPreference(value RuntimeName) error {
 	return nil
 }
 
-func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition) (StartResult, error) {
+func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return StartResult{}, err
 	}
-	return runtime.Start(ctx, environmentName, environmentKey, service)
+	return runtime.Start(ctx, environmentName, environmentKey, service, generation, logsRoot)
+}
+
+func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
+	runtime, err := m.readyRuntime(ctx)
+	if err != nil {
+		return StartResult{}, err
+	}
+	adopter, ok := runtime.(Adopter)
+	if !ok {
+		return StartResult{}, errors.New("selected container runtime does not support adoption")
+	}
+	return adopter.Adopt(ctx, environmentName, environmentKey, service, generation, logsRoot)
+}
+
+func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) error {
+	runtime, err := m.readyRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	verifier, ok := runtime.(Verifier)
+	if !ok {
+		return errors.New("selected container runtime does not support ownership verification")
+	}
+	return verifier.Verify(ctx, environmentKey, service, generation, containerName)
+}
+
+func (m *Manager) Close() {
+	m.mu.Lock()
+	runtimes := make([]Runtime, 0, len(m.runtimes))
+	for _, runtime := range m.runtimes {
+		runtimes = append(runtimes, runtime)
+	}
+	m.mu.Unlock()
+	for _, runtime := range runtimes {
+		if closer, ok := runtime.(Closer); ok {
+			closer.Close()
+		}
+	}
 }
 
 func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {

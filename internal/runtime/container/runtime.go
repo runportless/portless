@@ -49,15 +49,28 @@ type StartResult struct {
 	Port          int
 	Environment   map[string]string
 	StartedAt     time.Time
+	LogDirectory  string
 }
 
 type Runtime interface {
 	Name() RuntimeName
 	Probe(context.Context) ProbeResult
 	StartHost(context.Context) ProbeResult
-	Start(context.Context, string, string, model.ServiceDefinition) (StartResult, error)
+	Start(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error)
 	StopEnvironment(context.Context, string, bool) error
 	StopService(context.Context, string, string) error
+}
+
+type Adopter interface {
+	Adopt(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error)
+}
+
+type Verifier interface {
+	Verify(context.Context, string, model.ServiceDefinition, int64, string) error
+}
+
+type Closer interface {
+	Close()
 }
 
 var ErrRuntimeUnavailable = errors.New("container runtime is unavailable")

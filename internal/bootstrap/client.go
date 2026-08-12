@@ -46,6 +46,20 @@ func Connect(ctx context.Context, paths Paths) (*Client, ControlRecord, error) {
 	return &Client{BaseURL: fmt.Sprintf("http://127.0.0.1:%d", record.Port), Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}, record, nil
 }
 
+// ConnectExisting verifies and connects to an already-running daemon. It never
+// starts, replaces, repairs, or otherwise mutates daemon state.
+func ConnectExisting(ctx context.Context, paths Paths) (*Client, ControlRecord, error) {
+	record, err := CheckDaemon(ctx, paths)
+	if err != nil {
+		return nil, ControlRecord{}, err
+	}
+	token, err := readPrivateTextFile(paths.Token)
+	if err != nil {
+		return nil, ControlRecord{}, fmt.Errorf("read CLI authentication token: %w", err)
+	}
+	return &Client{BaseURL: fmt.Sprintf("http://127.0.0.1:%d", record.Port), Token: token, HTTP: &http.Client{Timeout: 2 * time.Second}}, record, nil
+}
+
 func (c *Client) Do(ctx context.Context, method, path string, input, output any) error {
 	return c.DoWithHeaders(ctx, method, path, input, output, nil)
 }

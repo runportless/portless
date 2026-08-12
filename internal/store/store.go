@@ -31,7 +31,10 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_foreign_keys=on&_busy_timeout=5000&_journal_mode=wal"}).String()
+	// Immediate transactions serialize writers before they read sequence values.
+	// Deferred transactions can deadlock while upgrading two concurrent
+	// read-then-write operations even when busy_timeout is configured.
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_foreign_keys=on&_busy_timeout=5000&_journal_mode=wal&_txlock=immediate"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -61,8 +64,57 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("create sqlite schema: %w", err)
 	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{"owner_instance_id", "TEXT NOT NULL DEFAULT ''"},
+		{"supervisor_socket", "TEXT NOT NULL DEFAULT ''"},
+		{"supervisor_state", "TEXT NOT NULL DEFAULT ''"},
+		{"supervisor_pid", "INTEGER NOT NULL DEFAULT 0"},
+		{"container_name", "TEXT NOT NULL DEFAULT ''"},
+		{"observed_at", "TEXT"},
+	} {
+		if err := s.ensureColumn(ctx, "service_runtime", column.name, column.definition); err != nil {
+			return err
+		}
+	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, name, definition string) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var index int
+		var column, kind string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&index, &column, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if column == name {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+name+" "+definition); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, name, err)
 	}
 	return nil
 }
@@ -139,7 +191,36 @@ CREATE TABLE IF NOT EXISTS service_runtime (
   restart_count INTEGER NOT NULL DEFAULT 0,
   log_path TEXT NOT NULL DEFAULT '',
   private_run_key TEXT NOT NULL DEFAULT '',
+  owner_instance_id TEXT NOT NULL DEFAULT '',
+  supervisor_socket TEXT NOT NULL DEFAULT '',
+  supervisor_state TEXT NOT NULL DEFAULT '',
+  supervisor_pid INTEGER NOT NULL DEFAULT 0,
+  container_name TEXT NOT NULL DEFAULT '',
+  observed_at TEXT,
   PRIMARY KEY(environment_key, service_name)
+);
+
+CREATE TABLE IF NOT EXISTS daemon_instances (
+  instance_id TEXT PRIMARY KEY,
+  build_id TEXT NOT NULL,
+  pid INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  stopped_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS connection_runtime (
+  environment_key TEXT NOT NULL REFERENCES environments(private_key) ON DELETE CASCADE,
+  source_name TEXT NOT NULL COLLATE NOCASE,
+  target_name TEXT NOT NULL COLLATE NOCASE,
+  protocol TEXT NOT NULL,
+  source_generation INTEGER NOT NULL DEFAULT 0,
+  listen_port INTEGER NOT NULL,
+  owner_instance_id TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'planned',
+  reason TEXT NOT NULL DEFAULT '',
+  observed_at TEXT,
+  PRIMARY KEY(environment_key, source_name, target_name)
 );
 
 CREATE TABLE IF NOT EXISTS operations (

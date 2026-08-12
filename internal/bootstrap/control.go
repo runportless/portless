@@ -19,16 +19,19 @@ import (
 )
 
 type ControlRecord struct {
-	PID             int       `json:"pid"`
-	Port            int       `json:"port"`
-	ProtocolVersion string    `json:"protocolVersion,omitempty"`
-	APIVersion      string    `json:"apiVersion"`
-	InstallationID  string    `json:"installationId,omitempty"`
-	InstanceID      string    `json:"instanceId,omitempty"`
-	BuildID         string    `json:"buildId,omitempty"`
-	TokenPath       string    `json:"tokenPath"`
-	StartedAt       time.Time `json:"startedAt"`
-	ProcessHint     string    `json:"processHint"`
+	PID              int       `json:"pid"`
+	Port             int       `json:"port"`
+	ProtocolVersion  string    `json:"protocolVersion,omitempty"`
+	APIVersion       string    `json:"apiVersion"`
+	InstallationID   string    `json:"installationId,omitempty"`
+	InstanceID       string    `json:"instanceId,omitempty"`
+	BuildID          string    `json:"buildId,omitempty"`
+	State            string    `json:"state,omitempty"`
+	HandoffReady     bool      `json:"handoffReady,omitempty"`
+	RecoveryProblems []string  `json:"recoveryProblems,omitempty"`
+	TokenPath        string    `json:"tokenPath"`
+	StartedAt        time.Time `json:"startedAt"`
+	ProcessHint      string    `json:"processHint"`
 }
 
 type DaemonInspection struct {
@@ -47,7 +50,7 @@ func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 		return ControlRecord{}, err
 	}
 	if inspection, err := InspectDaemon(ctx, paths); err == nil && inspection.Compatible {
-		if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 {
+		if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 && !inspection.Identity.HandoffReady {
 			return inspection.Record, nil
 		}
 	}
@@ -56,14 +59,14 @@ func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 		return ControlRecord{}, err
 	}
 	defer lock.Close()
-	lockDeadline := time.Now().Add(12 * time.Second)
+	lockDeadline := time.Now().Add(65 * time.Second)
 	for {
 		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			break
 		}
 		if inspection, inspectErr := InspectDaemon(ctx, paths); inspectErr == nil && inspection.Compatible {
-			if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 {
+			if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 && !inspection.Identity.HandoffReady {
 				return inspection.Record, nil
 			}
 		}
@@ -83,10 +86,10 @@ func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 		if inspection.Compatible && inspection.CurrentBuild {
 			return inspection.Record, nil
 		}
-		if inspection.Compatible && len(inspection.Identity.ActiveEnvironments) > 0 {
+		if inspection.Compatible && len(inspection.Identity.ActiveEnvironments) > 0 && !inspection.Identity.HandoffReady {
 			return inspection.Record, nil
 		}
-		if _, err := stopVerifiedDaemon(ctx, paths, inspection, StopOptions{Timeout: 15 * time.Second}, false, "replace an outdated daemon"); err != nil {
+		if _, err := stopVerifiedDaemon(ctx, paths, inspection, StopOptions{Timeout: 15 * time.Second, Handoff: true}, false, "replace an outdated daemon"); err != nil {
 			return ControlRecord{}, err
 		}
 	} else {
@@ -111,7 +114,11 @@ func EnsureDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 	if err := startDaemon(paths); err != nil {
 		return ControlRecord{}, err
 	}
-	startupDeadline := time.Now().Add(12 * time.Second)
+	// Reconciliation verifies each surviving process/container and restores its
+	// dependency listeners before the daemon publishes readiness. A multi-service
+	// environment can legitimately take longer than the old process-spawn-only
+	// startup budget.
+	startupDeadline := time.Now().Add(60 * time.Second)
 	var lastError error
 	for time.Now().Before(startupDeadline) {
 		inspection, err := InspectDaemon(ctx, paths)
@@ -243,7 +250,14 @@ func CheckDaemon(ctx context.Context, paths Paths) (ControlRecord, error) {
 	if !inspection.Compatible || !inspection.CurrentBuild {
 		return ControlRecord{}, incompatibleDaemonError(inspection)
 	}
-	return inspection.Record, nil
+	record := inspection.Record
+	// The discovery record is an atomic startup snapshot. Runtime recovery and
+	// handoff safety are live properties, so diagnostics must use the freshly
+	// authenticated identity response rather than stale JSON on disk.
+	record.State = inspection.Identity.State
+	record.HandoffReady = inspection.Identity.HandoffReady
+	record.RecoveryProblems = append([]string(nil), inspection.Identity.RecoveryProblems...)
+	return record, nil
 }
 
 func fetchDaemonIdentity(ctx context.Context, port int, token string) (daemon.Identity, error) {
@@ -253,7 +267,10 @@ func fetchDaemonIdentity(ctx context.Context, port int, token string) (daemon.Id
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: 750 * time.Millisecond}
+	// Identity includes a live handoff-safety check. Container ownership probes
+	// can require a few local engine round trips, so this timeout must cover more
+	// than a simple health endpoint while remaining tightly bounded.
+	client := &http.Client{Timeout: 15 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
 		return daemon.Identity{}, fmt.Errorf("connect to recorded daemon identity endpoint: %w", err)

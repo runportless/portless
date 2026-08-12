@@ -52,6 +52,13 @@ func installPlatform(ctx context.Context, request SetupRequest) error {
 	return writeInstallationReceipt(request)
 }
 
+func restartPlatform(ctx context.Context) error {
+	if err := runCommand(ctx, "/bin/launchctl", "kickstart", "-k", "system/"+launchdLabel); err != nil {
+		return fmt.Errorf("restart ingress launch daemon: %w", err)
+	}
+	return nil
+}
+
 func uninstallPlatform(ctx context.Context) error {
 	loaded, err := platformServiceRunning(ctx)
 	if err != nil {

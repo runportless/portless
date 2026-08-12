@@ -192,6 +192,18 @@ WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active' AND 
 	return tx.Commit()
 }
 
+func (s *Store) MaxRecordedTrafficSequence(ctx context.Context, selector string) (int64, error) {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return 0, err
+	}
+	var sequence int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) FROM traffic_events WHERE environment_key = ?`, environmentKey).Scan(&sequence); err != nil {
+		return 0, err
+	}
+	return sequence, nil
+}
+
 func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName string, limit int) ([]model.TrafficEvent, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {

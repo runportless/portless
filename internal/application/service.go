@@ -1,15 +1,14 @@
 package application
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	pathmatch "path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/runtime/container/docker"
 	"github.com/portless-run/portless/internal/runtime/container/podman"
+	"github.com/portless-run/portless/internal/runtime/logstore"
 	processruntime "github.com/portless-run/portless/internal/runtime/process"
 	"github.com/portless-run/portless/internal/store"
 )
@@ -51,8 +51,10 @@ func (e NameConflictError) Error() string {
 }
 
 type Config struct {
-	DataDirectory   string
-	InstallationKey string
+	DataDirectory    string
+	InstallationKey  string
+	DaemonInstanceID string
+	Executable       string
 }
 
 type Service struct {
@@ -63,6 +65,7 @@ type Service struct {
 	proxy                *proxy.Manager
 	dataDirectory        string
 	installationKey      string
+	daemonInstanceID     string
 	mu                   sync.RWMutex
 	projectLocks         map[string]*sync.Mutex
 	containerEnvironment map[string]map[string]string
@@ -72,8 +75,8 @@ type Service struct {
 func New(controlStore *store.Store, broker *events.Broker, config Config) *Service {
 	service := &Service{
 		store: controlStore, broker: broker, dataDirectory: config.DataDirectory,
-		installationKey: config.InstallationKey,
-		projectLocks:    make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string), sourceLeases: make(map[string]string),
+		installationKey: config.InstallationKey, daemonInstanceID: config.DaemonInstanceID,
+		projectLocks: make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string), sourceLeases: make(map[string]string),
 	}
 	service.proxy = proxy.NewManager(controlStore, broker)
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
@@ -82,11 +85,33 @@ func New(controlStore *store.Store, broker *events.Broker, config Config) *Servi
 		podman.New(config.InstallationKey, temporaryRoot),
 		docker.New(config.InstallationKey, temporaryRoot),
 	)
-	service.processes = processruntime.NewManager(service.processExited)
+	if config.DaemonInstanceID != "" && config.Executable != "" {
+		service.processes = processruntime.NewSupervisedManager(config.Executable, filepath.Join(config.DataDirectory, "runs"), service.processExited)
+	} else {
+		service.processes = processruntime.NewManager(service.processExited)
+	}
+	if environments, err := controlStore.ListEnvironments(context.Background(), ""); err == nil {
+		for _, environment := range environments {
+			scope := model.EnvironmentSelector(environment.Project, environment.Name)
+			if sequence, sequenceErr := controlStore.MaxRecordedTrafficSequence(context.Background(), scope); sequenceErr == nil {
+				broker.EnsureTrafficSequence(scope, sequence)
+			}
+		}
+	}
 	return service
 }
 
-func (s *Service) Close(ctx context.Context) { s.proxy.Close(ctx) }
+func (s *Service) Close(ctx context.Context) {
+	s.processes.Close()
+	s.containers.Close()
+	closeContext := ctx
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		closeContext, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	s.proxy.Close(closeContext)
+}
 
 type SourceInput struct {
 	Name string `json:"name"`
@@ -476,62 +501,208 @@ func (s *Service) Operation(ctx context.Context, projectName, environmentName st
 }
 
 func (s *Service) Operations(ctx context.Context, projectName, environmentName string, limit int) ([]model.Operation, error) {
-	return s.store.Operations(ctx, model.EnvironmentSelector(projectName, environmentName), limit)
+	scope := model.EnvironmentSelector(projectName, environmentName)
+	operations, err := s.store.Operations(ctx, scope, limit)
+	if err != nil {
+		return nil, err
+	}
+	for index := range operations {
+		events, eventErr := s.store.OperationEvents(ctx, scope, operations[index].Number)
+		if eventErr != nil {
+			return nil, eventErr
+		}
+		operations[index].Events = events
+	}
+	return operations, nil
+}
+
+func (s *Service) Connections(ctx context.Context, projectName, environmentName string) ([]model.EffectiveConnection, error) {
+	environment, err := s.store.Environment(ctx, projectName, environmentName)
+	if err != nil {
+		return nil, err
+	}
+	scope := model.EnvironmentSelector(projectName, environmentName)
+	result := make([]model.EffectiveConnection, 0, len(environment.Connections))
+	for _, connection := range environment.Connections {
+		proxyAddress, provider, endpoint := s.proxy.ConnectionRuntime(scope, connection.Source, connection.Target)
+		target := runtimeFor(environment, connection.Target)
+		if provider == "" {
+			provider = bindingForEnvironment(environment, connection.Target).Provider
+			if provider == "" {
+				provider = model.ProviderLocal
+			}
+		}
+		if endpoint == "" && provider == model.ProviderRemote {
+			binding := bindingForEnvironment(environment, connection.Target)
+			if binding.Remote != nil {
+				endpoint = binding.Remote.URL
+			}
+		}
+		injected := safeInjectedValue(connection, proxyAddress)
+		result = append(result, model.EffectiveConnection{
+			Connection: connection, TargetProvider: provider, TargetStatus: target.Status,
+			ProxyAddress: proxyAddress, TargetEndpoint: endpoint,
+			InjectedEnvVar: connection.Environment, InjectedValue: injected,
+		})
+	}
+	return result, nil
+}
+
+func (s *Service) ServiceConfiguration(ctx context.Context, projectName, environmentName, serviceName string) (model.ServiceConfiguration, error) {
+	environment, err := s.store.Environment(ctx, projectName, environmentName)
+	if err != nil {
+		return model.ServiceConfiguration{}, err
+	}
+	definition, ok := serviceDefinitionForEnvironment(environment, serviceName)
+	if !ok {
+		return model.ServiceConfiguration{}, store.ErrNotFound
+	}
+	values := make([]model.ConfigurationValue, 0, len(definition.Environment)+len(environment.Connections))
+	for key, value := range definition.Environment {
+		classification := "public"
+		if shouldMaskConfiguration(key, value) {
+			classification, value = "masked", "••••••••"
+		}
+		values = append(values, model.ConfigurationValue{Key: key, Value: value, Classification: classification, Source: "discovered model"})
+	}
+	connections, err := s.Connections(ctx, projectName, environmentName)
+	if err != nil {
+		return model.ServiceConfiguration{}, err
+	}
+	for _, connection := range connections {
+		if connection.Source == serviceName && connection.InjectedEnvVar != "" {
+			values = append(values, model.ConfigurationValue{Key: connection.InjectedEnvVar, Value: connection.InjectedValue, Classification: "generated", Source: "Portless connection " + connection.Source + ":" + connection.Target})
+		}
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].Key < values[j].Key })
+	return model.ServiceConfiguration{
+		Service: definition.Name, Command: nonNilStrings(definition.Command), WorkingDirectory: definition.WorkingDirectory,
+		PortEnvironment: definition.PortEnvironment, Environment: values, Health: definition.Health,
+	}, nil
+}
+
+func (s *Service) StartService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
+	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, false)
 }
 
 func (s *Service) RestartService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
+	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, true)
+}
+
+func (s *Service) beginServiceStart(ctx context.Context, projectName, environmentName, serviceName, actor string, restart bool) (model.Operation, error) {
 	environment, err := s.store.Environment(ctx, projectName, environmentName)
 	if err != nil {
 		return model.Operation{}, err
 	}
-	definition, ok := serviceDefinitionForEnvironment(environment, serviceName)
+	_, ok := serviceDefinitionForEnvironment(environment, serviceName)
 	if !ok {
 		return model.Operation{}, store.ErrNotFound
 	}
 	if bindingForEnvironment(environment, serviceName).Provider == model.ProviderRemote {
-		return model.Operation{}, errors.New("remote services are not restarted by Portless")
+		return model.Operation{}, fmt.Errorf("remote service %s is not managed by Portless; change its environment binding before using lifecycle commands", serviceName)
+	}
+	if !restart {
+		for _, connection := range environment.Connections {
+			if connection.Source != serviceName || !connection.Required {
+				continue
+			}
+			if bindingForEnvironment(environment, connection.Target).Provider == model.ProviderRemote {
+				continue
+			}
+			dependency := runtimeFor(environment, connection.Target)
+			if dependency.Status != model.ServiceReady {
+				return model.Operation{}, fmt.Errorf("required dependency %s is %s; start it first or run `portless up`", connection.Target, dependency.Status)
+			}
+		}
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	if definition.Kind != model.ServiceProcess {
-		operation, err := s.store.CreateOperation(ctx, scope, "restart", actor, "")
-		if err != nil {
-			return model.Operation{}, err
-		}
-		go func() {
-			lock := s.projectLock(scope)
-			lock.Lock()
-			defer lock.Unlock()
-			privateKey, keyErr := s.store.PrivateEnvironmentKeyForSelector(context.Background(), scope)
-			if keyErr == nil {
-				keyErr = s.containers.StopService(context.Background(), privateKey, serviceName)
-			}
-			if keyErr == nil {
-				keyErr = s.startContainer(context.Background(), environment, definition)
-			}
-			if keyErr != nil {
-				s.failOperation(scope, operation, keyErr)
-				return
-			}
-			s.reconcileEnvironmentStatus(context.Background(), scope)
-			s.completeOperation(scope, operation, "Service "+serviceName+" restarted")
-		}()
-		return operation, nil
+	operationType := "start-service"
+	if restart {
+		operationType = "restart-service"
 	}
-	operation, err := s.store.CreateOperation(ctx, scope, "restart", actor, "")
+	operation, err := s.store.CreateOperation(ctx, scope, operationType, actor, "")
 	if err != nil {
 		return model.Operation{}, err
+	}
+	_ = s.operationServiceTarget(scope, operation, serviceName)
+	if !restart && runtimeFor(environment, serviceName).Status == model.ServiceReady {
+		s.completeOperation(scope, operation, "Service "+serviceName+" is already ready")
+		return s.store.Operation(ctx, scope, operation.Number)
 	}
 	go func() {
 		lock := s.projectLock(scope)
 		lock.Lock()
 		defer lock.Unlock()
-		_ = s.processes.Stop(context.Background(), scope, serviceName, 10*time.Second)
-		if err := s.startProcess(context.Background(), environment, definition, operation); err != nil {
-			s.failOperation(scope, operation, err)
+		current, currentErr := s.store.Environment(context.Background(), projectName, environmentName)
+		if currentErr != nil {
+			s.failOperation(scope, operation, currentErr)
 			return
 		}
+		currentDefinition, exists := serviceDefinitionForEnvironment(current, serviceName)
+		if !exists {
+			s.failOperation(scope, operation, store.ErrNotFound)
+			return
+		}
+		currentRuntime := runtimeFor(current, serviceName)
+		if !restart && currentRuntime.Status == model.ServiceReady {
+			s.completeOperation(scope, operation, "Service "+serviceName+" is already ready")
+			return
+		}
+		if currentErr = s.prepareServiceDependencies(context.Background(), scope, current, serviceName, operation); currentErr != nil {
+			s.failOperation(scope, operation, currentErr)
+			return
+		}
+		if currentDefinition.Kind == model.ServiceProcess {
+			if currentErr = s.acquireSourceLeases(scope, current); currentErr != nil {
+				s.failOperation(scope, operation, currentErr)
+				return
+			}
+		}
+		if restart {
+			_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceStopping, "")
+			s.reconcileEnvironmentStatus(context.Background(), scope)
+			_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Stopping "+serviceName)
+			if currentDefinition.Kind == model.ServiceProcess {
+				currentErr = s.processes.Stop(context.Background(), scope, serviceName, 10*time.Second)
+			} else {
+				var privateKey string
+				privateKey, currentErr = s.store.PrivateEnvironmentKeyForSelector(context.Background(), scope)
+				if currentErr == nil {
+					currentErr = s.containers.StopService(context.Background(), privateKey, serviceName)
+				}
+			}
+			if currentErr != nil {
+				_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceFailed, currentErr.Error())
+				s.failOperation(scope, operation, currentErr)
+				return
+			}
+			s.proxy.RemoveTarget(scope, serviceName)
+		}
+		_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceStarting, "")
 		s.reconcileEnvironmentStatus(context.Background(), scope)
-		s.completeOperation(scope, operation, "Service "+serviceName+" restarted")
+		_ = s.serviceEvent(scope, operation, serviceName, "starting", "Starting "+serviceName)
+		increment := int64(0)
+		if restart {
+			increment = 1
+		}
+		if currentDefinition.Kind == model.ServiceProcess {
+			currentErr = s.startProcess(context.Background(), current, currentDefinition, operation, increment)
+		} else {
+			currentErr = s.startContainer(context.Background(), current, currentDefinition, increment)
+		}
+		if currentErr != nil {
+			_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceFailed, Reason: currentErr.Error(), Generation: currentRuntime.Generation, RestartCount: currentRuntime.RestartCount})
+			s.failOperation(scope, operation, currentErr)
+			s.releaseSourceLeasesIfIdle(scope)
+			return
+		}
+		_ = s.serviceEvent(scope, operation, serviceName, "ready", serviceName+" is ready")
+		s.reconcileEnvironmentStatus(context.Background(), scope)
+		verb := "started"
+		if restart {
+			verb = "restarted"
+		}
+		s.completeOperation(scope, operation, "Service "+serviceName+" "+verb)
 	}()
 	return operation, nil
 }
@@ -541,56 +712,65 @@ func (s *Service) StopService(ctx context.Context, projectName, environmentName,
 	if err != nil {
 		return model.Operation{}, err
 	}
-	definition, ok := serviceDefinitionForEnvironment(environment, serviceName)
+	_, ok := serviceDefinitionForEnvironment(environment, serviceName)
 	if !ok {
 		return model.Operation{}, store.ErrNotFound
 	}
 	if bindingForEnvironment(environment, serviceName).Provider == model.ProviderRemote {
-		return model.Operation{}, errors.New("remote services are not stopped by Portless")
+		return model.Operation{}, fmt.Errorf("remote service %s is not managed by Portless; change its environment binding before using lifecycle commands", serviceName)
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	if definition.Kind != model.ServiceProcess {
-		operation, err := s.store.CreateOperation(ctx, scope, "stop-service", actor, "")
-		if err != nil {
-			return model.Operation{}, err
-		}
-		go func() {
-			lock := s.projectLock(scope)
-			lock.Lock()
-			defer lock.Unlock()
-			privateKey, stopErr := s.store.PrivateEnvironmentKeyForSelector(context.Background(), scope)
-			if stopErr == nil {
-				stopErr = s.containers.StopService(context.Background(), privateKey, serviceName)
-			}
-			if stopErr != nil {
-				s.failOperation(scope, operation, stopErr)
-				return
-			}
-			runtime := runtimeFor(environment, serviceName)
-			_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: runtime.Generation})
-			s.proxy.RemoveTarget(scope, serviceName)
-			s.reconcileEnvironmentStatus(context.Background(), scope)
-			s.completeOperation(scope, operation, "Service "+serviceName+" stopped")
-		}()
-		return operation, nil
-	}
 	operation, err := s.store.CreateOperation(ctx, scope, "stop-service", actor, "")
 	if err != nil {
 		return model.Operation{}, err
+	}
+	_ = s.operationServiceTarget(scope, operation, serviceName)
+	runtime := runtimeFor(environment, serviceName)
+	if runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned {
+		s.completeOperation(scope, operation, "Service "+serviceName+" is already stopped")
+		return s.store.Operation(ctx, scope, operation.Number)
 	}
 	go func() {
 		lock := s.projectLock(scope)
 		lock.Lock()
 		defer lock.Unlock()
+		current, currentErr := s.store.Environment(context.Background(), projectName, environmentName)
+		if currentErr != nil {
+			s.failOperation(scope, operation, currentErr)
+			return
+		}
+		currentDefinition, exists := serviceDefinitionForEnvironment(current, serviceName)
+		if !exists {
+			s.failOperation(scope, operation, store.ErrNotFound)
+			return
+		}
+		currentRuntime := runtimeFor(current, serviceName)
+		if currentRuntime.Status == model.ServiceStopped || currentRuntime.Status == model.ServicePlanned {
+			s.completeOperation(scope, operation, "Service "+serviceName+" is already stopped")
+			return
+		}
+		_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceStopping, "")
+		s.reconcileEnvironmentStatus(context.Background(), scope)
 		_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Stopping service")
-		if err := s.processes.Stop(context.Background(), scope, serviceName, 10*time.Second); err != nil {
-			s.failOperation(scope, operation, err)
+		var stopErr error
+		if currentDefinition.Kind == model.ServiceProcess {
+			stopErr = s.processes.Stop(context.Background(), scope, serviceName, 10*time.Second)
+		} else {
+			var privateKey string
+			privateKey, stopErr = s.store.PrivateEnvironmentKeyForSelector(context.Background(), scope)
+			if stopErr == nil {
+				stopErr = s.containers.StopService(context.Background(), privateKey, serviceName)
+			}
+		}
+		if stopErr != nil {
+			_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceFailed, stopErr.Error())
+			s.failOperation(scope, operation, stopErr)
 			return
 		}
 		s.proxy.RemoveTarget(scope, serviceName)
-		runtime := runtimeFor(environment, serviceName)
-		_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: runtime.Generation, RestartCount: runtime.RestartCount})
+		_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: currentRuntime.Generation, RestartCount: currentRuntime.RestartCount})
 		s.reconcileEnvironmentStatus(context.Background(), scope)
+		s.releaseSourceLeasesIfIdle(scope)
 		s.completeOperation(scope, operation, "Service "+serviceName+" stopped")
 	}()
 	return operation, nil
@@ -635,6 +815,24 @@ func (s *Service) UseRuntime(ctx context.Context, value string) (container.Statu
 
 func (s *Service) Traffic(project, environment string, limit int) []model.TrafficEvent {
 	return s.broker.RecentTraffic(model.EnvironmentSelector(project, environment), limit)
+}
+
+func (s *Service) TrafficEvent(ctx context.Context, project, environment string, sequence int64) (model.TrafficEvent, error) {
+	for _, event := range s.Traffic(project, environment, 1000) {
+		if event.Sequence == sequence {
+			return event, nil
+		}
+	}
+	recorded, err := s.store.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), "", 10_000)
+	if err != nil {
+		return model.TrafficEvent{}, err
+	}
+	for _, event := range recorded {
+		if event.Sequence == sequence {
+			return event, nil
+		}
+	}
+	return model.TrafficEvent{}, store.ErrNotFound
 }
 
 func (s *Service) RecordedTraffic(ctx context.Context, project, environment, recording string, limit int) ([]model.TrafficEvent, error) {
@@ -697,6 +895,10 @@ func (s *Service) StopRecording(ctx context.Context, project, environment, name,
 
 func (s *Service) Recordings(ctx context.Context, project, environment string) ([]model.Recording, error) {
 	return s.store.Recordings(ctx, model.EnvironmentSelector(project, environment))
+}
+
+func (s *Service) Recording(ctx context.Context, project, environment, name string) (model.Recording, error) {
+	return s.store.Recording(ctx, model.EnvironmentSelector(project, environment), name)
 }
 
 func (s *Service) DeleteRecording(ctx context.Context, project, environment, name, actor string) error {
@@ -767,6 +969,10 @@ func (s *Service) Faults(ctx context.Context, project, environment string) ([]mo
 	return s.store.Faults(ctx, model.EnvironmentSelector(project, environment), false)
 }
 
+func (s *Service) Fault(ctx context.Context, project, environment, name string) (model.FaultRule, error) {
+	return s.store.Fault(ctx, model.EnvironmentSelector(project, environment), name)
+}
+
 func (s *Service) DisableFault(ctx context.Context, project, environment, name, actor string) error {
 	scope := model.EnvironmentSelector(project, environment)
 	if err := s.store.DisableFault(ctx, scope, name); err != nil {
@@ -788,41 +994,26 @@ func (s *Service) DisableAllFaults(ctx context.Context, project, environment, ac
 	return count, nil
 }
 
-func (s *Service) Logs(ctx context.Context, project, environment, service string, limit int) ([]string, error) {
-	path, err := s.store.ServiceLogPath(ctx, model.EnvironmentSelector(project, environment), service)
+func (s *Service) Logs(ctx context.Context, project, environment, service string, limit int, since time.Time) ([]model.LogEntry, error) {
+	current, err := s.store.Environment(ctx, project, environment)
 	if err != nil {
 		return nil, err
 	}
-	if path == "" {
-		return []string{}, nil
-	}
-	var lines []string
-	for _, name := range []string{"stdout.log", "stderr.log"} {
-		file, err := os.Open(filepath.Join(path, name))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		scanner := bufio.NewScanner(file)
-		buffer := make([]byte, 64*1024)
-		scanner.Buffer(buffer, 1024*1024)
-		for scanner.Scan() {
-			lines = append(lines, strings.TrimRight(scanner.Text(), "\r\n"))
-		}
-		file.Close()
-		if err := scanner.Err(); err != nil {
-			return nil, err
+	services := make([]string, 0, len(current.Services))
+	for _, candidate := range current.Services {
+		if service == "" || strings.EqualFold(candidate.Name, service) {
+			services = append(services, candidate.Name)
 		}
 	}
-	if limit <= 0 {
-		limit = 500
+	if service != "" && len(services) == 0 {
+		return nil, store.ErrNotFound
 	}
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
+	privateKey, err := s.store.PrivateEnvironmentKey(ctx, project, environment)
+	if err != nil {
+		return nil, err
 	}
-	return lines, nil
+	root := filepath.Join(s.dataDirectory, "environments", privateKey, "logs")
+	return logstore.Read(root, services, limit, since)
 }
 
 func (s *Service) ExportProject(ctx context.Context, project string) ([]byte, error) {
@@ -852,9 +1043,30 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		s.failOperation(scope, operation, err)
 		return
 	}
-	if environment.Status == model.EnvironmentHealthy {
+	if environment.Status == model.EnvironmentHealthy && s.environmentRuntimeVerified(ctx, environment) {
 		s.completeOperation(scope, operation, "Environment is already healthy")
 		return
+	}
+	if environment.Status != model.EnvironmentStopped && !s.environmentRuntimeVerified(ctx, environment) {
+		_ = s.store.SetEnvironmentStatus(ctx, environment.Project, environment.Name, model.EnvironmentRecovering, "runtime ownership is stale")
+		if err := s.reconcileActiveEnvironmentLocked(ctx, environment); err != nil {
+			s.failOperation(scope, operation, fmt.Errorf("runtime recovery failed: %w", err))
+			return
+		}
+		if environment, err = s.store.EnvironmentBySelector(ctx, scope); err != nil {
+			s.failOperation(scope, operation, err)
+			return
+		}
+		if environment.Status == model.EnvironmentHealthy {
+			s.completeOperation(scope, operation, "Environment runtime was recovered")
+			return
+		}
+		for _, service := range environment.Services {
+			if service.Status == model.ServiceUnknown || service.Status == model.ServiceRecovering {
+				s.failOperation(scope, operation, fmt.Errorf("runtime recovery is incomplete: %s", environment.Reason))
+				return
+			}
+		}
 	}
 	if err := s.acquireSourceLeases(scope, environment); err != nil {
 		s.failOperation(scope, operation, err)
@@ -886,7 +1098,11 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 				return
 			}
 		}
-		_ = s.store.SetServiceRuntime(ctx, scope, binding.Service, store.ServiceRuntimeUpdate{Status: model.ServiceReady, Reason: "remote " + string(binding.Remote.Classification) + " target"})
+		now := time.Now().UTC()
+		_ = s.store.SetServiceRuntime(ctx, scope, binding.Service, store.ServiceRuntimeUpdate{
+			Status: model.ServiceReady, Reason: "remote " + string(binding.Remote.Classification) + " target",
+			OwnerInstanceID: s.daemonInstanceID, ObservedAt: &now,
+		})
 		_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is routed to "+string(binding.Remote.Classification))
 	}
 	order, err := executionOrder(definition, environment.Bindings)
@@ -895,12 +1111,16 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		return
 	}
 	for _, serviceName := range order {
+		if current := runtimeFor(environment, serviceName); current.Status == model.ServiceReady && s.proxy.HasTarget(scope, serviceName) {
+			_ = s.serviceEvent(scope, operation, serviceName, "ready", serviceName+" is already ready")
+			continue
+		}
 		service, _ := serviceDefinition(definition, serviceName)
 		_ = s.serviceEvent(scope, operation, serviceName, "starting", "Starting "+serviceName)
 		if service.Kind == model.ServiceContainer {
-			err = s.startContainer(ctx, environment, service)
+			err = s.startContainer(ctx, environment, service, 0)
 		} else {
-			err = s.startProcess(ctx, environment, service, operation)
+			err = s.startProcess(ctx, environment, service, operation, 0)
 		}
 		if err != nil {
 			runtime := runtimeFor(environment, serviceName)
@@ -983,6 +1203,7 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 		_ = s.store.SetServiceRuntime(ctx, scope, service.Name, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: service.Generation})
 	}
 	s.proxy.CloseEnvironment(ctx, scope)
+	_ = s.store.DeleteConnectionRuntimes(ctx, scope)
 	_, _ = s.store.DisableAllFaults(ctx, scope)
 	for _, recording := range mustRecordings(s.store.Recordings(ctx, scope)) {
 		if recording.Status == "active" {
@@ -997,57 +1218,99 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 	s.publish(scope, "environment.state", snapshot)
 }
 
-func (s *Service) startContainer(ctx context.Context, environment model.Environment, definition model.ServiceDefinition) error {
+func (s *Service) startContainer(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, restartIncrement int64) error {
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
 		return err
 	}
 	runtime := runtimeFor(environment, definition.Name)
-	result, err := s.containers.Start(ctx, environment.Project+"-"+environment.Name, privateKey, definition)
+	nextGeneration := runtime.Generation + 1
+	observed := time.Now().UTC()
+	if err := s.store.SetServiceRuntime(ctx, scope, definition.Name, store.ServiceRuntimeUpdate{
+		Status: model.ServiceStarting, Generation: nextGeneration,
+		RestartCount:    runtime.RestartCount + restartIncrement,
+		OwnerInstanceID: s.daemonInstanceID, ObservedAt: &observed,
+	}); err != nil {
+		return err
+	}
+	logsRoot := filepath.Join(s.dataDirectory, "environments", privateKey, "logs")
+	result, err := s.containers.Start(ctx, environment.Project+"-"+environment.Name, privateKey, definition, nextGeneration, logsRoot)
 	if err != nil {
 		return err
 	}
-	s.proxy.SetTarget(scope, definition.Name, result.Port)
+	s.proxy.SetTargetProvider(scope, definition.Name, result.Port, model.ProviderContainer)
 	s.mu.Lock()
 	s.containerEnvironment[targetEnvironmentKey(scope, definition.Name)] = result.Environment
 	s.mu.Unlock()
+	now := time.Now().UTC()
 	return s.store.SetServiceRuntime(ctx, scope, definition.Name, store.ServiceRuntimeUpdate{
-		Status: model.ServiceReady, Generation: runtime.Generation + 1, UpstreamPort: result.Port, StartedAt: &result.StartedAt,
+		Status: model.ServiceReady, Generation: nextGeneration, UpstreamPort: result.Port, StartedAt: &result.StartedAt, LogPath: result.LogDirectory, RestartCount: runtime.RestartCount + restartIncrement,
+		OwnerInstanceID: s.daemonInstanceID, ContainerName: result.ContainerName, ObservedAt: &now,
 	})
 }
 
-func (s *Service) startProcess(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, operation model.Operation) error {
+func (s *Service) startProcess(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, operation model.Operation, restartIncrement int64) error {
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	processEnvironment := make(map[string]string)
 	modelDefinition, err := s.store.EnvironmentModel(ctx, environment.Project, environment.Name)
 	if err != nil {
 		return err
 	}
+	runtime := runtimeFor(environment, definition.Name)
+	nextGeneration := runtime.Generation + 1
 	for _, connection := range modelDefinition.Connections {
 		if connection.Source != definition.Name {
 			continue
 		}
-		port, err := s.proxy.EnsureEdge(ctx, scope, connection)
+		port := 0
+		persisted, persistedErr := s.store.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
+		if persistedErr != nil && !errors.Is(persistedErr, store.ErrNotFound) {
+			return persistedErr
+		}
+		if persistedErr == nil && persisted.SourceGeneration == nextGeneration {
+			port, err = s.proxy.EnsureEdgeAtPort(ctx, scope, connection, persisted.ListenPort)
+		} else {
+			port, err = s.proxy.EnsureEdge(ctx, scope, connection)
+		}
 		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if err := s.store.SaveConnectionRuntime(ctx, scope, store.ConnectionRuntime{
+			Source: connection.Source, Target: connection.Target, Protocol: connection.Protocol,
+			SourceGeneration: nextGeneration, ListenPort: port, OwnerInstanceID: s.daemonInstanceID,
+			State: "ready", ObservedAt: &now,
+		}); err != nil {
 			return err
 		}
 		applyBinding(processEnvironment, connection, port, s.containerEnvironmentFor(scope, connection.Target))
 	}
-	runtime := runtimeFor(environment, definition.Name)
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
 		return err
 	}
 	logsRoot := filepath.Join(s.dataDirectory, "environments", privateKey, "logs")
-	result, err := s.processes.Start(ctx, scope, definition, runtime.Generation+1, processEnvironment, logsRoot)
+	result, err := s.processes.StartPrepared(ctx, scope, definition, nextGeneration, processEnvironment, logsRoot, func(prepared processruntime.StartResult) error {
+		now := time.Now().UTC()
+		return s.store.SetServiceRuntime(ctx, scope, definition.Name, store.ServiceRuntimeUpdate{
+			Status: model.ServiceStarting, Generation: prepared.Generation, UpstreamPort: prepared.Port,
+			StartedAt: &prepared.StartedAt, RestartCount: runtime.RestartCount + restartIncrement,
+			LogPath: prepared.LogDirectory, PrivateRunKey: prepared.PrivateRunKey,
+			OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: prepared.SupervisorSocket,
+			SupervisorState: prepared.SupervisorState, SupervisorPID: prepared.SupervisorPID, ObservedAt: &now,
+		})
+	})
 	if err != nil {
 		return err
 	}
 	s.proxy.SetTarget(scope, definition.Name, result.Port)
+	now := time.Now().UTC()
 	return s.store.SetServiceRuntime(ctx, scope, definition.Name, store.ServiceRuntimeUpdate{
 		Status: model.ServiceReady, Generation: result.Generation, PID: result.PID, UpstreamPort: result.Port,
-		StartedAt: &result.StartedAt, RestartCount: runtime.RestartCount, LogPath: result.LogDirectory, PrivateRunKey: result.PrivateRunKey,
+		StartedAt: &result.StartedAt, RestartCount: runtime.RestartCount + restartIncrement, LogPath: result.LogDirectory, PrivateRunKey: result.PrivateRunKey,
+		OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: result.SupervisorSocket,
+		SupervisorState: result.SupervisorState, SupervisorPID: result.SupervisorPID, ObservedAt: &now,
 	})
 }
 
@@ -1070,9 +1333,13 @@ func (s *Service) processExited(event processruntime.ExitEvent) {
 		status = model.ServiceFailed
 		reason = event.Error.Error()
 	}
-	_ = s.store.SetServiceRuntime(ctx, event.Scope, event.Service, store.ServiceRuntimeUpdate{Status: status, Reason: reason, Generation: event.Generation, RestartCount: runtime.RestartCount, LogPath: mustLogPath(s.store.ServiceLogPath(ctx, event.Scope, event.Service))})
+	// Preserve the supervisor identity and run metadata. A later daemon must be
+	// able to authenticate the durable terminal state instead of degrading a
+	// known exit into an unverifiable process.
+	_ = s.store.SetServiceStatus(ctx, event.Scope, event.Service, status, reason)
 	s.proxy.RemoveTarget(event.Scope, event.Service)
 	s.reconcileEnvironmentStatus(ctx, event.Scope)
+	s.releaseSourceLeasesIfIdle(event.Scope)
 	_, _ = s.timeline(ctx, event.Scope, "runtime", "service.exited", event.Service, "error", event.Service+" exited: "+reason, nil)
 	s.publish(event.Scope, "service.state", map[string]any{"service": event.Service, "state": status, "reason": reason})
 }
@@ -1083,6 +1350,58 @@ func (s *Service) completeOperation(scope string, operation model.Operation, mes
 	_ = s.store.CompleteOperation(ctx, scope, operation.Number, "succeeded", "")
 	completed, _ := s.store.Operation(ctx, scope, operation.Number)
 	s.publish(scope, "operation.state", completed)
+}
+
+func (s *Service) operationServiceTarget(scope string, operation model.Operation, serviceName string) error {
+	_, err := s.store.AddOperationEvent(context.Background(), scope, operation.Number, model.OperationEvent{
+		Type: "operation.accepted", Subject: serviceName, Message: "Service operation accepted",
+	})
+	return err
+}
+
+func (s *Service) prepareServiceDependencies(ctx context.Context, scope string, environment model.Environment, serviceName string, operation model.Operation) error {
+	for _, connection := range environment.Connections {
+		if connection.Source != serviceName {
+			continue
+		}
+		binding := bindingForEnvironment(environment, connection.Target)
+		if binding.Provider != model.ProviderRemote {
+			if connection.Required {
+				dependency := runtimeFor(environment, connection.Target)
+				if dependency.Status != model.ServiceReady {
+					return fmt.Errorf("required dependency %s is %s; start it first or run `portless up`", connection.Target, dependency.Status)
+				}
+			}
+			continue
+		}
+		if binding.Remote == nil {
+			return fmt.Errorf("remote dependency %s has no target configuration", connection.Target)
+		}
+		_ = s.serviceEvent(scope, operation, connection.Target, "starting", "Connecting "+connection.Target+" to "+string(binding.Remote.Classification))
+		if err := s.proxy.SetRemoteTarget(scope, connection.Target, *binding.Remote); err != nil {
+			return err
+		}
+		if binding.Remote.HealthPath != "" {
+			checkContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err := s.proxy.CheckRemote(checkContext, scope, connection.Target)
+			cancel()
+			if err != nil {
+				_ = s.store.SetServiceStatus(context.Background(), scope, connection.Target, model.ServiceFailed, "remote health check failed: "+err.Error())
+				return fmt.Errorf("%s remote health check: %w", connection.Target, err)
+			}
+		}
+		remoteRuntime := runtimeFor(environment, connection.Target)
+		now := time.Now().UTC()
+		if err := s.store.SetServiceRuntime(ctx, scope, connection.Target, store.ServiceRuntimeUpdate{
+			Status: model.ServiceReady, Reason: "remote " + string(binding.Remote.Classification) + " target",
+			Generation: remoteRuntime.Generation, RestartCount: remoteRuntime.RestartCount,
+			OwnerInstanceID: s.daemonInstanceID, ObservedAt: &now,
+		}); err != nil {
+			return err
+		}
+		_ = s.serviceEvent(scope, operation, connection.Target, "ready", connection.Target+" is routed to "+string(binding.Remote.Classification))
+	}
+	return nil
 }
 
 func (s *Service) reconcileEnvironmentStatus(ctx context.Context, scope string) {
@@ -1223,6 +1542,23 @@ func (s *Service) releaseSourceLeases(scope string) {
 	}
 }
 
+func (s *Service) releaseSourceLeasesIfIdle(scope string) {
+	environment, err := s.store.EnvironmentBySelector(context.Background(), scope)
+	if err != nil {
+		return
+	}
+	for _, service := range environment.Services {
+		if service.Kind != model.ServiceProcess || bindingForEnvironment(environment, service.Name).Provider != model.ProviderLocal {
+			continue
+		}
+		switch service.Status {
+		case model.ServiceReady, model.ServiceStarting, model.ServiceUnhealthy, model.ServiceStopping, model.ServiceUnknown:
+			return
+		}
+	}
+	s.releaseSourceLeases(scope)
+}
+
 func applyBinding(environment map[string]string, connection model.Connection, port int, targetEnvironment map[string]string) {
 	address := "127.0.0.1:" + strconv.Itoa(port)
 	switch connection.Protocol {
@@ -1245,6 +1581,45 @@ func applyBinding(environment map[string]string, connection model.Connection, po
 	case model.ProtocolRedis:
 		environment[connection.Environment] = "redis://" + address
 	}
+}
+
+func safeInjectedValue(connection model.Connection, address string) string {
+	if address == "" {
+		return "not active"
+	}
+	switch connection.Protocol {
+	case model.ProtocolHTTP:
+		return "http://" + address
+	case model.ProtocolPostgres:
+		if strings.Contains(connection.Environment, "SPRING_DATASOURCE") {
+			return "jdbc:postgresql://" + address + "/portless"
+		}
+		return "postgresql://••••@" + address + "/portless"
+	case model.ProtocolRedis:
+		return "redis://" + address
+	default:
+		return address
+	}
+}
+
+func secretConfigurationKey(key string) bool {
+	upper := strings.ToUpper(key)
+	return strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "SECRET") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "API_KEY") || strings.HasSuffix(upper, "_KEY")
+}
+
+func shouldMaskConfiguration(key, value string) bool {
+	if secretConfigurationKey(key) {
+		return true
+	}
+	parsed, err := url.Parse(strings.TrimPrefix(value, "jdbc:"))
+	return err == nil && parsed.User != nil
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func serviceDefinitionForEnvironment(environment model.Environment, name string) (model.ServiceDefinition, bool) {

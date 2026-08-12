@@ -1,5 +1,5 @@
-export type EnvironmentStatus = 'starting' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
-export type ServiceStatus = 'planned' | 'starting' | 'ready' | 'unhealthy' | 'exited' | 'failed' | 'stopping' | 'stopped' | 'unknown'
+export type EnvironmentStatus = 'starting' | 'recovering' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
+export type ServiceStatus = 'planned' | 'starting' | 'recovering' | 'ready' | 'unhealthy' | 'exited' | 'failed' | 'stopping' | 'stopped' | 'unknown'
 export type ProviderKind = 'local' | 'container' | 'remote'
 export type RemoteClassification = 'development' | 'qa' | 'staging' | 'unknown'
 export type WritePolicy = 'read-only' | 'read-write'
@@ -18,6 +18,26 @@ export interface RuntimeStatus {
   version?: string
   reason?: string
   candidates: RuntimeCandidate[]
+}
+
+export interface DaemonStatus {
+  state: string
+  pid: number
+  startedAt: string
+  instanceId: string
+  buildId: string
+  protocolVersion: string
+  apiVersion: string
+  handoffReady: boolean
+  recoveryProblems: string[]
+  activeEnvironments: string[]
+}
+
+export interface DaemonRestart {
+  restarting: boolean
+  previousInstanceId: string
+  handoff: boolean
+  activeEnvironments: string[]
 }
 
 export interface Evidence { file: string; explanation: string; confidence: string }
@@ -131,6 +151,8 @@ export interface Environment {
 export interface OperationEvent { sequence: number; timestamp: string; type: string; subject?: string; message: string; payload?: Record<string, unknown> }
 export interface Operation { project: string; environment: string; number: number; type: string; state: string; actor: string; startedAt: string; completedAt?: string; error?: string; events: OperationEvent[] }
 
+export interface LogEntry { timestamp: string; service: string; stream: string; generation: number; message: string }
+
 export interface TrafficEvent {
   project: string
   environment: string
@@ -152,7 +174,8 @@ export interface TrafficEvent {
   fault?: string
   recording?: string
   error?: string
-  headers?: Record<string, string>
+  requestHeaders?: Record<string, string>
+  responseHeaders?: Record<string, string>
 }
 
 export interface Recording { project: string; environment: string; name: string; source?: string; target?: string; captureBodies: boolean; maxEvents: number; maxBodyBytes: number; status: string; startedAt: string; completedAt?: string; expiresAt?: string; eventCount: number }

@@ -27,12 +27,29 @@ import (
 	"github.com/portless-run/portless/webui"
 )
 
+var (
+	ErrExecutableChanged = errors.New("Portless executable changed")
+	ErrRestartRequested  = errors.New("Portless daemon restart requested")
+)
+
 func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	for _, directory := range []string{paths.Root, paths.Logs, paths.Temporary} {
 		if err := ensurePrivateDirectory(directory); err != nil {
 			return err
 		}
 	}
+	instanceLock, err := os.OpenFile(paths.InstanceLock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open daemon instance lock: %w", err)
+	}
+	defer instanceLock.Close()
+	if err := os.Chmod(paths.InstanceLock, 0o600); err != nil {
+		return fmt.Errorf("protect daemon instance lock: %w", err)
+	}
+	if err := syscall.Flock(int(instanceLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return errors.New("another Portless daemon already owns this data directory")
+	}
+	defer syscall.Flock(int(instanceLock.Fd()), syscall.LOCK_UN)
 	authManager, err := auth.LoadOrCreate(paths.Token)
 	if err != nil {
 		return fmt.Errorf("initialize local authentication: %w", err)
@@ -53,7 +70,7 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	identity := daemon.Identity{
 		Product: daemon.Product, ProtocolVersion: daemon.ProtocolVersion, APIVersion: api.APIVersion,
 		InstallationID: installationIDFromKey(ownershipKey), InstanceID: instanceID, BuildID: buildID,
-		PID: os.Getpid(), StartedAt: startedAt, ActiveEnvironments: []string{},
+		PID: os.Getpid(), StartedAt: startedAt, State: "reconciling", RecoveryProblems: []string{}, ActiveEnvironments: []string{},
 	}
 	controlStore, err := store.Open(paths.Database)
 	if err != nil {
@@ -61,8 +78,34 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	}
 	defer controlStore.Close()
 	broker := events.NewBroker()
-	app := application.New(controlStore, broker, application.Config{DataDirectory: paths.Root, InstallationKey: ownershipKey})
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+		executable = resolved
+	}
+	if err := controlStore.RecordDaemonInstance(ctx, store.DaemonInstance{
+		InstanceID: instanceID, BuildID: buildID, PID: os.Getpid(), State: "reconciling", StartedAt: startedAt,
+	}); err != nil {
+		return err
+	}
+	defer controlStore.SetDaemonInstanceState(context.Background(), instanceID, "stopped", true)
+	app := application.New(controlStore, broker, application.Config{
+		DataDirectory: paths.Root, InstallationKey: ownershipKey, DaemonInstanceID: instanceID, Executable: executable,
+	})
 	defer app.Close(context.Background())
+	reconciliation, err := app.Reconcile(ctx)
+	if err != nil {
+		identity.RecoveryProblems = append(identity.RecoveryProblems, err.Error())
+	} else {
+		identity.RecoveryProblems = append(identity.RecoveryProblems, reconciliation.Unverifiable...)
+	}
+	identity.State = "ready"
+	identity.HandoffReady, _ = app.CanHandoff(ctx)
+	if err := controlStore.SetDaemonInstanceState(ctx, instanceID, "ready", false); err != nil {
+		return err
+	}
 	listener, err := listenControl(preferredPort)
 	if err != nil {
 		return err
@@ -75,14 +118,13 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	defer ingressListener.Close()
 	defer removeIngressSocket(paths.Ingress)
 	port := listener.Addr().(*net.TCPAddr).Port
-	apiHandler, err := api.New(app, authManager, webui.Assets())
-	if err != nil {
-		return err
-	}
 	shutdownRequested := make(chan struct{})
+	restartRequested := make(chan struct{}, 1)
+	replacementRequested := make(chan struct{}, 1)
 	var shutdownOnce sync.Once
 	handler := &lifecycleHandler{
-		next: apiHandler, auth: authManager, identity: identity,
+		auth: authManager, identity: identity,
+		handoffStatus: app.CanHandoff,
 		activeEnvironments: func(ctx context.Context) ([]string, error) {
 			environments, err := app.Environments(ctx, "")
 			if err != nil {
@@ -97,7 +139,18 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 			return active, nil
 		},
 		shutdown: func() { shutdownOnce.Do(func() { close(shutdownRequested) }) },
+		replace: func() {
+			select {
+			case restartRequested <- struct{}{}:
+			default:
+			}
+		},
 	}
+	apiHandler, err := api.New(app, authManager, webui.Assets(), handler)
+	if err != nil {
+		return err
+	}
+	handler.next = apiHandler
 	controlServer := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -113,6 +166,7 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	record := ControlRecord{
 		PID: identity.PID, Port: port, ProtocolVersion: identity.ProtocolVersion, APIVersion: identity.APIVersion,
 		InstallationID: identity.InstallationID, InstanceID: identity.InstanceID, BuildID: identity.BuildID,
+		State: identity.State, HandoffReady: identity.HandoffReady, RecoveryProblems: identity.RecoveryProblems,
 		TokenPath: paths.Token, StartedAt: identity.StartedAt, ProcessHint: filepath.Base(os.Args[0]),
 	}
 	if err := writeControl(paths, record); err != nil {
@@ -127,6 +181,9 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	go func() {
 		errChannel <- ingressServer.Serve(ingressListener)
 	}()
+	watchContext, stopWatching := context.WithCancel(ctx)
+	defer stopWatching()
+	go watchExecutable(watchContext, executable, buildID, app.CanHandoff, replacementRequested)
 	signalContext, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	select {
@@ -138,6 +195,18 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
+	case <-replacementRequested:
+		_ = controlStore.SetDaemonInstanceState(context.Background(), instanceID, "draining", false)
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		shutdownErr := errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
+		return errors.Join(ErrExecutableChanged, shutdownErr)
+	case <-restartRequested:
+		_ = controlStore.SetDaemonInstanceState(context.Background(), instanceID, "draining", false)
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		shutdownErr := errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
+		return errors.Join(ErrRestartRequested, shutdownErr)
 	case err := <-errChannel:
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
@@ -148,6 +217,63 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 		}
 		return err
 	}
+}
+
+func watchExecutable(ctx context.Context, executable, currentBuildID string, canHandoff func(context.Context) (bool, []string), replacement chan<- struct{}) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	reportedBuild := ""
+	lastInfo, _ := os.Stat(executable)
+	pendingBuild := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		currentInfo, statErr := os.Stat(executable)
+		if statErr != nil {
+			continue
+		}
+		if pendingBuild == "" && sameExecutableFile(lastInfo, currentInfo) {
+			continue
+		}
+		if !sameExecutableFile(lastInfo, currentInfo) {
+			observedBuild, err := BuildIDForPath(executable)
+			if err != nil {
+				continue
+			}
+			lastInfo = currentInfo
+			if observedBuild == currentBuildID {
+				pendingBuild = ""
+				reportedBuild = ""
+				continue
+			}
+			pendingBuild = observedBuild
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		ready, problems := canHandoff(probeCtx)
+		cancel()
+		if !ready {
+			if reportedBuild != pendingBuild {
+				slog.Warn("Portless executable changed but runtime handoff is unsafe", "problems", problems)
+				reportedBuild = pendingBuild
+			}
+			continue
+		}
+		select {
+		case replacement <- struct{}{}:
+		case <-ctx.Done():
+		}
+		return
+	}
+}
+
+func sameExecutableFile(left, right os.FileInfo) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return os.SameFile(left, right) && left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
 }
 
 func listenIngress(path string) (net.Listener, error) {

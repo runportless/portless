@@ -2,12 +2,15 @@ package proxy
 
 import (
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
@@ -21,6 +24,7 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	scope := model.EnvironmentSelector("billing", "local")
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("X-Upstream", "checkout")
+		writer.Header().Set("Set-Cookie", "session=should-not-leak")
 		writer.WriteHeader(http.StatusCreated)
 		_, _ = writer.Write([]byte("created"))
 	}))
@@ -40,7 +44,7 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 		t.Fatalf("response code=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 	traffic := broker.RecentTraffic(scope, 10)
-	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].Headers["Authorization"] != "[REDACTED]" || traffic[0].Headers["X-Trace"] != "visible" {
+	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].RequestHeaders["Authorization"] != "[REDACTED]" || traffic[0].RequestHeaders["X-Trace"] != "visible" || traffic[0].ResponseHeaders["Set-Cookie"] != "[REDACTED]" || traffic[0].ResponseHeaders["X-Upstream"] != "checkout" {
 		t.Fatalf("unexpected traffic %#v", traffic)
 	}
 
@@ -61,6 +65,81 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/faulted", nil), scope, "checkout")
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-Portless-Fault") != "checkout-down" {
 		t.Fatalf("fault response code=%d headers=%v", response.Code, response.Header())
+	}
+}
+
+func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
+	controlStore, err := store.Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	connection := model.Connection{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP}
+	first := NewManager(controlStore, events.NewBroker())
+	port, err := first.EnsureEdge(context.Background(), "billing/local", connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.HasEdge("billing/local", "checkout", "orders", port) {
+		t.Fatal("first manager did not report its edge")
+	}
+	first.CloseEnvironment(context.Background(), "billing/local")
+	second := NewManager(controlStore, events.NewBroker())
+	defer second.Close(context.Background())
+	restored, err := second.EnsureEdgeAtPort(context.Background(), "billing/local", connection, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored != port || !second.HasEdge("billing/local", "checkout", "orders", port) {
+		t.Fatalf("restored port = %d, want %d", restored, port)
+	}
+}
+
+func TestTCPEdgeOutlivesTheOperationContextThatCreatedIt(t *testing.T) {
+	controlStore, err := store.Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		connection, acceptErr := upstream.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		_, _ = io.Copy(connection, connection)
+	}()
+
+	manager := NewManager(controlStore, events.NewBroker())
+	defer manager.Close(context.Background())
+	manager.SetTarget("billing/local", "redis", upstream.Addr().(*net.TCPAddr).Port)
+	operationContext, cancelOperation := context.WithCancel(context.Background())
+	port, err := manager.EnsureEdge(operationContext, "billing/local", model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelOperation()
+
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	if _, err := connection.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 4)
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatal(err)
+	}
+	if string(response) != "ping" {
+		t.Fatalf("TCP proxy response = %q", response)
 	}
 }
 

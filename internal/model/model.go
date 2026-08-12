@@ -5,27 +5,29 @@ import "time"
 type EnvironmentStatus string
 
 const (
-	EnvironmentStarting EnvironmentStatus = "starting"
-	EnvironmentHealthy  EnvironmentStatus = "healthy"
-	EnvironmentDegraded EnvironmentStatus = "degraded"
-	EnvironmentFailed   EnvironmentStatus = "failed"
-	EnvironmentStopping EnvironmentStatus = "stopping"
-	EnvironmentStopped  EnvironmentStatus = "stopped"
-	EnvironmentUnknown  EnvironmentStatus = "unknown"
+	EnvironmentStarting   EnvironmentStatus = "starting"
+	EnvironmentRecovering EnvironmentStatus = "recovering"
+	EnvironmentHealthy    EnvironmentStatus = "healthy"
+	EnvironmentDegraded   EnvironmentStatus = "degraded"
+	EnvironmentFailed     EnvironmentStatus = "failed"
+	EnvironmentStopping   EnvironmentStatus = "stopping"
+	EnvironmentStopped    EnvironmentStatus = "stopped"
+	EnvironmentUnknown    EnvironmentStatus = "unknown"
 )
 
 type ServiceStatus string
 
 const (
-	ServicePlanned   ServiceStatus = "planned"
-	ServiceStarting  ServiceStatus = "starting"
-	ServiceReady     ServiceStatus = "ready"
-	ServiceUnhealthy ServiceStatus = "unhealthy"
-	ServiceExited    ServiceStatus = "exited"
-	ServiceFailed    ServiceStatus = "failed"
-	ServiceStopping  ServiceStatus = "stopping"
-	ServiceStopped   ServiceStatus = "stopped"
-	ServiceUnknown   ServiceStatus = "unknown"
+	ServicePlanned    ServiceStatus = "planned"
+	ServiceStarting   ServiceStatus = "starting"
+	ServiceRecovering ServiceStatus = "recovering"
+	ServiceReady      ServiceStatus = "ready"
+	ServiceUnhealthy  ServiceStatus = "unhealthy"
+	ServiceExited     ServiceStatus = "exited"
+	ServiceFailed     ServiceStatus = "failed"
+	ServiceStopping   ServiceStatus = "stopping"
+	ServiceStopped    ServiceStatus = "stopped"
+	ServiceUnknown    ServiceStatus = "unknown"
 )
 
 type ServiceKind string
@@ -102,6 +104,16 @@ type Connection struct {
 	Protocol    Protocol `json:"protocol"`
 	Environment string   `json:"environment,omitempty"`
 	Required    bool     `json:"required"`
+}
+
+type EffectiveConnection struct {
+	Connection
+	TargetProvider ProviderKind  `json:"targetProvider"`
+	TargetStatus   ServiceStatus `json:"targetStatus"`
+	ProxyAddress   string        `json:"proxyAddress,omitempty"`
+	TargetEndpoint string        `json:"targetEndpoint,omitempty"`
+	InjectedEnvVar string        `json:"injectedEnvVar,omitempty"`
+	InjectedValue  string        `json:"injectedValue,omitempty"`
 }
 
 type ConnectionReference struct {
@@ -255,7 +267,32 @@ type TrafficEvent struct {
 	Fault                string               `json:"fault,omitempty"`
 	Recording            string               `json:"recording,omitempty"`
 	Error                string               `json:"error,omitempty"`
-	Headers              map[string]string    `json:"headers,omitempty"`
+	RequestHeaders       map[string]string    `json:"requestHeaders,omitempty"`
+	ResponseHeaders      map[string]string    `json:"responseHeaders,omitempty"`
+}
+
+type ConfigurationValue struct {
+	Key            string `json:"key"`
+	Value          string `json:"value"`
+	Classification string `json:"classification"`
+	Source         string `json:"source"`
+}
+
+type ServiceConfiguration struct {
+	Service          string               `json:"service"`
+	Command          []string             `json:"command"`
+	WorkingDirectory string               `json:"workingDirectory,omitempty"`
+	PortEnvironment  string               `json:"portEnvironment,omitempty"`
+	Environment      []ConfigurationValue `json:"environment"`
+	Health           HealthCheck          `json:"health"`
+}
+
+type LogEntry struct {
+	Timestamp  time.Time `json:"timestamp"`
+	Service    string    `json:"service"`
+	Stream     string    `json:"stream"`
+	Generation int64     `json:"generation"`
+	Message    string    `json:"message"`
 }
 
 type Recording struct {

@@ -26,20 +26,25 @@ func CurrentBuildID() (string, error) {
 			buildIDErr = fmt.Errorf("locate current Portless executable: %w", err)
 			return
 		}
-		file, err := os.Open(executable)
-		if err != nil {
-			buildIDErr = fmt.Errorf("open current Portless executable: %w", err)
-			return
-		}
-		defer file.Close()
-		hash := sha256.New()
-		if _, err := io.Copy(hash, file); err != nil {
-			buildIDErr = fmt.Errorf("fingerprint current Portless executable: %w", err)
-			return
-		}
-		buildID = hex.EncodeToString(hash.Sum(nil))
+		buildID, buildIDErr = BuildIDForPath(executable)
 	})
 	return buildID, buildIDErr
+}
+
+// BuildIDForPath fingerprints the executable currently present at path. It is
+// intentionally uncached so a running daemon can notice an atomic rebuild or
+// upgrade that replaced its executable on disk.
+func BuildIDForPath(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open Portless executable: %w", err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("fingerprint Portless executable: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func InstallationID(paths Paths) (string, error) {

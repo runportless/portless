@@ -51,3 +51,47 @@ func TestControlOriginAllowsCleanPortlessURL(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserSessionSurvivesManagerRestartAndLogoutRevokesIt(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "install.key")
+	manager, err := LoadOrCreate(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := manager.IssueClaim("/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, csrf, _, _, err := manager.ConsumeClaim(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "http://portless.localhost/api/v1/daemon/restart", nil)
+	request.AddCookie(&http.Cookie{Name: SessionCookie, Value: token})
+	request.Header.Set("Origin", "http://portless.localhost")
+	request.Header.Set("X-Portless-CSRF", csrf)
+
+	reloaded, err := LoadOrCreate(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, ok := reloaded.Authenticate(request)
+	if !ok || !principal.Session || principal.CSRF != csrf {
+		t.Fatalf("reloaded manager rejected persisted browser session: %#v %v", principal, ok)
+	}
+	if err := reloaded.ValidateMutation(request, principal); err != nil {
+		t.Fatalf("reloaded manager rejected persisted CSRF token: %v", err)
+	}
+	if err := reloaded.Logout(request); err != nil {
+		t.Fatal(err)
+	}
+
+	afterLogout, err := LoadOrCreate(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := afterLogout.Authenticate(request); ok {
+		t.Fatal("logged-out browser session remained valid after another manager restart")
+	}
+}

@@ -65,6 +65,52 @@ func TestProjectAndEnvironmentStateAreSeparated(t *testing.T) {
 	}
 }
 
+func TestRecoverableRuntimeOwnershipAndProxyPortsPersist(t *testing.T) {
+	ctx := context.Background()
+	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := testDefinition()
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Round(0)
+	observed := started.Add(time.Second)
+	if err := controlStore.SetServiceRuntime(ctx, "billing/local", "checkout", ServiceRuntimeUpdate{
+		Status: model.ServiceReady, Generation: 4, PID: 1234, UpstreamPort: 43210,
+		StartedAt: &started, RestartCount: 2, LogPath: "/private/logs", PrivateRunKey: "run-key",
+		OwnerInstanceID: "daemon-two", SupervisorSocket: "/tmp/runner.sock",
+		SupervisorState: "/private/state.json", SupervisorPID: 1200, ObservedAt: &observed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := controlStore.ServiceRuntime(ctx, "billing/local", "checkout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.OwnerInstanceID != "daemon-two" || runtime.SupervisorSocket != "/tmp/runner.sock" || runtime.SupervisorState != "/private/state.json" || runtime.Generation != 4 {
+		t.Fatalf("runtime ownership was not persisted: %#v", runtime)
+	}
+	if err := controlStore.SaveConnectionRuntime(ctx, "billing/local", ConnectionRuntime{
+		Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, SourceGeneration: 4,
+		ListenPort: 45678, OwnerInstanceID: "daemon-two", State: "ready", ObservedAt: &observed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := controlStore.ConnectionRuntime(ctx, "billing/local", "checkout", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.ListenPort != 45678 || connection.SourceGeneration != 4 || connection.OwnerInstanceID != "daemon-two" {
+		t.Fatalf("connection runtime was not persisted: %#v", connection)
+	}
+}
+
 func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	ctx := context.Background()
 	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))

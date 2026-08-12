@@ -22,6 +22,9 @@ type daemonStatusOutput struct {
 	BuildID            string    `json:"buildId,omitempty"`
 	ExpectedBuildID    string    `json:"expectedBuildId,omitempty"`
 	StartedAt          time.Time `json:"startedAt,omitempty"`
+	RuntimeState       string    `json:"runtimeState,omitempty"`
+	HandoffReady       bool      `json:"handoffReady"`
+	RecoveryProblems   []string  `json:"recoveryProblems"`
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 	Problems           []string  `json:"problems"`
 }
@@ -54,7 +57,9 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 		InstallationID: inspection.Identity.InstallationID, InstanceID: inspection.Identity.InstanceID,
 		BuildID: inspection.Identity.BuildID, ExpectedBuildID: inspection.ExpectedBuildID,
 		StartedAt: inspection.Identity.StartedAt, ActiveEnvironments: inspection.Identity.ActiveEnvironments,
-		Problems: append([]string(nil), inspection.Problems...),
+		RuntimeState: inspection.Identity.State, HandoffReady: inspection.Identity.HandoffReady,
+		RecoveryProblems: append([]string(nil), inspection.Identity.RecoveryProblems...),
+		Problems:         append([]string(nil), inspection.Problems...),
 	}
 	if result.ActiveEnvironments == nil {
 		result.ActiveEnvironments = []string{}
@@ -62,15 +67,32 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 	if result.Problems == nil {
 		result.Problems = []string{}
 	}
+	if result.RecoveryProblems == nil {
+		result.RecoveryProblems = []string{}
+	}
 	if jsonOutput {
 		return writeJSON(c.Out, result)
 	}
-	fmt.Fprintf(c.Out, "%s %s\n", c.heading(c.Out, "Portless daemon:"), c.state(c.Out, state))
+	c.printDaemonStatus(result)
+	return nil
+}
+
+func (c *CLI) printDaemonStatus(result daemonStatusOutput) {
+	fmt.Fprintf(c.Out, "%s %s\n", c.heading(c.Out, "Portless daemon:"), c.state(c.Out, result.State))
 	fmt.Fprintf(c.Out, "PID: %d\n", result.PID)
 	fmt.Fprintf(c.Out, "Started: %s\n", result.StartedAt.Local().Format(time.RFC3339))
 	fmt.Fprintf(c.Out, "Instance: %s\n", shortFingerprint(result.InstanceID))
 	fmt.Fprintf(c.Out, "Build: %s\n", shortFingerprint(result.BuildID))
-	fmt.Fprintf(c.Out, "Protocol: %s  API: %s\n", result.ProtocolVersion, result.APIVersion)
+	fmt.Fprintf(c.Out, "Protocol Version: %s\n", result.ProtocolVersion)
+	fmt.Fprintf(c.Out, "API Version: %s\n", result.APIVersion)
+	if result.RuntimeState != "" {
+		fmt.Fprintf(c.Out, "Runtime state: %s\n", result.RuntimeState)
+	}
+	if result.HandoffReady {
+		fmt.Fprintln(c.Out, "Runtime handoff:", c.success(c.Out, "ready"))
+	} else {
+		fmt.Fprintln(c.Out, "Runtime handoff:", c.warning(c.Out, "not ready"))
+	}
 	if len(result.ActiveEnvironments) == 0 {
 		fmt.Fprintln(c.Out, "Active environments: none")
 	} else {
@@ -82,7 +104,9 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 	for _, problem := range result.Problems {
 		fmt.Fprintln(c.Out, c.failure(c.Out, "Problem:")+" "+problem)
 	}
-	return nil
+	for _, problem := range result.RecoveryProblems {
+		fmt.Fprintln(c.Out, c.failure(c.Out, "Recovery:")+" "+problem)
+	}
 }
 
 func (c *CLI) stopDaemon(ctx context.Context, options bootstrap.StopOptions, jsonOutput bool) error {
@@ -103,6 +127,7 @@ func (c *CLI) stopDaemon(ctx context.Context, options bootstrap.StopOptions, jso
 }
 
 func (c *CLI) restartDaemon(ctx context.Context, options bootstrap.StopOptions, jsonOutput bool) error {
+	options.Handoff = true
 	stopped, err := bootstrap.StopDaemon(ctx, c.paths, options)
 	if err != nil {
 		return err
@@ -126,7 +151,9 @@ func (c *CLI) restartDaemon(ctx context.Context, options bootstrap.StopOptions, 
 			InstallationID: record.InstallationID, InstanceID: record.InstanceID,
 			BuildID: record.BuildID, ExpectedBuildID: inspection.ExpectedBuildID,
 			StartedAt: record.StartedAt, ActiveEnvironments: inspection.Identity.ActiveEnvironments,
-			Problems: problems,
+			RuntimeState: inspection.Identity.State, HandoffReady: inspection.Identity.HandoffReady,
+			RecoveryProblems: append([]string(nil), inspection.Identity.RecoveryProblems...),
+			Problems:         problems,
 		}})
 	}
 	fmt.Fprintf(c.Out, "Portless daemon is %s (PID %d, build %s).\n", c.success(c.Out, "running"), record.PID, shortFingerprint(record.BuildID))
@@ -138,7 +165,7 @@ func printForcedDaemonWarning(c *CLI, result bootstrap.StopResult) {
 	if !result.Forced || len(result.ActiveEnvironments) == 0 {
 		return
 	}
-	fmt.Fprintln(c.Out, c.warning(c.Out, "Warning:")+" these active environments were left unmanaged:")
+	fmt.Fprintln(c.Out, c.warning(c.Out, "Warning:")+" runtime handoff safety was bypassed for these active environments:")
 	for _, environment := range result.ActiveEnvironments {
 		fmt.Fprintln(c.Out, "  "+environment)
 	}

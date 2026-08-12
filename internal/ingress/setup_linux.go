@@ -51,6 +51,13 @@ func installPlatform(ctx context.Context, request SetupRequest) error {
 	return writeInstallationReceipt(request)
 }
 
+func restartPlatform(ctx context.Context) error {
+	if err := runCommand(ctx, "/usr/bin/systemctl", "restart", systemdUnitName); err != nil {
+		return fmt.Errorf("restart ingress system service: %w", err)
+	}
+	return nil
+}
+
 func uninstallPlatform(ctx context.Context) error {
 	running, err := platformServiceRunning(ctx)
 	if err != nil {

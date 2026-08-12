@@ -30,6 +30,7 @@ type edge struct {
 	protocol model.Protocol
 	listener net.Listener
 	server   *http.Server
+	cancel   context.CancelFunc
 }
 
 type target struct {
@@ -59,9 +60,30 @@ func NewManager(controlStore *store.Store, broker *events.Broker) *Manager {
 }
 
 func (m *Manager) SetTarget(scope, service string, port int) {
+	m.SetTargetProvider(scope, service, port, model.ProviderLocal)
+}
+
+func (m *Manager) SetTargetProvider(scope, service string, port int, provider model.ProviderKind) {
 	m.mu.Lock()
-	m.targets[targetKey(scope, service)] = target{provider: model.ProviderLocal, address: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
+	m.targets[targetKey(scope, service)] = target{provider: provider, address: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
 	m.mu.Unlock()
+}
+
+func (m *Manager) ConnectionRuntime(scope, source, targetName string) (proxyAddress string, provider model.ProviderKind, targetEndpoint string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if current := m.edges[edgeKey(scope, source, targetName)]; current != nil && current.listener != nil {
+		proxyAddress = current.listener.Addr().String()
+	}
+	if upstream, ok := m.targets[targetKey(scope, targetName)]; ok {
+		provider = upstream.provider
+		if upstream.baseURL != nil {
+			targetEndpoint = upstream.baseURL.String()
+		} else {
+			targetEndpoint = upstream.address
+		}
+	}
+	return proxyAddress, provider, targetEndpoint
 }
 
 func (m *Manager) SetRemoteTarget(scope, service string, remote model.RemoteTarget) error {
@@ -85,21 +107,45 @@ func (m *Manager) RemoveTarget(scope, service string) {
 }
 
 func (m *Manager) EnsureEdge(ctx context.Context, scope string, connection model.Connection) (int, error) {
+	return m.ensureEdge(ctx, scope, connection, 0)
+}
+
+func (m *Manager) EnsureEdgeAtPort(ctx context.Context, scope string, connection model.Connection, port int) (int, error) {
+	if port < 1 || port > 65535 {
+		return 0, errors.New("persisted proxy port is invalid")
+	}
+	return m.ensureEdge(ctx, scope, connection, port)
+}
+
+func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model.Connection, requestedPort int) (int, error) {
 	key := edgeKey(scope, connection.Source, connection.Target)
 	m.mu.RLock()
 	current := m.edges[key]
 	m.mu.RUnlock()
 	if current != nil {
-		return current.listener.Addr().(*net.TCPAddr).Port, nil
+		currentPort := current.listener.Addr().(*net.TCPAddr).Port
+		if requestedPort != 0 && currentPort != requestedPort {
+			return 0, fmt.Errorf("proxy edge is already bound to port %d, expected %d", currentPort, requestedPort)
+		}
+		return currentPort, nil
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	address := "127.0.0.1:0"
+	if requestedPort != 0 {
+		address = net.JoinHostPort("127.0.0.1", strconv.Itoa(requestedPort))
+	}
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
+		if requestedPort != 0 {
+			return 0, fmt.Errorf("restore proxy edge on %s: %w", address, err)
+		}
 		return 0, err
 	}
-	created := &edge{scope: scope, source: connection.Source, target: connection.Target, protocol: connection.Protocol, listener: listener}
+	edgeContext, cancel := context.WithCancel(context.Background())
+	created := &edge{scope: scope, source: connection.Source, target: connection.Target, protocol: connection.Protocol, listener: listener, cancel: cancel}
 	m.mu.Lock()
 	if existing := m.edges[key]; existing != nil {
 		m.mu.Unlock()
+		cancel()
 		_ = listener.Close()
 		return existing.listener.Addr().(*net.TCPAddr).Port, nil
 	}
@@ -115,9 +161,23 @@ func (m *Manager) EnsureEdge(ctx context.Context, scope string, connection model
 		}
 		go func() { _ = created.server.Serve(listener) }()
 	} else {
-		go m.serveTCP(ctx, created)
+		go m.serveTCP(edgeContext, created)
 	}
 	return listener.Addr().(*net.TCPAddr).Port, nil
+}
+
+func (m *Manager) HasTarget(scope, service string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.targets[targetKey(scope, service)]
+	return ok
+}
+
+func (m *Manager) HasEdge(scope, source, targetName string, port int) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	current := m.edges[edgeKey(scope, source, targetName)]
+	return current != nil && current.listener != nil && (port == 0 || current.listener.Addr().(*net.TCPAddr).Port == port)
 }
 
 func (m *Manager) ServeIngress(w http.ResponseWriter, request *http.Request, scope, service string) {
@@ -140,11 +200,16 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 	}
 	m.mu.Unlock()
 	for _, current := range closing {
+		if current.cancel != nil {
+			current.cancel()
+		}
 		if current.server != nil {
 			_ = current.server.Shutdown(ctx)
-		} else {
-			_ = current.listener.Close()
 		}
+		// Close the listener explicitly as well. Shutdown only closes listeners
+		// that Serve has already registered, so relying on it races with the
+		// goroutine that starts a newly-created edge.
+		_ = current.listener.Close()
 	}
 }
 
@@ -175,25 +240,25 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		if fault.StatusCode != 0 {
 			writer.Header().Set("X-Portless-Fault", fault.Name)
 			http.Error(writer, "Portless fault "+fault.Name, fault.StatusCode)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{})
+			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header())
 			return
 		}
 		if fault.Abort {
 			m.abortHTTP(writer)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{})
+			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil)
 			return
 		}
 	}
 	upstream, ok := m.target(scope, targetName)
 	if !ok {
 		http.Error(writer, "Portless: "+targetName+" is not available", http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{})
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header())
 		return
 	}
 	if upstream.provider == model.ProviderRemote && upstream.writePolicy == model.WriteReadOnly && !safeMethod(request.Method) {
 		writer.Header().Set("X-Portless-Remote-Policy", string(model.WriteReadOnly))
 		http.Error(writer, "Portless: remote target is read-only", http.StatusForbidden)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream)
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header())
 		return
 	}
 	outgoing := request.Clone(request.Context())
@@ -212,7 +277,7 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	response, err := m.transport.RoundTrip(outgoing)
 	if err != nil {
 		http.Error(writer, "Portless upstream error: "+err.Error(), http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream)
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header())
 		return
 	}
 	defer response.Body.Close()
@@ -224,10 +289,10 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	if copyErr != nil {
 		errorText = copyErr.Error()
 	}
-	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream)
+	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header)
 }
 
-func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target) {
+func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header) {
 	completed := time.Now().UTC()
 	project, environment := scopeNames(scope)
 	event := model.TrafficEvent{
@@ -236,11 +301,11 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
 		Path: request.URL.EscapedPath(), Status: status, DurationMS: completed.Sub(started).Milliseconds(),
 		RequestBytes: request.ContentLength, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
-		Headers: redactHeaders(request.Header),
+		RequestHeaders: redactHeaders(request.Header), ResponseHeaders: redactHeaders(responseHeaders),
 	}
+	event.Recording = m.matchRecording(ctx, scope, source, targetName)
 	event = m.broker.AddTraffic(event)
-	if recording := m.matchRecording(ctx, scope, source, targetName); recording != "" {
-		event.Recording = recording
+	if event.Recording != "" {
 		_ = m.store.PersistTraffic(context.Background(), event)
 	}
 }
@@ -303,9 +368,13 @@ func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, resp
 	event := model.TrafficEvent{Project: project, Environment: environment, Protocol: current.protocol, Source: current.source, Target: current.target,
 		StartedAt: started, CompletedAt: completed, DurationMS: completed.Sub(started).Milliseconds(),
 		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText}
+	if upstream, ok := m.target(current.scope, current.target); ok {
+		event.TargetProvider = upstream.provider
+		event.RemoteClassification = upstream.classification
+	}
+	event.Recording = m.matchRecording(context.Background(), current.scope, current.source, current.target)
 	event = m.broker.AddTraffic(event)
-	if recording := m.matchRecording(context.Background(), current.scope, current.source, current.target); recording != "" {
-		event.Recording = recording
+	if event.Recording != "" {
 		_ = m.store.PersistTraffic(context.Background(), event)
 	}
 }

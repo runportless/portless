@@ -2,14 +2,31 @@ package application
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/runtime/supervisor"
 	"github.com/portless-run/portless/internal/store"
 )
+
+func TestMain(testingMain *testing.M) {
+	if len(os.Args) == 4 && os.Args[1] == "__runner" && os.Args[2] == "--manifest" {
+		if err := supervisor.Run(context.Background(), os.Args[3]); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(testingMain.Run())
+}
 
 func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	ctx := context.Background()
@@ -145,6 +162,495 @@ func TestEnvironmentContextExplainsSelectionAndInference(t *testing.T) {
 	resolved, err = app.EnvironmentContext(ctx, source)
 	if err != nil || resolved.Resolution != "ambiguous" || len(resolved.Candidates) != 2 {
 		t.Fatalf("context after clear = %#v, err = %v", resolved, err)
+	}
+}
+
+func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "billing",
+		Services: []model.ServiceDefinition{{
+			Name: "checkout", Kind: model.ServiceProcess, Required: true,
+			Command:         []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"},
+			Environment:     map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+			PortEnvironment: "PORT",
+			Health:          model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+		}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "local"), "checkout", time.Second)
+
+	started, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrent, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started = waitForOperation(t, app, started)
+	concurrent = waitForOperation(t, app, concurrent)
+	if started.State != "succeeded" {
+		t.Fatalf("start operation = %#v", started)
+	}
+	if concurrent.State != "succeeded" {
+		t.Fatalf("concurrent idempotent start = %#v", concurrent)
+	}
+	service := serviceSnapshot(t, app, "checkout")
+	if service.Status != model.ServiceReady || service.Generation != 1 || service.RestartCount != 0 {
+		t.Fatalf("started service = %#v", service)
+	}
+
+	again, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again = waitForOperation(t, app, again)
+	if again.State != "succeeded" || serviceSnapshot(t, app, "checkout").Generation != 1 {
+		t.Fatalf("idempotent start changed the running generation: %#v", again)
+	}
+
+	restarted, err := app.RestartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted = waitForOperation(t, app, restarted)
+	service = serviceSnapshot(t, app, "checkout")
+	if restarted.State != "succeeded" || service.Status != model.ServiceReady || service.Generation != 2 || service.RestartCount != 1 {
+		t.Fatalf("restarted service = %#v, operation = %#v", service, restarted)
+	}
+
+	stopped, err := app.StopService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped = waitForOperation(t, app, stopped)
+	service = serviceSnapshot(t, app, "checkout")
+	if stopped.State != "succeeded" || service.Status != model.ServiceStopped || service.Generation != 2 || service.RestartCount != 1 {
+		t.Fatalf("stopped service = %#v, operation = %#v", service, stopped)
+	}
+
+	stoppedAgain, err := app.StopService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed := waitForOperation(t, app, stoppedAgain); completed.State != "succeeded" {
+		t.Fatalf("idempotent stop = %#v", completed)
+	}
+}
+
+func TestEffectiveConnectionsAndConfigurationExplainRemoteTargetsAndMaskCredentials(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "billing",
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess, Environment: map[string]string{"DATABASE_URL": "postgresql://user:secret@localhost/billing", "JDBC_URL": "jdbc:postgresql://user:secret@localhost/billing", "LOG_LEVEL": "debug"}},
+			{Name: "payments", Kind: model.ServiceProcess},
+		},
+		Connections: []model.Connection{{Source: "checkout", Target: "payments", Protocol: model.ProtocolHTTP, Environment: "PAYMENTS_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	remoteURL := "https://payments.qa.example.test"
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "hybrid", definition, nil, []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"},
+		{Service: "payments", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: remoteURL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	connections, err := app.Connections(ctx, "billing", "hybrid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connections) != 1 || connections[0].TargetProvider != model.ProviderRemote || connections[0].TargetEndpoint != remoteURL || connections[0].InjectedEnvVar != "PAYMENTS_URL" {
+		t.Fatalf("effective connections = %#v", connections)
+	}
+	configuration, err := app.ServiceConfiguration(ctx, "billing", "hybrid", "checkout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]model.ConfigurationValue)
+	for _, value := range configuration.Environment {
+		values[value.Key] = value
+	}
+	if values["DATABASE_URL"].Classification != "masked" || values["DATABASE_URL"].Value != "••••••••" {
+		t.Fatalf("credential URL was exposed: %#v", values["DATABASE_URL"])
+	}
+	if values["JDBC_URL"].Classification != "masked" || values["JDBC_URL"].Value != "••••••••" {
+		t.Fatalf("JDBC credential URL was exposed: %#v", values["JDBC_URL"])
+	}
+	if values["LOG_LEVEL"].Value != "debug" || values["LOG_LEVEL"].Classification != "public" {
+		t.Fatalf("public configuration was not preserved: %#v", values["LOG_LEVEL"])
+	}
+	if values["PAYMENTS_URL"].Classification != "generated" {
+		t.Fatalf("generated connection value was not explained: %#v", values["PAYMENTS_URL"])
+	}
+}
+
+func TestApplicationRestoresTrafficSequenceFromRetainedRecordings(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "retained"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.PersistTraffic(ctx, model.TrafficEvent{Project: "billing", Environment: "local", Recording: "retained", Sequence: 41}); err != nil {
+		t.Fatal(err)
+	}
+	broker := events.NewBroker()
+	app := New(controlStore, broker, Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	event := broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP})
+	if event.Sequence != 42 {
+		t.Fatalf("restored sequence = %d, want 42", event.Sequence)
+	}
+}
+
+func TestIndividualServiceStartHonorsCrossEnvironmentSourceLeases(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	source := t.TempDir()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{
+		Name: "checkout", Kind: model.ServiceProcess, Required: true,
+		Command:         []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"},
+		Environment:     map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+		PortEnvironment: "PORT",
+		Health:          model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+	}}}
+	projectSources := []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, projectSources); err != nil {
+		t.Fatal(err)
+	}
+	sources := []model.SourceBinding{{Name: "checkout", Path: source, Status: "ready", Definition: definition}}
+	bindings := []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, sources, bindings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "experiment", definition, sources, bindings); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "local"), "checkout", time.Second)
+	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "experiment"), "checkout", time.Second)
+
+	local, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local = waitForOperation(t, app, local); local.State != "succeeded" {
+		t.Fatalf("local start = %#v", local)
+	}
+	experiment, err := app.StartService(ctx, "billing", "experiment", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if experiment = waitForOperation(t, app, experiment); experiment.State != "failed" || !strings.Contains(experiment.Error, "already running") {
+		t.Fatalf("shared-checkout start = %#v", experiment)
+	}
+	stopped, err := app.StopService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped = waitForOperation(t, app, stopped); stopped.State != "succeeded" {
+		t.Fatalf("local stop = %#v", stopped)
+	}
+	experiment, err = app.StartService(ctx, "billing", "experiment", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if experiment = waitForOperation(t, app, experiment); experiment.State != "succeeded" {
+		t.Fatalf("experiment start after lease release = %#v", experiment)
+	}
+	stopped, err = app.StopService(ctx, "billing", "experiment", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped = waitForOperation(t, app, stopped); stopped.State != "succeeded" {
+		t.Fatalf("experiment stop = %#v", stopped)
+	}
+}
+
+func TestIndividualServiceStartPreparesRequiredRemoteDependency(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) }))
+	defer remote.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "billing",
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess, Required: true, Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"}, PortEnvironment: "PORT", Health: model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond}},
+			{Name: "payments", Kind: model.ServiceProcess, Required: true},
+		},
+		Connections: []model.Connection{{Source: "checkout", Target: "payments", Protocol: model.ProtocolHTTP, Environment: "PAYMENTS_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	bindings := []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "payments", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health"}},
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "hybrid", definition, nil, bindings); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "hybrid"), "checkout", time.Second)
+
+	operation, err := app.StartService(ctx, "billing", "hybrid", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("start with remote dependency = %#v", operation)
+	}
+	environment, err := app.Environment(ctx, "billing", "hybrid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeFor(environment, "checkout").Status != model.ServiceReady || runtimeFor(environment, "payments").Status != model.ServiceReady {
+		t.Fatalf("remote dependency was not prepared: %#v", environment.Services)
+	}
+	stopped, err := app.StopService(ctx, "billing", "hybrid", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped = waitForOperation(t, app, stopped); stopped.State != "succeeded" {
+		t.Fatalf("stop = %#v", stopped)
+	}
+}
+
+func TestDaemonRestartRecoversSupervisedProcessIngressAndDependencyProxy(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer remote.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "billing",
+		Services: []model.ServiceDefinition{
+			{
+				Name: "checkout", Kind: model.ServiceProcess, Required: true,
+				Command:     []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"},
+				Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"}, PortEnvironment: "PORT",
+				Health: model.HealthCheck{Kind: "http", Path: "/health", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+			},
+			{Name: "payments", Kind: model.ServiceProcess, Required: true},
+		},
+		Connections: []model.Connection{{Source: "checkout", Target: "payments", Protocol: model.ProtocolHTTP, Environment: "PAYMENTS_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	bindings := []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "payments", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health"}},
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, bindings); err != nil {
+		t.Fatal(err)
+	}
+
+	first := New(controlStore, events.NewBroker(), Config{
+		DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-one", Executable: os.Args[0],
+	})
+	operation, err := first.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		first.Close(ctx)
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, first, operation); operation.State != "succeeded" {
+		first.Close(ctx)
+		t.Fatalf("start operation = %#v", operation)
+	}
+	before := serviceSnapshot(t, first, "checkout")
+	connectionBefore, err := controlStore.ConnectionRuntime(ctx, "billing/local", "checkout", "payments")
+	if err != nil {
+		first.Close(ctx)
+		t.Fatal(err)
+	}
+	assertIngressStatus(t, first, http.StatusOK)
+	first.Close(ctx)
+
+	second := New(controlStore, events.NewBroker(), Config{
+		DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-two", Executable: os.Args[0],
+	})
+	defer second.Close(ctx)
+	report, err := second.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unverifiable) != 0 || len(report.Recovered) != 1 || report.Recovered[0] != "billing/local" {
+		t.Fatalf("reconciliation report = %#v", report)
+	}
+	after := serviceSnapshot(t, second, "checkout")
+	if after.Status != model.ServiceReady || after.PID != before.PID || after.Generation != before.Generation {
+		t.Fatalf("service was restarted instead of adopted: before=%#v after=%#v", before, after)
+	}
+	connectionAfter, err := controlStore.ConnectionRuntime(ctx, "billing/local", "checkout", "payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connectionAfter.ListenPort != connectionBefore.ListenPort || connectionAfter.OwnerInstanceID != "daemon-two" {
+		t.Fatalf("dependency proxy was not restored at the saved port: before=%#v after=%#v", connectionBefore, connectionAfter)
+	}
+	assertIngressStatus(t, second, http.StatusOK)
+	if ready, problems := second.CanHandoff(ctx); !ready || len(problems) != 0 {
+		t.Fatalf("recovered runtime is not handoff-ready: ready=%v problems=%v", ready, problems)
+	}
+	if err := syscall.Kill(after.PID, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for serviceSnapshot(t, second, "checkout").Status != model.ServiceFailed && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if terminal := serviceSnapshot(t, second, "checkout"); terminal.Status != model.ServiceFailed {
+		t.Fatalf("unexpected service state after process exit: %#v", terminal)
+	}
+	if ready, problems := second.CanHandoff(ctx); !ready || len(problems) != 0 {
+		t.Fatalf("known terminal runtime is not handoff-ready: ready=%v problems=%v", ready, problems)
+	}
+	second.Close(ctx)
+
+	third := New(controlStore, events.NewBroker(), Config{
+		DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-three", Executable: os.Args[0],
+	})
+	defer third.Close(ctx)
+	report, err = third.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal := serviceSnapshot(t, third, "checkout"); terminal.Status != model.ServiceFailed {
+		t.Fatalf("terminal service became unverifiable after handoff: %#v report=%#v", terminal, report)
+	}
+	if ready, problems := third.CanHandoff(ctx); !ready || len(problems) != 0 {
+		t.Fatalf("reconciled terminal runtime is not handoff-ready: ready=%v problems=%v", ready, problems)
+	}
+	restarted, err := third.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted = waitForOperation(t, third, restarted); restarted.State != "succeeded" {
+		t.Fatalf("restart after recovered exit = %#v", restarted)
+	}
+	stopped, err := third.StopService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped = waitForOperation(t, third, stopped); stopped.State != "succeeded" {
+		t.Fatalf("stop after recovered exit = %#v", stopped)
+	}
+}
+
+func assertIngressStatus(t *testing.T, app *Service, expected int) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/health", nil)
+	app.Proxy().ServeIngress(response, request, "billing/local", "checkout")
+	if response.Code != expected {
+		t.Fatalf("ingress status = %d, want %d; body=%s", response.Code, expected, response.Body.String())
+	}
+}
+
+func waitForOperation(t *testing.T, app *Service, operation model.Operation) model.Operation {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	var last model.Operation
+	for time.Now().Before(deadline) {
+		current, err := app.Operation(context.Background(), operation.Project, operation.Environment, operation.Number)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.State != "running" {
+			return current
+		}
+		last = current
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("operation %d did not complete: %#v", operation.Number, last)
+	return model.Operation{}
+}
+
+func serviceSnapshot(t *testing.T, app *Service, name string) model.Service {
+	t.Helper()
+	environment, err := app.Environment(context.Background(), "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range environment.Services {
+		if service.Name == name {
+			return service
+		}
+	}
+	t.Fatalf("service %s was not found", name)
+	return model.Service{}
+}
+
+func TestApplicationProcessHelper(t *testing.T) {
+	if os.Getenv("PORTLESS_APPLICATION_TEST_HELPER") != "1" {
+		return
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:"+os.Getenv("PORT"))
+	if err != nil {
+		os.Exit(2)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"service":"checkout"}`))
+	})}
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		os.Exit(3)
 	}
 }
 

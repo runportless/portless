@@ -37,6 +37,14 @@ type UninstallRequest struct {
 	Stderr     io.Writer
 }
 
+type RestartRequest struct {
+	Executable string
+	UID        int
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+}
+
 type InstallationStatus struct {
 	Platform             string     `json:"platform"`
 	Service              string     `json:"service"`
@@ -201,6 +209,61 @@ func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket strin
 	return installPlatform(ctx, request)
 }
 
+func Restart(ctx context.Context, request RestartRequest) error {
+	if request.UID <= 0 {
+		return errors.New("Portless relay restart requires a non-root requesting user ID")
+	}
+	if err := validateExecutable(request.Executable); err != nil {
+		return err
+	}
+	status, err := Inspect(ctx)
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return errors.New("the Portless clean-URL relay is not installed")
+	}
+	if err := validateOwnership(status, request.UID); err != nil {
+		return err
+	}
+	if os.Geteuid() == 0 {
+		return RestartPrivileged(ctx, request.UID)
+	}
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		return errors.New("Portless relay restart requires sudo, but sudo was not found")
+	}
+	command := exec.CommandContext(ctx, sudo,
+		request.Executable,
+		"__restart-ingress",
+		"--uid", strconv.Itoa(request.UID),
+	)
+	command.Stdin = request.Stdin
+	command.Stdout = request.Stdout
+	command.Stderr = request.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("restart clean localhost ingress: %w", err)
+	}
+	return nil
+}
+
+func RestartPrivileged(ctx context.Context, requestingUID int) error {
+	if os.Geteuid() != 0 {
+		return errors.New("the internal ingress restarter must run as root")
+	}
+	status, err := Inspect(ctx)
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return errors.New("the Portless clean-URL relay is not installed")
+	}
+	if err := validateOwnership(status, requestingUID); err != nil {
+		return err
+	}
+	return restartPlatform(ctx)
+}
+
 func Inspect(ctx context.Context) (InstallationStatus, error) {
 	details := currentPlatformInstallation()
 	status := InstallationStatus{
@@ -279,7 +342,7 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 	}
 	sudo, err := exec.LookPath("sudo")
 	if err != nil {
-		return false, errors.New("Portless setup uninstall requires sudo, but sudo was not found")
+		return false, errors.New("Portless relay uninstall requires sudo, but sudo was not found")
 	}
 	arguments := []string{request.Executable, "__uninstall-ingress", "--uid", strconv.Itoa(request.UID)}
 	if request.Force {
@@ -317,20 +380,34 @@ func UninstallPrivileged(ctx context.Context, requestingUID int, force bool) err
 		return err
 	}
 	if remaining.Installed {
-		return errors.New("clean localhost ingress removal was incomplete; run `portless setup status` for details")
+		return errors.New("clean localhost ingress removal was incomplete; run `portless relay status` for details")
 	}
 	return nil
+}
+
+func validateOwnership(status InstallationStatus, requestingUID int) error {
+	if requestingUID <= 0 {
+		return errors.New("the relay operation requires a non-root requesting user ID")
+	}
+	if status.OwnerUID <= 0 {
+		return errors.New("the clean-URL relay owner could not be determined; inspect `portless relay status`")
+	}
+	if status.OwnerUID != requestingUID {
+		return fmt.Errorf("the clean-URL relay belongs to user ID %d", status.OwnerUID)
+	}
+	return nil
+}
+
+func ValidateOwnership(status InstallationStatus, requestingUID int) error {
+	return validateOwnership(status, requestingUID)
 }
 
 func validateUninstallOwnership(status InstallationStatus, requestingUID int, force bool) error {
 	if force {
 		return nil
 	}
-	if status.OwnerUID <= 0 {
-		return errors.New("the clean-URL relay owner could not be determined; inspect `portless setup status` and repeat with --force")
-	}
-	if status.OwnerUID != requestingUID {
-		return fmt.Errorf("the clean-URL relay belongs to user ID %d; repeat with --force to remove another user's installation", status.OwnerUID)
+	if err := validateOwnership(status, requestingUID); err != nil {
+		return fmt.Errorf("%w; repeat with --force to remove the installation", err)
 	}
 	return nil
 }

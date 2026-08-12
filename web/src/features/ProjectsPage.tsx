@@ -44,7 +44,7 @@ export function ProjectsPage({ projects, environments, selectedProject, runtime,
   return <div className="page projects-page">
     <div className="page-heading">
       <div><div className="eyebrow">{selectedProject ? 'PROJECT' : 'LOCAL CONTROL PLANE'}</div><h1>{selectedProject?.name || 'Projects & environments'}</h1><span>{selectedProject ? `${selectedProject.sources?.length || 0} sources · ${shown.length} environments` : `${projects.length} projects · ${environments.length} environments`}</span></div>
-      <div className="page-heading__summary"><span>{counts.failed ?? 0} failed</span><b>·</b><span>{counts.degraded ?? 0} degraded</span><b>·</b><span>{counts.starting ?? 0} starting</span><b>·</b><span>{counts.healthy ?? 0} healthy</span></div>
+      <div className="page-heading__summary"><span>{counts.failed ?? 0} failed</span><b>·</b><span>{counts.degraded ?? 0} degraded</span><b>·</b><span>{counts.recovering ?? 0} recovering</span><b>·</b><span>{counts.starting ?? 0} starting</span><b>·</b><span>{counts.healthy ?? 0} healthy</span></div>
     </div>
     {selectedProject && <section className="panel source-panel">
       <div className="panel-title"><span>PROJECT SOURCES</span><small>one logical application, many repositories</small></div>

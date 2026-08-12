@@ -28,3 +28,18 @@ func TestTrafficUsesProjectLocalSequencesAndTypedTopics(t *testing.T) {
 		t.Fatal("traffic event was not published")
 	}
 }
+
+func TestTrafficSequenceCanResumeAboveDurableHistory(t *testing.T) {
+	broker := NewBroker()
+	scope := model.EnvironmentSelector("billing", "local")
+	broker.EnsureTrafficSequence(scope, 41)
+	event := broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP})
+	if event.Sequence != 42 {
+		t.Fatalf("sequence = %d, want 42", event.Sequence)
+	}
+	broker.EnsureTrafficSequence(scope, 10)
+	event = broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP})
+	if event.Sequence != 43 {
+		t.Fatalf("lower restoration moved sequence backwards: %d", event.Sequence)
+	}
+}
