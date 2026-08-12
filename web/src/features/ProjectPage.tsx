@@ -130,18 +130,28 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
   const [configuration, setConfiguration] = useState<{ environment?: Array<{ key: string; value: string; classification: string; source: string }> } | null>(null)
   const [drawerTab, setDrawerTab] = useState<'details' | 'logs' | 'configuration'>('details')
   const [busy, setBusy] = useState('')
+  const [fullScreen, setFullScreen] = useState(false)
   const base = environmentPath(environment, `/services/${encodeURIComponent(service.name)}`)
   useEffect(() => {
     api<{ entries: LogEntry[] }>(`${environmentPath(environment, '/logs')}?service=${encodeURIComponent(service.name)}&limit=500`).then((value) => setLogs(value.entries)).catch(() => setLogs([]))
     api<typeof configuration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
   }, [base, environment.name, service.name])
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (fullScreen) setFullScreen(false)
+      else onClose()
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [fullScreen, onClose])
   const action = async (name: 'restart' | 'stop' | 'start') => {
     setBusy(name)
     try { await api<Operation>(`${base}/${name}`, { method: 'POST' }); onChanged() } finally { setBusy('') }
   }
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-    <aside className="drawer" role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></header>
+    <aside className={`drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
       <div className="drawer-actions"><button className="button button--primary" onClick={() => action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy || (service.status === 'ready' ? 'RESTART' : 'START')}</button><button className="button" onClick={() => action('stop')} disabled={!!busy || service.status === 'stopped'}>STOP</button>{service.ingressUrl && <a className="button" href={service.ingressUrl} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
       <nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>
       <div className="drawer-content">

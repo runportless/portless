@@ -32,6 +32,8 @@ describe('application navigation', () => {
     const markup = renderChrome()
 
     expect(markup).toContain('aria-label="Portless projects"')
+    expect(markup).not.toContain('<small>local</small>')
+    expect(markup).not.toContain('environment-chip')
     expect(markup).toContain('aria-label="Projects"')
     expect(markup).not.toContain('All projects')
     expect(markup).not.toContain('Workspace')

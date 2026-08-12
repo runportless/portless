@@ -81,7 +81,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
 
   return <div className="shell">
     <aside className="sidebar">
-      <button className="brand" onClick={() => onNavigate('/projects')} aria-label="Portless projects"><span className="brand__signal"><i /><i /><i /></span><span>portless</span><small>local</small></button>
+      <button className="brand" onClick={() => onNavigate('/projects')} aria-label="Portless projects"><span className="brand__signal"><i /><i /><i /></span><span>portless</span></button>
       <div className="sidebar__body">
         <div className="sidebar__section-label">Projects</div>
         <nav className="project-nav" aria-label="Projects">
@@ -119,7 +119,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
       <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
-      <header className="topbar"><div className="crumbs"><span className="environment-chip">LOCAL</span>{activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
+      <header className="topbar"><div className="crumbs">{activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}

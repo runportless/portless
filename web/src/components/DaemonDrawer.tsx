@@ -17,6 +17,7 @@ export function DaemonDrawer({ status, runtime, live, onClose, onRefresh, onRest
   const [phase, setPhase] = useState<RestartPhase>('idle')
   const [error, setError] = useState('')
   const [copyState, setCopyState] = useState('COPY DIAGNOSTICS')
+  const [fullScreen, setFullScreen] = useState(false)
   const mounted = useRef(true)
   const active = status?.activeEnvironments ?? []
   const restartSafe = active.length === 0 || status?.handoffReady === true
@@ -26,11 +27,13 @@ export function DaemonDrawer({ status, runtime, live, onClose, onRefresh, onRest
   useEffect(() => () => { mounted.current = false }, [])
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape') return
+      if (fullScreen) setFullScreen(false)
+      else onClose()
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [onClose])
+  }, [fullScreen, onClose])
 
   const restartDaemon = async () => {
     if (!status || !restartSafe || restarting) return
@@ -74,8 +77,8 @@ export function DaemonDrawer({ status, runtime, live, onClose, onRefresh, onRest
   }
 
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-    <aside className="drawer daemon-drawer" role="dialog" aria-modal="true" aria-label="Portless daemon" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="daemon-drawer-heading"><span className="eyebrow">LOCAL CONTROL PLANE</span><div><h2>Portless daemon</h2><StatusMark status={effectiveState} /></div></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></header>
+    <aside className={`drawer daemon-drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Portless Daemon" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
       <div className="drawer-actions">
         <button className="button button--warning" onClick={() => setPhase('confirm')} disabled={!status || !live || !restartSafe || restarting}>RESTART DAEMON</button>
         <button className="button" onClick={() => void copyDiagnostics()} disabled={!status}>{copyState}</button>
