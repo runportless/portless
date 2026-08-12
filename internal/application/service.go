@@ -36,6 +36,12 @@ type RuntimeInUseError struct {
 	Project string `json:"project"`
 }
 
+type EnvironmentContext struct {
+	Resolution  string              `json:"resolution"`
+	Environment *model.Environment  `json:"environment,omitempty"`
+	Candidates  []model.Environment `json:"candidates"`
+}
+
 func (e RuntimeInUseError) Error() string {
 	return "stop project " + e.Project + " before changing the container runtime"
 }
@@ -385,18 +391,48 @@ func (s *Service) SelectEnvironment(ctx context.Context, path, projectName, envi
 	return s.store.SetContextSelection(ctx, path, projectName, environmentName)
 }
 
-func (s *Service) EnvironmentsForPath(ctx context.Context, path string) ([]model.Environment, error) {
-	if selected, err := s.store.ContextSelection(ctx, path); err == nil {
-		return []model.Environment{s.decorateEnvironment(selected)}, nil
+func (s *Service) ClearEnvironmentSelection(ctx context.Context, path string) (bool, error) {
+	return s.store.ClearContextSelection(ctx, path)
+}
+
+func (s *Service) EnvironmentContext(ctx context.Context, path string) (EnvironmentContext, error) {
+	selected, err := s.store.ContextSelection(ctx, path)
+	if err == nil {
+		selected = s.decorateEnvironment(selected)
+		return EnvironmentContext{Resolution: "selected", Environment: &selected, Candidates: []model.Environment{}}, nil
 	}
-	environments, err := s.store.EnvironmentsByPath(ctx, path)
+	if !errors.Is(err, store.ErrNotFound) {
+		return EnvironmentContext{}, err
+	}
+	candidates, err := s.store.EnvironmentsByPath(ctx, path)
+	if err != nil {
+		return EnvironmentContext{}, err
+	}
+	for index := range candidates {
+		candidates[index] = s.decorateEnvironment(candidates[index])
+	}
+	result := EnvironmentContext{Resolution: "none", Candidates: candidates}
+	switch len(candidates) {
+	case 1:
+		result.Resolution = "inferred"
+		result.Environment = &candidates[0]
+	case 0:
+		result.Candidates = []model.Environment{}
+	default:
+		result.Resolution = "ambiguous"
+	}
+	return result, nil
+}
+
+func (s *Service) EnvironmentsForPath(ctx context.Context, path string) ([]model.Environment, error) {
+	resolved, err := s.EnvironmentContext(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	for index := range environments {
-		environments[index] = s.decorateEnvironment(environments[index])
+	if resolved.Environment != nil {
+		return []model.Environment{*resolved.Environment}, nil
 	}
-	return environments, nil
+	return resolved.Candidates, nil
 }
 
 func (s *Service) ProjectModel(ctx context.Context, name string) (model.ProjectModel, error) {

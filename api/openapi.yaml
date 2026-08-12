@@ -227,6 +227,21 @@ paths:
           schema: { type: string, description: Absolute checkout path. }
       responses:
         '200': { description: Selected environment, or all environments containing the checkout }
+  /environments/context:
+    get:
+      operationId: getEnvironmentContextForPath
+      description: Resolves the effective environment for a checkout and explains whether it was saved, inferred, ambiguous, or absent.
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string, description: Absolute checkout path. }
+      responses:
+        '200':
+          description: Effective environment context for the checkout
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentContext' }
   /environments/select:
     put:
       operationId: selectEnvironmentForPath
@@ -243,6 +258,23 @@ paths:
                 environment: { $ref: '#/components/schemas/EnvironmentName' }
       responses:
         '204': { description: Checkout context selection persisted }
+    delete:
+      operationId: clearEnvironmentSelectionForPath
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string, description: Absolute checkout path. }
+      responses:
+        '200':
+          description: Whether a saved checkout selection was removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared: { type: boolean }
   /environments/{projectName}/{environmentName}:
     parameters: &environmentParameters
       - { $ref: '#/components/parameters/ProjectName' }
@@ -751,6 +783,17 @@ components:
         services: { type: array, items: { $ref: '#/components/schemas/Service' } }
         connections: { type: array, items: { $ref: '#/components/schemas/Connection' } }
         issues: { type: array, items: { $ref: '#/components/schemas/ConfigurationIssue' } }
+    EnvironmentContext:
+      type: object
+      required: [resolution, candidates]
+      properties:
+        resolution:
+          type: string
+          enum: [selected, inferred, ambiguous, none]
+        environment: { $ref: '#/components/schemas/Environment' }
+        candidates:
+          type: array
+          items: { $ref: '#/components/schemas/Environment' }
     Operation:
       type: object
       required: [project, environment, number, type, state, actor, startedAt]

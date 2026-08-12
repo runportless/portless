@@ -22,20 +22,85 @@ import (
 	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/project/discovery"
+	"github.com/portless-run/portless/internal/runtime/container"
 )
 
 var Version = "dev"
 
 type CLI struct {
-	Out   io.Writer
-	Err   io.Writer
-	paths bootstrap.Paths
+	Out                 io.Writer
+	Err                 io.Writer
+	paths               bootstrap.Paths
+	jsonOutput          bool
+	noColor             bool
+	completionOutput    bool
+	colorPreference     colorPreference
+	colorSource         string
+	environmentOverride string
 }
 
 type discoverResponse struct {
 	Project     model.Project     `json:"project"`
 	Environment model.Environment `json:"environment"`
 	Warnings    []string          `json:"warnings"`
+}
+
+type upOutput struct {
+	Environment model.Environment `json:"environment"`
+	Operation   model.Operation   `json:"operation"`
+	Warnings    []string          `json:"warnings"`
+}
+
+type browserOutput struct {
+	URL     string `json:"url"`
+	Service string `json:"service,omitempty"`
+	Opened  bool   `json:"opened"`
+	Error   string `json:"error,omitempty"`
+}
+
+type setupStatusOutput struct {
+	State string `json:"state"`
+	ingress.InstallationStatus
+}
+
+type actionOutput struct {
+	Action      string `json:"action"`
+	Project     string `json:"project,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Status      string `json:"status,omitempty"`
+}
+
+type serviceLogs struct {
+	Service string   `json:"service"`
+	Lines   []string `json:"lines"`
+}
+
+type logsOutput struct {
+	Project     string        `json:"project"`
+	Environment string        `json:"environment"`
+	Logs        []serviceLogs `json:"logs"`
+}
+
+type environmentContextOutput struct {
+	Path        string            `json:"path"`
+	Selector    string            `json:"selector"`
+	Resolution  string            `json:"resolution"`
+	Environment model.Environment `json:"environment"`
+}
+
+type errorOutput struct {
+	Error errorDetail `json:"error"`
+}
+
+type errorDetail struct {
+	Code        string           `json:"code"`
+	Message     string           `json:"message"`
+	Status      int              `json:"status,omitempty"`
+	Subject     map[string]any   `json:"subject,omitempty"`
+	Details     map[string]any   `json:"details,omitempty"`
+	Remediation []map[string]any `json:"remediation,omitempty"`
 }
 
 func New(out, errOut io.Writer, dataDirectory string) (*CLI, error) {
@@ -46,7 +111,7 @@ func New(out, errOut io.Writer, dataDirectory string) (*CLI, error) {
 	return &CLI{Out: out, Err: errOut, paths: paths}, nil
 }
 
-func (c *CLI) setup(ctx context.Context) error {
+func (c *CLI) setup(ctx context.Context, jsonOutput bool) error {
 	if _, err := bootstrap.EnsureDaemon(ctx, c.paths); err != nil {
 		return err
 	}
@@ -62,30 +127,46 @@ func (c *CLI) setup(ctx context.Context) error {
 		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless setup uninstall --force` before installing it for this user", status.OwnerUID)
 	}
 	if status.Healthy && status.TargetSocket == c.paths.Ingress && status.ReceiptPresent {
+		if jsonOutput {
+			return writeSetupStatusJSON(c.Out, status)
+		}
 		fmt.Fprintln(c.Out, "Clean localhost URLs are already configured.")
-		fmt.Fprintln(c.Out, ingress.ControlOrigin)
+		fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
 		return nil
 	}
 	executable, err := resolvedExecutable()
 	if err != nil {
 		return err
 	}
-	if status.Installed {
-		fmt.Fprintln(c.Out, "Repairing the Portless localhost port-80 relay requires administrator approval.")
-	} else {
-		fmt.Fprintln(c.Out, "Portless needs administrator approval once to install its localhost port-80 relay.")
+	if !jsonOutput {
+		if status.Installed {
+			fmt.Fprintln(c.Out, "Repairing the Portless localhost port-80 relay requires administrator approval.")
+		} else {
+			fmt.Fprintln(c.Out, "Portless needs administrator approval once to install its localhost port-80 relay.")
+		}
+	}
+	installOutput := c.Out
+	if jsonOutput {
+		installOutput = c.Err
 	}
 	if err := ingress.Install(ctx, ingress.SetupRequest{
 		Executable: executable, TargetSocket: c.paths.Ingress,
-		UID: uid, GID: gid, Stdin: os.Stdin, Stdout: c.Out, Stderr: c.Err,
+		UID: uid, GID: gid, Stdin: os.Stdin, Stdout: installOutput, Stderr: c.Err,
 	}); err != nil {
 		return err
 	}
 	if err := ingress.WaitUntilReady(ctx, 8*time.Second); err != nil {
 		return err
 	}
-	fmt.Fprintln(c.Out, "Clean localhost URLs are ready.")
-	fmt.Fprintln(c.Out, ingress.ControlOrigin)
+	if jsonOutput {
+		ready, err := ingress.Inspect(ctx)
+		if err != nil {
+			return err
+		}
+		return writeSetupStatusJSON(c.Out, ready)
+	}
+	fmt.Fprintln(c.Out, "Clean localhost URLs are", c.success(c.Out, "ready")+".")
+	fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
 	return nil
 }
 
@@ -95,9 +176,9 @@ func (c *CLI) setupStatus(ctx context.Context, jsonOutput bool) error {
 		return err
 	}
 	if jsonOutput {
-		return writeJSON(c.Out, status)
+		return writeSetupStatusJSON(c.Out, status)
 	}
-	fmt.Fprintln(c.Out, "Clean URL relay:", status.State())
+	fmt.Fprintln(c.Out, c.heading(c.Out, "Clean URL relay:"), c.state(c.Out, status.State()))
 	fmt.Fprintln(c.Out, "Platform:", status.Platform)
 	if !status.Installed {
 		fmt.Fprintln(c.Out, "Run `portless setup` to install it.")
@@ -116,20 +197,23 @@ func (c *CLI) setupStatus(ctx context.Context, jsonOutput bool) error {
 	fmt.Fprintln(c.Out, "Configuration:", status.ConfigurationPath)
 	fmt.Fprintln(c.Out, "Receipt:", status.ReceiptPath)
 	if status.HealthError != "" {
-		fmt.Fprintln(c.Out, "End-to-end check:", status.HealthError)
+		fmt.Fprintln(c.Out, c.failure(c.Out, "End-to-end check:"), status.HealthError)
 	}
 	if status.Problem != "" {
-		fmt.Fprintln(c.Out, "Problem:", status.Problem)
+		fmt.Fprintln(c.Out, c.failure(c.Out, "Problem:"), status.Problem)
 	}
 	return nil
 }
 
-func (c *CLI) uninstallSetup(ctx context.Context, force bool) error {
+func (c *CLI) uninstallSetup(ctx context.Context, force, jsonOutput bool) error {
 	status, err := ingress.Inspect(ctx)
 	if err != nil {
 		return err
 	}
 	if !status.Installed {
+		if jsonOutput {
+			return writeJSON(c.Out, actionOutput{Action: "uninstall", Status: "not-installed"})
+		}
 		fmt.Fprintln(c.Out, "The Portless clean-URL relay is not installed.")
 		return nil
 	}
@@ -141,20 +225,32 @@ func (c *CLI) uninstallSetup(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(c.Out, "Removing the Portless clean-URL relay:")
-	fmt.Fprintln(c.Out, "  service:", status.Service)
-	fmt.Fprintln(c.Out, "  helper: ", status.HelperPath)
-	fmt.Fprintln(c.Out, "Projects, containers, volumes, recordings, and Portless user data will not be removed.")
-	fmt.Fprintln(c.Out, "Administrator approval is required to remove the system service.")
+	if !jsonOutput {
+		fmt.Fprintln(c.Out, "Removing the Portless clean-URL relay:")
+		fmt.Fprintln(c.Out, "  service:", status.Service)
+		fmt.Fprintln(c.Out, "  helper: ", status.HelperPath)
+		fmt.Fprintln(c.Out, "Projects, containers, volumes, recordings, and Portless user data will not be removed.")
+		fmt.Fprintln(c.Out, "Administrator approval is required to remove the system service.")
+	}
+	uninstallOutput := c.Out
+	if jsonOutput {
+		uninstallOutput = c.Err
+	}
 	removed, err := ingress.Uninstall(ctx, ingress.UninstallRequest{
-		Executable: executable, UID: uid, Force: force, Stdin: os.Stdin, Stdout: c.Out, Stderr: c.Err,
+		Executable: executable, UID: uid, Force: force, Stdin: os.Stdin, Stdout: uninstallOutput, Stderr: c.Err,
 	})
 	if err != nil {
 		return err
 	}
 	if !removed {
+		if jsonOutput {
+			return writeJSON(c.Out, actionOutput{Action: "uninstall", Status: "not-installed"})
+		}
 		fmt.Fprintln(c.Out, "The Portless clean-URL relay is not installed.")
 		return nil
+	}
+	if jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "uninstall", Name: status.Service, Status: "removed"})
 	}
 	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80.")
 	fmt.Fprintln(c.Out, "Running environments were not stopped, but their clean localhost URLs are unavailable until `portless setup` is run again.")
@@ -184,6 +280,10 @@ func requestingUserIDs() (int, int) {
 }
 
 func (c *CLI) up(ctx context.Context, selector string, options upOptions) error {
+	selector, err := c.effectiveEnvironmentSelector(selector)
+	if err != nil {
+		return err
+	}
 	client, _, err := bootstrap.Connect(ctx, c.paths)
 	if err != nil {
 		return err
@@ -192,6 +292,7 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 		return err
 	}
 	var environment model.Environment
+	warnings := []string{}
 	if selector != "" {
 		environment, err = c.loadEnvironment(ctx, client, selector)
 	} else {
@@ -215,9 +316,8 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 				break
 			}
 			environment = discovered.Environment
-			for _, warning := range discovered.Warnings {
-				fmt.Fprintln(c.Err, "warning:", warning)
-			}
+			warnings = nonNilStrings(discovered.Warnings)
+			c.printWarnings(warnings)
 		}
 	}
 	if err != nil {
@@ -231,10 +331,13 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 		return err
 	}
 	if !options.wait {
-		c.printOperation(operation, options.jsonOutput)
+		if c.jsonOutput {
+			return writeJSON(c.Out, upOutput{Environment: environment, Operation: operation, Warnings: warnings})
+		}
+		c.printOperation(operation)
 		return nil
 	}
-	operation, err = c.waitOperation(operationContext, client, operation, options.jsonOutput)
+	operation, err = c.waitOperation(operationContext, client, operation, c.jsonOutput)
 	if err != nil {
 		return err
 	}
@@ -244,7 +347,13 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment), nil, &environment); err != nil {
 		return err
 	}
-	c.printStatus(environment)
+	if c.jsonOutput {
+		if err := writeJSON(c.Out, upOutput{Environment: environment, Operation: operation, Warnings: warnings}); err != nil {
+			return err
+		}
+	} else {
+		c.printStatus(environment)
+	}
 	if options.open {
 		next := "/environments/" + bootstrap.EscapePath(environment.Project, environment.Name)
 		if browserURL, browserErr := c.browserURL(ctx, client, next); browserErr == nil {
@@ -264,7 +373,7 @@ func (c *CLI) down(ctx context.Context, selector string, options downOptions) er
 		return err
 	}
 	if options.wait {
-		operation, err = c.waitOperation(ctx, client, operation, false)
+		operation, err = c.waitOperation(ctx, client, operation, c.jsonOutput)
 		if err != nil {
 			return err
 		}
@@ -272,11 +381,22 @@ func (c *CLI) down(ctx context.Context, selector string, options downOptions) er
 			return errors.New(operation.Error)
 		}
 	}
-	fmt.Fprintf(c.Out, "%s/%s  stopped\n", environment.Project, environment.Name)
+	if c.jsonOutput {
+		return writeJSON(c.Out, operation)
+	}
+	if !options.wait {
+		c.printOperation(operation)
+		return nil
+	}
+	fmt.Fprintf(c.Out, "%s/%s  %s\n", environment.Project, environment.Name, c.state(c.Out, "stopped"))
 	return nil
 }
 
 func (c *CLI) status(ctx context.Context, selector string, jsonOutput bool) error {
+	selector, err := c.effectiveEnvironmentSelector(selector)
+	if err != nil {
+		return err
+	}
 	client, _, err := bootstrap.Connect(ctx, c.paths)
 	if err != nil {
 		return err
@@ -294,11 +414,17 @@ func (c *CLI) status(ctx context.Context, selector string, jsonOutput bool) erro
 		c.printStatus(environment)
 		return nil
 	}
+	if selector != "" {
+		return err
+	}
 	var response struct {
 		Environments []model.Environment `json:"environments"`
 	}
 	if requestErr := client.Do(ctx, http.MethodGet, "/api/v1/environments", nil, &response); requestErr != nil {
 		return requestErr
+	}
+	if response.Environments == nil {
+		response.Environments = []model.Environment{}
 	}
 	if jsonOutput {
 		return writeJSON(c.Out, response)
@@ -307,8 +433,9 @@ func (c *CLI) status(ctx context.Context, selector string, jsonOutput bool) erro
 		fmt.Fprintln(c.Out, "No environments yet. Run `portless up` in a supported repository or create a multi-source project.")
 		return nil
 	}
+	c.printEnvironmentListHeader()
 	for _, item := range response.Environments {
-		fmt.Fprintf(c.Out, "%-32s %-14s %d services\n", model.EnvironmentSelector(item.Project, item.Name), item.Status, len(item.Services))
+		fmt.Fprintf(c.Out, "%-32s %s %d services\n", model.EnvironmentSelector(item.Project, item.Name), c.state(c.Out, fmt.Sprintf("%-14s", item.Status)), len(item.Services))
 	}
 	return nil
 }
@@ -322,16 +449,24 @@ func (c *CLI) ui(ctx context.Context) error {
 		return err
 	}
 	next := "/projects"
-	if environment, findErr := c.findCurrent(ctx, client); findErr == nil {
+	if environment, findErr := c.resolveEnvironment(ctx, client, ""); findErr == nil {
 		next = "/environments/" + bootstrap.EscapePath(environment.Project, environment.Name)
 	}
 	browserURL, err := c.browserURL(ctx, client, next)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(c.Out, browserURL)
-	if err := launchBrowser(browserURL); err != nil {
-		fmt.Fprintln(c.Err, "Could not open a browser; use the URL above:", err)
+	launchErr := launchBrowser(browserURL)
+	if c.jsonOutput {
+		result := browserOutput{URL: browserURL, Opened: launchErr == nil}
+		if launchErr != nil {
+			result.Error = launchErr.Error()
+		}
+		return writeJSON(c.Out, result)
+	}
+	fmt.Fprintln(c.Out, "Portless control plane:", c.accent(c.Out, browserURL))
+	if launchErr != nil {
+		fmt.Fprintln(c.Err, "Could not open a browser; use the URL above:", launchErr)
 	}
 	return nil
 }
@@ -352,8 +487,15 @@ func (c *CLI) open(ctx context.Context, requestedService string) error {
 		for _, service := range environment.Services {
 			if strings.EqualFold(service.Name, serviceName) {
 				if service.IngressURL != "" {
-					fmt.Fprintln(c.Out, service.IngressURL)
-					return launchBrowser(service.IngressURL)
+					launchErr := launchBrowser(service.IngressURL)
+					if c.jsonOutput {
+						if err := writeJSON(c.Out, browserOutput{URL: service.IngressURL, Service: service.Name, Opened: launchErr == nil, Error: errorString(launchErr)}); err != nil {
+							return err
+						}
+					} else {
+						fmt.Fprintf(c.Out, "%s: %s\n", service.Name, c.accent(c.Out, service.IngressURL))
+					}
+					return launchErr
 				}
 				return fmt.Errorf("service %s does not expose an HTTP endpoint", serviceName)
 			}
@@ -365,36 +507,61 @@ func (c *CLI) open(ctx context.Context, requestedService string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(c.Out, browserURL)
-	return launchBrowser(browserURL)
+	launchErr := launchBrowser(browserURL)
+	if c.jsonOutput {
+		if err := writeJSON(c.Out, browserOutput{URL: browserURL, Opened: launchErr == nil, Error: errorString(launchErr)}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(c.Out, "Portless control plane:", c.accent(c.Out, browserURL))
+	}
+	return launchErr
 }
 
-func (c *CLI) logs(ctx context.Context, service string, options streamOptions) error {
+func (c *CLI) logs(ctx context.Context, requestedService string, options streamOptions) error {
 	client, environment, err := c.current(ctx)
 	if err != nil {
 		return err
 	}
-	seen := 0
+	services, err := logServiceNames(environment, requestedService)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]int, len(services))
 	for {
-		var response struct {
-			Lines []string `json:"lines"`
-		}
-		path := environmentAPI(environment) + "/logs?service=" + url.QueryEscape(service) + "&limit=2000"
-		if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
-			return err
-		}
-		if seen > len(response.Lines) {
-			seen = 0
-		}
-		for _, line := range response.Lines[seen:] {
-			if options.jsonOutput {
-				_ = writeJSON(c.Out, map[string]any{"project": environment.Project, "environment": environment.Name, "service": service, "line": line})
-			} else {
-				fmt.Fprintln(c.Out, line)
+		batches := make([]serviceLogs, 0, len(services))
+		for _, service := range services {
+			var response struct {
+				Lines []string `json:"lines"`
 			}
+			path := environmentAPI(environment) + "/logs?service=" + url.QueryEscape(service) + "&limit=2000"
+			if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
+				return err
+			}
+			response.Lines = nonNilStrings(response.Lines)
+			batches = append(batches, serviceLogs{Service: service, Lines: response.Lines})
+			start := seen[service]
+			if start > len(response.Lines) {
+				start = 0
+			}
+			if options.tail {
+				for _, line := range response.Lines[start:] {
+					if c.jsonOutput {
+						if err := writeJSONLine(c.Out, map[string]any{"project": environment.Project, "environment": environment.Name, "service": service, "line": line}); err != nil {
+							return err
+						}
+					} else {
+						c.printLogLine(service, line, len(services) > 1)
+					}
+				}
+			}
+			seen[service] = len(response.Lines)
 		}
-		seen = len(response.Lines)
-		if !options.follow {
+		if !options.tail {
+			if c.jsonOutput {
+				return writeJSON(c.Out, logsOutput{Project: environment.Project, Environment: environment.Name, Logs: batches})
+			}
+			c.printLogs(environment, batches, requestedService != "")
 			return nil
 		}
 		select {
@@ -403,6 +570,48 @@ func (c *CLI) logs(ctx context.Context, service string, options streamOptions) e
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+func logServiceNames(environment model.Environment, requested string) ([]string, error) {
+	if requested != "" {
+		for _, service := range environment.Services {
+			if strings.EqualFold(service.Name, requested) {
+				return []string{service.Name}, nil
+			}
+		}
+		return nil, fmt.Errorf("service %s was not found in %s/%s", requested, environment.Project, environment.Name)
+	}
+	services := make([]string, 0, len(environment.Services))
+	for _, service := range environment.Services {
+		services = append(services, service.Name)
+	}
+	return services, nil
+}
+
+func (c *CLI) printLogs(environment model.Environment, batches []serviceLogs, singleService bool) {
+	lineCount := 0
+	for _, batch := range batches {
+		lineCount += len(batch.Lines)
+		for _, line := range batch.Lines {
+			c.printLogLine(batch.Service, line, !singleService)
+		}
+	}
+	if lineCount > 0 {
+		return
+	}
+	if singleService && len(batches) == 1 {
+		fmt.Fprintf(c.Out, "No logs for %s.\n", batches[0].Service)
+		return
+	}
+	fmt.Fprintf(c.Out, "No logs for %s/%s.\n", environment.Project, environment.Name)
+}
+
+func (c *CLI) printLogLine(service, line string, includeService bool) {
+	if includeService {
+		fmt.Fprintf(c.Out, "%s %s\n", c.accent(c.Out, "["+service+"]"), line)
+		return
+	}
+	fmt.Fprintln(c.Out, line)
 }
 
 func (c *CLI) traffic(ctx context.Context, selector string, options streamOptions) error {
@@ -416,15 +625,29 @@ func (c *CLI) traffic(ctx context.Context, selector string, options streamOption
 	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/traffic/http?limit=250", nil, &response); err != nil {
 		return err
 	}
+	traffic := make([]model.TrafficEvent, 0, len(response.Traffic))
 	for index := len(response.Traffic) - 1; index >= 0; index-- {
 		if matchesTraffic(response.Traffic[index], selector) {
-			c.printTraffic(response.Traffic[index], options.jsonOutput)
+			traffic = append(traffic, response.Traffic[index])
 		}
 	}
-	if !options.follow {
+	if !options.tail {
+		if c.jsonOutput {
+			return writeJSON(c.Out, map[string]any{"project": environment.Project, "environment": environment.Name, "traffic": traffic})
+		}
+		c.printTrafficList(environment, traffic)
 		return nil
 	}
-	return c.followTraffic(ctx, client, environment, selector, options.jsonOutput)
+	if c.jsonOutput {
+		for _, event := range traffic {
+			if err := writeJSONLine(c.Out, event); err != nil {
+				return err
+			}
+		}
+	} else {
+		c.printTrafficList(environment, traffic)
+	}
+	return c.followTraffic(ctx, client, environment, selector, c.jsonOutput)
 }
 
 func (c *CLI) listRecordings(ctx context.Context) error {
@@ -438,8 +661,20 @@ func (c *CLI) listRecordings(ctx context.Context) error {
 	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/recordings", nil, &response); err != nil {
 		return err
 	}
+	if response.Recordings == nil {
+		response.Recordings = []model.Recording{}
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
+	}
+	if len(response.Recordings) == 0 {
+		fmt.Fprintln(c.Out, c.muted(c.Out, "No recordings."))
+		return nil
+	}
+	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, "Recordings"), environment.Project, environment.Name)
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-24s %-10s %-8s %s", "NAME", "STATE", "EVENTS", "EDGE")))
 	for _, item := range response.Recordings {
-		fmt.Fprintf(c.Out, "%-24s %-10s %d events  %s → %s\n", item.Name, item.Status, item.EventCount, emptyAs(item.Source, "any"), emptyAs(item.Target, "any"))
+		fmt.Fprintf(c.Out, "%-24s %s %-8d %s → %s\n", item.Name, c.state(c.Out, fmt.Sprintf("%-10s", item.Status)), item.EventCount, emptyAs(item.Source, "any"), emptyAs(item.Target, "any"))
 	}
 	return nil
 }
@@ -459,6 +694,9 @@ func (c *CLI) startRecording(ctx context.Context, name string, options recording
 	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/recordings", input, &created); err != nil {
 		return err
 	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, created)
+	}
 	fmt.Fprintf(c.Out, "recording %s started; expires %s\n", created.Name, created.ExpiresAt.Format(time.RFC3339))
 	return nil
 }
@@ -477,8 +715,12 @@ func (c *CLI) stopRecording(ctx context.Context, requestedName string) error {
 	if err != nil {
 		return err
 	}
-	if err := client.Do(ctx, http.MethodPost, base+"/"+bootstrap.EscapePath(name)+"/stop", nil, nil); err != nil {
+	var stopped model.Recording
+	if err := client.Do(ctx, http.MethodPost, base+"/"+bootstrap.EscapePath(name)+"/stop", nil, &stopped); err != nil {
 		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, stopped)
 	}
 	fmt.Fprintln(c.Out, "recording", name, "stopped")
 	return nil
@@ -504,7 +746,14 @@ func (c *CLI) deleteRecording(ctx context.Context, name string) error {
 		return err
 	}
 	path := environmentAPI(environment) + "/recordings/" + bootstrap.EscapePath(name)
-	return client.Do(ctx, http.MethodDelete, path, nil, nil)
+	if err := client.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "delete", Project: environment.Project, Environment: environment.Name, Name: name, Status: "deleted"})
+	}
+	fmt.Fprintln(c.Out, "recording", name, "deleted")
+	return nil
 }
 
 func (c *CLI) listFaults(ctx context.Context) error {
@@ -518,12 +767,24 @@ func (c *CLI) listFaults(ctx context.Context) error {
 	if err := client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/faults", nil, &response); err != nil {
 		return err
 	}
+	if response.Faults == nil {
+		response.Faults = []model.FaultRule{}
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
+	}
+	if len(response.Faults) == 0 {
+		fmt.Fprintln(c.Out, c.muted(c.Out, "No fault rules."))
+		return nil
+	}
+	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, "Fault rules"), environment.Project, environment.Name)
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-24s %-9s %s", "NAME", "STATE", "SCOPE")))
 	for _, fault := range response.Faults {
 		state := "disabled"
 		if fault.Enabled {
 			state = "active"
 		}
-		fmt.Fprintf(c.Out, "%-24s %-9s %s\n", fault.Name, state, fault.ScopeSummary)
+		fmt.Fprintf(c.Out, "%-24s %s %s\n", fault.Name, c.state(c.Out, fmt.Sprintf("%-9s", state)), fault.ScopeSummary)
 	}
 	return nil
 }
@@ -543,6 +804,9 @@ func (c *CLI) addFault(ctx context.Context, name, edge string, options faultOpti
 	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/faults", input, &created); err != nil {
 		return err
 	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, created)
+	}
 	fmt.Fprintf(c.Out, "fault %s active: %s\n", created.Name, created.ScopeSummary)
 	return nil
 }
@@ -556,6 +820,9 @@ func (c *CLI) disableFault(ctx context.Context, name string) error {
 	if err := client.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
 		return err
 	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "disable", Project: environment.Project, Environment: environment.Name, Name: name, Status: "disabled"})
+	}
 	fmt.Fprintln(c.Out, "fault", name, "disabled")
 	return nil
 }
@@ -568,6 +835,14 @@ func (c *CLI) clearFaults(ctx context.Context) error {
 	var result map[string]any
 	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/faults/disable-all", nil, &result); err != nil {
 		return err
+	}
+	if c.jsonOutput {
+		if result == nil {
+			result = map[string]any{}
+		}
+		result["project"] = environment.Project
+		result["environment"] = environment.Name
+		return writeJSON(c.Out, result)
 	}
 	fmt.Fprintln(c.Out, "all active faults disabled")
 	return nil
@@ -594,9 +869,11 @@ func (c *CLI) createProject(ctx context.Context, name string, sourceValues []str
 	if err := client.Do(ctx, http.MethodPost, "/api/v1/projects", map[string]any{"name": name, "sources": sources}, &response); err != nil {
 		return err
 	}
-	for _, warning := range response.Warnings {
-		fmt.Fprintln(c.Err, "warning:", warning)
+	response.Warnings = nonNilStrings(response.Warnings)
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
 	}
+	c.printWarnings(response.Warnings)
 	fmt.Fprintf(c.Out, "created %s with environment %s and %d sources\n", response.Project.Name, response.Environment.Name, len(sources))
 	return nil
 }
@@ -618,6 +895,9 @@ func (c *CLI) exportProject(ctx context.Context, output string) error {
 	if err := os.WriteFile(output, content, 0o600); err != nil {
 		return err
 	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "export", Project: environment.Project, Path: output, Status: "written"})
+	}
 	fmt.Fprintln(c.Out, "wrote", output)
 	return nil
 }
@@ -636,6 +916,9 @@ func (c *CLI) renameProject(ctx context.Context, name string) error {
 	if err := client.Do(ctx, http.MethodPatch, base, map[string]any{"name": name, "revision": project.Revision}, &renamed); err != nil {
 		return err
 	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, renamed)
+	}
 	fmt.Fprintf(c.Out, "%s renamed to %s\n", project.Name, renamed.Name)
 	return nil
 }
@@ -648,6 +931,9 @@ func (c *CLI) forgetProject(ctx context.Context) error {
 	base := "/api/v1/projects/" + bootstrap.EscapePath(environment.Project)
 	if err := client.Do(ctx, http.MethodDelete, base, nil, nil); err != nil {
 		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "forget", Project: environment.Project, Status: "forgotten"})
 	}
 	fmt.Fprintln(c.Out, "forgot", environment.Project)
 	return nil
@@ -668,8 +954,19 @@ func (c *CLI) listEnvironments(ctx context.Context, project string) error {
 	if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
 		return err
 	}
+	if response.Environments == nil {
+		response.Environments = []model.Environment{}
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
+	}
+	if len(response.Environments) == 0 {
+		fmt.Fprintln(c.Out, c.muted(c.Out, "No environments."))
+		return nil
+	}
+	c.printEnvironmentListHeader()
 	for _, item := range response.Environments {
-		fmt.Fprintf(c.Out, "%-32s %-14s %d services\n", model.EnvironmentSelector(item.Project, item.Name), item.Status, len(item.Services))
+		fmt.Fprintf(c.Out, "%-32s %s %d services\n", model.EnvironmentSelector(item.Project, item.Name), c.state(c.Out, fmt.Sprintf("%-14s", item.Status)), len(item.Services))
 	}
 	return nil
 }
@@ -685,6 +982,9 @@ func (c *CLI) cloneEnvironment(ctx context.Context, name, from string) error {
 	var created model.Environment
 	if err := client.Do(ctx, http.MethodPost, "/api/v1/environments", map[string]any{"project": current.Project, "name": name, "from": from}, &created); err != nil {
 		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, created)
 	}
 	fmt.Fprintln(c.Out, "created", model.EnvironmentSelector(created.Project, created.Name))
 	return nil
@@ -704,6 +1004,9 @@ func (c *CLI) bindProvider(ctx context.Context, service string, options bindingO
 	path := environmentAPI(environment) + "/bindings/" + bootstrap.EscapePath(service)
 	if err := client.Do(ctx, http.MethodPut, path, binding, &updated); err != nil {
 		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, updated)
 	}
 	detail := string(binding.Provider)
 	if options.provider == model.ProviderLocal {
@@ -732,9 +1035,11 @@ func (c *CLI) bindSource(ctx context.Context, source, pathValue string) error {
 	if err := client.Do(ctx, http.MethodPut, path, map[string]string{"path": sourcePath}, &response); err != nil {
 		return err
 	}
-	for _, warning := range response.Warnings {
-		fmt.Fprintln(c.Err, "warning:", warning)
+	response.Warnings = nonNilStrings(response.Warnings)
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
 	}
+	c.printWarnings(response.Warnings)
 	fmt.Fprintf(c.Out, "%s now uses %s for source %s\n", model.EnvironmentSelector(environment.Project, environment.Name), sourcePath, source)
 	return nil
 }
@@ -751,9 +1056,11 @@ func (c *CLI) rescanEnvironment(ctx context.Context) error {
 	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/rescan", nil, &response); err != nil {
 		return err
 	}
-	for _, warning := range response.Warnings {
-		fmt.Fprintln(c.Err, "warning:", warning)
+	response.Warnings = nonNilStrings(response.Warnings)
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
 	}
+	c.printWarnings(response.Warnings)
 	fmt.Fprintf(c.Out, "%s rescanned (revision %d)\n", model.EnvironmentSelector(environment.Project, environment.Name), response.Environment.Revision)
 	return nil
 }
@@ -765,6 +1072,9 @@ func (c *CLI) forgetEnvironment(ctx context.Context) error {
 	}
 	if err := client.Do(ctx, http.MethodDelete, environmentAPI(environment), nil, nil); err != nil {
 		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "forget", Project: environment.Project, Environment: environment.Name, Status: "forgotten"})
 	}
 	fmt.Fprintln(c.Out, "forgot", model.EnvironmentSelector(environment.Project, environment.Name))
 	return nil
@@ -781,7 +1091,10 @@ func absoluteSourcePath(path string) (string, error) {
 	return filepath.Clean(absolute), nil
 }
 
-func (c *CLI) useEnvironment(ctx context.Context, selector string) error {
+func (c *CLI) selectEnvironment(ctx context.Context, selector string) error {
+	if c.environmentOverride != "" {
+		return usageError("--env cannot be used with env select; pass the environment to env select directly")
+	}
 	project, environment, err := model.ParseEnvironmentSelector(selector)
 	if err != nil {
 		return err
@@ -800,32 +1113,150 @@ func (c *CLI) useEnvironment(ctx context.Context, selector string) error {
 	if err := client.Do(ctx, http.MethodPut, "/api/v1/environments/select", map[string]any{"path": root, "project": project, "environment": environment}, nil); err != nil {
 		return err
 	}
-	fmt.Fprintln(c.Out, "using", selector, "in", root)
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "select", Project: project, Environment: environment, Path: root, Status: "selected"})
+	}
+	fmt.Fprintln(c.Out, "selected", selector, "for", root)
 	return nil
 }
 
-func (c *CLI) runtimeStatus(ctx context.Context) error {
-	return c.runtimeRequest(ctx, http.MethodGet, "/api/v1/runtime", nil)
-}
-
-func (c *CLI) startRuntime(ctx context.Context) error {
-	return c.runtimeRequest(ctx, http.MethodPost, "/api/v1/runtime/start", nil)
-}
-
-func (c *CLI) useRuntime(ctx context.Context, preference string) error {
-	return c.runtimeRequest(ctx, http.MethodPut, "/api/v1/runtime", map[string]string{"preference": preference})
-}
-
-func (c *CLI) runtimeRequest(ctx context.Context, method, path string, body any) error {
+func (c *CLI) showEnvironmentContext(ctx context.Context) error {
 	client, _, err := bootstrap.Connect(ctx, c.paths)
 	if err != nil {
 		return err
 	}
-	var status map[string]any
+	resolved, err := c.resolveEnvironmentContext(ctx, client)
+	if err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, resolved)
+	}
+	fmt.Fprintln(c.Out, c.heading(c.Out, "Environment"))
+	fmt.Fprintln(c.Out)
+	fmt.Fprintf(c.Out, "  %-12s %s\n", "Effective:", c.accent(c.Out, resolved.Selector))
+	fmt.Fprintf(c.Out, "  %-12s %s\n", "Resolution:", environmentResolutionDescription(resolved.Resolution))
+	fmt.Fprintf(c.Out, "  %-12s %s\n", "Checkout:", resolved.Path)
+	fmt.Fprintf(c.Out, "  %-12s %s\n", "State:", c.state(c.Out, string(resolved.Environment.Status)))
+	return nil
+}
+
+func (c *CLI) clearEnvironmentSelection(ctx context.Context) error {
+	if c.environmentOverride != "" {
+		return usageError("--env cannot be used with env clear; clear always applies to the current checkout")
+	}
+	root, err := currentSourceRoot()
+	if err != nil {
+		return err
+	}
+	client, _, err := bootstrap.Connect(ctx, c.paths)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Cleared bool `json:"cleared"`
+	}
+	path := "/api/v1/environments/select?path=" + url.QueryEscape(root)
+	if err := client.Do(ctx, http.MethodDelete, path, nil, &result); err != nil {
+		return err
+	}
+	status := "already-clear"
+	if result.Cleared {
+		status = "cleared"
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "clear", Path: root, Status: status})
+	}
+	if result.Cleared {
+		fmt.Fprintln(c.Out, "cleared the environment selection for", root)
+	} else {
+		fmt.Fprintln(c.Out, "no saved environment selection for", root)
+	}
+	return nil
+}
+
+func (c *CLI) runtimeStatus(ctx context.Context, jsonOutput bool) error {
+	return c.runtimeRequest(ctx, http.MethodGet, "/api/v1/runtime", nil, jsonOutput)
+}
+
+func (c *CLI) startRuntime(ctx context.Context, jsonOutput bool) error {
+	return c.runtimeRequest(ctx, http.MethodPost, "/api/v1/runtime/start", nil, jsonOutput)
+}
+
+func (c *CLI) useRuntime(ctx context.Context, preference string, jsonOutput bool) error {
+	return c.runtimeRequest(ctx, http.MethodPut, "/api/v1/runtime", map[string]string{"preference": preference}, jsonOutput)
+}
+
+func (c *CLI) runtimeRequest(ctx context.Context, method, path string, body any, jsonOutput bool) error {
+	client, _, err := bootstrap.Connect(ctx, c.paths)
+	if err != nil {
+		return err
+	}
+	var status container.Status
 	if err := client.Do(ctx, method, path, body, &status); err != nil {
 		return err
 	}
-	return writeJSON(c.Out, status)
+	if jsonOutput {
+		return writeJSON(c.Out, status)
+	}
+	c.printRuntimeStatus(status)
+	return nil
+}
+
+func (c *CLI) printRuntimeStatus(status container.Status) {
+	state := status.State
+	if state == "" {
+		state = "unknown"
+	}
+	selected := "none"
+	if status.Selected != "" {
+		selected = string(status.Selected)
+		if status.Version != "" {
+			selected += " " + status.Version
+		}
+	}
+
+	fmt.Fprintln(c.Out, c.heading(c.Out, "Container runtime"))
+	fmt.Fprintln(c.Out)
+	fmt.Fprintf(c.Out, "  %-11s %s\n", "Status:", c.state(c.Out, state))
+	fmt.Fprintf(c.Out, "  %-11s %s\n", "Selected:", selected)
+	fmt.Fprintf(c.Out, "  %-11s %s\n", "Preference:", status.Preference)
+	if status.Reason != "" {
+		fmt.Fprintf(c.Out, "  %-11s %s\n", "Reason:", status.Reason)
+	}
+	if len(status.Candidates) == 0 {
+		return
+	}
+
+	ordered := make([]container.ProbeResult, 0, len(status.Candidates))
+	for _, candidate := range status.Candidates {
+		if candidate.Name == status.Selected {
+			ordered = append(ordered, candidate)
+		}
+	}
+	for _, candidate := range status.Candidates {
+		if candidate.Name != status.Selected {
+			ordered = append(ordered, candidate)
+		}
+	}
+
+	fmt.Fprintln(c.Out)
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("  %-10s %-10s %-10s %s", "RUNTIME", "STATE", "VERSION", "DETAILS")))
+	for _, candidate := range ordered {
+		version := candidate.Version
+		if version == "" {
+			version = "—"
+		}
+		details := candidate.Reason
+		if candidate.Name == status.Selected {
+			if details == "" {
+				details = "selected"
+			} else {
+				details = "selected · " + details
+			}
+		}
+		fmt.Fprintf(c.Out, "  %-10s %s %-10s %s\n", candidate.Name, c.state(c.Out, fmt.Sprintf("%-10s", candidate.State)), version, details)
+	}
 }
 
 func (c *CLI) current(ctx context.Context) (*bootstrap.Client, model.Environment, error) {
@@ -837,12 +1268,7 @@ func (c *CLI) currentOrNamed(ctx context.Context, selector string) (*bootstrap.C
 	if err != nil {
 		return nil, model.Environment{}, err
 	}
-	var environment model.Environment
-	if selector != "" {
-		environment, err = c.loadEnvironment(ctx, client, selector)
-	} else {
-		environment, err = c.findCurrent(ctx, client)
-	}
+	environment, err := c.resolveEnvironment(ctx, client, selector)
 	if err != nil {
 		return nil, model.Environment{}, err
 	}
@@ -850,19 +1276,65 @@ func (c *CLI) currentOrNamed(ctx context.Context, selector string) (*bootstrap.C
 }
 
 func (c *CLI) findCurrent(ctx context.Context, client *bootstrap.Client) (model.Environment, error) {
-	environments, err := c.environmentsForCurrentPath(ctx, client)
+	resolved, err := c.resolveEnvironmentContext(ctx, client)
 	if err != nil {
 		return model.Environment{}, err
 	}
-	switch len(environments) {
-	case 0:
-		return model.Environment{}, errors.New("this checkout is not part of a Portless environment; run `portless up` or `portless project create`")
-	case 1:
-		resolved := environments[0]
-		return c.loadEnvironment(ctx, client, model.EnvironmentSelector(resolved.Project, resolved.Name))
-	default:
-		return model.Environment{}, ambiguousEnvironmentError(environments)
+	return resolved.Environment, nil
+}
+
+func (c *CLI) resolveEnvironment(ctx context.Context, client *bootstrap.Client, selector string) (model.Environment, error) {
+	effective, err := c.effectiveEnvironmentSelector(selector)
+	if err != nil {
+		return model.Environment{}, err
 	}
+	if effective != "" {
+		return c.loadEnvironment(ctx, client, effective)
+	}
+	return c.findCurrent(ctx, client)
+}
+
+func (c *CLI) effectiveEnvironmentSelector(selector string) (string, error) {
+	if selector != "" && c.environmentOverride != "" {
+		return "", usageError("an environment was provided twice; use only --env")
+	}
+	if selector != "" {
+		return selector, nil
+	}
+	return c.environmentOverride, nil
+}
+
+func (c *CLI) resolveEnvironmentContext(ctx context.Context, client *bootstrap.Client) (environmentContextOutput, error) {
+	root, err := currentSourceRoot()
+	if err != nil {
+		return environmentContextOutput{}, err
+	}
+	if c.environmentOverride != "" {
+		environment, err := c.loadEnvironment(ctx, client, c.environmentOverride)
+		if err != nil {
+			return environmentContextOutput{}, err
+		}
+		return environmentContextOutput{
+			Path: root, Selector: model.EnvironmentSelector(environment.Project, environment.Name),
+			Resolution: "flag", Environment: environment,
+		}, nil
+	}
+	var response application.EnvironmentContext
+	path := "/api/v1/environments/context?path=" + url.QueryEscape(root)
+	if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return environmentContextOutput{}, err
+	}
+	if response.Environment == nil {
+		if response.Resolution == "ambiguous" {
+			return environmentContextOutput{}, ambiguousEnvironmentError(response.Candidates)
+		}
+		return environmentContextOutput{}, errors.New("this checkout is not part of a Portless environment; run `portless up` or `portless project create`")
+	}
+	environment := *response.Environment
+	return environmentContextOutput{
+		Path: root, Selector: model.EnvironmentSelector(environment.Project, environment.Name),
+		Resolution: response.Resolution, Environment: environment,
+	}, nil
 }
 
 func (c *CLI) environmentsForCurrentPath(ctx context.Context, client *bootstrap.Client) ([]model.Environment, error) {
@@ -912,7 +1384,20 @@ func ambiguousEnvironmentError(environments []model.Environment) error {
 	for _, environment := range environments {
 		selectors = append(selectors, model.EnvironmentSelector(environment.Project, environment.Name))
 	}
-	return fmt.Errorf("this checkout belongs to multiple environments (%s); select one with `portless use project/environment`", strings.Join(selectors, ", "))
+	return fmt.Errorf("this checkout belongs to multiple environments (%s); select one with `portless env select project/environment` or pass `--env project/environment`", strings.Join(selectors, ", "))
+}
+
+func environmentResolutionDescription(resolution string) string {
+	switch resolution {
+	case "flag":
+		return "--env override for this invocation"
+	case "selected":
+		return "saved selection for this checkout"
+	case "inferred":
+		return "only environment using this checkout"
+	default:
+		return resolution
+	}
 }
 
 func environmentAPI(environment model.Environment) string {
@@ -944,9 +1429,7 @@ func (c *CLI) waitOperation(ctx context.Context, client *bootstrap.Client, opera
 			return model.Operation{}, err
 		}
 		for _, event := range operation.Events[seen:] {
-			if jsonOutput {
-				_ = writeJSON(c.Out, event)
-			} else {
+			if !jsonOutput {
 				fmt.Fprintf(c.Out, "  %-12s %s\n", event.Subject, event.Message)
 			}
 		}
@@ -988,7 +1471,13 @@ func (c *CLI) followTraffic(ctx context.Context, client *bootstrap.Client, envir
 		if strings.HasPrefix(line, "data: ") && eventType == "traffic.http" {
 			var event model.TrafficEvent
 			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) == nil && matchesTraffic(event, selector) {
-				c.printTraffic(event, jsonOutput)
+				if jsonOutput {
+					if err := writeJSONLine(c.Out, event); err != nil {
+						return err
+					}
+				} else {
+					c.printTraffic(event)
+				}
 			}
 		}
 	}
@@ -1005,8 +1494,8 @@ func (c *CLI) printStatus(environment model.Environment) {
 			ready++
 		}
 	}
-	fmt.Fprintf(c.Out, "%s/%s  %s  %d/%d ready\n\n", environment.Project, environment.Name, environment.Status, ready, len(environment.Services))
-	fmt.Fprintln(c.Out, "SERVICE                 PROVIDER    KIND        STATE          ENDPOINT")
+	fmt.Fprintf(c.Out, "%s  %s  %d/%d ready\n\n", c.heading(c.Out, environment.Project+"/"+environment.Name), c.state(c.Out, string(environment.Status)), ready, len(environment.Services))
+	fmt.Fprintln(c.Out, c.muted(c.Out, "SERVICE                 PROVIDER    KIND        STATE          ENDPOINT"))
 	for _, service := range environment.Services {
 		kind := string(service.Kind)
 		if service.Framework != "" {
@@ -1021,9 +1510,9 @@ func (c *CLI) printStatus(environment model.Environment) {
 				break
 			}
 		}
-		fmt.Fprintf(c.Out, "%-23s %-11s %-11s %-14s %s\n", service.Name, provider, kind, service.Status, statusEndpoint(service))
+		fmt.Fprintf(c.Out, "%-23s %-11s %-11s %s %s\n", service.Name, provider, kind, c.state(c.Out, fmt.Sprintf("%-14s", service.Status)), c.accent(c.Out, statusEndpoint(service)))
 	}
-	fmt.Fprintln(c.Out, "\nDashboard:", environment.DashboardURL)
+	fmt.Fprintln(c.Out, "\nDashboard:", c.accent(c.Out, environment.DashboardURL))
 }
 
 func statusEndpoint(service model.Service) string {
@@ -1036,44 +1525,78 @@ func statusEndpoint(service model.Service) string {
 	return ""
 }
 
-func (c *CLI) printOperation(operation model.Operation, jsonOutput bool) {
-	if jsonOutput {
-		_ = writeJSON(c.Out, operation)
-		return
-	}
-	fmt.Fprintf(c.Out, "%s operation %d %s\n", operation.Type, operation.Number, operation.State)
+func (c *CLI) printOperation(operation model.Operation) {
+	fmt.Fprintf(c.Out, "%s operation %d %s\n", operation.Type, operation.Number, c.state(c.Out, operation.State))
 }
 
-func (c *CLI) printTraffic(event model.TrafficEvent, jsonOutput bool) {
-	if jsonOutput {
-		_ = writeJSON(c.Out, event)
+func (c *CLI) printTrafficList(environment model.Environment, events []model.TrafficEvent) {
+	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, "HTTP traffic"), environment.Project, environment.Name)
+	if len(events) == 0 {
+		fmt.Fprintln(c.Out, c.muted(c.Out, "No HTTP traffic captured."))
 		return
 	}
+	fmt.Fprintln(c.Out, c.muted(c.Out, "SEQ    METHOD  PATH               CODE  TIME    EDGE"))
+	for _, event := range events {
+		c.printTraffic(event)
+	}
+}
+
+func (c *CLI) printTraffic(event model.TrafficEvent) {
 	fault := ""
 	if event.Fault != "" {
 		fault = " fault=" + event.Fault
 	}
-	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %4d %5dms %s:%s%s\n", event.Sequence, event.Method, event.Path, event.Status, event.DurationMS, event.Source, event.Target, fault)
+	status := fmt.Sprintf("%4d", event.Status)
+	switch {
+	case event.Status >= 500:
+		status = c.failure(c.Out, status)
+	case event.Status >= 400:
+		status = c.warning(c.Out, status)
+	case event.Status >= 200 && event.Status < 400:
+		status = c.success(c.Out, status)
+	}
+	if fault != "" {
+		fault = c.warning(c.Out, fault)
+	}
+	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %s %5dms %s:%s%s\n", event.Sequence, event.Method, event.Path, status, event.DurationMS, event.Source, event.Target, fault)
 }
 
 func (c *CLI) printError(err error) {
 	var clientErr *bootstrap.ClientError
+	if c.jsonOutput {
+		detail := errorDetail{Code: "COMMAND_FAILED", Message: err.Error()}
+		var usage *commandUsageError
+		if errors.As(err, &usage) || isCobraSyntaxError(err) {
+			detail.Code = "USAGE_ERROR"
+		}
+		if errors.As(err, &clientErr) {
+			detail = errorDetail{
+				Code: clientErr.Code, Message: clientErr.Message, Status: clientErr.Status,
+				Subject: clientErr.Subject, Details: clientErr.Details, Remediation: clientErr.Remediation,
+			}
+			if detail.Code == "" {
+				detail.Code = "API_ERROR"
+			}
+		}
+		_ = writeJSON(c.Err, errorOutput{Error: detail})
+		return
+	}
 	if errors.As(err, &clientErr) {
-		fmt.Fprintf(c.Err, "portless: %s\n", clientErr.Message)
+		fmt.Fprintf(c.Err, "%s %s\n", c.failure(c.Err, "portless:"), clientErr.Message)
 		if clientErr.Code != "" {
-			fmt.Fprintf(c.Err, "code: %s\n", clientErr.Code)
+			fmt.Fprintf(c.Err, "%s %s\n", c.muted(c.Err, "code:"), clientErr.Code)
 		}
 		for _, remediation := range clientErr.Remediation {
 			if command, ok := remediation["command"].(string); ok && command != "" {
-				fmt.Fprintln(c.Err, "next:", command)
+				fmt.Fprintln(c.Err, c.accent(c.Err, "next:"), command)
 			}
 			if targetURL, ok := remediation["url"].(string); ok && targetURL != "" {
-				fmt.Fprintln(c.Err, "inspect:", targetURL)
+				fmt.Fprintln(c.Err, c.accent(c.Err, "inspect:"), targetURL)
 			}
 		}
 		return
 	}
-	fmt.Fprintln(c.Err, "portless:", err)
+	fmt.Fprintln(c.Err, c.failure(c.Err, "portless:"), err)
 }
 
 func launchBrowser(targetURL string) error {
@@ -1143,8 +1666,46 @@ func firstArg(values []string) string {
 
 func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
+}
+
+func writeJSONLine(writer io.Writer, value any) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(value)
+}
+
+func writeSetupStatusJSON(writer io.Writer, status ingress.InstallationStatus) error {
+	return writeJSON(writer, setupStatusOutput{State: status.State(), InstallationStatus: status})
+}
+
+func (c *CLI) printEnvironmentListHeader() {
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-32s %-14s %s", "ENVIRONMENT", "STATE", "SERVICES")))
+}
+
+func (c *CLI) printWarnings(warnings []string) {
+	if c.jsonOutput {
+		return
+	}
+	for _, warning := range warnings {
+		fmt.Fprintln(c.Err, c.warning(c.Err, "warning:"), warning)
+	}
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func emptyAs(value, fallback string) string {

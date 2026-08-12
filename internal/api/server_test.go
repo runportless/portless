@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -84,6 +85,59 @@ func TestApplicationHostRequiresServiceEnvironmentProject(t *testing.T) {
 	}
 	if _, _, _, ok := applicationHost("checkout.billing.localhost"); ok {
 		t.Fatal("two-label application host should not be accepted")
+	}
+}
+
+func TestEnvironmentContextSelectionCanBeInspectedAndCleared(t *testing.T) {
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", PrimaryService: "checkout", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}}}
+	if _, err := controlStore.CreateProject(context.Background(), "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if _, err := controlStore.CreateEnvironment(context.Background(), "billing", "local", definition,
+		[]model.SourceBinding{{Name: "checkout", Path: source, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	authManager, err := auth.LoadOrCreate(filepath.Join(data, "install.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := application.New(controlStore, events.NewBroker(), application.Config{DataDirectory: data, InstallationKey: "test-installation"})
+	defer app.Close(context.Background())
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>portless</html>"), Mode: fs.FileMode(0o600)}}
+	server, err := New(app, authManager, assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contextPath := "/api/v1/environments/context?path=" + url.QueryEscape(source)
+	resolved := request(server, authManager, http.MethodGet, contextPath, "", true)
+	if resolved.Code != http.StatusOK || !strings.Contains(resolved.Body.String(), `"resolution":"inferred"`) || !strings.Contains(resolved.Body.String(), `"name":"local"`) {
+		t.Fatalf("inferred context response code=%d body=%s", resolved.Code, resolved.Body.String())
+	}
+	selected := request(server, authManager, http.MethodPut, "/api/v1/environments/select", `{"path":"`+source+`","project":"billing","environment":"local"}`, true)
+	if selected.Code != http.StatusNoContent {
+		t.Fatalf("select response code=%d body=%s", selected.Code, selected.Body.String())
+	}
+	resolved = request(server, authManager, http.MethodGet, contextPath, "", true)
+	if resolved.Code != http.StatusOK || !strings.Contains(resolved.Body.String(), `"resolution":"selected"`) {
+		t.Fatalf("selected context response code=%d body=%s", resolved.Code, resolved.Body.String())
+	}
+	cleared := request(server, authManager, http.MethodDelete, "/api/v1/environments/select?path="+url.QueryEscape(source), "", true)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"cleared":true`) {
+		t.Fatalf("clear response code=%d body=%s", cleared.Code, cleared.Body.String())
+	}
+	cleared = request(server, authManager, http.MethodDelete, "/api/v1/environments/select?path="+url.QueryEscape(source), "", true)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"cleared":false`) {
+		t.Fatalf("idempotent clear response code=%d body=%s", cleared.Code, cleared.Body.String())
 	}
 }
 

@@ -28,20 +28,21 @@ func (c *CLI) doctor(ctx context.Context, scope diagnostics.Scope, jsonOutput bo
 }
 
 func printDoctorReport(c *CLI, report diagnostics.Report) {
-	fmt.Fprintln(c.Out, "Portless doctor")
+	fmt.Fprintln(c.Out, c.heading(c.Out, "Portless doctor"))
 	component := ""
 	for _, check := range report.Checks {
 		if check.Component != component {
 			component = check.Component
 			fmt.Fprintln(c.Out)
-			fmt.Fprintln(c.Out, doctorComponentName(component))
+			fmt.Fprintln(c.Out, c.heading(c.Out, doctorComponentName(component)))
 		}
-		fmt.Fprintf(c.Out, "  %-4s  %s\n", strings.ToUpper(string(check.Status)), check.Summary)
+		status := strings.ToUpper(string(check.Status))
+		fmt.Fprintf(c.Out, "  %s  %s\n", c.state(c.Out, fmt.Sprintf("%-4s", status)), check.Summary)
 		if check.Detail != "" {
 			fmt.Fprintln(c.Out, "        "+check.Detail)
 		}
 		if check.Remediation != "" {
-			fmt.Fprintln(c.Out, "        fix: "+check.Remediation)
+			fmt.Fprintln(c.Out, "        "+c.warning(c.Out, "fix:")+" "+check.Remediation)
 		}
 	}
 	fmt.Fprintf(c.Out, "\n%d passed, %s, %s, %d failed, %d skipped\n",

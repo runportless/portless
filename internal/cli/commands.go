@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,11 +15,18 @@ import (
 )
 
 type commandUsageError struct {
-	err error
+	err     error
+	command *cobra.Command
 }
 
 func (e *commandUsageError) Error() string { return e.err.Error() }
 func (e *commandUsageError) Unwrap() error { return e.err }
+
+type commandHelpError struct {
+	command *cobra.Command
+}
+
+func (e *commandHelpError) Error() string { return "required arguments were omitted" }
 
 type reportedCommandError struct{}
 
@@ -30,19 +38,21 @@ func usageError(message string, arguments ...any) error {
 
 func usageArgs(validate cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
+		if len(args) < requiredArgumentCount(cmd.Use) {
+			return &commandHelpError{command: cmd}
+		}
 		if err := validate(cmd, args); err != nil {
-			return &commandUsageError{err: err}
+			return &commandUsageError{err: err, command: cmd}
 		}
 		return nil
 	}
 }
 
 type upOptions struct {
-	name       string
-	jsonOutput bool
-	timeout    time.Duration
-	open       bool
-	wait       bool
+	name    string
+	timeout time.Duration
+	open    bool
+	wait    bool
 }
 
 type downOptions struct {
@@ -52,8 +62,7 @@ type downOptions struct {
 }
 
 type streamOptions struct {
-	follow     bool
-	jsonOutput bool
+	tail bool
 }
 
 type recordingOptions struct {
@@ -83,21 +92,71 @@ type bindingOptions struct {
 }
 
 func (c *CLI) Run(ctx context.Context, args []string) int {
+	c.jsonOutput = jsonFlagRequested(args)
+	c.noColor = boolFlagRequested(args, "no-color")
+	c.completionOutput = isCompletionRequest(args)
+	if err := c.loadPreferences(); err != nil {
+		if !isConfigResetRequest(args) {
+			c.printError(err)
+			return 1
+		}
+		c.colorPreference = colorAuto
+		c.colorSource = "default"
+	}
 	root := c.rootCommand()
+	if c.jsonOutput {
+		encoded, _ := json.MarshalIndent(map[string]string{"version": Version}, "", "  ")
+		root.SetVersionTemplate(string(encoded) + "\n")
+	}
 	root.SetArgs(args)
 	if err := root.ExecuteContext(ctx); err != nil {
+		var help *commandHelpError
+		if errors.As(err, &help) {
+			if helpErr := help.command.Help(); helpErr != nil {
+				c.printError(helpErr)
+				return 1
+			}
+			return 0
+		}
 		var reported *reportedCommandError
 		if errors.As(err, &reported) {
 			return 1
 		}
-		c.printError(err)
 		var usage *commandUsageError
 		if errors.As(err, &usage) || isCobraSyntaxError(err) {
+			c.printError(err)
+			if !c.jsonOutput {
+				command := commandForUsage(root, args)
+				if usage != nil && usage.command != nil {
+					command = usage.command
+				}
+				fmt.Fprintln(c.Err)
+				fmt.Fprint(c.Err, command.UsageString())
+			}
 			return 2
 		}
+		c.printError(err)
 		return 1
 	}
 	return 0
+}
+
+func commandForUsage(root *cobra.Command, args []string) *cobra.Command {
+	command, _, _ := root.Find(args)
+	if command == nil {
+		return root
+	}
+	return command
+}
+
+func requiredArgumentCount(use string) int {
+	count := 0
+	for _, field := range strings.Fields(use) {
+		if strings.HasPrefix(field, "<") {
+			count++
+		}
+	}
+	return count
 }
 
 func isCobraSyntaxError(err error) bool {
@@ -126,18 +185,23 @@ func (c *CLI) rootCommand() *cobra.Command {
 	root.SetOut(c.Out)
 	root.SetErr(c.Err)
 	root.SetVersionTemplate("portless {{.Version}}\n")
-	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
-		return &commandUsageError{err: err}
+	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return &commandUsageError{err: err, command: cmd}
 	})
+	root.SetUsageTemplate(c.usageTemplate())
+	root.PersistentFlags().BoolVar(&c.jsonOutput, "json", c.jsonOutput, "emit JSON (JSON Lines for streaming commands)")
+	root.PersistentFlags().BoolVar(&c.noColor, "no-color", c.noColor, "disable color for this invocation")
+	root.PersistentFlags().StringVar(&c.environmentOverride, "env", "", "use project/environment for this invocation without changing the checkout selection")
+	_ = root.RegisterFlagCompletionFunc("env", cobra.NoFileCompletions)
 	root.CompletionOptions.DisableDescriptions = true
 	root.AddCommand(
+		c.configCommand(),
 		c.setupCommand(),
 		c.daemonCommand(),
 		c.doctorCommand(),
 		c.upCommand(),
 		c.downCommand(),
 		c.statusCommand(),
-		c.useCommand(),
 		c.openCommand(),
 		c.uiCommand(),
 		c.logsCommand(),
@@ -152,56 +216,82 @@ func (c *CLI) rootCommand() *cobra.Command {
 	return root
 }
 
+func (c *CLI) configCommand() *cobra.Command {
+	command := commandGroup("config", "Manage CLI preferences")
+	color := &cobra.Command{
+		Use:               "color [auto|always|never]",
+		Short:             "Show or save the color preference",
+		Args:              usageArgs(cobra.MaximumNArgs(1)),
+		ValidArgs:         []string{string(colorAuto), string(colorAlways), string(colorNever)},
+		ValidArgsFunction: fixedCompletions(string(colorAuto), string(colorAlways), string(colorNever)),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				preference, err := parseColorPreference(args[0])
+				if err != nil {
+					return err
+				}
+				if err := c.saveColorPreference(preference); err != nil {
+					return err
+				}
+			}
+			return c.printColorConfig()
+		},
+	}
+	reset := &cobra.Command{
+		Use:   "reset",
+		Short: "Reset all CLI preferences to built-in defaults",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return c.resetPreferences()
+		},
+	}
+	command.AddCommand(color, reset)
+	return command
+}
+
 func (c *CLI) daemonCommand() *cobra.Command {
 	command := commandGroup("daemon", "Inspect, stop, or restart the local Portless daemon")
 
-	statusJSON := false
 	status := &cobra.Command{
 		Use:   "status",
 		Short: "Authenticate the daemon and show its identity",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.daemonStatus(cmd.Context(), statusJSON)
+			return c.daemonStatus(cmd.Context(), c.jsonOutput)
 		},
 	}
-	status.Flags().BoolVar(&statusJSON, "json", false, "emit JSON")
 	command.AddCommand(status)
 
 	stopOptions := bootstrap.StopOptions{Timeout: 15 * time.Second}
-	stopJSON := false
 	stop := &cobra.Command{
 		Use:   "stop",
 		Short: "Gracefully stop the authenticated daemon",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.stopDaemon(cmd.Context(), stopOptions, stopJSON)
+			return c.stopDaemon(cmd.Context(), stopOptions, c.jsonOutput)
 		},
 	}
 	stop.Flags().BoolVar(&stopOptions.Force, "force", false, "stop despite active environments or use the guarded legacy fallback")
 	stop.Flags().DurationVar(&stopOptions.Timeout, "timeout", stopOptions.Timeout, "time to wait for graceful shutdown")
-	stop.Flags().BoolVar(&stopJSON, "json", false, "emit JSON")
 	command.AddCommand(stop)
 
 	restartOptions := bootstrap.StopOptions{Timeout: 15 * time.Second}
-	restartJSON := false
 	restart := &cobra.Command{
 		Use:   "restart",
 		Short: "Stop the authenticated daemon and start the current build",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.restartDaemon(cmd.Context(), restartOptions, restartJSON)
+			return c.restartDaemon(cmd.Context(), restartOptions, c.jsonOutput)
 		},
 	}
 	restart.Flags().BoolVar(&restartOptions.Force, "force", false, "restart despite active environments or replace a guarded legacy daemon")
 	restart.Flags().DurationVar(&restartOptions.Timeout, "timeout", restartOptions.Timeout, "time to wait for graceful shutdown")
-	restart.Flags().BoolVar(&restartJSON, "json", false, "emit JSON")
 	command.AddCommand(restart)
 
 	return command
 }
 
 func (c *CLI) doctorCommand() *cobra.Command {
-	jsonOutput := false
 	command := &cobra.Command{
 		Use:               "doctor [daemon|relay|runtime]",
 		Short:             "Diagnose the local Portless installation",
@@ -213,10 +303,9 @@ func (c *CLI) doctorCommand() *cobra.Command {
 			if err != nil {
 				return usageError("%v", err)
 			}
-			return c.doctor(cmd.Context(), scope, jsonOutput)
+			return c.doctor(cmd.Context(), scope, c.jsonOutput)
 		},
 	}
-	command.Flags().BoolVar(&jsonOutput, "json", false, "emit a machine-readable diagnostic report")
 	return command
 }
 
@@ -226,19 +315,17 @@ func (c *CLI) setupCommand() *cobra.Command {
 		Short: "Install, inspect, or remove the localhost port-80 relay",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.setup(cmd.Context())
+			return c.setup(cmd.Context(), c.jsonOutput)
 		},
 	}
-	jsonOutput := false
 	status := &cobra.Command{
 		Use:   "status",
 		Short: "Show clean-URL relay installation and health",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.setupStatus(cmd.Context(), jsonOutput)
+			return c.setupStatus(cmd.Context(), c.jsonOutput)
 		},
 	}
-	status.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON")
 	command.AddCommand(status)
 
 	force := false
@@ -248,7 +335,7 @@ func (c *CLI) setupCommand() *cobra.Command {
 		Short:   "Remove only the privileged clean-URL relay",
 		Args:    usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.uninstallSetup(cmd.Context(), force)
+			return c.uninstallSetup(cmd.Context(), force, c.jsonOutput)
 		},
 	}
 	uninstall.Flags().BoolVar(&force, "force", false, "remove an installation owned by another or unknown user")
@@ -260,10 +347,10 @@ func (c *CLI) upCommand() *cobra.Command {
 	options := upOptions{timeout: 10 * time.Minute, open: true, wait: true}
 	noOpen, noWait := false, false
 	command := &cobra.Command{
-		Use:   "up [project/environment]",
+		Use:   "up",
 		Short: "Start an environment",
-		Args:  usageArgs(cobra.MaximumNArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			effective := options
 			if noOpen {
 				effective.open = false
@@ -271,12 +358,11 @@ func (c *CLI) upCommand() *cobra.Command {
 			if noWait {
 				effective.wait = false
 			}
-			return c.up(cmd.Context(), firstArg(args), effective)
+			return c.up(cmd.Context(), "", effective)
 		},
 	}
 	flags := command.Flags()
 	flags.StringVar(&options.name, "name", "", "name used when discovering a new project")
-	flags.BoolVar(&options.jsonOutput, "json", false, "emit JSON Lines")
 	flags.DurationVar(&options.timeout, "timeout", options.timeout, "startup timeout")
 	flags.BoolVar(&options.open, "open", options.open, "open the dashboard")
 	flags.BoolVar(&noOpen, "no-open", false, "do not open a browser")
@@ -290,14 +376,14 @@ func (c *CLI) upCommand() *cobra.Command {
 func (c *CLI) downCommand() *cobra.Command {
 	options := downOptions{wait: true}
 	command := &cobra.Command{
-		Use:   "down [project/environment]",
+		Use:   "down",
 		Short: "Stop an environment",
-		Args:  usageArgs(cobra.MaximumNArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if options.volumes && !options.yes {
 				return usageError("--volumes permanently deletes managed database/cache data; repeat with --yes")
 			}
-			return c.down(cmd.Context(), firstArg(args), options)
+			return c.down(cmd.Context(), "", options)
 		},
 	}
 	command.Flags().BoolVar(&options.volumes, "volumes", false, "remove managed data volumes")
@@ -307,28 +393,15 @@ func (c *CLI) downCommand() *cobra.Command {
 }
 
 func (c *CLI) statusCommand() *cobra.Command {
-	jsonOutput := false
 	command := &cobra.Command{
-		Use:   "status [project/environment]",
+		Use:   "status",
 		Short: "Show environment status",
-		Args:  usageArgs(cobra.MaximumNArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.status(cmd.Context(), firstArg(args), jsonOutput)
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.status(cmd.Context(), "", c.jsonOutput)
 		},
 	}
-	command.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON")
 	return command
-}
-
-func (c *CLI) useCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "use <project/environment>",
-		Short: "Select an environment for the current checkout",
-		Args:  usageArgs(cobra.ExactArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.useEnvironment(cmd.Context(), args[0])
-		},
-	}
 }
 
 func (c *CLI) openCommand() *cobra.Command {
@@ -356,30 +429,31 @@ func (c *CLI) uiCommand() *cobra.Command {
 func (c *CLI) logsCommand() *cobra.Command {
 	options := streamOptions{}
 	command := &cobra.Command{
-		Use:   "logs <service>",
-		Short: "Read service logs",
-		Args:  usageArgs(cobra.ExactArgs(1)),
+		Use:   "logs [service]",
+		Short: "Read logs from every service or one named service",
+		Args:  usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.logs(cmd.Context(), args[0], options)
+			return c.logs(cmd.Context(), firstArg(args), options)
 		},
 	}
-	command.Flags().BoolVarP(&options.follow, "follow", "f", false, "continue polling for new lines")
-	command.Flags().BoolVar(&options.jsonOutput, "json", false, "emit JSON")
+	command.Flags().BoolVarP(&options.tail, "tail", "t", false, "keep streaming new log lines")
 	return command
 }
 
 func (c *CLI) trafficCommand() *cobra.Command {
+	command := commandGroup("traffic", "Inspect HTTP traffic")
 	options := streamOptions{}
-	command := &cobra.Command{
-		Use:   "traffic [service|source:target]",
-		Short: "Inspect HTTP traffic",
-		Args:  usageArgs(cobra.MaximumNArgs(1)),
+	list := &cobra.Command{
+		Use:     "list [service|source:target]",
+		Aliases: []string{"ls"},
+		Short:   "List captured HTTP traffic",
+		Args:    usageArgs(cobra.MaximumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return c.traffic(cmd.Context(), firstArg(args), options)
 		},
 	}
-	command.Flags().BoolVarP(&options.follow, "follow", "f", false, "stream live traffic")
-	command.Flags().BoolVar(&options.jsonOutput, "json", false, "emit JSON")
+	list.Flags().BoolVarP(&options.tail, "tail", "t", false, "stream live traffic")
+	command.AddCommand(list)
 	return command
 }
 
@@ -544,6 +618,33 @@ func (c *CLI) environmentCommand() *cobra.Command {
 	command.Aliases = []string{"environment"}
 
 	command.AddCommand(&cobra.Command{
+		Use:               "select <project/environment>",
+		Short:             "Select an environment for the current checkout",
+		Example:           "  portless env select billing/local",
+		Args:              usageArgs(cobra.ExactArgs(1)),
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.selectEnvironment(cmd.Context(), args[0])
+		},
+	})
+	command.AddCommand(&cobra.Command{
+		Use:   "current",
+		Short: "Show the effective environment and how it was resolved",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.showEnvironmentContext(cmd.Context())
+		},
+	})
+	command.AddCommand(&cobra.Command{
+		Use:   "clear",
+		Short: "Clear the saved environment selection for the current checkout",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.clearEnvironmentSelection(cmd.Context())
+		},
+	})
+
+	command.AddCommand(&cobra.Command{
 		Use:   "list [project]",
 		Short: "List environments",
 		Args:  usageArgs(cobra.MaximumNArgs(1)),
@@ -652,7 +753,7 @@ func (c *CLI) runtimeCommand() *cobra.Command {
 		Short: "Show container runtime status",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.runtimeStatus(cmd.Context())
+			return c.runtimeStatus(cmd.Context(), c.jsonOutput)
 		},
 	})
 	command.AddCommand(&cobra.Command{
@@ -660,7 +761,7 @@ func (c *CLI) runtimeCommand() *cobra.Command {
 		Short: "Start the configured container runtime",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.startRuntime(cmd.Context())
+			return c.startRuntime(cmd.Context(), c.jsonOutput)
 		},
 	})
 	use := &cobra.Command{
@@ -672,7 +773,7 @@ func (c *CLI) runtimeCommand() *cobra.Command {
 			if args[0] != "auto" && args[0] != "docker" && args[0] != "podman" {
 				return usageError("runtime must be auto, docker, or podman")
 			}
-			return c.useRuntime(cmd.Context(), args[0])
+			return c.useRuntime(cmd.Context(), args[0], c.jsonOutput)
 		},
 	}
 	command.AddCommand(use)
@@ -684,10 +785,18 @@ func (c *CLI) versionCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Print the Portless version",
 		Args:  usageArgs(cobra.NoArgs),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if c.jsonOutput {
+				return writeJSON(c.Out, map[string]string{"version": Version})
+			}
 			fmt.Fprintln(c.Out, "portless "+Version)
+			return nil
 		},
 	}
+}
+
+func jsonFlagRequested(args []string) bool {
+	return boolFlagRequested(args, "json")
 }
 
 func commandGroup(use, short string) *cobra.Command {

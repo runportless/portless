@@ -50,7 +50,6 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     ...projects.map((project) => ({ group: 'Projects', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onNavigate(`/projects/${encodeURIComponent(project.name)}`) })),
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
-    { group: 'Navigation', label: 'All projects', detail: 'projects and environments', run: () => onNavigate('/projects') },
   ], [commands, environments, onNavigate, projects])
 
   const expandProject = (name: string) => {
@@ -70,10 +69,6 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     <aside className="sidebar">
       <button className="brand" onClick={() => onNavigate('/projects')} aria-label="Portless projects"><span className="brand__signal"><i /><i /><i /></span><span>portless</span><small>local</small></button>
       <div className="sidebar__body">
-        <div className="sidebar__section-label">Workspace</div>
-        <nav className="view-nav" aria-label="Workspace">
-          <button onClick={() => onNavigate('/projects')} className={!activeProject && !activeEnvironment ? 'is-active' : ''} aria-current={!activeProject && !activeEnvironment ? 'page' : undefined}><FolderIcon /><span>All projects</span></button>
-        </nav>
         <div className="sidebar__section-label">Projects</div>
         <nav className="project-nav" aria-label="Projects">
           {projects.map((project) => {
@@ -159,7 +154,6 @@ function readExpandedProjects() {
   } catch { return new Set<string>() }
 }
 function ChevronIcon({ expanded }: { expanded: boolean }) { return <svg className={expanded ? 'is-expanded' : ''} viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2.5 3.5 3.5L4 9.5" /></svg> }
-function FolderIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h5l1.4 1.5h6.6v7.5h-13z" /></svg> }
 function GridIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" /><rect x="9" y="2" width="5" height="5" /><rect x="2" y="9" width="5" height="5" /><rect x="9" y="9" width="5" height="5" /></svg> }
 function LinkIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 5.5 5 4a3 3 0 0 0-4 4l2 2a3 3 0 0 0 4 0l1-1"/><path d="m9.5 10.5 1.5 1.5a3 3 0 0 0 4-4l-2-2a3 3 0 0 0-4 0L8 7"/></svg> }
 function PulseIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8h3l2-5 3.5 10L12 8h3" /></svg> }

@@ -33,7 +33,7 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 		if jsonOutput {
 			return writeJSON(c.Out, result)
 		}
-		fmt.Fprintln(c.Out, "Portless daemon is stopped.")
+		fmt.Fprintln(c.Out, "Portless daemon is", c.state(c.Out, "stopped")+".")
 		return nil
 	}
 	if err != nil {
@@ -65,7 +65,7 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 	if jsonOutput {
 		return writeJSON(c.Out, result)
 	}
-	fmt.Fprintf(c.Out, "Portless daemon: %s\n", state)
+	fmt.Fprintf(c.Out, "%s %s\n", c.heading(c.Out, "Portless daemon:"), c.state(c.Out, state))
 	fmt.Fprintf(c.Out, "PID: %d\n", result.PID)
 	fmt.Fprintf(c.Out, "Started: %s\n", result.StartedAt.Local().Format(time.RFC3339))
 	fmt.Fprintf(c.Out, "Instance: %s\n", shortFingerprint(result.InstanceID))
@@ -80,7 +80,7 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 		}
 	}
 	for _, problem := range result.Problems {
-		fmt.Fprintln(c.Out, "Problem: "+problem)
+		fmt.Fprintln(c.Out, c.failure(c.Out, "Problem:")+" "+problem)
 	}
 	return nil
 }
@@ -97,7 +97,7 @@ func (c *CLI) stopDaemon(ctx context.Context, options bootstrap.StopOptions, jso
 		fmt.Fprintln(c.Out, "Portless daemon is already stopped.")
 		return nil
 	}
-	fmt.Fprintf(c.Out, "Stopped Portless daemon (PID %d).\n", result.PID)
+	fmt.Fprintf(c.Out, "%s Portless daemon (PID %d).\n", c.success(c.Out, "Stopped"), result.PID)
 	printForcedDaemonWarning(c, result)
 	return nil
 }
@@ -129,7 +129,7 @@ func (c *CLI) restartDaemon(ctx context.Context, options bootstrap.StopOptions, 
 			Problems: problems,
 		}})
 	}
-	fmt.Fprintf(c.Out, "Portless daemon is running (PID %d, build %s).\n", record.PID, shortFingerprint(record.BuildID))
+	fmt.Fprintf(c.Out, "Portless daemon is %s (PID %d, build %s).\n", c.success(c.Out, "running"), record.PID, shortFingerprint(record.BuildID))
 	printForcedDaemonWarning(c, stopped)
 	return nil
 }
@@ -138,7 +138,7 @@ func printForcedDaemonWarning(c *CLI, result bootstrap.StopResult) {
 	if !result.Forced || len(result.ActiveEnvironments) == 0 {
 		return
 	}
-	fmt.Fprintln(c.Out, "Warning: these active environments were left unmanaged:")
+	fmt.Fprintln(c.Out, c.warning(c.Out, "Warning:")+" these active environments were left unmanaged:")
 	for _, environment := range result.ActiveEnvironments {
 		fmt.Fprintln(c.Out, "  "+environment)
 	}

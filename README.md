@@ -85,11 +85,19 @@ portless daemon stop
 portless daemon restart
 portless setup status
 portless doctor
+portless config color
+portless config color auto
+portless config color always
+portless config color never
+portless config reset
 portless env list
-portless use billing/local
+portless env select billing/local
+portless env current
+portless env clear
+portless --env billing/qa status
 portless open [service]
-portless logs <service> --follow
-portless traffic [service|source:target] --follow
+portless logs [service] --tail
+portless traffic list [service|source:target] --tail
 
 portless runtime status
 portless runtime use auto
@@ -114,6 +122,8 @@ Every command and subcommand has generated help, for example `portless env bind 
 portless completion --help
 source <(portless completion zsh)
 ```
+
+CLI color defaults to `auto`, which uses a restrained status palette only when output is going to an interactive terminal. `portless config color always` or `portless config color never` saves a machine-local preference in `~/.portless/preferences.json`; `portless config color auto` restores terminal detection. `portless config reset` removes all saved CLI preferences and restores their built-in defaults. The global `--no-color` flag and the `NO_COLOR` environment variable override the saved preference for one invocation. JSON, redirected output in `auto` mode, and generated completion scripts never contain ANSI color codes.
 
 Ordinary `down` preserves managed volumes, history, logs, and recordings. Volume removal requires the separate destructive flag and confirmation.
 
@@ -168,7 +178,7 @@ portless project create billing \
   --source payments=../payments-service \
   --source notifications=../notifications-service
 
-portless use billing/local
+portless env select billing/local
 portless up
 ```
 
@@ -178,7 +188,7 @@ Clone an environment when you want a different composition. Cloning copies confi
 
 ```bash
 portless env clone qa-assisted --from local
-portless use billing/qa-assisted
+portless env select billing/qa-assisted
 
 # Keep checkout and notifications local, but route payments to QA.
 portless env bind payments --remote https://payments.qa.example.com \
@@ -196,7 +206,15 @@ git -C ../payments-service worktree add ../payments-experiment experiment
 portless env source payments --path ../payments-experiment
 ```
 
-From any source directory, `portless use billing/qa-assisted` records the selected environment for that checkout. Explicit selectors also work with lifecycle commands, for example `portless up billing/local`.
+From any project source directory, `portless env select billing/qa-assisted` saves that environment as the context for the checkout. Commands such as `up`, `down`, `status`, `logs`, `traffic`, `record`, `fault`, and environment configuration then use it automatically. `portless env current` shows the effective environment and whether it came from a saved selection or was inferred because only one environment uses the checkout. `portless env clear` removes only the saved selection.
+
+Use the global `--env` flag for a one-command override without changing the checkout selection:
+
+```bash
+portless --env billing/local status
+portless --env billing/local logs checkout --tail
+portless --env billing/qa up
+```
 
 ## No mandatory project file
 

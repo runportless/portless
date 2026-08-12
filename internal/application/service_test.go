@@ -105,6 +105,49 @@ func TestEnvironmentsForPathDecoratesResolvedEnvironmentURLs(t *testing.T) {
 	}
 }
 
+func TestEnvironmentContextExplainsSelectionAndInference(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := app.EnvironmentContext(ctx, source)
+	if err != nil || resolved.Resolution != "inferred" || resolved.Environment == nil || resolved.Environment.Name != "local" {
+		t.Fatalf("inferred context = %#v, err = %v", resolved, err)
+	}
+	if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa-assisted"); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = app.EnvironmentContext(ctx, source)
+	if err != nil || resolved.Resolution != "ambiguous" || resolved.Environment != nil || len(resolved.Candidates) != 2 {
+		t.Fatalf("ambiguous context = %#v, err = %v", resolved, err)
+	}
+	if err := app.SelectEnvironment(ctx, source, "billing", "qa-assisted"); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = app.EnvironmentContext(ctx, source)
+	if err != nil || resolved.Resolution != "selected" || resolved.Environment == nil || resolved.Environment.Name != "qa-assisted" || len(resolved.Candidates) != 0 {
+		t.Fatalf("selected context = %#v, err = %v", resolved, err)
+	}
+	cleared, err := app.ClearEnvironmentSelection(ctx, source)
+	if err != nil || !cleared {
+		t.Fatalf("clear = %v, %v", cleared, err)
+	}
+	resolved, err = app.EnvironmentContext(ctx, source)
+	if err != nil || resolved.Resolution != "ambiguous" || len(resolved.Candidates) != 2 {
+		t.Fatalf("context after clear = %#v, err = %v", resolved, err)
+	}
+}
+
 func nestFixture(t *testing.T, root string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o700); err != nil {

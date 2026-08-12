@@ -392,25 +392,56 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusOK, map[string]any{"environments": nonNil(environments)})
 		return
 	}
-	if len(segments) == 2 && segments[1] == "select" {
-		if request.Method != http.MethodPut {
-			methodNotAllowed(writer, http.MethodPut)
+	if len(segments) == 2 && segments[1] == "context" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
 			return
 		}
-		var input struct {
-			Path        string `json:"path"`
-			Project     string `json:"project"`
-			Environment string `json:"environment"`
-		}
-		if err := decodeJSON(request, &input); err != nil {
-			writeDecodeError(writer, err)
+		path := request.URL.Query().Get("path")
+		if path == "" {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "PATH_REQUIRED", Message: "the path query parameter is required"})
 			return
 		}
-		if err := s.app.SelectEnvironment(ctx, input.Path, input.Project, input.Environment); err != nil {
+		resolved, err := s.app.EnvironmentContext(ctx, path)
+		if err != nil {
 			s.writeError(writer, err, nil)
 			return
 		}
-		writer.WriteHeader(http.StatusNoContent)
+		writeJSON(writer, http.StatusOK, resolved)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "select" {
+		switch request.Method {
+		case http.MethodPut:
+			var input struct {
+				Path        string `json:"path"`
+				Project     string `json:"project"`
+				Environment string `json:"environment"`
+			}
+			if err := decodeJSON(request, &input); err != nil {
+				writeDecodeError(writer, err)
+				return
+			}
+			if err := s.app.SelectEnvironment(ctx, input.Path, input.Project, input.Environment); err != nil {
+				s.writeError(writer, err, nil)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+		case http.MethodDelete:
+			path := request.URL.Query().Get("path")
+			if path == "" {
+				writeAPIError(writer, http.StatusBadRequest, APIError{Code: "PATH_REQUIRED", Message: "the path query parameter is required"})
+				return
+			}
+			cleared, err := s.app.ClearEnvironmentSelection(ctx, path)
+			if err != nil {
+				s.writeError(writer, err, nil)
+				return
+			}
+			writeJSON(writer, http.StatusOK, map[string]any{"cleared": cleared})
+		default:
+			methodNotAllowed(writer, http.MethodPut, http.MethodDelete)
+		}
 		return
 	}
 	if len(segments) < 3 {

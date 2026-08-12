@@ -101,6 +101,58 @@ func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	}
 }
 
+func TestContextSelectionCanBeClearedIdempotently(t *testing.T) {
+	ctx := context.Background()
+	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := testDefinition()
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "checkout")
+	environment, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition,
+		[]model.SourceBinding{{Name: "checkout", Path: sourcePath, Status: "ready", ScannedAt: time.Now(), Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetContextSelection(ctx, sourcePath, "billing", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if selected, err := controlStore.ContextSelection(ctx, sourcePath); err != nil || selected.Name != "local" {
+		t.Fatalf("selection = %#v, err = %v", selected, err)
+	}
+	cleared, err := controlStore.ClearContextSelection(ctx, sourcePath)
+	if err != nil || !cleared {
+		t.Fatalf("first clear = %v, %v; want true, nil", cleared, err)
+	}
+	if _, err := controlStore.ContextSelection(ctx, sourcePath); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("selection still resolves after clear: %v", err)
+	}
+	cleared, err = controlStore.ClearContextSelection(ctx, sourcePath)
+	if err != nil || cleared {
+		t.Fatalf("second clear = %v, %v; want false, nil", cleared, err)
+	}
+
+	if err := controlStore.SetContextSelection(ctx, sourcePath, "billing", "local"); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := filepath.Join(t.TempDir(), "checkout-worktree")
+	if _, err := controlStore.ReplaceEnvironmentConfiguration(ctx, "billing", "local", environment.Revision, definition,
+		[]model.SourceBinding{{Name: "checkout", Path: replacementPath, Status: "ready", ScannedAt: time.Now(), Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.ContextSelection(ctx, sourcePath); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("selection still resolves after the environment moved to another checkout: %v", err)
+	}
+}
+
 func TestOnlyOneRecordingIsActivePerEnvironment(t *testing.T) {
 	ctx := context.Background()
 	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))

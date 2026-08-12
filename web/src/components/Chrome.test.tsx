@@ -26,7 +26,10 @@ describe('application navigation', () => {
   it('does not invent an environment scope from the first environment', () => {
     const markup = renderChrome()
 
-    expect(markup).toContain('All projects')
+    expect(markup).toContain('aria-label="Portless projects"')
+    expect(markup).toContain('aria-label="Projects"')
+    expect(markup).not.toContain('All projects')
+    expect(markup).not.toContain('Workspace')
     expect(markup).not.toContain('Providers')
     expect(markup).not.toContain('Traffic')
     expect(markup).not.toContain('Timeline')

@@ -336,7 +336,7 @@ func (s *Store) EnvironmentsByPath(ctx context.Context, path string) ([]model.En
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT p.name, e.name
+SELECT DISTINCT p.name, e.name
 FROM environment_sources source
 JOIN environments e ON e.private_key = source.environment_key
 JOIN projects p ON p.private_key = e.project_key
@@ -487,11 +487,28 @@ func (s *Store) ContextSelection(ctx context.Context, path string) (model.Enviro
 SELECT p.name, e.name FROM context_selections c
 JOIN environments e ON e.private_key = c.environment_key
 JOIN projects p ON p.private_key = e.project_key
+JOIN environment_sources source ON source.environment_key = c.environment_key AND source.path = c.path
 WHERE c.path = ?`, path).Scan(&projectName, &environmentName)
 	if err != nil {
 		return model.Environment{}, mapSQLError(err)
 	}
 	return s.Environment(ctx, projectName, environmentName)
+}
+
+func (s *Store) ClearContextSelection(ctx context.Context, path string) (bool, error) {
+	path, err := canonicalPath(path)
+	if err != nil {
+		return false, err
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM context_selections WHERE path = ?`, path)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return changed > 0, nil
 }
 
 func (s *Store) ForgetEnvironment(ctx context.Context, projectName, environmentName string) error {
