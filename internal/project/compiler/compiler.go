@@ -158,6 +158,45 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 	return result
 }
 
+// RefreshDiscoveredTopology rebuilds a logical project's connections from its
+// current source snapshots. Connections are discovery-owned in this release;
+// provider bindings are the environment-owned configuration that is preserved.
+func RefreshDiscoveredTopology(project model.ProjectModel, currentSources []model.SourceBinding) model.ProjectModel {
+	currentConnections, currentReferences := sourceTopology(project.Services, currentSources)
+	result := project
+	result.Connections = currentConnections
+	result.References = uniqueConnectionReferences(unresolvedReferences(project.Services, currentReferences))
+	return result
+}
+
+func sourceTopology(services []model.ServiceDefinition, sources []model.SourceBinding) ([]model.Connection, []model.ConnectionReference) {
+	var connections []model.Connection
+	var references []model.ConnectionReference
+	for _, source := range sources {
+		connections = append(connections, source.Definition.Connections...)
+		references = append(references, source.Definition.References...)
+	}
+	return resolveConnections(services, connections, references), references
+}
+
+func referenceKey(reference model.ConnectionReference) string {
+	return strings.ToLower(reference.Source + "\x00" + reference.TargetHint + "\x00" + reference.Environment)
+}
+
+func uniqueConnectionReferences(input []model.ConnectionReference) []model.ConnectionReference {
+	seen := make(map[string]struct{}, len(input))
+	result := make([]model.ConnectionReference, 0, len(input))
+	for _, reference := range input {
+		key := referenceKey(reference)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, reference)
+	}
+	return result
+}
+
 func pruneUnusedContainers(services []model.ServiceDefinition, connections []model.Connection, bindings map[string]model.ComponentBinding) []model.ServiceDefinition {
 	active := make(map[string]struct{})
 	for _, service := range services {

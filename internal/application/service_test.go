@@ -225,6 +225,96 @@ func TestEnvironmentsForPathDecoratesResolvedEnvironmentURLs(t *testing.T) {
 	}
 }
 
+func TestRescanRemovesConnectionNoLongerDiscoveredFromSource(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	environmentFile := filepath.Join(source, ".env.example")
+	if err := os.WriteFile(environmentFile, []byte("REDIS_URL=redis://redis\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, environment, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(environment.Connections) != 1 || environment.Connections[0].Source != "checkout" || environment.Connections[0].Target != "redis" {
+		t.Fatalf("initial connections = %#v", environment.Connections)
+	}
+	if err := os.WriteFile(environmentFile, []byte("LOG_LEVEL=debug\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rescanned, _, err := app.Rescan(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rescanned.Connections) != 0 {
+		t.Fatalf("rescanned connections = %#v, want none", rescanned.Connections)
+	}
+	projectDefinition, err := app.ProjectModel(ctx, "billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projectDefinition.Connections) != 0 {
+		t.Fatalf("stored project connections = %#v, want none", projectDefinition.Connections)
+	}
+}
+
+func TestEnvironmentDecoratesServicesWithRecentHTTPTraffic(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{
+		{Name: "checkout", Kind: model.ServiceProcess},
+		{Name: "orders", Kind: model.ServiceProcess},
+	}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "orders", Provider: model.ProviderLocal},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	broker := events.NewBroker()
+	app := New(controlStore, broker, Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	now := time.Now().UTC()
+	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "orders", CompletedAt: now.Add(-time.Second), DurationMS: 10})
+	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "orders", CompletedAt: now.Add(-2 * time.Second), DurationMS: 100})
+	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "checkout", CompletedAt: now.Add(-time.Minute), DurationMS: 999})
+	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Target: "orders", CompletedAt: now, DurationMS: 1})
+
+	environment, err := app.Environment(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range environment.Services {
+		switch service.Name {
+		case "orders":
+			if service.RecentRequest != 2 || service.P95Millis != 100 {
+				t.Fatalf("orders traffic = %d requests at p95 %dms", service.RecentRequest, service.P95Millis)
+			}
+		case "checkout":
+			if service.RecentRequest != 0 || service.P95Millis != 0 {
+				t.Fatalf("stale checkout traffic was counted: %#v", service)
+			}
+		}
+	}
+}
+
 func TestEnvironmentContextExplainsSelectionAndInference(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()

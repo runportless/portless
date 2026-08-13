@@ -271,6 +271,20 @@ type TrafficEvent struct {
 	ResponseHeaders      map[string]string    `json:"responseHeaders,omitempty"`
 }
 
+type TrafficActivity struct {
+	Project           string    `json:"project"`
+	Environment       string    `json:"environment"`
+	Protocol          Protocol  `json:"protocol"`
+	Source            string    `json:"source"`
+	Target            string    `json:"target"`
+	ObservedAt        time.Time `json:"observedAt"`
+	Phase             string    `json:"phase"`
+	ActiveConnections int64     `json:"activeConnections"`
+	RequestBytes      int64     `json:"requestBytes,omitempty"`
+	ResponseBytes     int64     `json:"responseBytes,omitempty"`
+	Fault             string    `json:"fault,omitempty"`
+}
+
 type ConfigurationValue struct {
 	Key            string `json:"key"`
 	Value          string `json:"value"`

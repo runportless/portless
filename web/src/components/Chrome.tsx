@@ -4,7 +4,7 @@ import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
-export type EnvironmentView = 'overview' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
+export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
@@ -108,7 +108,8 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
           <div className="sidebar__section-label sidebar__section-label--context"><span>Environment</span><small title={`${activeEnvironment.project}/${activeEnvironment.name}`}>{activeEnvironment.project}/{activeEnvironment.name}</small></div>
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>
             <ViewButton label="Overview" view="overview" activeView={activeView} environment={activeEnvironment} icon={<GridIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Providers" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} onNavigate={onNavigate} />
+            <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} onNavigate={onNavigate} />
+            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} onNavigate={onNavigate} />
             <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} onNavigate={onNavigate} />
             <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} onNavigate={onNavigate} />
             <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} onNavigate={onNavigate} />
@@ -170,6 +171,7 @@ function readExpandedProjects() {
 }
 function ChevronIcon({ expanded }: { expanded: boolean }) { return <svg className={expanded ? 'is-expanded' : ''} viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2.5 3.5 3.5L4 9.5" /></svg> }
 function GridIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" /><rect x="9" y="2" width="5" height="5" /><rect x="2" y="9" width="5" height="5" /><rect x="9" y="9" width="5" height="5" /></svg> }
+function TopologyIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.5" /><circle cx="10.5" cy="3.5" r="1.5" /><circle cx="13" cy="11.5" r="1.5" /><path d="m4.5 7.1 4.6-2.7M4.5 8.7l7 2.3M11.2 5l1.2 5" /></svg> }
 function LinkIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 5.5 5 4a3 3 0 0 0-4 4l2 2a3 3 0 0 0 4 0l1-1"/><path d="m9.5 10.5 1.5 1.5a3 3 0 0 0 4-4l-2-2a3 3 0 0 0-4 0L8 7"/></svg> }
 function PulseIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8h3l2-5 3.5 10L12 8h3" /></svg> }
 function RecordIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" /><circle cx="8" cy="8" r="2" className="fill" /></svg> }

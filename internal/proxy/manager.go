@@ -24,13 +24,14 @@ import (
 )
 
 type edge struct {
-	scope    string
-	source   string
-	target   string
-	protocol model.Protocol
-	listener net.Listener
-	server   *http.Server
-	cancel   context.CancelFunc
+	scope             string
+	source            string
+	target            string
+	protocol          model.Protocol
+	listener          net.Listener
+	server            *http.Server
+	cancel            context.CancelFunc
+	activeConnections atomic.Int64
 }
 
 type target struct {
@@ -324,6 +325,19 @@ func (m *Manager) forwardTCP(ctx context.Context, current *edge, downstream net.
 	started := time.Now().UTC()
 	defer downstream.Close()
 	fault := m.matchFault(ctx, current.scope, current.source, current.target, "", "")
+	activeConnections := current.activeConnections.Add(1)
+	m.publishTCPActivity(current, "open", activeConnections, 0, 0, faultName(fault))
+	var requestBytes atomic.Int64
+	var responseBytes atomic.Int64
+	activityDone := make(chan struct{})
+	activityStopped := make(chan struct{})
+	go m.reportTCPActivity(ctx, current, &requestBytes, &responseBytes, faultName(fault), activityDone, activityStopped)
+	defer func() {
+		close(activityDone)
+		<-activityStopped
+		activeConnections = current.activeConnections.Add(-1)
+		m.publishTCPActivity(current, "close", activeConnections, 0, 0, faultName(fault))
+	}()
 	if fault != nil {
 		m.applyDelay(ctx, *fault)
 		if fault.Abort || fault.StatusCode != 0 {
@@ -343,23 +357,92 @@ func (m *Manager) forwardTCP(ctx context.Context, current *edge, downstream net.
 	}
 	defer upstream.Close()
 	type countResult struct {
-		bytes int64
-		err   error
+		err error
 	}
 	results := make(chan countResult, 2)
-	go func() { count, err := io.Copy(upstream, downstream); results <- countResult{count, err} }()
-	go func() { count, err := io.Copy(downstream, upstream); results <- countResult{count, err} }()
+	go func() {
+		_, err := io.Copy(upstream, io.TeeReader(downstream, trafficCounter{value: &requestBytes}))
+		results <- countResult{err: err}
+	}()
+	go func() {
+		_, err := io.Copy(downstream, io.TeeReader(upstream, trafficCounter{value: &responseBytes}))
+		results <- countResult{err: err}
+	}()
 	first := <-results
-	_ = downstream.SetDeadline(time.Now())
-	_ = upstream.SetDeadline(time.Now())
-	second := <-results
+	forcedShutdown := false
+	var second countResult
+	select {
+	case second = <-results:
+	default:
+		forcedShutdown = true
+		_ = downstream.SetDeadline(time.Now())
+		_ = upstream.SetDeadline(time.Now())
+		second = <-results
+	}
 	errorText := ""
 	if first.err != nil && !isClosedConnection(first.err) {
 		errorText = first.err.Error()
-	} else if second.err != nil && !isClosedConnection(second.err) {
+	} else if !forcedShutdown && second.err != nil && !isClosedConnection(second.err) {
 		errorText = second.err.Error()
 	}
-	m.finishTCP(current, started, first.bytes, second.bytes, faultName(fault), errorText)
+	m.finishTCP(current, started, requestBytes.Load(), responseBytes.Load(), faultName(fault), errorText)
+}
+
+type trafficCounter struct{ value *atomic.Int64 }
+
+func (counter trafficCounter) Write(value []byte) (int, error) {
+	counter.value.Add(int64(len(value)))
+	return len(value), nil
+}
+
+func (m *Manager) reportTCPActivity(ctx context.Context, current *edge, requestBytes, responseBytes *atomic.Int64, fault string, done <-chan struct{}, stopped chan<- struct{}) {
+	defer close(stopped)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	lastRequestBytes := int64(0)
+	lastResponseBytes := int64(0)
+	lastPublished := time.Now()
+	publish := func(heartbeat bool) {
+		requestTotal := requestBytes.Load()
+		responseTotal := responseBytes.Load()
+		requestDelta := requestTotal - lastRequestBytes
+		responseDelta := responseTotal - lastResponseBytes
+		if requestDelta == 0 && responseDelta == 0 && !heartbeat {
+			return
+		}
+		phase := "data"
+		if requestDelta == 0 && responseDelta == 0 {
+			phase = "heartbeat"
+		}
+		m.publishTCPActivity(current, phase, current.activeConnections.Load(), requestDelta, responseDelta, fault)
+		lastRequestBytes = requestTotal
+		lastResponseBytes = responseTotal
+		lastPublished = time.Now()
+	}
+	for {
+		select {
+		case <-done:
+			publish(false)
+			return
+		case <-ctx.Done():
+			publish(false)
+			return
+		case <-ticker.C:
+			publish(time.Since(lastPublished) >= 5*time.Second)
+		}
+	}
+}
+
+func (m *Manager) publishTCPActivity(current *edge, phase string, activeConnections, requestBytes, responseBytes int64, fault string) {
+	project, environment := scopeNames(current.scope)
+	m.broker.Publish(events.Event{
+		Type: "traffic.tcp.activity", Project: project, Environment: environment,
+		Data: model.TrafficActivity{
+			Project: project, Environment: environment, Protocol: current.protocol,
+			Source: current.source, Target: current.target, ObservedAt: time.Now().UTC(), Phase: phase,
+			ActiveConnections: activeConnections, RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault,
+		},
+	})
 }
 
 func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, responseBytes int64, fault, errorText string) {

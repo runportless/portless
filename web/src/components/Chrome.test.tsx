@@ -1,13 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { DaemonStatus, Environment, Project } from '../types'
-import { AppChrome } from './Chrome'
+import { AppChrome, type EnvironmentView } from './Chrome'
 
 const project = { name: 'billing' } as Project
 const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
 const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
 
-function renderChrome(activeEnvironment?: Environment, activeView: 'overview' | 'traffic' = 'overview') {
+function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview') {
   return renderToStaticMarkup(
     <AppChrome
       projects={[project]}
@@ -37,7 +37,8 @@ describe('application navigation', () => {
     expect(markup).toContain('aria-label="Projects"')
     expect(markup).not.toContain('All projects')
     expect(markup).not.toContain('Workspace')
-    expect(markup).not.toContain('Providers')
+    expect(markup).not.toContain('Bindings')
+    expect(markup).not.toContain('Topology')
     expect(markup).not.toContain('Traffic')
     expect(markup).not.toContain('Timeline')
     expect(markup).toContain('daemon ready')
@@ -45,10 +46,11 @@ describe('application navigation', () => {
   })
 
   it('shows and selects views only for the active environment', () => {
-    const markup = renderChrome(environment, 'traffic')
+    const markup = renderChrome(environment, 'topology')
 
     expect(markup).toContain('aria-label="billing/local views"')
-    expect(markup).toContain('Providers')
+    expect(markup).toContain('Bindings')
+    expect(markup).toContain('Topology')
     expect(markup).toContain('Timeline')
     expect(markup).toContain('<button class="is-active" aria-current="page"')
   })

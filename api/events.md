@@ -23,6 +23,13 @@ Current topics:
 - `fault.state`
 - `traffic.http`
 - `traffic.tcp`
+- `traffic.tcp.activity`
+
+`traffic.tcp.activity` is an ephemeral live signal for open TCP connections. It
+reports `open`, `data`, `heartbeat`, and `close` phases with the current active
+connection count and byte deltas. This lets the topology animate long-lived
+Postgres and Redis connections before their final `traffic.tcp` event exists.
+It is not retained in traffic snapshots or recordings.
 
 After a daemon handoff, snapshot responses can temporarily report environment
 and service state as `recovering`. The replacement daemon does not emit a

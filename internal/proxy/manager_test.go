@@ -143,6 +143,125 @@ func TestTCPEdgeOutlivesTheOperationContextThatCreatedIt(t *testing.T) {
 	}
 }
 
+func TestTCPEdgePublishesActivityBeforeTheConnectionCloses(t *testing.T) {
+	controlStore, err := store.Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		connection, acceptErr := upstream.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		_, _ = io.Copy(connection, connection)
+	}()
+
+	broker := events.NewBroker()
+	manager := NewManager(controlStore, broker)
+	defer manager.Close(context.Background())
+	scope := model.EnvironmentSelector("billing", "local")
+	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.tcp.activity"})
+	defer subscription.Close()
+	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
+	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := connection.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 4)
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-subscription.C:
+			activity, ok := event.Data.(model.TrafficActivity)
+			if ok && activity.Phase == "data" && activity.ActiveConnections == 1 && activity.RequestBytes >= 4 && activity.ResponseBytes >= 4 {
+				return
+			}
+		case <-deadline:
+			t.Fatal("TCP byte activity was not published while the connection remained open")
+		}
+	}
+}
+
+func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {
+	controlStore, err := store.Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		connection, acceptErr := upstream.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		request := make([]byte, 4)
+		if _, readErr := io.ReadFull(connection, request); readErr != nil {
+			return
+		}
+		_, _ = connection.Write([]byte("pong"))
+		time.Sleep(time.Second)
+	}()
+
+	broker := events.NewBroker()
+	manager := NewManager(controlStore, broker)
+	defer manager.Close(context.Background())
+	scope := model.EnvironmentSelector("billing", "local")
+	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
+	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 4)
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		traffic := broker.RecentTraffic(scope, 1)
+		if len(traffic) == 1 {
+			if traffic[0].Error != "" {
+				t.Fatalf("successful TCP exchange error = %q", traffic[0].Error)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("completed TCP traffic was not published")
+}
+
 func TestRemoteTargetForwardsHTTPAndEnforcesReadOnlyPolicy(t *testing.T) {
 	controlStore := environmentStore(t)
 	defer controlStore.Close()

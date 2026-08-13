@@ -178,6 +178,20 @@ export interface TrafficEvent {
   responseHeaders?: Record<string, string>
 }
 
+export interface TrafficActivity {
+  project: string
+  environment: string
+  protocol: string
+  source: string
+  target: string
+  observedAt: string
+  phase: 'open' | 'data' | 'heartbeat' | 'close'
+  activeConnections: number
+  requestBytes?: number
+  responseBytes?: number
+  fault?: string
+}
+
 export interface Recording { project: string; environment: string; name: string; source?: string; target?: string; captureBodies: boolean; maxEvents: number; maxBodyBytes: number; status: string; startedAt: string; completedAt?: string; expiresAt?: string; eventCount: number }
 export interface FaultRule { project: string; environment: string; name: string; source: string; target: string; method?: string; path?: string; probability: number; latencyMs?: number; jitterMs?: number; statusCode?: number; abort?: boolean; enabled: boolean; createdAt: string; expiresAt?: string; matchCount: number; revision: number; scopeSummary: string }
 export interface TimelineEvent { project: string; environment: string; sequence: number; timestamp: string; actor: string; type: string; subject?: string; severity: string; summary: string; details?: Record<string, unknown> }

@@ -74,3 +74,32 @@ func TestCompilePrunesContainersUsedOnlyByRemoteServices(t *testing.T) {
 		t.Fatalf("effective services = %v", names)
 	}
 }
+
+func TestRefreshDiscoveredTopologyReplacesStoredConnectionsFromCurrentSources(t *testing.T) {
+	project := model.ProjectModel{
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "orders", Kind: model.ServiceProcess},
+			{Name: "redis", Kind: model.ServiceContainer},
+		},
+		Connections: []model.Connection{
+			{Source: "external", Target: "checkout", Protocol: model.ProtocolHTTP},
+			{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Environment: "ORDERS_URL", Required: true},
+			{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis, Environment: "REDIS_URL", Required: true},
+			{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis, Environment: "REDIS_URL", Required: true},
+		},
+	}
+	current := []model.SourceBinding{{Name: "apps", Definition: model.ProjectModel{Connections: []model.Connection{
+		{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Environment: "ORDERS_URL", Required: true},
+		{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis, Environment: "REDIS_URL", Required: true},
+	}}}}
+
+	refreshed := RefreshDiscoveredTopology(project, current)
+	var edges []string
+	for _, connection := range refreshed.Connections {
+		edges = append(edges, connection.Source+":"+connection.Target)
+	}
+	if strings.Join(edges, ",") != "checkout:orders,orders:redis" {
+		t.Fatalf("refreshed edges = %v", edges)
+	}
+}

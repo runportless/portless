@@ -94,6 +94,7 @@ export function App() {
   }, [])
   const commands = useMemo<Command[]>(() => activeEnvironment ? [
     ...(activeEnvironment.status === 'recovering' ? [] : [{ group: 'Actions', label: activeEnvironment.status === 'stopped' ? 'Start environment' : 'Stop environment', detail: `${activeEnvironment.project}/${activeEnvironment.name}`, run: () => void mutateEnvironment(activeEnvironment.status === 'stopped' ? 'up' : 'down') } as Command]),
+    { group: 'Views', label: 'Open topology', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'topology')) },
     { group: 'Views', label: 'Configure providers', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'bindings')) },
     { group: 'Views', label: 'Inspect live traffic', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'traffic')) },
     { group: 'Views', label: 'Introduce a fault', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'faults')) },
@@ -124,7 +125,7 @@ function parseRoute(route: string): { project?: string; environment?: string; ta
   if (parts[0] === 'projects' && parts[1]) project = parts[1]
   if (parts[0] === 'environments' && parts[1] && parts[2]) { project = parts[1]; environment = parts[2] }
   const requested = current.searchParams.get('tab')
-  const tabs: Tab[] = ['overview', 'bindings', 'traffic', 'recordings', 'faults', 'timeline']
+  const tabs: Tab[] = ['overview', 'topology', 'bindings', 'traffic', 'recordings', 'faults', 'timeline']
   const tab = tabs.includes(requested as Tab) ? requested as Tab : 'overview'
   return { project, environment, tab }
 }

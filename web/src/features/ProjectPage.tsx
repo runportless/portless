@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { api, connectEvents, jsonBody, environmentPath } from '../api'
-import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficEvent, WritePolicy } from '../types'
+import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficEvent, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 
-type Tab = 'overview' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
+type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
 
 export function EnvironmentPage({ environment, tab, onNavigate, onChanged }: { environment: Environment; tab: Tab; onNavigate: (path: string) => void; onChanged: () => void }) {
   const [selectedService, setSelectedService] = useState<Service | null>(null)
@@ -16,7 +16,7 @@ export function EnvironmentPage({ environment, tab, onNavigate, onChanged }: { e
   const refreshSecondary = async () => {
     const base = environmentPath(environment)
     const [timelineResult, recordingResult, faultResult] = await Promise.all([
-      api<{ timeline: TimelineEvent[] }>(`${base}/timeline?limit=100`),
+      api<{ timeline: TimelineEvent[] }>(`${base}/timeline?limit=1000`),
       api<{ recordings: Recording[] }>(`${base}/recordings`),
       api<{ faults: FaultRule[] }>(`${base}/faults`),
     ])
@@ -67,96 +67,324 @@ export function EnvironmentPage({ environment, tab, onNavigate, onChanged }: { e
       {!!environment.issues?.length && <div className="alert alert--danger"><strong>Configuration needs attention</strong><span>{environment.issues.map((issue) => issue.message).join(' · ')}</span></div>}
       {error && <div className="alert alert--danger"><strong>Action failed</strong><span>{error}</span><button onClick={() => setError('')}>DISMISS</button></div>}
       <nav className="tabs" aria-label="Environment views">
-        {(['overview', 'bindings', 'traffic', 'recordings', 'faults', 'timeline'] as Tab[]).map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => onNavigate(environmentUIPath(environment, name))}>{name}<small>{name === 'recordings' ? recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
+        {(['overview', 'topology', 'bindings', 'traffic', 'recordings', 'faults', 'timeline'] as Tab[]).map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => onNavigate(environmentUIPath(environment, name))}>{name}<small>{name === 'recordings' ? recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
       </nav>
-      {tab === 'overview' && <Overview environment={environment} timeline={timeline} ready={ready} activeFaults={activeFaults.length} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onTab={(next) => onNavigate(environmentUIPath(environment, next))} />}
+      {tab === 'overview' && <Overview environment={environment} timeline={timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, edge, protocol))} />}
+      {tab === 'topology' && <TopologyView environment={environment} faults={activeFaults} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, edge, protocol))} />}
       {tab === 'bindings' && <BindingsPanel environment={environment} onChanged={onChanged} />}
       {tab === 'traffic' && <TrafficPanel environment={environment} />}
       {tab === 'recordings' && <RecordingsPanel environment={environment} recordings={recordings} refresh={refreshSecondary} />}
       {tab === 'faults' && <FaultsPanel environment={environment} faults={faults} refresh={refreshSecondary} />}
-      {tab === 'timeline' && <TimelinePanel timeline={timeline} />}
+      {tab === 'timeline' && <TimelinePanel key={`${environment.project}/${environment.name}`} timeline={timeline} />}
       {selectedService && <ServiceDrawer environment={environment} service={selectedService} onClose={() => setSelectedService(null)} onChanged={onChanged} />}
     </div>
   )
 }
 
-function Overview({ environment, timeline, ready, activeFaults, activeRecording, trafficCount, onService, onTab }: {
-  environment: Environment; timeline: TimelineEvent[]; ready: number; activeFaults: number; activeRecording?: Recording; trafficCount: number; onService: (service: Service) => void; onTab: (tab: Tab) => void
+function Overview({ environment, timeline, ready, faults, activeRecording, trafficCount, onService, onTab }: {
+  environment: Environment; timeline: TimelineEvent[]; ready: number; faults: FaultRule[]; activeRecording?: Recording; trafficCount: number; onService: (service: Service) => void; onTab: (tab: Tab, edge?: string, protocol?: 'http' | 'tcp') => void
 }) {
-  const [topologyMaximized, setTopologyMaximized] = useState(false)
+  const [topologyPaused, setTopologyPaused] = useState(false)
+  const [servicePage, setServicePage] = useState(0)
+  const [activityPage, setActivityPage] = useState(0)
+  const [copiedEndpoint, setCopiedEndpoint] = useState('')
+  const copyReset = useRef<number | undefined>(undefined)
+  const services = paginateOverview(environment.services, servicePage)
+  const activities = paginateOverview(timeline, activityPage)
   useEffect(() => {
-    if (!topologyMaximized) return
+    setServicePage(0)
+    setActivityPage(0)
+  }, [environment.project, environment.name])
+  useEffect(() => () => window.clearTimeout(copyReset.current), [])
+  const copyServiceEndpoint = async (event: ReactMouseEvent<HTMLButtonElement>, serviceName: string, endpoint: string) => {
+    event.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(endpoint)
+      setCopiedEndpoint(serviceName)
+      window.clearTimeout(copyReset.current)
+      copyReset.current = window.setTimeout(() => setCopiedEndpoint((current) => current === serviceName ? '' : current), 1400)
+    } catch { setCopiedEndpoint('') }
+  }
+  return <>
+    <div className="state-grid">
+      <StatePanel title="READY" value={`${ready}/${environment.services.length}`} detail="required services" />
+      <StatePanel title="TRAFFIC" value={trafficCount} detail="recent requests" />
+      <StatePanel title="RECORDING" value={activeRecording ? 'ON' : 'OFF'} tone={activeRecording ? 'danger' : undefined} detail={activeRecording?.name || 'capture disabled'} />
+      <StatePanel title="FAULTS" value={faults.length} tone={faults.length ? 'warning' : undefined} detail={faults.length ? 'affecting local traffic' : 'none active'} />
+      <StatePanel title="REVISION" value={environment.revision} detail={`updated · ${relativeTime(environment.updatedAt)} ago`} />
+    </div>
+    <section className="panel services-panel">
+      <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} managed workloads</small></div>
+      <div className="table-row table-row--header service-row"><span /><span>Name</span><span>Provider</span><span>State</span><span>Restarts</span><span>Requests</span><span>P95</span><span>Endpoint / reason</span><span /></div>
+      {services.items.map((service) => {
+        const endpoint = overviewServiceEndpoint(environment, service)
+        const copied = copiedEndpoint === service.name
+        return <div className="table-row service-row service-row--interactive" key={service.name} onClick={() => onService(service)}>
+          <StatusMark status={service.status} label={false} /><strong>{service.name}</strong><span>{bindingFor(environment, service.name)?.provider || service.kind}</span><StatusMark status={service.status} /><span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span><span>{service.recentRequests || '—'}</span><span>{service.p95Millis ? `${service.p95Millis}ms` : '—'}</span><span className="service-list-endpoint"><span className="truncate muted" title={service.reason || endpoint || 'not running'}>{service.reason || endpoint || 'not running'}</span>{!service.reason && endpoint && <button className={`service-copy-button${copied ? ' is-copied' : ''}`} type="button" aria-label={`Copy ${service.name} endpoint`} title={copied ? 'Copied' : 'Copy endpoint'} onClick={(event) => void copyServiceEndpoint(event, service.name, endpoint)}><CopyIcon copied={copied} /></button>}</span><button className="row-action" type="button" onClick={(event) => { event.stopPropagation(); onService(service) }}>INSPECT</button>
+        </div>
+      })}
+      <PanelPagination label="services" pagination={services} onPage={setServicePage} />
+    </section>
+    <div className="overview-grid">
+      <section className="panel topology-panel topology-panel--preview" aria-label="Service topology">
+        <div className="panel-title topology-toolbar"><span>TOPOLOGY</span><div><TopologyLiveButton paused={topologyPaused} onToggle={() => setTopologyPaused((value) => !value)} /><button className="topology-size-button" type="button" title="Open topology" aria-label="Open topology" onClick={() => onTab('topology')}><TopologySizeIcon /></button></div></div>
+        <Topology environment={environment} faults={faults} paused={topologyPaused} onService={onService} onEdge={(edge) => onTab('traffic', `${edge.source}:${edge.target}`, edge.protocol === 'http' ? 'http' : 'tcp')} />
+      </section>
+      <section className="panel activity-panel">
+        <div className="panel-title"><span>RECENT ACTIVITY</span><button onClick={() => onTab('timeline')}>FULL TIMELINE</button></div>
+        <div className="activity-list">
+          {activities.items.map((event) => <div className="activity" key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time><span className={`activity__line activity__line--${event.severity}`} /><div><strong>{event.summary}</strong><small>{event.subject || event.type} · {event.actor}</small></div></div>)}
+          {timeline.length === 0 && <div className="empty-row">No lifecycle events have been recorded yet.</div>}
+        </div>
+        <PanelPagination label="activities" pagination={activities} onPage={setActivityPage} />
+      </section>
+    </div>
+  </>
+}
+
+export function overviewServiceEndpoint(environment: Environment, service: Service) {
+  const binding = bindingFor(environment, service.name)
+  if (binding?.remote?.url) return binding.remote.url
+  if (service.ingressUrl) return service.ingressUrl
+  return serviceEndpoints(service, binding).find((endpoint) => endpoint.label === 'RUNTIME URL')?.value || ''
+}
+
+function CopyIcon({ copied }: { copied: boolean }) {
+  return copied
+    ? <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" /></svg>
+    : <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="3" width="8" height="9" /><path d="M10 12v2H2V5h3" /></svg>
+}
+
+function TopologyView({ environment, faults, onService, onTab }: { environment: Environment; faults: FaultRule[]; onService: (service: Service) => void; onTab: (tab: Tab, edge?: string, protocol?: 'http' | 'tcp') => void }) {
+  const [paused, setPaused] = useState(false)
+  const [maximized, setMaximized] = useState(false)
+
+  useEffect(() => {
+    if (!maximized) return
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !document.querySelector('.drawer-backdrop')) setTopologyMaximized(false)
+      if (event.key === 'Escape' && !document.querySelector('.drawer-backdrop')) setMaximized(false)
     }
     window.addEventListener('keydown', keydown)
     return () => {
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', keydown)
     }
-  }, [topologyMaximized])
-  return <>
-    <div className="state-grid">
-      <StatePanel title="READY" value={`${ready}/${environment.services.length}`} detail="required services" />
-      <StatePanel title="TRAFFIC" value={trafficCount} detail="recent requests" />
-      <StatePanel title="RECORDING" value={activeRecording ? 'ON' : 'OFF'} tone={activeRecording ? 'danger' : undefined} detail={activeRecording?.name || 'capture disabled'} />
-      <StatePanel title="FAULTS" value={activeFaults} tone={activeFaults ? 'warning' : undefined} detail={activeFaults ? 'affecting local traffic' : 'none active'} />
-      <StatePanel title="REVISION" value={environment.revision} detail={`updated · ${relativeTime(environment.updatedAt)} ago`} />
+  }, [maximized])
+
+  return <section className={`panel topology-panel topology-panel--page${maximized ? ' topology-panel--maximized' : ''}`} aria-label="Service topology">
+    <div className="panel-title topology-toolbar"><span>TOPOLOGY</span><div><TopologyLiveButton paused={paused} onToggle={() => setPaused((value) => !value)} /><button className={maximized ? 'icon-button' : 'topology-size-button'} type="button" title={`${maximized ? 'Restore' : 'Maximize'} topology`} aria-label={`${maximized ? 'Restore' : 'Maximize'} topology`} aria-pressed={maximized} onClick={() => setMaximized((value) => !value)}>{maximized ? '×' : <TopologySizeIcon />}</button></div></div>
+    <Topology environment={environment} faults={faults} paused={paused} onService={onService} onEdge={(edge) => onTab('traffic', `${edge.source}:${edge.target}`, edge.protocol === 'http' ? 'http' : 'tcp')} />
+  </section>
+}
+
+function TopologyLiveButton({ paused, onToggle }: { paused: boolean; onToggle: () => void }) {
+  return <button className={`topology-live${paused ? ' is-paused' : ''}`} type="button" title={paused ? 'Resume live topology' : 'Pause live topology'} onClick={onToggle}>{paused ? <svg className="topology-live__pause" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="3" height="8" /><rect x="6" y="1" width="3" height="8" /></svg> : <i className="topology-live__dot" aria-hidden="true" />}{paused ? 'PAUSED' : 'LIVE'}</button>
+}
+
+const overviewPageSize = 8
+
+type OverviewPagination<T> = { items: T[]; page: number; pageCount: number; start: number; end: number; total: number }
+
+export function paginateOverview<T>(items: T[], requestedPage: number, pageSize = overviewPageSize): OverviewPagination<T> {
+  const pageCount = Math.max(1, Math.ceil(items.length/pageSize))
+  const page = Math.min(Math.max(0, requestedPage), pageCount-1)
+  const start = page*pageSize
+  const end = Math.min(items.length, start+pageSize)
+  return { items: items.slice(start, end), page, pageCount, start, end, total: items.length }
+}
+
+function PanelPagination<T>({ label, pagination, onPage }: { label: string; pagination: OverviewPagination<T>; onPage: (page: number) => void }) {
+  if (pagination.pageCount <= 1) return null
+  return <footer className="panel-pagination" aria-label={`${label} pagination`}>
+    <span>{pagination.start+1}–{pagination.end} of {pagination.total}</span>
+    <div>
+      <button type="button" aria-label={`Previous ${label} page`} disabled={pagination.page === 0} onClick={() => onPage(pagination.page-1)}>← PREV</button>
+      <small>{pagination.page+1} / {pagination.pageCount}</small>
+      <button type="button" aria-label={`Next ${label} page`} disabled={pagination.page === pagination.pageCount-1} onClick={() => onPage(pagination.page+1)}>NEXT →</button>
     </div>
-    <div className="overview-grid">
-      <section className={`panel topology-panel${topologyMaximized ? ' topology-panel--maximized' : ''}`} aria-label="Service topology">
-        <div className="panel-title"><span>TOPOLOGY</span><button className={topologyMaximized ? 'icon-button' : 'topology-size-button'} type="button" title={`${topologyMaximized ? 'Restore' : 'Maximize'} topology`} aria-label={`${topologyMaximized ? 'Restore' : 'Maximize'} topology`} aria-pressed={topologyMaximized} onClick={() => setTopologyMaximized((value) => !value)}>{topologyMaximized ? '×' : <TopologySizeIcon />}</button></div>
-        <Topology environment={environment} onService={onService} />
-      </section>
-      <section className="panel activity-panel">
-        <div className="panel-title"><span>RECENT ACTIVITY</span><button onClick={() => onTab('timeline')}>FULL TIMELINE</button></div>
-        <div className="activity-list">
-          {timeline.slice(0, 7).map((event) => <div className="activity" key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time><span className={`activity__line activity__line--${event.severity}`} /><div><strong>{event.summary}</strong><small>{event.subject || event.type} · {event.actor}</small></div></div>)}
-          {timeline.length === 0 && <div className="empty-row">No lifecycle events have been recorded yet.</div>}
-        </div>
-      </section>
-    </div>
-    <section className="panel services-panel">
-      <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} managed workloads</small></div>
-      <div className="table-row table-row--header service-row"><span /><span>Name</span><span>Provider</span><span>State</span><span>Restarts</span><span>Requests</span><span>P95</span><span>Endpoint / reason</span><span /></div>
-      {environment.services.map((service) => <button className="table-row service-row" key={service.name} onClick={() => onService(service)}>
-        <StatusMark status={service.status} label={false} /><strong>{service.name}</strong><span>{bindingFor(environment, service.name)?.provider || service.kind}</span><StatusMark status={service.status} /><span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span><span>{service.recentRequests || '—'}</span><span>{service.p95Millis ? `${service.p95Millis}ms` : '—'}</span><span className="truncate muted">{service.reason || bindingFor(environment, service.name)?.remote?.url || service.ingressUrl || (service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : 'not running')}</span><span className="row-action">INSPECT</span>
-      </button>)}
-    </section>
-  </>
+  </footer>
 }
 
 type TopologyItem = { kind: 'client'; key: 'external' } | { kind: 'service'; key: string; service: Service }
+type TopologySignal = TrafficEvent | TrafficActivity
+type TopologyEdgeMetric = {
+  samples: Array<{ observedAt: number; duration: number; error: boolean }>
+  bytes: number
+  activeConnections: number
+  lastSeen: number
+  latestSequence: number
+  fault?: string
+  faultSeen?: number
+}
+type TopologyEdge = ReturnType<typeof buildTopology>['edges'][number]
+
+const topologyWindowMilliseconds = 30_000
+
+export function topologyEdgeKey(source: string, target: string) { return `${source}\u0000${target}` }
+
+export function summarizeTopologyTraffic(events: TrafficEvent[], now = Date.now()) {
+  const metrics = new Map<string, TopologyEdgeMetric>()
+  for (const event of events) {
+    const observedAt = new Date(event.completedAt || event.startedAt).getTime()
+    if (!Number.isFinite(observedAt) || now-observedAt > topologyWindowMilliseconds) continue
+    const key = topologyEdgeKey(event.source, event.target)
+    const current = metrics.get(key) || emptyTopologyMetric()
+    if (event.protocol === 'http') current.samples.push({ observedAt, duration: event.durationMs || 0, error: !!event.error || (event.status || 0) >= 500 })
+    current.bytes += Math.max(0, event.requestBytes || 0) + Math.max(0, event.responseBytes || 0)
+    current.lastSeen = Math.max(current.lastSeen, observedAt)
+    current.latestSequence = Math.max(current.latestSequence, event.sequence || 0)
+    if (event.fault) { current.fault = event.fault; current.faultSeen = observedAt }
+    metrics.set(key, current)
+  }
+  return metrics
+}
+
+function emptyTopologyMetric(): TopologyEdgeMetric {
+  return { samples: [], bytes: 0, activeConnections: 0, lastSeen: 0, latestSequence: 0 }
+}
+
+function mergeTopologySignal(metrics: Map<string, TopologyEdgeMetric>, signal: TopologySignal) {
+  const key = topologyEdgeKey(signal.source, signal.target)
+  const next = new Map(metrics)
+  const current = { ...(next.get(key) || emptyTopologyMetric()) }
+  current.samples = current.samples.filter((sample) => Date.now()-sample.observedAt <= topologyWindowMilliseconds)
+  if ('phase' in signal) {
+    current.activeConnections = Math.max(0, signal.activeConnections || 0)
+    current.bytes += Math.max(0, signal.requestBytes || 0) + Math.max(0, signal.responseBytes || 0)
+    current.lastSeen = new Date(signal.observedAt).getTime() || Date.now()
+    if (signal.fault) { current.fault = signal.fault; current.faultSeen = current.lastSeen }
+  } else {
+    const observedAt = new Date(signal.completedAt || signal.startedAt).getTime() || Date.now()
+    current.samples.push({ observedAt, duration: signal.durationMs || 0, error: !!signal.error || (signal.status || 0) >= 500 })
+    current.bytes += Math.max(0, signal.requestBytes || 0) + Math.max(0, signal.responseBytes || 0)
+    current.lastSeen = new Date(signal.completedAt || signal.startedAt).getTime() || Date.now()
+    current.latestSequence = Math.max(current.latestSequence, signal.sequence || 0)
+    if (signal.fault) { current.fault = signal.fault; current.faultSeen = observedAt }
+  }
+  next.set(key, current)
+  return next
+}
+
+export function topologyEdgeTone(metric: TopologyEdgeMetric | undefined, hasFault: boolean, now = Date.now()) {
+  if (hasFault) return 'fault'
+  if (!metric || now-metric.lastSeen > topologyWindowMilliseconds) return 'idle'
+  if (metric.fault && metric.faultSeen && now-metric.faultSeen <= topologyWindowMilliseconds) return 'fault'
+  const samples = metric.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds)
+  if (samples.some((sample) => sample.error)) return 'error'
+  if (samples.length > 0 && samples.reduce((sum, sample) => sum+sample.duration, 0)/samples.length >= 500) return 'slow'
+  return 'active'
+}
+
+function topologyEdgeLabel(edge: TopologyEdge, metric: TopologyEdgeMetric | undefined, now: number, activeFault?: string) {
+  if (activeFault) return `▲ ${activeFault}`
+  if (!metric || now-metric.lastSeen > topologyWindowMilliseconds) return edge.protocol.toUpperCase()
+  if (edge.protocol !== 'http') return metric.activeConnections > 0 ? `${metric.activeConnections} OPEN · ${formatBytes(metric.bytes)}` : formatBytes(metric.bytes)
+  const samples = metric.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds)
+  const requestsPerSecond = samples.length/(topologyWindowMilliseconds/1000)
+  const average = samples.length ? Math.round(samples.reduce((sum, sample) => sum+sample.duration, 0)/samples.length) : 0
+  const errors = samples.filter((sample) => sample.error).length
+  return `${requestsPerSecond < 0.1 ? requestsPerSecond.toFixed(2) : requestsPerSecond.toFixed(1)} RPS · ${average}MS${errors ? ` · ${errors} ERR` : ''}`
+}
+
+function formatBytes(value: number) {
+  if (value >= 1_000_000) return `${(value/1_000_000).toFixed(1)} MB`
+  if (value >= 1_000) return `${(value/1_000).toFixed(1)} KB`
+  return `${value} B`
+}
+
+function topologyEdgeWidth(metric: TopologyEdgeMetric | undefined, now: number, hasFault: boolean) {
+  if (hasFault) return 2
+  if (!metric || now-metric.lastSeen > topologyWindowMilliseconds) return 1
+  const volume = metric.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds).length || metric.activeConnections
+  return Math.min(3.2, 1.35+Math.log2(volume+1)*.42)
+}
+
+export function topologyParticleMotion(metric: TopologyEdgeMetric | undefined, now: number) {
+  if (!metric || now-metric.lastSeen > topologyWindowMilliseconds) return { count: 0, durationSeconds: 0 }
+  const recentRequests = metric.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds).length
+  if (recentRequests > 0) {
+    const requestsPerSecond = recentRequests/(topologyWindowMilliseconds/1000)
+    const count = requestsPerSecond >= 5 ? 4 : requestsPerSecond >= 2 ? 3 : requestsPerSecond >= .75 ? 2 : 1
+    return { count, durationSeconds: Math.min(12, Math.max(.9, count/requestsPerSecond)) }
+  }
+  if (metric.activeConnections > 0) return { count: Math.min(3, metric.activeConnections), durationSeconds: 3.5 }
+  if (metric.bytes > 0) return { count: 1, durationSeconds: 4.5 }
+  return { count: 0, durationSeconds: 0 }
+}
+
+export function topologyPanPosition(origin: { clientX: number; clientY: number; scrollLeft: number; scrollTop: number }, clientX: number, clientY: number) {
+  return { scrollLeft: origin.scrollLeft-(clientX-origin.clientX), scrollTop: origin.scrollTop-(clientY-origin.clientY) }
+}
 
 function TopologySizeIcon() {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2H2v4M10 2h4v4M2 10v4h4M14 10v4h-4" /></svg>
 }
 
-function Topology({ environment, onService }: { environment: Environment; onService: (service: Service) => void }) {
+function Topology({ environment, faults, paused, onService, onEdge }: { environment: Environment; faults: FaultRule[]; paused: boolean; onService: (service: Service) => void; onEdge: (edge: TopologyEdge) => void }) {
   const viewportRef = useRef<HTMLDivElement>(null)
-  const pan = useRef<{ pointerId: number; clientX: number; clientY: number; scrollLeft: number; scrollTop: number } | null>(null)
+  const pan = useRef<{ pointerId: number; clientX: number; clientY: number; scrollLeft: number; scrollTop: number; dragging: boolean } | null>(null)
+  const suppressClick = useRef(false)
   const [isPanning, setIsPanning] = useState(false)
+  const [edgeMetrics, setEdgeMetrics] = useState<Map<string, TopologyEdgeMetric>>(new Map())
+  const [now, setNow] = useState(Date.now())
   const { levels, edges } = buildTopology(environment)
-  const rowGap = 62
-  const nodeWidth = 150
-  const nodeHeight = 74
-  const columnGap = 38
-  const sidePadding = 30
+  const rowGap = 48
+  const nodeWidth = 164
+  const nodeHeight = 72
+  const columnGap = 112
+  const sidePadding = 54
+  const verticalPadding = 40
   const positions = new Map<string, { x: number; y: number }>()
   const widestLevel = Math.max(1, ...levels.map((level) => level.length))
-  const width = sidePadding * 2 + widestLevel * nodeWidth + (widestLevel - 1) * columnGap
+  const width = sidePadding*2 + levels.length*nodeWidth + Math.max(0, levels.length-1)*columnGap
+  const height = Math.max(280, verticalPadding*2 + widestLevel*nodeHeight + Math.max(0, widestLevel-1)*rowGap)
   levels.forEach((level, depth) => {
-    const rowWidth = level.length * nodeWidth + Math.max(0, level.length - 1) * columnGap
-    const start = (width - rowWidth) / 2
-    level.forEach((item, index) => positions.set(item.key, { x: start + index * (nodeWidth + columnGap), y: depth * (nodeHeight + rowGap) }))
+    const columnHeight = level.length*nodeHeight + Math.max(0, level.length-1)*rowGap
+    const start = (height-columnHeight)/2
+    level.forEach((item, index) => positions.set(item.key, { x: sidePadding+depth*(nodeWidth+columnGap), y: start+index*(nodeHeight+rowGap) }))
   })
-  const height = levels.length * nodeHeight + Math.max(0, levels.length - 1) * rowGap
+  const activeFaultEdges = useMemo(() => new Map(faults.map((fault) => [topologyEdgeKey(fault.source, fault.target), fault.name])), [faults])
+
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      api<{ traffic: TrafficEvent[] }>(environmentPath(environment, '/traffic?protocol=http&limit=1000')),
+      api<{ traffic: TrafficEvent[] }>(environmentPath(environment, '/traffic?protocol=tcp&limit=1000')),
+    ]).then(([http, tcp]) => {
+      if (active) setEdgeMetrics(summarizeTopologyTraffic([...http.traffic, ...tcp.traffic]))
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [environment.project, environment.name])
+
+  useEffect(() => {
+    if (paused) return
+    return connectEvents(environment, ['traffic.http', 'traffic.tcp.activity'], (type, value) => {
+      if (type.startsWith('traffic.')) setEdgeMetrics((metrics) => mergeTopologySignal(metrics, value as TopologySignal))
+    })
+  }, [environment.project, environment.name, paused])
+
+  useEffect(() => {
+    if (paused) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [paused])
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const frame = requestAnimationFrame(() => {
+      viewport.scrollLeft = Math.max(0, (viewport.scrollWidth-viewport.clientWidth)/2)
+      viewport.scrollTop = Math.min(120, Math.max(0, (viewport.scrollHeight-viewport.clientHeight)/2))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [environment.project, environment.name])
 
   const startPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
-    if (event.button !== 0 || target.closest('button, a, input, select, textarea')) return
+    if (event.button !== 0 || target.closest('.topology__edge-action')) return
     const viewport = event.currentTarget
     pan.current = {
       pointerId: event.pointerId,
@@ -164,25 +392,51 @@ function Topology({ environment, onService }: { environment: Environment; onServ
       clientY: event.clientY,
       scrollLeft: viewport.scrollLeft,
       scrollTop: viewport.scrollTop,
+      dragging: false,
     }
-    viewport.setPointerCapture(event.pointerId)
-    setIsPanning(true)
-    event.preventDefault()
   }
 
   const movePan = (event: ReactPointerEvent<HTMLDivElement>) => {
     const origin = pan.current
     if (!origin || origin.pointerId !== event.pointerId) return
-    event.currentTarget.scrollLeft = origin.scrollLeft - (event.clientX - origin.clientX)
-    event.currentTarget.scrollTop = origin.scrollTop - (event.clientY - origin.clientY)
+    const deltaX = event.clientX-origin.clientX
+    const deltaY = event.clientY-origin.clientY
+    if (!origin.dragging && Math.hypot(deltaX, deltaY) < 4) return
+    if (!origin.dragging) {
+      origin.dragging = true
+      suppressClick.current = true
+      event.currentTarget.setPointerCapture(event.pointerId)
+      setIsPanning(true)
+    }
+    const next = topologyPanPosition(origin, event.clientX, event.clientY)
+    event.currentTarget.scrollLeft = next.scrollLeft
+    event.currentTarget.scrollTop = next.scrollTop
     event.preventDefault()
   }
 
   const stopPan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (pan.current?.pointerId !== event.pointerId) return
+    const origin = pan.current
+    if (origin?.pointerId !== event.pointerId) return
     pan.current = null
     setIsPanning(false)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    if (origin.dragging) window.setTimeout(() => { suppressClick.current = false }, 0)
+  }
+
+  const selectService = (service: Service) => {
+    if (suppressClick.current) {
+      suppressClick.current = false
+      return
+    }
+    onService(service)
+  }
+
+  const selectEdge = (edge: TopologyEdge) => {
+    if (suppressClick.current) {
+      suppressClick.current = false
+      return
+    }
+    onEdge(edge)
   }
 
   return <div
@@ -195,30 +449,58 @@ function Topology({ environment, onService }: { environment: Environment; onServ
     onPointerUp={stopPan}
     onPointerCancel={stopPan}
     onLostPointerCapture={stopPan}
-  ><div className="topology__canvas" style={{ width, height }}>
+  ><div className="topology__pan-surface"><div className="topology__canvas" style={{ width, height }}>
     <svg className="topology__edges" width={width} height={height} aria-hidden="true">
       <defs><marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker></defs>
       {edges.map((edge) => {
         const from = positions.get(edge.source)
         const to = positions.get(edge.target)
         if (!from || !to) return null
-        const startX = from.x + nodeWidth / 2
-        const startY = from.y + nodeHeight
-        const endX = to.x + nodeWidth / 2
-        const endY = to.y
-        const middleY = startY + (endY - startY) / 2
-        return <g key={`${edge.source}:${edge.target}`}><path d={`M ${startX} ${startY} V ${middleY} H ${endX} V ${endY}`} /><text x={(startX + endX) / 2} y={middleY - 6}>{edge.protocol}</text></g>
+        const startX = from.x+nodeWidth
+        const startY = from.y+nodeHeight/2
+        const endX = to.x
+        const endY = to.y+nodeHeight/2
+        const middleX = (startX+endX)/2
+        const middleY = (startY+endY)/2
+        const edgeKey = topologyEdgeKey(edge.source, edge.target)
+        const metric = edgeMetrics.get(edgeKey)
+        const activeFault = activeFaultEdges.get(edgeKey)
+        const tone = topologyEdgeTone(metric, !!activeFault, now)
+        const path = `M ${startX} ${startY} C ${middleX} ${startY}, ${middleX} ${endY}, ${endX} ${endY}`
+        const particleMotion = topologyParticleMotion(metric, now)
+        return <g key={`${edge.source}:${edge.target}`} className={`topology-edge topology-edge--${tone}`}>
+          <path className="topology-edge__line" d={path} style={{ strokeWidth: topologyEdgeWidth(metric, now, !!activeFault) }} />
+          {!paused && Array.from({ length: particleMotion.count }, (_, index) => <circle key={index} className="topology-edge__pulse" r="3"><animateMotion dur={`${particleMotion.durationSeconds}s`} begin={`${-(index*particleMotion.durationSeconds/particleMotion.count)}s`} repeatCount="indefinite" path={path} /></circle>)}
+          <text x={middleX} y={middleY-10}>{topologyEdgeLabel(edge, metric, now, activeFault)}</text>
+        </g>
+      })}
+    </svg>
+    <svg className="topology__edge-actions" width={width} height={height} aria-label="Topology connections">
+      {edges.map((edge) => {
+        const from = positions.get(edge.source)
+        const to = positions.get(edge.target)
+        if (!from || !to) return null
+        const startX = from.x+nodeWidth
+        const startY = from.y+nodeHeight/2
+        const endX = to.x
+        const endY = to.y+nodeHeight/2
+        const middleX = (startX+endX)/2
+        const middleY = (startY+endY)/2
+        return <g key={`${edge.source}:${edge.target}`} className="topology__edge-action" role="button" tabIndex={0} aria-label={`Inspect traffic from ${edge.source} to ${edge.target}`} onClick={() => selectEdge(edge)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectEdge(edge) } }}>
+          <path className="topology__edge-hit" d={`M ${startX} ${startY} C ${middleX} ${startY}, ${middleX} ${endY}, ${endX} ${endY}`} />
+          <rect className="topology__edge-label-hit" x={middleX-54} y={middleY-30} width="108" height="28" rx="6" />
+        </g>
       })}
     </svg>
     {levels.flat().map((item) => {
       const position = positions.get(item.key)!
-      if (item.kind === 'client') return <div key={item.key} className="topology__external topology__item" style={{ left: position.x, top: position.y }}><span>EXTERNAL</span><strong>browser / client</strong></div>
+      if (item.kind === 'client') return <div key={item.key} className="topology__external topology__item" style={{ left: position.x, top: position.y }}><span>INGRESS</span><strong>browser / client</strong><small>localhost</small></div>
       const service = item.service
-      return <button key={item.key} style={{ left: position.x, top: position.y }} className={`topology-node topology__item topology-node--${service.kind} ${service.name === environment.primaryService ? 'is-primary' : ''}`} onClick={() => onService(service)}>
+      return <button key={item.key} style={{ left: position.x, top: position.y }} className={`topology-node topology__item topology-node--${service.kind} ${service.name === environment.primaryService ? 'is-primary' : ''}`} onClick={() => selectService(service)}>
         <span><StatusMark status={service.status} label={false} />{service.kind === 'container' ? service.template : service.framework}</span><strong>{service.name}</strong><small>{service.ingressUrl ? service.ingressUrl.replace(/^https?:\/\//, '') : service.status}</small>
       </button>
     })}
-  </div></div>
+  </div></div></div>
 }
 
 export function buildTopology(environment: Environment) {
@@ -276,6 +558,7 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
     setBusy(name)
     try { await api<Operation>(`${base}/${name}`, { method: 'POST' }); onChanged() } finally { setBusy('') }
   }
+  const endpoints = serviceEndpoints(service, bindingFor(environment, service.name))
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
     <aside className={`drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
@@ -284,6 +567,7 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
       <div className="drawer-content">
         {drawerTab === 'details' && <>
           <div className="detail-grid"><Detail label="KIND" value={service.framework || service.template || service.kind} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div>
+          <section className="drawer-section service-endpoints"><div className="eyebrow">ENDPOINTS</div><div className="service-endpoint-list">{endpoints.map((endpoint) => <div className="service-endpoint" key={`${endpoint.label}:${endpoint.value}`}><span>{endpoint.label}</span>{endpoint.href ? <a href={endpoint.href} target="_blank" rel="noreferrer">{endpoint.value} ↗</a> : <code>{endpoint.value}</code>}<small>{endpoint.detail}</small></div>)}{endpoints.length === 0 && <p className="muted">No endpoint is available while this service is stopped.</p>}</div></section>
           <section className="drawer-section"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.template} container`}</pre></section>
           <section className="drawer-section"><div className="eyebrow">HEALTH</div><p><StatusMark status={service.status} /> {service.health.kind}{service.health.path ? ` ${service.health.path}` : ''}</p><small>{service.reason || 'No current readiness error.'}</small></section>
         </>}
@@ -294,19 +578,59 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
   </div>
 }
 
+type ServiceEndpoint = { label: string; value: string; detail: string; href?: string }
+
+export function serviceEndpoints(service: Service, binding?: ComponentBinding): ServiceEndpoint[] {
+  const endpoints: ServiceEndpoint[] = []
+  const seen = new Set<string>()
+  const add = (endpoint: ServiceEndpoint) => {
+    if (!endpoint.value || seen.has(endpoint.value)) return
+    seen.add(endpoint.value)
+    endpoints.push(endpoint)
+  }
+
+  if (service.ingressUrl) add({ label: 'CLEAN URL', value: service.ingressUrl, detail: 'Browser and host access through Portless', href: service.ingressUrl })
+  if (binding?.remote?.url) add({ label: 'REMOTE PROVIDER', value: binding.remote.url, detail: `${binding.remote.classification} · ${binding.remote.writePolicy}`, ...(isWebURL(binding.remote.url) ? { href: binding.remote.url } : {}) })
+
+  const protocol = inferServiceProtocol(service)
+  const runtimeValue = service.upstreamPort ? endpointWithProtocol(`127.0.0.1:${service.upstreamPort}`, protocol) : ''
+  if (runtimeValue) add({ label: 'RUNTIME URL', value: runtimeValue, detail: 'Private endpoint owned by the current environment', ...(isWebURL(runtimeValue) ? { href: runtimeValue } : {}) })
+
+  return endpoints
+}
+
+function inferServiceProtocol(service: Service): 'http' | 'tcp' | 'postgres' | 'redis' {
+  if (service.template === 'postgres') return 'postgres'
+  if (service.template === 'redis' || service.template === 'valkey') return 'redis'
+  return service.ingressUrl ? 'http' : 'tcp'
+}
+
+function endpointWithProtocol(value: string, protocol: string) {
+  if (value.includes('://')) return value
+  if (protocol === 'postgres') return `postgresql://${value}`
+  if (protocol === 'redis') return `redis://${value}`
+  return `${protocol === 'http' ? 'http' : 'tcp'}://${value}`
+}
+
+function isWebURL(value: string) { return /^https?:\/\//.test(value) }
+
 function Detail({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 
 function TrafficPanel({ environment }: { environment: Environment }) {
+  const requested = new URLSearchParams(location.search)
   const [traffic, setTraffic] = useState<TrafficEvent[]>([])
   const [selected, setSelected] = useState<TrafficEvent | null>(null)
-  const [filter, setFilter] = useState('')
+  const [filter, setFilter] = useState(() => requested.get('edge') || '')
+  const [protocol, setProtocol] = useState<'http' | 'tcp'>(() => requested.get('protocol') === 'tcp' ? 'tcp' : 'http')
   const [paused, setPaused] = useState(false)
   useEffect(() => {
-    api<{ traffic: TrafficEvent[] }>(environmentPath(environment, '/traffic?protocol=http&limit=500')).then((value) => setTraffic(value.traffic)).catch(() => setTraffic([]))
-    return connectEvents(environment, ['traffic.http'], (type, value) => {
-      if (type === 'traffic.http' && !paused) setTraffic((items) => [value as TrafficEvent, ...items].slice(0, 1000))
+    const topic = protocol === 'http' ? 'traffic.http' : 'traffic.tcp'
+    setSelected(null)
+    api<{ traffic: TrafficEvent[] }>(environmentPath(environment, `/traffic?protocol=${protocol}&limit=500`)).then((value) => setTraffic(value.traffic)).catch(() => setTraffic([]))
+    return connectEvents(environment, [topic], (type, value) => {
+      if (type === topic && !paused) setTraffic((items) => [value as TrafficEvent, ...items].slice(0, 1000))
     })
-  }, [environment.project, environment.name, paused])
+  }, [environment.project, environment.name, paused, protocol])
   const inspect = async (event: TrafficEvent) => {
     try {
       setSelected(await api<TrafficEvent>(environmentPath(environment, `/traffic/${event.sequence}`)))
@@ -314,13 +638,13 @@ function TrafficPanel({ environment }: { environment: Environment }) {
       setSelected(event)
     }
   }
-  const filtered = traffic.filter((event) => `${event.method} ${event.path} ${event.source} ${event.target} ${event.status}`.toLowerCase().includes(filter.toLowerCase()))
+  const filtered = traffic.filter((event) => `${event.method} ${event.path} ${event.source} ${event.target} ${event.source}:${event.target} ${event.status}`.toLowerCase().includes(filter.toLowerCase()))
   return <section className="panel traffic-panel">
-    <div className="panel-title traffic-toolbar"><span>LIVE HTTP TRAFFIC</span><div><span className="live-count"><i />{paused ? 'PAUSED' : 'STREAMING'}</span><button className="button button--small" onClick={() => setPaused((value) => !value)}>{paused ? 'RESUME' : 'PAUSE'}</button><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="filter method, path, edge…" /></div></div>
+    <div className="panel-title traffic-toolbar"><span>LIVE {protocol.toUpperCase()} TRAFFIC</span><div><div className="traffic-protocol" role="group" aria-label="Traffic protocol"><button className={protocol === 'http' ? 'is-active' : ''} onClick={() => setProtocol('http')}>HTTP</button><button className={protocol === 'tcp' ? 'is-active' : ''} onClick={() => setProtocol('tcp')}>TCP</button></div><span className="live-count"><i />{paused ? 'PAUSED' : 'STREAMING'}</span><button className="button button--small" onClick={() => setPaused((value) => !value)}>{paused ? 'RESUME' : 'PAUSE'}</button><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="filter method, path, edge…" /></div></div>
     <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Method</span><span>Path</span><span>Edge</span><span>Status</span><span>Duration</span><span>Fault / recording</span></div>
-    {filtered.map((event) => <button className="table-row traffic-row" key={event.sequence} onClick={() => inspect(event)}><code>#{event.sequence}</code><span>{new Date(event.startedAt).toLocaleTimeString()}</span><strong>{event.method || event.protocol.toUpperCase()}</strong><code className="truncate">{event.path || 'TCP session'}</code><span>{event.source}<i className="edge-arrow">→</i>{event.target}</span><span className={(event.status || 0) >= 500 ? 'danger-text' : (event.status || 0) >= 400 ? 'warning-text' : ''}>{event.status || '—'}</span><span>{duration(event.durationMs)}</span><span>{event.fault ? <b className="fault-chip">▲ {event.fault}</b> : event.recording ? <b className="record-chip">● {event.recording}</b> : '—'}</span></button>)}
-    {filtered.length === 0 && <div className="empty-row">No matching HTTP traffic yet. Requests through <code>service.{environment.name}.{environment.project}.localhost</code> or a discovered HTTP edge appear here.</div>}
-    {selected && <div className="traffic-detail"><header><div><span className="eyebrow">HTTP TRAFFIC #{selected.sequence}</span><h3>{selected.method} {selected.path}</h3></div><button onClick={() => setSelected(null)}>×</button></header><div className="detail-grid"><Detail label="EDGE" value={`${selected.source} → ${selected.target}`} /><Detail label="STATUS" value={String(selected.status || '—')} /><Detail label="DURATION" value={duration(selected.durationMs)} /><Detail label="REQUEST" value={`${selected.requestBytes} B`} /><Detail label="RESPONSE" value={`${selected.responseBytes} B`} /><Detail label="FAULT" value={selected.fault || 'none'} /></div><div className="drawer-section"><div className="eyebrow">REDACTED REQUEST HEADERS</div><pre>{JSON.stringify(selected.requestHeaders || {}, null, 2)}</pre></div><div className="drawer-section"><div className="eyebrow">REDACTED RESPONSE HEADERS</div><pre>{JSON.stringify(selected.responseHeaders || {}, null, 2)}</pre></div></div>}
+    {filtered.map((event) => <button className="table-row traffic-row" key={event.sequence} onClick={() => inspect(event)}><code>#{event.sequence}</code><span>{new Date(event.startedAt).toLocaleTimeString()}</span><strong>{event.method || event.protocol.toUpperCase()}</strong><code className="truncate">{event.path || 'TCP session'}</code><span>{event.source}<i className="edge-arrow">→</i>{event.target}</span><span className={event.error || (event.status || 0) >= 500 ? 'danger-text' : (event.status || 0) >= 400 ? 'warning-text' : ''}>{event.error ? 'ERR' : event.status || (event.protocol === 'tcp' ? 'OK' : '—')}</span><span>{duration(event.durationMs)}</span><span>{event.fault ? <b className="fault-chip">▲ {event.fault}</b> : event.recording ? <b className="record-chip">● {event.recording}</b> : '—'}</span></button>)}
+    {filtered.length === 0 && <div className="empty-row">No matching {protocol.toUpperCase()} traffic yet.{protocol === 'http' && <> Requests through <code>service.{environment.name}.{environment.project}.localhost</code> or a discovered HTTP edge appear here.</>}</div>}
+    {selected && <div className="traffic-detail"><header><div><span className="eyebrow">{selected.protocol.toUpperCase()} TRAFFIC #{selected.sequence}</span><h3>{selected.method || selected.protocol.toUpperCase()} {selected.path}</h3></div><button onClick={() => setSelected(null)}>×</button></header><div className="detail-grid"><Detail label="EDGE" value={`${selected.source} → ${selected.target}`} /><Detail label="STATUS" value={selected.error ? 'error' : String(selected.status || 'ok')} /><Detail label="DURATION" value={duration(selected.durationMs)} /><Detail label="REQUEST" value={`${selected.requestBytes} B`} /><Detail label="RESPONSE" value={`${selected.responseBytes} B`} /><Detail label="FAULT" value={selected.fault || 'none'} /></div>{selected.protocol === 'http' && <><div className="drawer-section"><div className="eyebrow">REDACTED REQUEST HEADERS</div><pre>{JSON.stringify(selected.requestHeaders || {}, null, 2)}</pre></div><div className="drawer-section"><div className="eyebrow">REDACTED RESPONSE HEADERS</div><pre>{JSON.stringify(selected.responseHeaders || {}, null, 2)}</pre></div></>}</div>}
   </section>
 }
 
@@ -454,16 +778,38 @@ function SourceEditor({ environment, source, disabled, onChanged }: { environmen
 	return <div className="source-editor"><label><span>{source.name}</span><input value={path} onChange={(event) => setPath(event.target.value)} /></label><button className="button button--small" disabled={disabled || path === source.path} onClick={save}>UPDATE</button>{message && <small className={message === 'saved' ? 'success-text' : 'danger-text'}>{message}</small>}</div>
 }
 
-function TimelinePanel({ timeline }: { timeline: TimelineEvent[] }) {
-  const groups = useMemo(() => timeline.reduce<Record<string, TimelineEvent[]>>((result, event) => { const key = new Date(event.timestamp).toLocaleDateString(); (result[key] ||= []).push(event); return result }, {}), [timeline])
-  return <section className="panel timeline-panel"><div className="panel-title"><span>ENVIRONMENT TIMELINE</span><small>durable local history · actors and outcomes retained</small></div>{Object.entries(groups).map(([date, events]) => <div className="timeline-group" key={date}><div className="timeline-date">{date}</div>{events.map((event) => <div className="timeline-event" key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`timeline-dot timeline-dot--${event.severity}`} /><div><strong>{event.summary}</strong><small>{event.type} · {event.actor}{event.subject ? ` · ${event.subject}` : ''}</small></div><code>#{event.sequence}</code></div>)}</div>)}{timeline.length === 0 && <div className="empty-row">The timeline will capture lifecycle, recording, and fault events.</div>}</section>
+const timelinePageSizes = [25, 50, 100] as const
+
+export function TimelinePanel({ timeline }: { timeline: TimelineEvent[] }) {
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(timelinePageSizes[0])
+  const pagination = useMemo(() => paginateOverview(timeline, page, pageSize), [timeline, page, pageSize])
+  const groups = useMemo(() => pagination.items.reduce<Record<string, TimelineEvent[]>>((result, event) => {
+    const key = new Date(event.timestamp).toLocaleDateString()
+    ;(result[key] ||= []).push(event)
+    return result
+  }, {}), [pagination.items])
+
+  return <section className="panel timeline-panel">
+    <div className="panel-title">
+      <span>ENVIRONMENT TIMELINE</span>
+      <label className="timeline-page-size"><span>ROWS PER PAGE</span><select aria-label="Timeline rows per page" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(0) }}>{timelinePageSizes.map((size) => <option value={size} key={size}>{size}</option>)}</select></label>
+    </div>
+    {Object.entries(groups).map(([date, events]) => <div className="timeline-group" key={date}><div className="timeline-date">{date}</div>{events.map((event) => <div className="timeline-event" key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`timeline-dot timeline-dot--${event.severity}`} /><div><strong>{event.summary}</strong><small>{event.type} · {event.actor}{event.subject ? ` · ${event.subject}` : ''}</small></div><code>#{event.sequence}</code></div>)}</div>)}
+    {timeline.length === 0 && <div className="empty-row">The timeline will capture lifecycle, recording, and fault events.</div>}
+    <PanelPagination label="timeline" pagination={pagination} onPage={setPage} />
+  </section>
 }
 
 function bindingFor(environment: Environment, service: string) {
   return environment.bindings?.find((binding) => binding.service === service)
 }
 
-function environmentUIPath(environment: Environment, tab: Tab) {
+function environmentUIPath(environment: Environment, tab: Tab, edge?: string, protocol?: 'http' | 'tcp') {
   const base = `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}`
-  return tab === 'overview' ? base : `${base}?tab=${tab}`
+  if (tab === 'overview') return base
+  const query = new URLSearchParams({ tab })
+  if (edge) query.set('edge', edge)
+  if (protocol) query.set('protocol', protocol)
+  return `${base}?${query}`
 }

@@ -429,6 +429,66 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	return s.Environment(ctx, projectName, environmentName)
 }
 
+func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environmentName string, expectedEnvironmentRevision int64, environmentDefinition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
+	projectDefinition.SuggestedName = projectName
+	projectJSON, err := json.Marshal(logicalDefinition(projectDefinition))
+	if err != nil {
+		return model.Environment{}, err
+	}
+	projectSourcesJSON, err := json.Marshal(projectSources)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	environmentJSON, err := json.Marshal(environmentDefinition)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	defer tx.Rollback()
+	var projectKey string
+	var projectRevision int64
+	if err := tx.QueryRowContext(ctx, `SELECT private_key, revision FROM projects WHERE name = ? COLLATE NOCASE`, projectName).Scan(&projectKey, &projectRevision); err != nil {
+		return model.Environment{}, mapSQLError(err)
+	}
+	if expectedProjectRevision > 0 && projectRevision != expectedProjectRevision {
+		return model.Environment{}, ErrConflict
+	}
+	var environmentKey string
+	var environmentRevision int64
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT private_key, revision, status FROM environments WHERE project_key = ? AND name = ? COLLATE NOCASE`, projectKey, environmentName).Scan(&environmentKey, &environmentRevision, &status); err != nil {
+		return model.Environment{}, mapSQLError(err)
+	}
+	if expectedEnvironmentRevision > 0 && environmentRevision != expectedEnvironmentRevision {
+		return model.Environment{}, ErrConflict
+	}
+	if status != string(model.EnvironmentStopped) {
+		return model.Environment{}, errors.New("environment must be stopped before its configuration changes")
+	}
+	now := nowText()
+	if _, err := tx.ExecContext(ctx, `UPDATE projects SET model_json = ?, sources_json = ?, primary_service = ?, revision = revision + 1, updated_at = ? WHERE private_key = ?`, projectJSON, projectSourcesJSON, projectDefinition.PrimaryService, now, projectKey); err != nil {
+		return model.Environment{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE environments SET model_json = ?, primary_service = ?, revision = revision + 1, updated_at = ? WHERE private_key = ?`, environmentJSON, environmentDefinition.PrimaryService, now, environmentKey); err != nil {
+		return model.Environment{}, err
+	}
+	for _, table := range []string{"connection_runtime", "service_runtime", "environment_sources", "environment_bindings"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE environment_key = ?", environmentKey); err != nil {
+			return model.Environment{}, err
+		}
+	}
+	if err := replaceEnvironmentChildren(ctx, tx, environmentKey, environmentDefinition, sources, bindings); err != nil {
+		return model.Environment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Environment{}, err
+	}
+	return s.Environment(ctx, projectName, environmentName)
+}
+
 func (s *Store) SetEnvironmentBinding(ctx context.Context, projectName, environmentName string, binding model.ComponentBinding) (model.Environment, error) {
 	environment, err := s.Environment(ctx, projectName, environmentName)
 	if err != nil {

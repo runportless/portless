@@ -232,16 +232,21 @@ func (s *Service) Rescan(ctx context.Context, projectName, environmentName strin
 		environment.Sources[index].ScannedAt = time.Now().UTC()
 		warnings = append(warnings, result.Warnings...)
 	}
+	project, err := s.store.Project(ctx, projectName)
+	if err != nil {
+		return model.Environment{}, warnings, err
+	}
 	projectDefinition, err := s.store.ProjectModel(ctx, projectName)
 	if err != nil {
 		return model.Environment{}, warnings, err
 	}
+	projectDefinition = compiler.RefreshDiscoveredTopology(projectDefinition, environment.Sources)
 	compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings)
 	if len(compiled.Issues) > 0 {
 		environment.Issues = compiled.Issues
 		return environment, warnings, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.store.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
+	updated, err := s.store.ReplaceProjectAndEnvironmentConfiguration(ctx, projectName, project.Revision, projectDefinition, project.Sources, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
 	if err != nil {
 		return model.Environment{}, warnings, err
 	}
@@ -411,15 +416,20 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 	if !found {
 		return model.Environment{}, result.Warnings, store.ErrNotFound
 	}
+	project, err := s.store.Project(ctx, projectName)
+	if err != nil {
+		return model.Environment{}, result.Warnings, err
+	}
 	projectDefinition, err := s.store.ProjectModel(ctx, projectName)
 	if err != nil {
 		return model.Environment{}, result.Warnings, err
 	}
+	projectDefinition = compiler.RefreshDiscoveredTopology(projectDefinition, environment.Sources)
 	compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings)
 	if len(compiled.Issues) > 0 {
 		return model.Environment{}, result.Warnings, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.store.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
+	updated, err := s.store.ReplaceProjectAndEnvironmentConfiguration(ctx, projectName, project.Revision, projectDefinition, project.Sources, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
 	if err != nil {
 		return model.Environment{}, result.Warnings, err
 	}
@@ -1603,9 +1613,25 @@ func (s *Service) decorateProject(project model.Project) model.Project {
 
 func (s *Service) decorateEnvironment(environment model.Environment) model.Environment {
 	environment.DashboardURL = fmt.Sprintf("http://portless.localhost/environments/%s/%s", environment.Project, environment.Name)
+	recentTraffic := s.broker.RecentTraffic(model.EnvironmentSelector(environment.Project, environment.Name), 1000)
+	cutoff := time.Now().UTC().Add(-30 * time.Second)
+	requestDurations := make(map[string][]int64)
+	for _, event := range recentTraffic {
+		if event.Protocol != model.ProtocolHTTP || event.CompletedAt.Before(cutoff) {
+			continue
+		}
+		requestDurations[event.Target] = append(requestDurations[event.Target], event.DurationMS)
+	}
 	for index := range environment.Services {
 		if environment.Services[index].Kind == model.ServiceProcess {
 			environment.Services[index].IngressURL = fmt.Sprintf("http://%s.%s.%s.localhost", environment.Services[index].Name, environment.Name, environment.Project)
+		}
+		durations := requestDurations[environment.Services[index].Name]
+		environment.Services[index].RecentRequest = int64(len(durations))
+		if len(durations) > 0 {
+			sort.Slice(durations, func(left, right int) bool { return durations[left] < durations[right] })
+			percentileIndex := (95*len(durations) + 99) / 100
+			environment.Services[index].P95Millis = durations[percentileIndex-1]
 		}
 	}
 	return environment
