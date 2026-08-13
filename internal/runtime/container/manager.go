@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -14,8 +15,9 @@ import (
 )
 
 type persistedSelection struct {
-	Preference RuntimeName `json:"preference"`
-	Selected   RuntimeName `json:"selected,omitempty"`
+	Preference RuntimeName   `json:"preference"`
+	Selected   RuntimeName   `json:"selected,omitempty"`
+	Used       []RuntimeName `json:"used"`
 }
 
 type Manager struct {
@@ -23,12 +25,13 @@ type Manager struct {
 	statePath  string
 	preference RuntimeName
 	selected   RuntimeName
+	used       map[RuntimeName]bool
 	runtimes   map[RuntimeName]Runtime
 	order      []RuntimeName
 }
 
 func NewManager(statePath string, runtimes ...Runtime) *Manager {
-	manager := &Manager{statePath: statePath, preference: RuntimeAuto, runtimes: make(map[RuntimeName]Runtime)}
+	manager := &Manager{statePath: statePath, preference: RuntimeAuto, used: make(map[RuntimeName]bool), runtimes: make(map[RuntimeName]Runtime)}
 	for _, runtime := range runtimes {
 		if runtime == nil || runtime.Name() == "" {
 			continue
@@ -109,6 +112,9 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	if err != nil {
 		return StartResult{}, err
 	}
+	if err := m.markUsed(runtime.Name()); err != nil {
+		return StartResult{}, fmt.Errorf("record used container runtime: %w", err)
+	}
 	return runtime.Start(ctx, environmentName, environmentKey, service, generation, logsRoot)
 }
 
@@ -121,6 +127,9 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	if !ok {
 		return StartResult{}, errors.New("selected container runtime does not support adoption")
 	}
+	if err := m.markUsed(runtime.Name()); err != nil {
+		return StartResult{}, fmt.Errorf("record used container runtime: %w", err)
+	}
 	return adopter.Adopt(ctx, environmentName, environmentKey, service, generation, logsRoot)
 }
 
@@ -132,6 +141,9 @@ func (m *Manager) Verify(ctx context.Context, environmentKey string, service mod
 	verifier, ok := runtime.(Verifier)
 	if !ok {
 		return errors.New("selected container runtime does not support ownership verification")
+	}
+	if err := m.markUsed(runtime.Name()); err != nil {
+		return fmt.Errorf("record used container runtime: %w", err)
 	}
 	return verifier.Verify(ctx, environmentKey, service, generation, containerName)
 }
@@ -164,6 +176,37 @@ func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName s
 		return err
 	}
 	return runtime.StopService(ctx, environmentKey, serviceName)
+}
+
+func (m *Manager) ResetInstallations(ctx context.Context) ([]ResetResult, error) {
+	m.mu.Lock()
+	names := make([]RuntimeName, 0, len(m.used))
+	for name := range m.used {
+		names = append(names, name)
+	}
+	runtimes := make(map[RuntimeName]Runtime, len(m.runtimes))
+	for name, runtime := range m.runtimes {
+		runtimes[name] = runtime
+	}
+	m.mu.Unlock()
+	sort.Slice(names, func(i, j int) bool { return names[i] < names[j] })
+	results := make([]ResetResult, 0, len(names))
+	for _, name := range names {
+		runtime := runtimes[name]
+		if runtime == nil {
+			return results, fmt.Errorf("previously used container runtime %s is no longer configured", name)
+		}
+		result, err := runtime.ResetInstallation(ctx)
+		if err != nil {
+			return results, fmt.Errorf("reset Portless resources in %s: %w", name, err)
+		}
+		results = append(results, result)
+	}
+	m.mu.Lock()
+	m.used = make(map[RuntimeName]bool)
+	err := m.persist()
+	m.mu.Unlock()
+	return results, err
 }
 
 func (m *Manager) readyRuntime(ctx context.Context) (Runtime, error) {
@@ -224,6 +267,15 @@ func (m *Manager) load() {
 	if _, exists := m.runtimes[state.Selected]; exists {
 		m.selected = state.Selected
 	}
+	if state.Used == nil && m.selected != "" {
+		m.used[m.selected] = true
+	} else {
+		for _, name := range state.Used {
+			if _, exists := m.runtimes[name]; exists {
+				m.used[name] = true
+			}
+		}
+	}
 	if m.preference != RuntimeAuto {
 		m.selected = m.preference
 	}
@@ -244,7 +296,12 @@ func (m *Manager) persist() error {
 		temporary.Close()
 		return err
 	}
-	if err := json.NewEncoder(temporary).Encode(persistedSelection{Preference: m.preference, Selected: m.selected}); err != nil {
+	used := make([]RuntimeName, 0, len(m.used))
+	for name := range m.used {
+		used = append(used, name)
+	}
+	sort.Slice(used, func(i, j int) bool { return used[i] < used[j] })
+	if err := json.NewEncoder(temporary).Encode(persistedSelection{Preference: m.preference, Selected: m.selected, Used: used}); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -255,6 +312,16 @@ func (m *Manager) persist() error {
 		return err
 	}
 	return os.Chmod(m.statePath, 0o600)
+}
+
+func (m *Manager) markUsed(name RuntimeName) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.used[name] {
+		return nil
+	}
+	m.used[name] = true
+	return m.persist()
 }
 
 func unavailableStatus(preference RuntimeName, probes []ProbeResult) Status {

@@ -207,13 +207,9 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	if finalErr != nil {
 		return finalErr
 	}
-	severity := "info"
-	summary := "Recovered runtime ownership and proxy routes"
 	if final.Status != model.EnvironmentHealthy {
-		severity = "warning"
-		summary = "Runtime recovery completed with unavailable services"
+		_, _ = s.timeline(ctx, scope, "daemon", "environment.reconciled", scope, "warning", "Runtime recovery completed with unavailable services", map[string]any{"daemonInstance": s.daemonInstanceID})
 	}
-	_, _ = s.timeline(ctx, scope, "daemon", "environment.reconciled", scope, severity, summary, map[string]any{"daemonInstance": s.daemonInstanceID})
 	return nil
 }
 

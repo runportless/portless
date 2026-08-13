@@ -258,6 +258,48 @@ func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, re
 	return nil
 }
 
+func (m *Manager) ResetInstallation(ctx context.Context) (container.ResetResult, error) {
+	result := container.ResetResult{Runtime: m.Name()}
+	if probe := m.Probe(ctx); probe.State != "ready" {
+		return result, fmt.Errorf("%s is not ready: %s", m.Name(), probe.Reason)
+	}
+	containers, err := m.ownedInstallationContainers(ctx)
+	if err != nil {
+		return result, err
+	}
+	for _, name := range containers {
+		if err := m.run(ctx, "rm", "-f", name); err != nil {
+			return result, fmt.Errorf("remove container %s: %w", name, err)
+		}
+		m.stopLogCollector(name)
+		result.Containers++
+	}
+	volumes, err := m.ownedInstallationResources(ctx, "volume")
+	if err != nil {
+		return result, err
+	}
+	for _, name := range volumes {
+		if err := m.run(ctx, "volume", "rm", name); err != nil {
+			return result, fmt.Errorf("remove volume %s: %w", name, err)
+		}
+		result.Volumes++
+	}
+	networks, err := m.ownedInstallationResources(ctx, "network")
+	if err != nil {
+		return result, err
+	}
+	for _, name := range networks {
+		if err := m.run(ctx, "network", "rm", name); err != nil {
+			return result, fmt.Errorf("remove network %s: %w", name, err)
+		}
+		result.Networks++
+	}
+	if err := os.RemoveAll(m.credentialsRoot); err != nil {
+		return result, fmt.Errorf("remove generated credentials: %w", err)
+	}
+	return result, nil
+}
+
 func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName string) error {
 	output, err := m.output(ctx, "ps", "-a", "--filter", "label="+labelOwner+"=true",
 		"--filter", "label="+labelInstall+"="+m.installationKey,
@@ -524,9 +566,27 @@ func (m *Manager) ownedContainers(ctx context.Context, environmentKey string) ([
 	return nonemptyLines(string(output)), nil
 }
 
+func (m *Manager) ownedInstallationContainers(ctx context.Context) ([]string, error) {
+	output, err := m.output(ctx, "ps", "-a", "--filter", "label="+labelOwner+"=true", "--filter", "label="+labelInstall+"="+m.installationKey,
+		"--format", "{{.Names}}")
+	if err != nil {
+		return nil, err
+	}
+	return nonemptyLines(string(output)), nil
+}
+
 func (m *Manager) ownedResources(ctx context.Context, kind, environmentKey string) ([]string, error) {
 	output, err := m.output(ctx, kind, "ls", "--filter", "label="+labelOwner+"=true", "--filter", "label="+labelInstall+"="+m.installationKey,
 		"--filter", "label="+labelEnvironment+"="+environmentKey, "--format", "{{.Name}}")
+	if err != nil {
+		return nil, err
+	}
+	return nonemptyLines(string(output)), nil
+}
+
+func (m *Manager) ownedInstallationResources(ctx context.Context, kind string) ([]string, error) {
+	output, err := m.output(ctx, kind, "ls", "--filter", "label="+labelOwner+"=true", "--filter", "label="+labelInstall+"="+m.installationKey,
+		"--format", "{{.Name}}")
 	if err != nil {
 		return nil, err
 	}

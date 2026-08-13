@@ -58,7 +58,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("unauthenticated control request returned %d", unauthenticated.Code)
 	}
 	projects := request(server, authManager, http.MethodGet, "/api/v1/projects", "", true)
-	if projects.Code != http.StatusOK || !strings.Contains(projects.Body.String(), `"name":"billing"`) || !strings.Contains(projects.Body.String(), `"environments":[`) {
+	if projects.Code != http.StatusOK || !strings.Contains(projects.Body.String(), `"name":"billing"`) || !strings.Contains(projects.Body.String(), `"environments":[`) || !strings.Contains(projects.Body.String(), `"total":1`) {
 		t.Fatalf("projects response code=%d body=%s", projects.Code, projects.Body.String())
 	}
 	environment := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local", "", true)
@@ -119,6 +119,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if browserRestart.Code != http.StatusAccepted {
 		t.Fatalf("browser restart with CSRF returned %d body=%s", browserRestart.Code, browserRestart.Body.String())
 	}
+	browserReset := requestBrowser(server, http.MethodPost, "/api/v1/runtime/reset", "", sessionToken, csrf)
+	if browserReset.Code != http.StatusForbidden || !strings.Contains(browserReset.Body.String(), `"code":"CLI_AUTH_REQUIRED"`) {
+		t.Fatalf("browser runtime reset returned %d body=%s", browserReset.Code, browserReset.Body.String())
+	}
 
 	privateKey, err := controlStore.PrivateEnvironmentKey(context.Background(), "billing", "local")
 	if err != nil {
@@ -143,6 +147,24 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	binding := request(server, authManager, http.MethodPut, "/api/v1/environments/billing/local/bindings/checkout", `{"provider":"remote","remote":{"url":"https://checkout.qa.example.test","classification":"qa","writePolicy":"read-only","healthPath":"/health"}}`, true)
 	if binding.Code != http.StatusOK || !strings.Contains(binding.Body.String(), `"provider":"remote"`) || !strings.Contains(binding.Body.String(), `"writePolicy":"read-only"`) {
 		t.Fatalf("remote binding response code=%d body=%s", binding.Code, binding.Body.String())
+	}
+	if err := controlStore.SetEnvironmentStatus(context.Background(), "billing", "local", model.EnvironmentHealthy, ""); err != nil {
+		t.Fatal(err)
+	}
+	blockedReset := request(server, authManager, http.MethodPost, "/api/v1/runtime/reset", "", true)
+	if blockedReset.Code != http.StatusConflict || !strings.Contains(blockedReset.Body.String(), `"code":"ACTIVE_ENVIRONMENTS"`) {
+		t.Fatalf("active environment reset returned %d body=%s", blockedReset.Code, blockedReset.Body.String())
+	}
+	if err := controlStore.SetEnvironmentStatus(context.Background(), "billing", "local", model.EnvironmentStopped, ""); err != nil {
+		t.Fatal(err)
+	}
+	preparedReset := request(server, authManager, http.MethodPost, "/api/v1/runtime/reset", "", true)
+	if preparedReset.Code != http.StatusOK || !strings.Contains(preparedReset.Body.String(), `"processes":0`) || !strings.Contains(preparedReset.Body.String(), `"runtimes":[]`) {
+		t.Fatalf("runtime reset preparation returned %d body=%s", preparedReset.Code, preparedReset.Body.String())
+	}
+	canceledReset := request(server, authManager, http.MethodPost, "/api/v1/runtime/reset/cancel", "", true)
+	if canceledReset.Code != http.StatusNoContent {
+		t.Fatalf("runtime reset cancellation returned %d body=%s", canceledReset.Code, canceledReset.Body.String())
 	}
 
 	browserClaim := requestHost(server, authManager, http.MethodPost, "/api/v1/browser-claims", `{"next":"/environments/billing/local"}`, true, "127.0.0.1:7331")

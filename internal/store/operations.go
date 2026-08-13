@@ -156,6 +156,30 @@ FROM operations WHERE environment_key = ? ORDER BY number DESC LIMIT ?`, environ
 	return result, rows.Err()
 }
 
+func (s *Store) RunningOperationScopes(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.name, e.name
+FROM operations o
+JOIN environments e ON e.private_key = o.environment_key
+JOIN projects p ON p.private_key = e.project_key
+WHERE o.state = 'running'
+GROUP BY p.name, e.name
+ORDER BY p.name COLLATE NOCASE, e.name COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	for rows.Next() {
+		var project, environment string
+		if err := rows.Scan(&project, &environment); err != nil {
+			return nil, err
+		}
+		result = append(result, model.EnvironmentSelector(project, environment))
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) OperationEvents(ctx context.Context, selector string, number int64) ([]model.OperationEvent, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -226,7 +250,10 @@ func (s *Store) Timeline(ctx context.Context, selector string, limit int) ([]mod
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, timestamp, actor, type, subject, severity, summary, details_json
-FROM timeline_events WHERE environment_key = ? ORDER BY sequence DESC LIMIT ?`, environmentKey, limit)
+FROM timeline_events
+WHERE environment_key = ?
+  AND NOT (type = 'environment.reconciled' AND severity = 'info')
+ORDER BY sequence DESC LIMIT ?`, environmentKey, limit)
 	if err != nil {
 		return nil, err
 	}

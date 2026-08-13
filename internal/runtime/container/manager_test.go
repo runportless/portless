@@ -3,8 +3,10 @@ package container
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/portless-run/portless/internal/model"
@@ -15,6 +17,8 @@ type fakeRuntime struct {
 	probe      ProbeResult
 	startCalls int
 	adoptCalls int
+	resetCalls int
+	resetError error
 }
 
 func (r *fakeRuntime) Name() RuntimeName { return r.name }
@@ -37,6 +41,10 @@ func (r *fakeRuntime) Adopt(context.Context, string, string, model.ServiceDefini
 func (r *fakeRuntime) StopEnvironment(context.Context, string, bool) error { return nil }
 func (r *fakeRuntime) StopService(context.Context, string, string) error {
 	return nil
+}
+func (r *fakeRuntime) ResetInstallation(context.Context) (ResetResult, error) {
+	r.resetCalls++
+	return ResetResult{Runtime: r.name, Volumes: 1}, r.resetError
 }
 
 func TestAutoSelectsFirstReadyRuntimeAndPersistsIt(t *testing.T) {
@@ -114,5 +122,47 @@ func TestUnavailableStatusExplainsEveryCandidate(t *testing.T) {
 	status := NewManager(filepath.Join(t.TempDir(), "runtime.json"), podman, docker).Status(context.Background())
 	if status.State != "failed" || len(status.Candidates) != 2 || status.Reason == "" {
 		t.Fatalf("unexpected unavailable status: %#v", status)
+	}
+}
+
+func TestResetInstallationsCleansEveryRuntimeUsedByPortless(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "runtime.json")
+	podman := &fakeRuntime{name: RuntimePodman, probe: ProbeResult{State: "ready"}}
+	docker := &fakeRuntime{name: RuntimeDocker, probe: ProbeResult{State: "ready"}}
+	manager := NewManager(statePath, podman, docker)
+	manager.used[RuntimeDocker] = true
+	manager.used[RuntimePodman] = true
+	if err := manager.persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := manager.ResetInstallations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || docker.resetCalls != 1 || podman.resetCalls != 1 {
+		t.Fatalf("reset did not clean both runtimes: results=%#v docker=%d podman=%d", results, docker.resetCalls, podman.resetCalls)
+	}
+	reloaded := NewManager(statePath, podman, docker)
+	if len(reloaded.used) != 0 {
+		t.Fatalf("used runtime set survived successful reset: %#v", reloaded.used)
+	}
+}
+
+func TestResetInstallationsKeepsRuntimeOwnershipStateAfterFailure(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "runtime.json")
+	docker := &fakeRuntime{name: RuntimeDocker, probe: ProbeResult{State: "ready"}, resetError: errors.New("engine unavailable")}
+	manager := NewManager(statePath, docker)
+	manager.used[RuntimeDocker] = true
+	if err := manager.persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := manager.ResetInstallations(context.Background()); err == nil || !strings.Contains(err.Error(), "engine unavailable") {
+		t.Fatalf("unexpected reset error: %v", err)
+	}
+	reloaded := NewManager(statePath, docker)
+	if !reloaded.used[RuntimeDocker] {
+		t.Fatal("failed reset discarded the runtime ownership record")
 	}
 }

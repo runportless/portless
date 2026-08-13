@@ -52,6 +52,13 @@ type StartResult struct {
 	LogDirectory  string
 }
 
+type ResetResult struct {
+	Runtime    RuntimeName `json:"runtime"`
+	Containers int         `json:"containers"`
+	Volumes    int         `json:"volumes"`
+	Networks   int         `json:"networks"`
+}
+
 type Runtime interface {
 	Name() RuntimeName
 	Probe(context.Context) ProbeResult
@@ -59,6 +66,7 @@ type Runtime interface {
 	Start(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error)
 	StopEnvironment(context.Context, string, bool) error
 	StopService(context.Context, string, string) error
+	ResetInstallation(context.Context) (ResetResult, error)
 }
 
 type Adopter interface {

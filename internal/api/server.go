@@ -160,7 +160,7 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	case "daemon":
 		s.handleDaemon(writer, request, segments)
 	case "runtime":
-		s.handleRuntime(writer, request, segments)
+		s.handleRuntime(writer, request, segments, principal)
 	case "session":
 		s.handleSession(writer, request, segments, principal)
 	case "browser-claims":
@@ -246,7 +246,7 @@ func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]any{"name": "portless", "version": "dev", "apiVersion": APIVersion, "telemetry": false})
 }
 
-func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request, segments []string) {
+func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {
 	if len(segments) == 1 && request.Method == http.MethodGet {
 		writeJSON(writer, http.StatusOK, s.app.RuntimeStatus(request.Context()))
 		return
@@ -274,6 +274,39 @@ func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		writeJSON(writer, http.StatusOK, result)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "reset" && request.Method == http.MethodPost {
+		if principal.Session {
+			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "runtime reset preparation may only be requested by the local CLI"})
+			return
+		}
+		result, err := s.app.PrepareReset(request.Context())
+		if err != nil {
+			var active application.ResetActiveEnvironmentsError
+			if errors.As(err, &active) {
+				writeAPIError(writer, http.StatusConflict, APIError{
+					Code: "ACTIVE_ENVIRONMENTS", Message: err.Error(),
+					Details: map[string]any{"activeEnvironments": nonNil(active.Environments)},
+				})
+				return
+			}
+			s.writeError(writer, err, nil)
+			return
+		}
+		if result.Runtimes == nil {
+			result.Runtimes = []container.ResetResult{}
+		}
+		writeJSON(writer, http.StatusOK, result)
+		return
+	}
+	if len(segments) == 3 && segments[1] == "reset" && segments[2] == "cancel" && request.Method == http.MethodPost {
+		if principal.Session {
+			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "runtime reset cancellation may only be requested by the local CLI"})
+			return
+		}
+		s.app.CancelReset()
+		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
 	methodNotAllowed(writer, http.MethodGet, http.MethodPut, http.MethodPost)
@@ -335,7 +368,7 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 				s.writeError(writer, err, nil)
 				return
 			}
-			writeJSON(writer, http.StatusOK, map[string]any{"projects": limited(nonNil(projects), limit)})
+			writeJSON(writer, http.StatusOK, map[string]any{"projects": limited(nonNil(projects), limit), "total": len(projects)})
 		case http.MethodPost:
 			var input struct {
 				Name    string                    `json:"name"`
@@ -455,7 +488,7 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 				s.writeError(writer, err, nil)
 				return
 			}
-			writeJSON(writer, http.StatusOK, map[string]any{"environments": limited(nonNil(environments), limit)})
+			writeJSON(writer, http.StatusOK, map[string]any{"environments": limited(nonNil(environments), limit), "total": len(environments)})
 		case http.MethodPost:
 			var input struct {
 				Project string `json:"project"`

@@ -75,6 +75,109 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	}
 }
 
+func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentHealthy, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.PrepareReset(ctx); err == nil || !strings.Contains(err.Error(), "billing/local") {
+		t.Fatalf("active environment did not block reset: %v", err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentStopped, ""); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := controlStore.CreateOperation(ctx, "billing/local", "up", "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.PrepareReset(ctx); err == nil || !strings.Contains(err.Error(), "operations are still running") {
+		t.Fatalf("running operation did not block reset: %v", err)
+	}
+	if err := controlStore.CompleteOperation(ctx, "billing/local", operation.Number, "failed", "test cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.PrepareReset(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processes != 0 || len(result.Runtimes) != 0 {
+		t.Fatalf("unexpected reset runtime cleanup: %#v", result)
+	}
+	if _, err := app.Up(ctx, "billing", "local", "test", ""); err == nil || !strings.Contains(err.Error(), "reset preparation") {
+		t.Fatalf("new start was accepted after reset preparation: %v", err)
+	}
+	app.CancelReset()
+	if app.resetting {
+		t.Fatal("reset cancellation did not reopen runtime starts")
+	}
+}
+
+func TestPrepareResetStopsAuthenticatedLingeringSupervisor(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{
+		Name: "checkout", Kind: model.ServiceProcess, Required: true,
+		Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+		PortEnvironment: "PORT", Health: model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+	}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-test", Executable: os.Args[0]})
+	defer app.Close(ctx)
+	operation, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("start = %#v", operation)
+	}
+	runtime, err := controlStore.ServiceRuntime(ctx, "billing/local", "checkout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentStopped, "simulated stale status"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.PrepareReset(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processes != 1 {
+		t.Fatalf("stopped supervisors = %d, want 1", result.Processes)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	_, liveErr := supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
+	cancel()
+	if liveErr == nil {
+		t.Fatal("lingering supervisor is still reachable after reset preparation")
+	}
+}
+
 func TestCreateProjectRejectsDaemonRelativeSourcePath(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()
@@ -307,6 +410,53 @@ func TestEffectiveConnectionsAndConfigurationExplainRemoteTargetsAndMaskCredenti
 	}
 	if values["PAYMENTS_URL"].Classification != "generated" {
 		t.Fatalf("generated connection value was not explained: %#v", values["PAYMENTS_URL"])
+	}
+}
+
+func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
+		t.Fatal(err)
+	}
+	persistent, err := app.CreateFault(ctx, model.FaultRule{
+		Project: "billing", Environment: "local", Name: "persistent-latency",
+		Source: "external", Target: "checkout", Probability: 1, LatencyMS: 250,
+	}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persistent.Enabled || persistent.ExpiresAt != nil {
+		t.Fatalf("default fault = %#v, want enabled with no expiry", persistent)
+	}
+
+	expires := time.Now().UTC().Add(2 * time.Hour)
+	timed, err := app.CreateFault(ctx, model.FaultRule{
+		Project: "billing", Environment: "local", Name: "timed-latency",
+		Source: "external", Target: "checkout", Probability: 1, LatencyMS: 500, ExpiresAt: &expires,
+	}, "test")
+	if err != nil {
+		t.Fatalf("two-hour timed fault was rejected: %v", err)
+	}
+	if timed.ExpiresAt == nil || !timed.ExpiresAt.Equal(expires) {
+		t.Fatalf("timed fault expiry = %v, want %v", timed.ExpiresAt, expires)
+	}
+
+	past := time.Now().UTC().Add(-time.Minute)
+	if _, err := app.CreateFault(ctx, model.FaultRule{
+		Project: "billing", Environment: "local", Name: "expired-latency",
+		Source: "external", Target: "checkout", Probability: 1, LatencyMS: 500, ExpiresAt: &past,
+	}, "test"); err == nil || !strings.Contains(err.Error(), "must be in the future") {
+		t.Fatalf("past expiry error = %v", err)
 	}
 }
 
@@ -547,6 +697,15 @@ func TestDaemonRestartRecoversSupervisedProcessIngressAndDependencyProxy(t *test
 	assertIngressStatus(t, second, http.StatusOK)
 	if ready, problems := second.CanHandoff(ctx); !ready || len(problems) != 0 {
 		t.Fatalf("recovered runtime is not handoff-ready: ready=%v problems=%v", ready, problems)
+	}
+	timeline, err := second.Timeline(ctx, "billing", "local", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range timeline {
+		if event.Type == "environment.reconciled" {
+			t.Fatalf("successful daemon recovery leaked bookkeeping into the user timeline: %#v", event)
+		}
 	}
 	if err := syscall.Kill(after.PID, syscall.SIGTERM); err != nil {
 		t.Fatal(err)

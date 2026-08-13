@@ -3,6 +3,7 @@ package discovery
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -37,6 +38,32 @@ func TestDiscoverNestServicesAndDependenciesWithoutExecutingCommands(t *testing.
 	}
 	if len(result.Model.References) != 0 {
 		t.Fatalf("managed dependency URLs became unresolved service references: %#v", result.Model.References)
+	}
+}
+
+func TestGoldenPathFixtureMatchesItsRuntimeTopology(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate discovery test source")
+	}
+	root := filepath.Join(filepath.Dir(filename), "..", "..", "..", "examples", "golden-path")
+	result, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	actual := make(map[string]bool, len(result.Model.Connections))
+	for _, connection := range result.Model.Connections {
+		actual[connection.Source+":"+connection.Target] = true
+	}
+	expected := []string{"checkout:orders", "orders:postgres", "orders:redis"}
+	if len(actual) != len(expected) {
+		t.Fatalf("connections = %#v, want only %v", result.Model.Connections, expected)
+	}
+	for _, edge := range expected {
+		if !actual[edge] {
+			t.Errorf("connection %s was not discovered", edge)
+		}
 	}
 }
 

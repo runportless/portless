@@ -24,6 +24,7 @@ import (
 	"github.com/portless-run/portless/internal/runtime/container/podman"
 	"github.com/portless-run/portless/internal/runtime/logstore"
 	processruntime "github.com/portless-run/portless/internal/runtime/process"
+	"github.com/portless-run/portless/internal/runtime/supervisor"
 	"github.com/portless-run/portless/internal/store"
 )
 
@@ -36,6 +37,15 @@ type RuntimeInUseError struct {
 	Project string `json:"project"`
 }
 
+type ResetActiveEnvironmentsError struct {
+	Environments []string `json:"environments"`
+}
+
+type ResetRuntimeResult struct {
+	Processes int                     `json:"processes"`
+	Runtimes  []container.ResetResult `json:"runtimes"`
+}
+
 type EnvironmentContext struct {
 	Resolution  string              `json:"resolution"`
 	Environment *model.Environment  `json:"environment,omitempty"`
@@ -44,6 +54,10 @@ type EnvironmentContext struct {
 
 func (e RuntimeInUseError) Error() string {
 	return "stop project " + e.Project + " before changing the container runtime"
+}
+
+func (e ResetActiveEnvironmentsError) Error() string {
+	return "all environments must be stopped before Portless application state is reset: " + strings.Join(e.Environments, ", ")
 }
 
 func (e NameConflictError) Error() string {
@@ -67,6 +81,8 @@ type Service struct {
 	installationKey      string
 	daemonInstanceID     string
 	mu                   sync.RWMutex
+	resetGate            sync.RWMutex
+	resetting            bool
 	projectLocks         map[string]*sync.Mutex
 	containerEnvironment map[string]map[string]string
 	sourceLeases         map[string]string
@@ -465,6 +481,11 @@ func (s *Service) ProjectModel(ctx context.Context, name string) (model.ProjectM
 }
 
 func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, idempotencyKey string) (model.Operation, error) {
+	s.resetGate.RLock()
+	defer s.resetGate.RUnlock()
+	if s.resetting {
+		return model.Operation{}, errors.New("Portless reset preparation is in progress")
+	}
 	if _, err := s.store.Environment(ctx, projectName, environmentName); err != nil {
 		return model.Operation{}, err
 	}
@@ -590,6 +611,11 @@ func (s *Service) RestartService(ctx context.Context, projectName, environmentNa
 }
 
 func (s *Service) beginServiceStart(ctx context.Context, projectName, environmentName, serviceName, actor string, restart bool) (model.Operation, error) {
+	s.resetGate.RLock()
+	defer s.resetGate.RUnlock()
+	if s.resetting {
+		return model.Operation{}, errors.New("Portless reset preparation is in progress")
+	}
 	environment, err := s.store.Environment(ctx, projectName, environmentName)
 	if err != nil {
 		return model.Operation{}, err
@@ -813,6 +839,115 @@ func (s *Service) UseRuntime(ctx context.Context, value string) (container.Statu
 	return s.containers.Status(ctx), nil
 }
 
+func (s *Service) PrepareReset(ctx context.Context) (result ResetRuntimeResult, err error) {
+	s.resetGate.Lock()
+	defer s.resetGate.Unlock()
+	if s.resetting {
+		return result, errors.New("Portless reset preparation is already in progress")
+	}
+	s.resetting = true
+	defer func() {
+		if err != nil {
+			s.resetting = false
+		}
+	}()
+	environments, err := s.store.ListEnvironments(ctx, "")
+	if err != nil {
+		return result, err
+	}
+	active := make([]string, 0)
+	for _, environment := range environments {
+		if environment.Status != model.EnvironmentStopped {
+			active = append(active, model.EnvironmentSelector(environment.Project, environment.Name))
+		}
+	}
+	if len(active) > 0 {
+		sort.Strings(active)
+		return result, ResetActiveEnvironmentsError{Environments: active}
+	}
+	running, err := s.store.RunningOperationScopes(ctx)
+	if err != nil {
+		return result, err
+	}
+	if len(running) > 0 {
+		return result, fmt.Errorf("environment operations are still running: %s; wait for them to finish, then retry", strings.Join(running, ", "))
+	}
+	result.Processes, err = s.stopResetSupervisors(ctx, environments)
+	if err != nil {
+		return result, err
+	}
+	result.Runtimes, err = s.containers.ResetInstallations(ctx)
+	return result, err
+}
+
+func (s *Service) CancelReset() {
+	s.resetGate.Lock()
+	s.resetting = false
+	s.resetGate.Unlock()
+}
+
+func (s *Service) stopResetSupervisors(ctx context.Context, environments []model.Environment) (int, error) {
+	stopped := 0
+	for _, environment := range environments {
+		scope := model.EnvironmentSelector(environment.Project, environment.Name)
+		for _, service := range environment.Services {
+			if service.Kind != model.ServiceProcess {
+				continue
+			}
+			runtime, err := s.store.ServiceRuntime(ctx, scope, service.Name)
+			if err != nil {
+				return stopped, err
+			}
+			if runtime.SupervisorSocket == "" && runtime.PrivateRunKey == "" && runtime.SupervisorState == "" {
+				continue
+			}
+			if runtime.SupervisorSocket == "" || runtime.PrivateRunKey == "" || runtime.SupervisorState == "" {
+				return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s because its supervisor ownership record is incomplete", scope, service.Name)
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			status, liveErr := supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
+			cancel()
+			if liveErr != nil {
+				status, err = supervisor.StatusFor(ctx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
+				if err != nil {
+					return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s: %w", scope, service.Name, liveErr)
+				}
+				if err := validateResetSupervisor(status, scope, service.Name, runtime.Generation); err != nil {
+					return stopped, err
+				}
+				if !supervisorTerminalState(status.State) {
+					return stopped, fmt.Errorf("cannot stop previous process runtime %s/%s because its supervisor is unavailable and persisted state is %s", scope, service.Name, status.State)
+				}
+				continue
+			}
+			if err := validateResetSupervisor(status, scope, service.Name, runtime.Generation); err != nil {
+				return stopped, err
+			}
+			if supervisorTerminalState(status.State) {
+				continue
+			}
+			stopCtx, stopCancel := context.WithTimeout(ctx, 12*time.Second)
+			status, err = supervisor.Stop(stopCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
+			stopCancel()
+			if err != nil {
+				return stopped, fmt.Errorf("stop previous process runtime %s/%s: %w", scope, service.Name, err)
+			}
+			if err := validateResetSupervisor(status, scope, service.Name, runtime.Generation); err != nil {
+				return stopped, err
+			}
+			stopped++
+		}
+	}
+	return stopped, nil
+}
+
+func validateResetSupervisor(status supervisor.Status, scope, service string, generation int64) error {
+	if status.Scope != scope || status.Service != service || status.Generation != generation {
+		return fmt.Errorf("previous process supervisor identity does not match %s/%s generation %d", scope, service, generation)
+	}
+	return nil
+}
+
 func (s *Service) Traffic(project, environment string, limit int) []model.TrafficEvent {
 	return s.broker.RecentTraffic(model.EnvironmentSelector(project, environment), limit)
 }
@@ -948,12 +1083,8 @@ func (s *Service) CreateFault(ctx context.Context, fault model.FaultRule, actor 
 			return model.FaultRule{}, fmt.Errorf("invalid path glob: %w", err)
 		}
 	}
-	if fault.ExpiresAt == nil {
-		expires := time.Now().UTC().Add(10 * time.Minute)
-		fault.ExpiresAt = &expires
-	}
-	if !fault.ExpiresAt.After(time.Now()) || fault.ExpiresAt.After(time.Now().Add(time.Hour)) {
-		return model.FaultRule{}, errors.New("fault expiry must be in the future and no more than one hour away")
+	if fault.ExpiresAt != nil && !fault.ExpiresAt.After(time.Now()) {
+		return model.FaultRule{}, errors.New("fault expiry must be in the future")
 	}
 	created, err := s.store.CreateFault(ctx, fault)
 	if err != nil {

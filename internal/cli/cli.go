@@ -934,13 +934,18 @@ func (c *CLI) listFaults(ctx context.Context, limit int) error {
 		return nil
 	}
 	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, "Fault rules"), environment.Project, environment.Name)
-	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-24s %-9s %s", "NAME", "STATE", "SCOPE")))
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-24s %-9s %-22s %s", "NAME", "STATE", "LIFETIME", "SCOPE")))
 	for _, fault := range response.Faults {
 		state := "disabled"
+		lifetime := "—"
 		if fault.Enabled {
 			state = "active"
+			lifetime = "until disabled"
+			if fault.ExpiresAt != nil {
+				lifetime = "until " + fault.ExpiresAt.Local().Format("2006-01-02 15:04")
+			}
 		}
-		fmt.Fprintf(c.Out, "%-24s %s %s\n", fault.Name, c.state(c.Out, fmt.Sprintf("%-9s", state)), fault.ScopeSummary)
+		fmt.Fprintf(c.Out, "%-24s %s %-22s %s\n", fault.Name, c.state(c.Out, fmt.Sprintf("%-9s", state)), lifetime, fault.ScopeSummary)
 	}
 	return nil
 }
@@ -950,8 +955,8 @@ func (c *CLI) addFault(ctx context.Context, name, edge string, options faultOpti
 	if err != nil || source == "" || target == "" {
 		return usageError("edge must use source:target")
 	}
-	if options.duration <= 0 || options.duration > time.Hour {
-		return usageError("--duration must be greater than zero and no more than 1h")
+	if options.duration < 0 {
+		return usageError("--duration must be zero or greater")
 	}
 	if options.probability <= 0 || options.probability > 1 {
 		return usageError("--probability must be greater than zero and no more than 1")
@@ -969,8 +974,11 @@ func (c *CLI) addFault(ctx context.Context, name, edge string, options faultOpti
 	if err != nil {
 		return err
 	}
-	expires := time.Now().UTC().Add(options.duration)
-	input := model.FaultRule{Name: name, Source: source, Target: target, LatencyMS: options.latency, JitterMS: options.jitter, StatusCode: options.status, Abort: options.abort, Probability: options.probability, Method: options.method, Path: options.path, ExpiresAt: &expires}
+	input := model.FaultRule{Name: name, Source: source, Target: target, LatencyMS: options.latency, JitterMS: options.jitter, StatusCode: options.status, Abort: options.abort, Probability: options.probability, Method: options.method, Path: options.path}
+	if options.duration > 0 {
+		expires := time.Now().UTC().Add(options.duration)
+		input.ExpiresAt = &expires
+	}
 	var created model.FaultRule
 	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/faults", input, &created); err != nil {
 		return err
@@ -978,7 +986,11 @@ func (c *CLI) addFault(ctx context.Context, name, edge string, options faultOpti
 	if c.jsonOutput {
 		return writeJSON(c.Out, created)
 	}
-	fmt.Fprintf(c.Out, "fault %s active: %s\n", created.Name, created.ScopeSummary)
+	lifetime := "until disabled"
+	if created.ExpiresAt != nil {
+		lifetime = "until " + created.ExpiresAt.Local().Format(time.RFC3339)
+	}
+	fmt.Fprintf(c.Out, "fault %s active %s: %s\n", created.Name, lifetime, created.ScopeSummary)
 	return nil
 }
 

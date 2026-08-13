@@ -2,11 +2,11 @@
 
 This intentionally tiny checkout exercises the full Portless loop without requiring application package installation:
 
-- `checkout`: a NestJS-shaped Node service with `ORDERS_URL` and Redis-compatible configuration.
+- `checkout`: a NestJS-shaped Node service with an `ORDERS_URL` dependency.
 - `orders`: a NestJS-shaped Node service with Postgres and Redis-compatible configuration.
 - `postgres`: discovered managed dependency.
 - `redis`: discovered managed Valkey dependency.
-- `checkout → orders`, `checkout → redis`, `orders → postgres`, and `orders → redis` edges.
+- `checkout → orders`, `orders → postgres`, and `orders → redis` edges.
 
 The fixture manifests include `@nestjs/core` only as static discovery evidence; the servers use Node's standard library so `npm run start:dev` is immediately runnable.
 

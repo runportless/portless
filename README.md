@@ -91,6 +91,8 @@ portless config color auto
 portless config color always
 portless config color never
 portless config reset
+portless reset
+portless reset --yes
 portless env list
 portless env select billing/local
 portless env current
@@ -146,6 +148,8 @@ Human-readable output is the default across the CLI. Add the global `--json` fla
 CLI color defaults to `auto`, which uses a restrained status palette only when output is going to an interactive terminal. `portless config color always` or `portless config color never` saves a machine-local preference in `~/.portless/preferences.json`; `portless config color auto` restores terminal detection. `portless config reset` removes all saved CLI preferences and restores their built-in defaults. The global `--no-color` flag and the `NO_COLOR` environment variable override the saved preference for one invocation. JSON, redirected output in `auto` mode, and generated completion scripts never contain ANSI color codes.
 
 Ordinary `down` preserves managed volumes, history, logs, and recordings. Volume removal requires the separate destructive flag and confirmation.
+
+`portless reset` previews a machine-wide application-state reset and does not change anything. `portless reset --yes` requires every environment to be stopped, removes all projects, environments, traffic, recordings, faults, timelines, service logs, generated credentials, and every Portless-owned container, network, database volume, and cache volume from each container runtime Portless has used. It then restarts the daemon with an empty database. If a previously used runtime is unavailable, reset stops before erasing the ownership records so it can be retried safely. CLI preferences, the selected runtime, installation identity, authentication, and the privileged localhost relay installation are preserved. Use `portless config reset` instead when only CLI preferences should return to their defaults.
 
 Logs from both host processes and managed containers are stored as structured entries. Portless retains the newest 10 generations for each service and caps each generation's stdout and stderr stream at 16 MiB, so a noisy local service cannot grow storage without bound.
 

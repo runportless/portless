@@ -56,12 +56,34 @@ func TestProjectAndEnvironmentStateAreSeparated(t *testing.T) {
 	if err != nil || repeated.Number != operation.Number {
 		t.Fatalf("idempotent operation = %#v, err = %v", repeated, err)
 	}
+	running, err := controlStore.RunningOperationScopes(ctx)
+	if err != nil || len(running) != 1 || running[0] != scope {
+		t.Fatalf("running operation scopes = %#v, err = %v", running, err)
+	}
+	if err := controlStore.CompleteOperation(ctx, scope, operation.Number, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	running, err = controlStore.RunningOperationScopes(ctx)
+	if err != nil || len(running) != 0 {
+		t.Fatalf("completed operation remained in reset inventory: %#v, err = %v", running, err)
+	}
 	if _, err := controlStore.AddTimelineEvent(ctx, model.TimelineEvent{Project: "billing", Environment: "local", Actor: "CLI", Type: "test", Severity: "info", Summary: "environment event"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := controlStore.AddTimelineEvent(ctx, model.TimelineEvent{Project: "billing", Environment: "local", Actor: "daemon", Type: "environment.reconciled", Severity: "info", Summary: "Recovered runtime ownership and proxy routes"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.AddTimelineEvent(ctx, model.TimelineEvent{Project: "billing", Environment: "local", Actor: "daemon", Type: "environment.reconciled", Severity: "warning", Summary: "Runtime recovery completed with unavailable services"}); err != nil {
+		t.Fatal(err)
+	}
 	timeline, err := controlStore.Timeline(ctx, scope, 10)
-	if err != nil || len(timeline) != 1 || timeline[0].Project != "billing" || timeline[0].Environment != "local" {
+	if err != nil || len(timeline) != 2 || timeline[0].Project != "billing" || timeline[0].Environment != "local" {
 		t.Fatalf("timeline = %#v, err = %v", timeline, err)
+	}
+	for _, event := range timeline {
+		if event.Type == "environment.reconciled" && event.Severity == "info" {
+			t.Fatalf("successful daemon recovery leaked into the user timeline: %#v", event)
+		}
 	}
 }
 

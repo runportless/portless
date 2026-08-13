@@ -71,6 +71,10 @@ type downOptions struct {
 	timeout time.Duration
 }
 
+type resetOptions struct {
+	yes bool
+}
+
 type logsOptions struct {
 	tail       bool
 	limit      int
@@ -262,6 +266,7 @@ func (c *CLI) rootCommand() *cobra.Command {
 		inRootGroup(rootGroupSystem, c.daemonCommand()),
 		inRootGroup(rootGroupSystem, c.doctorCommand()),
 		inRootGroup(rootGroupSystem, c.configCommand()),
+		inRootGroup(rootGroupSystem, c.resetCommand()),
 	)
 	return root
 }
@@ -472,6 +477,21 @@ func (c *CLI) downCommand() *cobra.Command {
 	command.Flags().BoolVar(&options.yes, "yes", false, "confirm volume deletion")
 	command.Flags().BoolVar(&noWait, "no-wait", false, "return after the operation is accepted")
 	command.Flags().DurationVar(&options.timeout, "timeout", options.timeout, "shutdown timeout")
+	return command
+}
+
+func (c *CLI) resetCommand() *cobra.Command {
+	options := resetOptions{}
+	command := &cobra.Command{
+		Use:   "reset",
+		Short: "Erase all projects and local environment data",
+		Long:  "Reset Portless to an empty application state. The command preserves CLI preferences, runtime selection, installation identity, authentication, and the localhost relay installation.",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.reset(cmd.Context(), options)
+		},
+	}
+	command.Flags().BoolVar(&options.yes, "yes", false, "confirm permanent deletion")
 	return command
 }
 
@@ -715,7 +735,7 @@ func (c *CLI) faultCommand() *cobra.Command {
 	faultList.Flags().IntVar(&faultListOptions.limit, "limit", faultListOptions.limit, "maximum fault rules")
 	command.AddCommand(faultList)
 
-	options := faultOptions{probability: 1, duration: 10 * time.Minute}
+	options := faultOptions{probability: 1}
 	add := &cobra.Command{
 		Use:   "add <name> <source:target>",
 		Short: "Add a fault rule",
@@ -731,7 +751,7 @@ func (c *CLI) faultCommand() *cobra.Command {
 	add.Flags().Float64Var(&options.probability, "probability", options.probability, "match probability from 0 to 1")
 	add.Flags().StringVar(&options.method, "method", "", "HTTP method filter")
 	add.Flags().StringVar(&options.path, "path", "", "HTTP path glob")
-	add.Flags().DurationVar(&options.duration, "duration", options.duration, "automatic expiry")
+	add.Flags().DurationVar(&options.duration, "duration", options.duration, "automatically disable after this duration")
 	add.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if len(args) == 1 {
 			return c.complete(completionConnections)(cmd, args, toComplete)

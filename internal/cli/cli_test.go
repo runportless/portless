@@ -23,7 +23,7 @@ func TestCobraRootHelpShowsCommandTree(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "project", "record", "relay", "runtime", "--env", "--json", "--no-color"} {
+	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "project", "record", "relay", "reset", "runtime", "--env", "--json", "--no-color"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q:\n%s", expected, output.String())
 		}
@@ -53,7 +53,7 @@ func TestCobraRootCommandsAreGroupedByTask(t *testing.T) {
 		"project": rootGroupConfigure, "env": rootGroupConfigure,
 		"record": rootGroupTest, "fault": rootGroupTest,
 		"runtime": rootGroupSystem, "setup": rootGroupSystem, "relay": rootGroupSystem, "daemon": rootGroupSystem,
-		"doctor": rootGroupSystem, "config": rootGroupSystem,
+		"doctor": rootGroupSystem, "config": rootGroupSystem, "reset": rootGroupSystem,
 		"completion": rootGroupOther, "help": rootGroupOther,
 	}
 
@@ -351,6 +351,45 @@ func TestCobraDaemonHelpAndStoppedStatus(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "already stopped") {
 		t.Fatalf("unexpected stopped result: %s", output.String())
+	}
+}
+
+func TestResetCommandHelpExplainsConfirmationAndPreservedState(t *testing.T) {
+	application, output, errorsOutput := newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"reset", "--help"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	for _, expected := range []string{"--yes", "permanent deletion", "preserves CLI preferences", "localhost relay installation"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("reset help does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestResetPreviewIsNonMutatingAndExplainsConfirmation(t *testing.T) {
+	application, output, _ := newTestCLI(t)
+	result := resetOutput{
+		Action: "reset", Projects: 2, Environments: 3, ManagedVolumeEnvironments: 1,
+		ActiveEnvironments: []string{"billing/local"},
+		WillRemove:         append([]string(nil), resetRemovalCategories...),
+		Preserved:          append([]string(nil), resetPreservedCategories...),
+	}
+	if err := application.printResetPreview(result); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Portless reset preview", "2 projects", "3 environments", "billing/local", "No changes were made", "portless reset --yes", "Preserved:"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("reset preview does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestResetActiveEnvironmentErrorGivesExplicitShutdownCommand(t *testing.T) {
+	err := activeResetError([]string{"billing/local", "search/dev"})
+	for _, expected := range []string{"billing/local", "search/dev", "portless --env project/environment down"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("active reset error does not contain %q: %v", expected, err)
+		}
 	}
 }
 
@@ -693,6 +732,28 @@ func TestCobraRuntimeHelpDocumentsJSONOutput(t *testing.T) {
 	}
 }
 
+func TestFaultDurationIsOptIn(t *testing.T) {
+	application, output, errorsOutput := newTestCLI(t)
+	if code := application.Run(context.Background(), []string{"fault", "add", "--help"}); code != 0 {
+		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
+	}
+	if !strings.Contains(output.String(), "--duration") || !strings.Contains(output.String(), "automatically disable") {
+		t.Fatalf("fault help does not explain optional automatic disable:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "default 10m") {
+		t.Fatalf("fault duration still defaults to ten minutes:\n%s", output.String())
+	}
+
+	command, _, err := application.rootCommand().Find([]string{"fault", "add"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durationFlag := command.Flags().Lookup("duration")
+	if durationFlag == nil || durationFlag.DefValue != "0s" {
+		t.Fatalf("duration default = %v, want 0s", durationFlag)
+	}
+}
+
 func TestCobraGlobalJSONFlagWorksBeforeAndAfterSubcommands(t *testing.T) {
 	for _, args := range [][]string{{"--json", "daemon", "status"}, {"daemon", "status", "--json"}} {
 		application, output, errorsOutput := newTestCLI(t)
@@ -861,6 +922,7 @@ func TestCobraUsageErrorsReturnExitCodeTwo(t *testing.T) {
 		{name: "exclusive provider", args: []string{"env", "bind", "checkout", "--local", "checkout", "--container"}, want: "none of the others can be", usage: "portless env bind <service>"},
 		{name: "invalid runtime", args: []string{"runtime", "use", "containerd"}, want: "runtime must be auto, docker, or podman", usage: "portless runtime use <auto|docker|podman>"},
 		{name: "invalid recording duration", args: []string{"record", "start", "capture", "--duration", "0s"}, want: "--duration must be greater than zero", usage: "portless record start <name>"},
+		{name: "negative fault duration", args: []string{"fault", "add", "slow", "checkout:orders", "--latency", "100", "--duration=-1s"}, want: "--duration must be zero or greater", usage: "portless fault add <name> <source:target>"},
 		{name: "fault without effect", args: []string{"fault", "add", "slow", "checkout:orders"}, want: "define at least one effect", usage: "portless fault add <name> <source:target>"},
 	}
 	for _, test := range tests {
@@ -900,6 +962,7 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless daemon stop":     runAction,
 		"portless daemon restart":  runAction,
 		"portless doctor":          runAction,
+		"portless reset":           runAction,
 		"portless up":              runAction,
 		"portless down":            runAction,
 		"portless status":          runAction,

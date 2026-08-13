@@ -3,12 +3,14 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -136,5 +138,105 @@ func TestEnsureDaemonRepairsDataDirectoryBeforeReturningHealthyRecord(t *testing
 	}
 	if info.Mode().Perm() != 0o700 {
 		t.Fatalf("healthy daemon data directory mode = %04o, want 0700", info.Mode().Perm())
+	}
+}
+
+func TestResetApplicationStateRemovesProjectDataAndPreservesInstallationState(t *testing.T) {
+	paths, err := ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := []string{
+		paths.Database, paths.Database + "-wal", paths.Database + "-shm", paths.DaemonLog,
+		filepath.Join(paths.Root, "environments", "private", "logs", "checkout.log"),
+		filepath.Join(paths.Root, "runs", "private", "state.json"),
+		filepath.Join(paths.Root, "secrets", "private", "postgres.env"),
+		filepath.Join(paths.Logs, "daemon.jsonl"), filepath.Join(paths.Temporary, "request.json"),
+	}
+	for _, path := range removed {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("application-state"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	preserved := []string{
+		paths.Token, paths.OwnershipKey, filepath.Join(paths.Root, "preferences.json"),
+		filepath.Join(paths.Root, "runtime.json"), filepath.Join(paths.Root, "browser-sessions.json"),
+	}
+	for _, path := range preserved {
+		if err := os.WriteFile(path, []byte("installation-state"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := ResetApplicationState(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Removed) == 0 {
+		t.Fatal("reset did not report removed state categories")
+	}
+	for _, path := range removed {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("reset target still exists: %s (%v)", path, err)
+		}
+	}
+	for _, path := range preserved {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("preserved path is missing: %s (%v)", path, err)
+			continue
+		}
+		if string(content) != "installation-state" {
+			t.Errorf("preserved path changed: %s", path)
+		}
+	}
+}
+
+func TestResetApplicationStateRejectsSymlinkBeforeRemovingAnything(t *testing.T) {
+	paths, err := ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Database, []byte("database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	marker := filepath.Join(target, "keep")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(paths.Root, "environments")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResetApplicationState(paths); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("unexpected reset symlink error: %v", err)
+	}
+	if content, err := os.ReadFile(paths.Database); err != nil || string(content) != "database" {
+		t.Fatalf("database was removed before reset preflight completed: content=%q err=%v", content, err)
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "keep" {
+		t.Fatalf("symlink target changed: content=%q err=%v", content, err)
+	}
+}
+
+func TestResetRefusesMissingControlRecordWhileDaemonInstanceLockIsHeld(t *testing.T) {
+	paths, err := ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(paths.InstanceLock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := prepareStoppedDaemonForReset(context.Background(), paths, os.ErrNotExist); err == nil || !strings.Contains(err.Error(), "instance lock is still held") {
+		t.Fatalf("unexpected missing-control reset error: %v", err)
 	}
 }

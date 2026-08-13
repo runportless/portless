@@ -439,6 +439,8 @@ func (c *CLI) showFault(ctx context.Context, name string) error {
 	fmt.Fprintf(c.Out, "  %-14s %s\n", "Created:", fault.CreatedAt.Local().Format(time.RFC3339))
 	if fault.ExpiresAt != nil {
 		fmt.Fprintf(c.Out, "  %-14s %s\n", "Expires:", fault.ExpiresAt.Local().Format(time.RFC3339))
+	} else {
+		fmt.Fprintf(c.Out, "  %-14s %s\n", "Lifetime:", "until disabled")
 	}
 	return nil
 }
