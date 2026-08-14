@@ -1114,6 +1114,37 @@ func (s *Service) Fault(ctx context.Context, project, environment, name string) 
 	return s.store.Fault(ctx, model.EnvironmentSelector(project, environment), name)
 }
 
+func (s *Service) EnableFault(ctx context.Context, project, environment, name, actor string) (model.FaultRule, error) {
+	scope := model.EnvironmentSelector(project, environment)
+	fault, err := s.store.Fault(ctx, scope, name)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	if fault.ExpiresAt != nil && !fault.ExpiresAt.After(time.Now()) {
+		return model.FaultRule{}, fmt.Errorf("fault %s has expired; delete it and create a new rule", name)
+	}
+	if fault.Enabled {
+		return fault, nil
+	}
+	definition, err := s.store.EnvironmentModel(ctx, project, environment)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	if err := validateExperimentScope(definition, fault.Source, fault.Target, false); err != nil {
+		return model.FaultRule{}, err
+	}
+	if err := s.store.EnableFault(ctx, scope, name); err != nil {
+		return model.FaultRule{}, err
+	}
+	fault, err = s.store.Fault(ctx, scope, name)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "fault.enabled", name, "warning", "Fault "+name+" enabled", nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: fault})
+	return fault, nil
+}
+
 func (s *Service) DisableFault(ctx context.Context, project, environment, name, actor string) error {
 	scope := model.EnvironmentSelector(project, environment)
 	if err := s.store.DisableFault(ctx, scope, name); err != nil {
@@ -1121,6 +1152,16 @@ func (s *Service) DisableFault(ctx context.Context, project, environment, name, 
 	}
 	_, _ = s.timeline(ctx, scope, actor, "fault.disabled", name, "info", "Fault "+name+" disabled", nil)
 	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: map[string]any{"name": name, "enabled": false}})
+	return nil
+}
+
+func (s *Service) DeleteFault(ctx context.Context, project, environment, name, actor string) error {
+	scope := model.EnvironmentSelector(project, environment)
+	if err := s.store.DeleteFault(ctx, scope, name); err != nil {
+		return err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "fault.deleted", name, "warning", "Fault "+name+" deleted", nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: map[string]any{"name": name, "enabled": false, "deleted": true}})
 	return nil
 }
 

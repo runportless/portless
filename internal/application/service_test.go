@@ -548,6 +548,30 @@ func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
 	}, "test"); err == nil || !strings.Contains(err.Error(), "must be in the future") {
 		t.Fatalf("past expiry error = %v", err)
 	}
+
+	disabled, err := app.DisableAllFaults(ctx, "billing", "local", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled != 2 {
+		t.Fatalf("disabled fault count = %d, want 2", disabled)
+	}
+	persistent, err = app.EnableFault(ctx, "billing", "local", persistent.Name, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persistent.Enabled || persistent.Revision != 3 {
+		t.Fatalf("re-enabled fault = %#v, want enabled revision 3", persistent)
+	}
+	if err := app.DisableFault(ctx, "billing", "local", persistent.Name, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.DeleteFault(ctx, "billing", "local", persistent.Name, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Fault(ctx, "billing", "local", persistent.Name); err == nil {
+		t.Fatal("deleted fault rule is still readable")
+	}
 }
 
 func TestApplicationRestoresTrafficSequenceFromRetainedRecordings(t *testing.T) {

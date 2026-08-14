@@ -768,6 +768,16 @@ func (c *CLI) faultCommand() *cobra.Command {
 	}
 	show.ValidArgsFunction = c.complete(completionFaults)
 	command.AddCommand(show)
+	enable := &cobra.Command{
+		Use:   "enable <name>",
+		Short: "Enable a saved fault rule",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.enableFault(cmd.Context(), args[0])
+		},
+	}
+	enable.ValidArgsFunction = c.complete(completionFaults)
+	command.AddCommand(enable)
 	disable := &cobra.Command{
 		Use:   "disable <name>",
 		Short: "Disable a fault rule",
@@ -778,6 +788,21 @@ func (c *CLI) faultCommand() *cobra.Command {
 	}
 	disable.ValidArgsFunction = c.complete(completionFaults)
 	command.AddCommand(disable)
+	deleteYes := false
+	deleteCommand := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Permanently delete a fault rule",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !deleteYes {
+				return usageError("fault deletion is permanent; repeat with --yes")
+			}
+			return c.deleteFault(cmd.Context(), args[0])
+		},
+	}
+	deleteCommand.Flags().BoolVar(&deleteYes, "yes", false, "confirm fault deletion")
+	deleteCommand.ValidArgsFunction = c.complete(completionFaults)
+	command.AddCommand(deleteCommand)
 	clear := &cobra.Command{
 		Use:   "clear",
 		Short: "Disable all active fault rules",

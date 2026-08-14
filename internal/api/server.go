@@ -1122,6 +1122,26 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 		writeJSON(writer, http.StatusOK, map[string]any{"disabled": count})
 		return
 	}
+	if len(segments) == 6 && request.Method == http.MethodPost {
+		name := segments[4]
+		switch segments[5] {
+		case "enable":
+			fault, err := s.app.EnableFault(ctx, project, environment, name, principal.Actor)
+			if err != nil {
+				s.writeError(writer, err, environmentSubject(project, environment))
+				return
+			}
+			writeJSON(writer, http.StatusOK, fault)
+			return
+		case "disable":
+			if err := s.app.DisableFault(ctx, project, environment, name, principal.Actor); err != nil {
+				s.writeError(writer, err, environmentSubject(project, environment))
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
 	if len(segments) == 5 {
 		name := segments[4]
 		if request.Method == http.MethodGet {
@@ -1134,7 +1154,7 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 			return
 		}
 		if request.Method == http.MethodDelete {
-			if err := s.app.DisableFault(ctx, project, environment, name, principal.Actor); err != nil {
+			if err := s.app.DeleteFault(ctx, project, environment, name, principal.Actor); err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}

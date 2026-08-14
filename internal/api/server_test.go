@@ -91,6 +91,31 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if invalidLimit.Code != http.StatusBadRequest || !strings.Contains(invalidLimit.Body.String(), `"code":"INVALID_LIMIT"`) {
 		t.Fatalf("invalid limit response code=%d body=%s", invalidLimit.Code, invalidLimit.Body.String())
 	}
+	faultPath := "/api/v1/environments/billing/local/faults/api-latency"
+	createdFault := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/faults", `{"name":"api-latency","source":"external","target":"checkout","probability":1,"latencyMs":50}`, true)
+	if createdFault.Code != http.StatusCreated || !strings.Contains(createdFault.Body.String(), `"enabled":true`) {
+		t.Fatalf("fault create response code=%d body=%s", createdFault.Code, createdFault.Body.String())
+	}
+	disabledFaults := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/faults/disable-all", "", true)
+	if disabledFaults.Code != http.StatusOK || !strings.Contains(disabledFaults.Body.String(), `"disabled":1`) {
+		t.Fatalf("disable-all response code=%d body=%s", disabledFaults.Code, disabledFaults.Body.String())
+	}
+	reenabledFault := request(server, authManager, http.MethodPost, faultPath+"/enable", "", true)
+	if reenabledFault.Code != http.StatusOK || !strings.Contains(reenabledFault.Body.String(), `"enabled":true`) {
+		t.Fatalf("fault enable response code=%d body=%s", reenabledFault.Code, reenabledFault.Body.String())
+	}
+	disabledFault := request(server, authManager, http.MethodPost, faultPath+"/disable", "", true)
+	if disabledFault.Code != http.StatusNoContent {
+		t.Fatalf("fault disable response code=%d body=%s", disabledFault.Code, disabledFault.Body.String())
+	}
+	deletedFault := request(server, authManager, http.MethodDelete, faultPath, "", true)
+	if deletedFault.Code != http.StatusNoContent {
+		t.Fatalf("fault delete response code=%d body=%s", deletedFault.Code, deletedFault.Body.String())
+	}
+	missingFault := request(server, authManager, http.MethodGet, faultPath, "", true)
+	if missingFault.Code != http.StatusNotFound {
+		t.Fatalf("deleted fault response code=%d body=%s", missingFault.Code, missingFault.Body.String())
+	}
 	daemonStatus := request(server, authManager, http.MethodGet, "/api/v1/daemon", "", true)
 	if daemonStatus.Code != http.StatusOK || !strings.Contains(daemonStatus.Body.String(), `"instanceId":"instance-current"`) || !strings.Contains(daemonStatus.Body.String(), `"protocolVersion":"2"`) || strings.Contains(daemonStatus.Body.String(), "installationId") {
 		t.Fatalf("daemon status response code=%d body=%s", daemonStatus.Code, daemonStatus.Body.String())

@@ -999,14 +999,47 @@ func (c *CLI) disableFault(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	path := environmentAPI(environment) + "/faults/" + bootstrap.EscapePath(name)
-	if err := client.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
+	path := environmentAPI(environment) + "/faults/" + bootstrap.EscapePath(name) + "/disable"
+	if err := client.Do(ctx, http.MethodPost, path, nil, nil); err != nil {
 		return err
 	}
 	if c.jsonOutput {
 		return writeJSON(c.Out, actionOutput{Action: "disable", Project: environment.Project, Environment: environment.Name, Name: name, Status: "disabled"})
 	}
 	fmt.Fprintln(c.Out, "fault", name, "disabled")
+	return nil
+}
+
+func (c *CLI) enableFault(ctx context.Context, name string) error {
+	client, environment, err := c.current(ctx)
+	if err != nil {
+		return err
+	}
+	path := environmentAPI(environment) + "/faults/" + bootstrap.EscapePath(name) + "/enable"
+	var fault model.FaultRule
+	if err := client.Do(ctx, http.MethodPost, path, nil, &fault); err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, fault)
+	}
+	fmt.Fprintln(c.Out, "fault", name, "enabled")
+	return nil
+}
+
+func (c *CLI) deleteFault(ctx context.Context, name string) error {
+	client, environment, err := c.current(ctx)
+	if err != nil {
+		return err
+	}
+	path := environmentAPI(environment) + "/faults/" + bootstrap.EscapePath(name)
+	if err := client.Do(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		return writeJSON(c.Out, actionOutput{Action: "delete", Project: environment.Project, Environment: environment.Name, Name: name, Status: "deleted"})
+	}
+	fmt.Fprintln(c.Out, "fault", name, "deleted")
 	return nil
 }
 

@@ -341,6 +341,38 @@ func (s *Store) DisableFault(ctx context.Context, selector, name string) error {
 	return nil
 }
 
+func (s *Store) EnableFault(ctx context.Context, selector, name string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 1, revision = revision + 1 WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteFault(ctx context.Context, selector, name string) error {
+	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM fault_rules WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) DisableAllFaults(ctx context.Context, selector string) (int64, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
