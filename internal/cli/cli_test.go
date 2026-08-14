@@ -422,7 +422,7 @@ func TestPrintDaemonStatusUsesExplicitVersionLabels(t *testing.T) {
 		APIVersion:         "3",
 		RuntimeState:       "ready",
 		HandoffReady:       true,
-		ActiveEnvironments: []string{"golden-path/local"},
+		ActiveEnvironments: []string{"store/local"},
 	})
 
 	for _, expected := range []string{"Protocol Version: 2\n", "API Version: 3\n"} {

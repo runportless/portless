@@ -303,7 +303,7 @@ make test
 make
 
 # Exercise discovery against the included small environment:
-cd examples/golden-path
+cd examples/store
 portless up --no-open
 portless ui
 ```

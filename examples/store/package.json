@@ -1,5 +1,5 @@
 {
-  "name": "portless-golden-path",
+  "name": "portless-store",
   "private": true,
   "workspaces": ["apps/*"]
 }

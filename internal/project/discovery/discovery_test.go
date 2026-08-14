@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -41,22 +42,45 @@ func TestDiscoverNestServicesAndDependenciesWithoutExecutingCommands(t *testing.
 	}
 }
 
-func TestGoldenPathFixtureMatchesItsRuntimeTopology(t *testing.T) {
+func TestStoreExampleMatchesItsRuntimeTopology(t *testing.T) {
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("could not locate discovery test source")
 	}
-	root := filepath.Join(filepath.Dir(filename), "..", "..", "..", "examples", "golden-path")
+	root := filepath.Join(filepath.Dir(filename), "..", "..", "..", "examples", "store")
 	result, err := Discover(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Model.SuggestedName != "store" {
+		t.Fatalf("suggested name = %q, want store", result.Model.SuggestedName)
+	}
+	services := make(map[string]bool, len(result.Model.Services))
+	for _, service := range result.Model.Services {
+		services[service.Name] = true
+		if service.Name == "inventory" {
+			if service.Framework != "spring-boot" {
+				t.Errorf("inventory framework = %q, want spring-boot", service.Framework)
+			}
+			if command := strings.Join(service.Command, " "); command != "./gradlew :apps:inventory:bootRun" {
+				t.Errorf("inventory command = %q", command)
+			}
+			if service.Health.Kind != "http" || service.Health.Path != "/actuator/health" {
+				t.Errorf("inventory health = %#v", service.Health)
+			}
+		}
+	}
+	for _, service := range []string{"checkout", "inventory", "orders", "postgres", "redis"} {
+		if !services[service] {
+			t.Errorf("service %s was not discovered", service)
+		}
 	}
 
 	actual := make(map[string]bool, len(result.Model.Connections))
 	for _, connection := range result.Model.Connections {
 		actual[connection.Source+":"+connection.Target] = true
 	}
-	expected := []string{"checkout:orders", "orders:postgres", "orders:redis"}
+	expected := []string{"checkout:inventory", "checkout:orders", "orders:postgres", "orders:redis"}
 	if len(actual) != len(expected) {
 		t.Fatalf("connections = %#v, want only %v", result.Model.Connections, expected)
 	}
@@ -64,6 +88,9 @@ func TestGoldenPathFixtureMatchesItsRuntimeTopology(t *testing.T) {
 		if !actual[edge] {
 			t.Errorf("connection %s was not discovered", edge)
 		}
+	}
+	if len(result.Model.References) != 0 {
+		t.Errorf("unexpected unresolved references: %#v", result.Model.References)
 	}
 }
 

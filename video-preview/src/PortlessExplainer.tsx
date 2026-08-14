@@ -164,10 +164,10 @@ function Terminal() {
   const command = 'portless up';
   const typed = command.slice(0, Math.floor(interpolate(frame, [18, 70], [0, command.length], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})));
   const lines = [
-    {at: 73, text: 'discovered checkout, orders', color: colors.green},
+    {at: 73, text: 'discovered checkout, inventory, orders', color: colors.green},
     {at: 88, text: 'started postgres and redis with docker', color: colors.green},
-    {at: 103, text: 'golden-path/local  healthy  4/4 ready', color: colors.teal},
-    {at: 122, text: 'http://checkout.local.golden-path.localhost', color: colors.text},
+    {at: 103, text: 'store/local  healthy  5/5 ready', color: colors.teal},
+    {at: 122, text: 'http://checkout.local.store.localhost', color: colors.text},
   ];
   return (
     <Chrome>
@@ -178,7 +178,7 @@ function Terminal() {
         <div style={{height: 420, border: `1px solid ${colors.lineBright}`, background: '#04090b', boxShadow: '0 26px 90px rgba(0,0,0,.38)'}}>
           <div style={{height: 46, borderBottom: `1px solid ${colors.line}`, display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 18}}>
             {[colors.red, colors.amber, colors.green].map((color) => <i key={color} style={{display: 'block', width: 9, height: 9, borderRadius: '50%', background: color, opacity: 0.75}} />)}
-            <span style={{marginLeft: 12, color: colors.faint, fontFamily: mono, fontSize: 11}}>~/workspace/golden-path</span>
+            <span style={{marginLeft: 12, color: colors.faint, fontFamily: mono, fontSize: 11}}>~/workspace/store</span>
           </div>
           <div style={{padding: '30px 34px', fontFamily: mono, fontSize: 19, lineHeight: 2.15}}>
             <div><span style={{color: colors.teal}}>$</span> {typed}<span style={{opacity: frame % 20 < 11 ? 1 : 0, color: colors.teal}}>▍</span></div>

@@ -37,7 +37,7 @@ func TestRelayForwardsHTTPToPrivateUnixSocket(t *testing.T) {
 	go func() { _ = ServeRelay(ctx, listener, targetPath, 4) }()
 
 	request, _ := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/checkout", nil)
-	request.Host = "checkout.golden-path.localhost"
+	request.Host = "checkout.store.localhost"
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {

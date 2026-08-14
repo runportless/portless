@@ -7,7 +7,7 @@ describe('daemon diagnostics', () => {
     const status: DaemonStatus = {
       state: 'ready', pid: 33083, startedAt: '2026-08-12T15:57:59-05:00',
       instanceId: 'f8ecffdf6d6f', buildId: '9f15670e7324', protocolVersion: '2', apiVersion: '3',
-      handoffReady: true, recoveryProblems: [], activeEnvironments: ['golden-path/local'],
+      handoffReady: true, recoveryProblems: [], activeEnvironments: ['store/local'],
     }
     const runtime = { selected: 'docker', version: '29.4.0', state: 'ready', preference: 'auto', candidates: [] } as RuntimeStatus
 
@@ -17,6 +17,6 @@ describe('daemon diagnostics', () => {
     expect(output).toContain('API Version: 3')
     expect(output).toContain('Runtime: docker 29.4.0')
     expect(output).toContain('Runtime handoff: ready')
-    expect(output).toContain('  golden-path/local')
+    expect(output).toContain('  store/local')
   })
 })

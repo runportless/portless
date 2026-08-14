@@ -54,10 +54,13 @@ async function checkRedis() {
 
 const server = http.createServer(async (request, response) => {
   response.setHeader('content-type', 'application/json')
-  if (request.url === '/orders') {
+  const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+  if (url.pathname === '/orders') {
+    const sku = url.searchParams.get('sku') || 'coffee-mug'
+    const quantity = Number(url.searchParams.get('quantity') || 1)
     try {
       const [postgres, redis] = await Promise.all([checkPostgres(), checkRedis()])
-      return response.end(JSON.stringify({ number: 42, state: 'created', dependencies: { postgres, redis } }))
+      return response.end(JSON.stringify({ number: 42, state: 'created', lines: [{ sku, quantity }], dependencies: { postgres, redis } }))
     } catch (error) {
       response.statusCode = 503
       return response.end(JSON.stringify({ error: String(error) }))
