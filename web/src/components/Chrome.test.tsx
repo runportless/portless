@@ -7,7 +7,7 @@ const project = { name: 'billing' } as Project
 const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
 const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
 
-function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview') {
+function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview', settingsActive = false) {
   return renderToStaticMarkup(
     <AppChrome
       projects={[project]}
@@ -15,6 +15,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       activeProject={activeEnvironment ? project : undefined}
       activeEnvironment={activeEnvironment}
       activeView={activeView}
+      settingsActive={settingsActive}
       commands={[]}
       daemon={daemon}
       onNavigate={() => undefined}
@@ -53,5 +54,14 @@ describe('application navigation', () => {
     expect(markup).toContain('Topology')
     expect(markup).toContain('Timeline')
     expect(markup).toContain('<button class="is-active" aria-current="page"')
+  })
+
+  it('keeps settings globally available and marks the settings route', () => {
+    const markup = renderChrome(undefined, 'overview', true)
+
+    expect(markup).toContain('aria-label="Application"')
+    expect(markup).toContain('class="is-active" aria-current="page"><svg')
+    expect(markup).toContain('<span>Settings</span>')
+    expect(markup).toContain('<span>portless</span><b>/</b><strong>settings</strong>')
   })
 })

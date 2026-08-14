@@ -3,6 +3,8 @@ import { api, APIError, environmentPath, jsonBody, setCSRF } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
+import { SettingsPage } from './features/SettingsPage'
+import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
 import type { DaemonRestart, DaemonStatus, Environment, Operation, Project, RuntimeStatus } from './types'
 
 interface Session { actor: string; browser: boolean; csrf: string }
@@ -18,17 +20,39 @@ export function App() {
   const [loading, setLoading] = useState(true)
   const [authRequired, setAuthRequired] = useState(false)
   const [live, setLive] = useState(true)
+  const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference)
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(readThemePreference()))
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const synchronize = () => {
+      const resolved = resolveTheme(themePreference, media.matches)
+      setResolvedTheme(resolved)
+      applyTheme(resolved)
+    }
+    synchronize()
+    if (themePreference !== 'system') return
+    media.addEventListener('change', synchronize)
+    return () => media.removeEventListener('change', synchronize)
+  }, [themePreference])
+
+  const changeThemePreference = useCallback((preference: ThemePreference) => {
+    writeThemePreference(preference)
+    setThemePreference(preference)
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
-      const [projectResponse, environmentResponse, runtime] = await Promise.all([
+      const [projectResponse, environmentResponse, runtime, daemon] = await Promise.all([
         api<{ projects: Project[] }>('/projects'),
         api<{ environments: Environment[] }>('/environments'),
         api<RuntimeStatus>('/runtime'),
+        api<DaemonStatus>('/daemon'),
       ])
       setProjects(projectResponse.projects)
       setEnvironments(environmentResponse.environments)
       setRuntimeStatus(runtime)
+      setDaemonStatus(daemon)
       setLive(true)
     } catch (error) {
       if (error instanceof APIError && error.status === 401) setAuthRequired(true)
@@ -48,7 +72,6 @@ export function App() {
         const value = await api<Session>('/session')
         setSession(value); setCSRF(value.csrf)
         await refresh()
-        void refreshDaemon().catch(() => undefined)
       } catch (error) {
         if (error instanceof APIError && error.status === 401) setAuthRequired(true)
       } finally { setLoading(false) }
@@ -57,7 +80,7 @@ export function App() {
     const popstate = () => setRoute(`${location.pathname}${location.search}`)
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
-  }, [refresh, refreshDaemon])
+  }, [refresh])
 
   useEffect(() => {
     if (!session) return
@@ -105,20 +128,26 @@ export function App() {
   if (authRequired || !session) return <AuthenticationScreen />
 
   let content
-  if (parsed.environment) {
+  if (parsed.settings) {
+    content = <SettingsPage preference={themePreference} resolvedTheme={resolvedTheme} onPreferenceChange={changeThemePreference} />
+  } else if (parsed.environment) {
     content = activeEnvironment
-      ? <EnvironmentPage environment={activeEnvironment} tab={parsed.tab} onNavigate={navigate} onChanged={refresh} />
+      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} tab={parsed.tab} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="environment" name={`${parsed.project}/${parsed.environment}`} onNavigate={navigate} />
   } else if (parsed.project && !activeProject) {
     content = <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} runtime={runtimeStatus} onNavigate={navigate} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} runtime={runtimeStatus} daemon={daemonStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} runtime={runtimeStatus} daemon={daemonStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
 }
 
-function parseRoute(route: string): { project?: string; environment?: string; tab: Tab } {
-  const current = new URL(route, location.origin)
+export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {
+  return `${environment.project}/${environment.name}@${daemon?.instanceId || 'daemon-pending'}`
+}
+
+export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; tab: Tab } {
+  const current = new URL(route, 'http://portless.localhost')
   const parts = current.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   let project: string | undefined
   let environment: string | undefined
@@ -127,7 +156,7 @@ function parseRoute(route: string): { project?: string; environment?: string; ta
   const requested = current.searchParams.get('tab')
   const tabs: Tab[] = ['overview', 'topology', 'bindings', 'traffic', 'recordings', 'faults', 'timeline']
   const tab = tabs.includes(requested as Tab) ? requested as Tab : 'overview'
-  return { project, environment, tab }
+  return { project, environment, settings: parts[0] === 'settings', tab }
 }
 
 function environmentUIPath(environment: Pick<Environment, 'project' | 'name'>, tab: Tab) {

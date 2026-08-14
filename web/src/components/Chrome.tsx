@@ -8,12 +8,13 @@ export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' |
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, runtime, daemon, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, runtime, daemon, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
   activeEnvironment?: Environment
   activeView: EnvironmentView
+  settingsActive?: boolean
   runtime?: RuntimeStatus | null
   daemon: DaemonStatus | null
   children: ReactNode
@@ -56,6 +57,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     ...projects.map((project) => ({ group: 'Projects', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onNavigate(`/projects/${encodeURIComponent(project.name)}`) })),
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
+    { group: 'System', label: 'Settings', detail: 'Appearance', run: () => onNavigate('/settings') },
   ], [commands, environments, onNavigate, projects])
 
   const expandProject = (name: string) => {
@@ -117,10 +119,13 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
           </nav>
         </>}
       </div>
+      <nav className="sidebar__utility" aria-label="Application">
+        <button type="button" className={settingsActive ? 'is-active' : ''} aria-current={settingsActive ? 'page' : undefined} onClick={() => onNavigate('/settings')}><SettingsIcon /><span>Settings</span></button>
+      </nav>
       <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
-      <header className="topbar"><div className="crumbs">{activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
+      <header className="topbar"><div className="crumbs">{settingsActive ? <><span>portless</span><b>/</b><strong>settings</strong></> : activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
@@ -177,3 +182,4 @@ function PulseIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path 
 function RecordIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" /><circle cx="8" cy="8" r="2" className="fill" /></svg> }
 function FaultIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 14.5 14h-13L8 1.5Z" /><path d="M8 5v4M8 11.5v.5" /></svg> }
 function TimelineIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2v12M3 4h8M3 8h6M3 12h10" /><circle cx="3" cy="4" r="1" /><circle cx="3" cy="8" r="1" /><circle cx="3" cy="12" r="1" /></svg> }
+function SettingsIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v1.5M8 12.7v1.5M1.8 8h1.5M12.7 8h1.5M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1" /></svg> }
