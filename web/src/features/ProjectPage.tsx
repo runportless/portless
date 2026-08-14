@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { api, connectEvents, jsonBody, environmentPath } from '../api'
 import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficEvent, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
+import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 
 type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
 
@@ -650,34 +651,40 @@ function TrafficPanel({ environment }: { environment: Environment }) {
 
 function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
   const [name, setName] = useState('checkout-debug')
-  const [source, setSource] = useState('')
-  const [target, setTarget] = useState('')
+  const [scopeID, setScopeID] = useState('')
   const [error, setError] = useState('')
+  const scopes = useMemo(() => experimentScopes(environment), [environment])
+  const selectedScope = scopes.find((scope) => scope.id === scopeID)
+  useEffect(() => { setScopeID(''); setError('') }, [environment.project, environment.name])
   const start = async () => {
     setError('')
-    try { await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody({ name, source, target, captureBodies: false, maxEvents: 10000, maxBodyBytes: 65536 }) }); await refresh() }
+    try { await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody({ name, source: selectedScope?.source || '', target: selectedScope?.target || '', captureBodies: false, maxEvents: 10000, maxBodyBytes: 65536 }) }); await refresh() }
     catch (value) { setError(value instanceof Error ? value.message : String(value)) }
   }
   const stop = async (recording: Recording) => { await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/stop`), { method: 'POST' }); await refresh() }
   const remove = async (recording: Recording) => { await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}`), { method: 'DELETE' }); await refresh() }
   return <div className="experiment-layout">
-    <section className="panel experiment-form"><div className="panel-title"><span>START RECORDING</span><small>bounded, metadata-first capture</small></div><label><span>NAME</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><div className="form-pair"><label><span>SOURCE</span><select value={source} onChange={(event) => setSource(event.target.value)}><option value="">any source</option><option value="external">external</option>{environment.services.map((service) => <option key={service.name}>{service.name}</option>)}</select></label><label><span>TARGET</span><select value={target} onChange={(event) => setTarget(event.target.value)}><option value="">any target</option>{environment.services.map((service) => <option key={service.name}>{service.name}</option>)}</select></label></div>{error && <p className="danger-text">{error}</p>}<button className="button button--primary" onClick={start}>● START RECORDING</button></section>
-    <section className="panel experiment-list"><div className="panel-title"><span>RECORDINGS</span><small>{recordings.length} retained locally</small></div>{recordings.map((recording) => <div className="experiment-row" key={recording.name}><StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} /><div><strong>{recording.name}</strong><small>{recording.source || 'any'} → {recording.target || 'any'} · {recording.eventCount} events</small></div><span>{relativeTime(recording.startedAt)} ago</span><div>{recording.status === 'active' ? <button onClick={() => stop(recording)}>STOP</button> : <><a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}>EXPORT</a><button onClick={() => remove(recording)}>DELETE</button></>}</div></div>)}{recordings.length === 0 && <div className="empty-row">No recordings. Start one before reproducing a local issue.</div>}</section>
+    <section className="panel experiment-form"><div className="panel-title"><span>START RECORDING</span></div><label><span>NAME</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} onChange={(event) => setScopeID(event.target.value)}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>{error && <p className="danger-text">{error}</p>}<button className="button button--primary" onClick={start}>● START RECORDING</button></section>
+    <section className="panel experiment-list"><div className="panel-title"><span>RECORDINGS</span><small>{recordings.length} retained locally</small></div>{recordings.map((recording) => <div className="experiment-row" key={recording.name}><StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} /><div><strong>{recording.name}</strong><small>{recordingScopeLabel(recording)} · {recording.eventCount} events</small></div><span>{relativeTime(recording.startedAt)} ago</span><div>{recording.status === 'active' ? <button onClick={() => stop(recording)}>STOP</button> : <><a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}>EXPORT</a><button onClick={() => remove(recording)}>DELETE</button></>}</div></div>)}{recordings.length === 0 && <div className="empty-row">No recordings. Start one before reproducing a local issue.</div>}</section>
   </div>
 }
 
 function FaultsPanel({ environment, faults, refresh }: { environment: Environment; faults: FaultRule[]; refresh: () => Promise<void> }) {
   const [name, setName] = useState('slow-downstream')
-  const [source, setSource] = useState(environment.primaryService || 'external')
-  const [target, setTarget] = useState(environment.services.find((service) => service.name !== source)?.name || environment.services[0]?.name || '')
+  const scopes = useMemo(() => experimentScopes(environment), [environment])
+  const initialScope = preferredFaultScope(environment, scopes)?.id || ''
+  const [scopeID, setScopeID] = useState(initialScope)
   const [effect, setEffect] = useState<'latency' | 'status' | 'abort'>('latency')
   const [value, setValue] = useState('2000')
   const [expiryMinutes, setExpiryMinutes] = useState('')
   const [error, setError] = useState('')
+  const selectedScope = scopes.find((scope) => scope.id === scopeID)
+  useEffect(() => { setScopeID(preferredFaultScope(environment, scopes)?.id || ''); setError('') }, [environment.project, environment.name]) // eslint-disable-line react-hooks/exhaustive-deps
   const create = async () => {
     setError('')
+    if (!selectedScope) { setError('No configurable connection is available in this environment.'); return }
     const body = {
-      name, source, target, probability: 1,
+      name, source: selectedScope.source, target: selectedScope.target, probability: 1,
       latencyMs: effect === 'latency' ? Number(value) : 0,
       statusCode: effect === 'status' ? Number(value) : 0,
       abort: effect === 'abort',
@@ -689,7 +696,7 @@ function FaultsPanel({ environment, faults, refresh }: { environment: Environmen
   const disable = async (fault: FaultRule) => { await api(environmentPath(environment, `/faults/${encodeURIComponent(fault.name)}`), { method: 'DELETE' }); await refresh() }
   const clear = async () => { await api(environmentPath(environment, '/faults/disable-all'), { method: 'POST' }); await refresh() }
   return <div className="experiment-layout">
-    <section className="panel experiment-form"><div className="panel-title"><span>INTRODUCE FAILURE</span><small>scoped to one local edge</small></div><label><span>NAME</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><div className="form-pair"><label><span>SOURCE</span><select value={source} onChange={(event) => setSource(event.target.value)}><option value="external">external</option>{environment.services.map((service) => <option key={service.name}>{service.name}</option>)}</select></label><label><span>TARGET</span><select value={target} onChange={(event) => setTarget(event.target.value)}>{environment.services.map((service) => <option key={service.name}>{service.name}</option>)}</select></label></div><div className="segmented">{(['latency', 'status', 'abort'] as const).map((item) => <button key={item} className={effect === item ? 'is-active' : ''} onClick={() => { setEffect(item); setValue(item === 'latency' ? '2000' : item === 'status' ? '503' : '') }}>{item}</button>)}</div>{effect !== 'abort' && <label><span>{effect === 'latency' ? 'MILLISECONDS' : 'HTTP STATUS'}</span><input type="number" value={value} onChange={(event) => setValue(event.target.value)} /></label>}<label><span>AUTOMATIC DISABLE</span><select value={expiryMinutes} onChange={(event) => setExpiryMinutes(event.target.value)}><option value="">Until manually disabled</option><option value="10">After 10 minutes</option><option value="30">After 30 minutes</option><option value="60">After 1 hour</option><option value="240">After 4 hours</option></select></label>{error && <p className="danger-text">{error}</p>}<button className="button button--warning" onClick={create}>▲ ENABLE FAULT</button></section>
+    <section className="panel experiment-form"><div className="panel-title"><span>INTRODUCE FAILURE</span></div><label><span>NAME</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label><span>CONNECTION</span><select aria-label="Fault connection" value={scopeID} onChange={(event) => setScopeID(event.target.value)}>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label><div className="segmented">{(['latency', 'status', 'abort'] as const).map((item) => <button key={item} className={effect === item ? 'is-active' : ''} onClick={() => { setEffect(item); setValue(item === 'latency' ? '2000' : item === 'status' ? '503' : '') }}>{item}</button>)}</div>{effect !== 'abort' && <label><span>{effect === 'latency' ? 'MILLISECONDS' : 'HTTP STATUS'}</span><input type="number" value={value} onChange={(event) => setValue(event.target.value)} /></label>}<label><span>AUTOMATIC DISABLE</span><select value={expiryMinutes} onChange={(event) => setExpiryMinutes(event.target.value)}><option value="">Until manually disabled</option><option value="10">After 10 minutes</option><option value="30">After 30 minutes</option><option value="60">After 1 hour</option><option value="240">After 4 hours</option></select></label>{error && <p className="danger-text">{error}</p>}<button className="button button--warning" disabled={!selectedScope} onClick={create}>▲ ENABLE FAULT</button></section>
     <section className="panel experiment-list"><div className="panel-title"><span>FAULT RULES</span><button onClick={clear}>DISABLE ALL</button></div>{faults.map((fault) => <div className={`experiment-row ${fault.enabled ? 'is-warning' : ''}`} key={fault.name}><StatusMark status={fault.enabled ? 'degraded' : 'stopped'} label={false} /><div><strong>{fault.name}</strong><small>{fault.scopeSummary}</small><small className="fault-lifetime">{faultLifetime(fault)}</small></div><span>{fault.matchCount} matches</span><div>{fault.enabled && <button onClick={() => disable(fault)}>DISABLE</button>}</div></div>)}{faults.length === 0 && <div className="empty-row">No fault rules have been created.</div>}</section>
   </div>
 }

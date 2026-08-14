@@ -1845,15 +1845,37 @@ func validateExperimentScope(definition model.ProjectModel, source, target strin
 	if source == "external" && target != "" && services[target].Kind != model.ServiceProcess {
 		return fmt.Errorf("external ingress is only available for process services; %s is a managed container", target)
 	}
+	if source == "external" && target != "" && target != definition.PrimaryService {
+		return invalidExperimentConnection(definition, source, target)
+	}
 	if source != "" && source != "external" && target != "" {
 		for _, connection := range definition.Connections {
 			if connection.Source == source && connection.Target == target {
 				return nil
 			}
 		}
-		return fmt.Errorf("connection %s:%s is not present in the accepted project model", source, target)
+		return invalidExperimentConnection(definition, source, target)
 	}
 	return nil
+}
+
+func invalidExperimentConnection(definition model.ProjectModel, source, target string) error {
+	available := make([]string, 0, len(definition.Connections)+1)
+	if definition.PrimaryService != "" {
+		for _, service := range definition.Services {
+			if service.Name == definition.PrimaryService && service.Kind == model.ServiceProcess {
+				available = append(available, "external → "+definition.PrimaryService)
+				break
+			}
+		}
+	}
+	for _, connection := range definition.Connections {
+		available = append(available, connection.Source+" → "+connection.Target)
+	}
+	if len(available) == 0 {
+		return fmt.Errorf("%s → %s is not a configured connection; this project has no configurable connections", source, target)
+	}
+	return fmt.Errorf("%s → %s is not a configured connection; choose one of: %s", source, target, strings.Join(available, ", "))
 }
 
 func targetEnvironmentKey(project, service string) string { return project + "\x00" + service }

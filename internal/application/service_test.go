@@ -886,6 +886,55 @@ func serviceSnapshot(t *testing.T, app *Service, name string) model.Service {
 	return model.Service{}
 }
 
+func TestValidateExperimentScopeUsesConfiguredDirectedConnections(t *testing.T) {
+	definition := model.ProjectModel{
+		PrimaryService: "checkout",
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "orders", Kind: model.ServiceProcess},
+			{Name: "postgres", Kind: model.ServiceContainer},
+			{Name: "redis", Kind: model.ServiceContainer},
+		},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP},
+			{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres},
+			{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis},
+		},
+	}
+
+	for _, scope := range [][2]string{
+		{"external", "checkout"},
+		{"checkout", "orders"},
+		{"orders", "postgres"},
+		{"orders", "redis"},
+	} {
+		if err := validateExperimentScope(definition, scope[0], scope[1], false); err != nil {
+			t.Fatalf("valid scope %s → %s was rejected: %v", scope[0], scope[1], err)
+		}
+	}
+
+	err := validateExperimentScope(definition, "orders", "checkout", false)
+	if err == nil {
+		t.Fatal("reverse connection was accepted")
+	}
+	for _, expected := range []string{
+		"orders → checkout is not a configured connection",
+		"external → checkout",
+		"checkout → orders",
+		"orders → postgres",
+		"orders → redis",
+	} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("error %q does not contain %q", err, expected)
+		}
+	}
+
+	err = validateExperimentScope(definition, "external", "orders", false)
+	if err == nil || !strings.Contains(err.Error(), "external → orders is not a configured connection") {
+		t.Fatalf("non-primary external connection error = %v", err)
+	}
+}
+
 func TestApplicationProcessHelper(t *testing.T) {
 	if os.Getenv("PORTLESS_APPLICATION_TEST_HELPER") != "1" {
 		return
