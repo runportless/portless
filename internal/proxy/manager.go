@@ -53,6 +53,49 @@ type Manager struct {
 	closed    atomic.Bool
 }
 
+const trafficBodyLimit = 64 << 10
+
+type bodyCapture struct {
+	body  []byte
+	total int64
+}
+
+func (c *bodyCapture) Write(content []byte) (int, error) {
+	written := len(content)
+	c.total += int64(written)
+	if remaining := trafficBodyLimit - len(c.body); remaining > 0 {
+		if len(content) > remaining {
+			content = content[:remaining]
+		}
+		c.body = append(c.body, content...)
+	}
+	return written, nil
+}
+
+func (c *bodyCapture) text() string {
+	if c == nil || len(c.body) == 0 {
+		return ""
+	}
+	return strings.ToValidUTF8(string(c.body), "�")
+}
+
+func (c *bodyCapture) truncated() bool {
+	return c != nil && c.total > int64(len(c.body))
+}
+
+type capturingReadCloser struct {
+	io.ReadCloser
+	capture *bodyCapture
+}
+
+func (r *capturingReadCloser) Read(content []byte) (int, error) {
+	read, err := r.ReadCloser.Read(content)
+	if read > 0 {
+		_, _ = r.capture.Write(content[:read])
+	}
+	return read, err
+}
+
 func NewManager(controlStore *store.Store, broker *events.Broker) *Manager {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -232,6 +275,7 @@ func (m *Manager) Close(ctx context.Context) {
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
 	started := time.Now().UTC()
+	requestCapture := captureRequestBody(request)
 	fault := m.matchFault(request.Context(), scope, source, targetName, request.Method, request.URL.Path)
 	if fault != nil {
 		m.applyDelay(request.Context(), *fault)
@@ -241,25 +285,25 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		if fault.StatusCode != 0 {
 			writer.Header().Set("X-Portless-Fault", fault.Name)
 			http.Error(writer, "Portless fault "+fault.Name, fault.StatusCode)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header())
+			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header(), requestCapture, nil)
 			return
 		}
 		if fault.Abort {
 			m.abortHTTP(writer)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil)
+			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil, requestCapture, nil)
 			return
 		}
 	}
 	upstream, ok := m.target(scope, targetName)
 	if !ok {
 		http.Error(writer, "Portless: "+targetName+" is not available", http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header())
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil)
 		return
 	}
 	if upstream.provider == model.ProviderRemote && upstream.writePolicy == model.WriteReadOnly && !safeMethod(request.Method) {
 		writer.Header().Set("X-Portless-Remote-Policy", string(model.WriteReadOnly))
 		http.Error(writer, "Portless: remote target is read-only", http.StatusForbidden)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header())
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header(), requestCapture, nil)
 		return
 	}
 	outgoing := request.Clone(request.Context())
@@ -278,36 +322,58 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	response, err := m.transport.RoundTrip(outgoing)
 	if err != nil {
 		http.Error(writer, "Portless upstream error: "+err.Error(), http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header())
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil)
 		return
 	}
 	defer response.Body.Close()
 	removeHopHeaders(response.Header)
 	copyHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
-	written, copyErr := io.Copy(writer, response.Body)
+	responseCapture := captureResponseBody(response.Header)
+	destination := io.Writer(writer)
+	if responseCapture != nil {
+		destination = io.MultiWriter(writer, responseCapture)
+	}
+	written, copyErr := io.Copy(destination, response.Body)
 	errorText := ""
 	if copyErr != nil {
 		errorText = copyErr.Error()
 	}
-	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header)
+	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header, requestCapture, responseCapture)
 }
 
-func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header) {
+func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header, requestCapture, responseCapture *bodyCapture) {
 	completed := time.Now().UTC()
 	project, environment := scopeNames(scope)
+	requestBytes := request.ContentLength
+	if requestCapture != nil && requestCapture.total > requestBytes {
+		requestBytes = requestCapture.total
+	}
+	if requestBytes < 0 {
+		requestBytes = 0
+	}
 	event := model.TrafficEvent{
 		Project: project, Environment: environment, Protocol: model.ProtocolHTTP, Source: source, Target: targetName,
 		TargetProvider: upstream.provider, RemoteClassification: upstream.classification,
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
 		Path: request.URL.EscapedPath(), Status: status, DurationMS: completed.Sub(started).Milliseconds(),
-		RequestBytes: request.ContentLength, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
+		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
 		RequestHeaders: redactHeaders(request.Header), ResponseHeaders: redactHeaders(responseHeaders),
+		RequestBody: requestCapture.text(), ResponseBody: responseCapture.text(),
+		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
 	}
-	event.Recording = m.matchRecording(ctx, scope, source, targetName)
+	var persistBodies bool
+	event.Recording, persistBodies = m.matchRecording(ctx, scope, source, targetName)
 	event = m.broker.AddTraffic(event)
 	if event.Recording != "" {
-		_ = m.store.PersistTraffic(context.Background(), event)
+		persisted := event
+		if !persistBodies {
+			persisted.RequestBody = ""
+			persisted.ResponseBody = ""
+			persisted.RequestBodyTruncated = false
+			persisted.ResponseBodyTruncated = false
+		}
+		_ = m.store.PersistTraffic(context.Background(), persisted)
 	}
 }
 
@@ -455,7 +521,7 @@ func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, resp
 		event.TargetProvider = upstream.provider
 		event.RemoteClassification = upstream.classification
 	}
-	event.Recording = m.matchRecording(context.Background(), current.scope, current.source, current.target)
+	event.Recording, _ = m.matchRecording(context.Background(), current.scope, current.source, current.target)
 	event = m.broker.AddTraffic(event)
 	if event.Recording != "" {
 		_ = m.store.PersistTraffic(context.Background(), event)
@@ -489,10 +555,10 @@ func (m *Manager) matchFault(ctx context.Context, project, source, target, metho
 	return nil
 }
 
-func (m *Manager) matchRecording(ctx context.Context, project, source, target string) string {
+func (m *Manager) matchRecording(ctx context.Context, project, source, target string) (string, bool) {
 	recordings, err := m.store.ActiveRecordings(ctx, project)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	for _, recording := range recordings {
 		if recording.Source != "" && recording.Source != source {
@@ -501,9 +567,35 @@ func (m *Manager) matchRecording(ctx context.Context, project, source, target st
 		if recording.Target != "" && recording.Target != target {
 			continue
 		}
-		return recording.Name
+		return recording.Name, recording.CaptureBodies
 	}
-	return ""
+	return "", false
+}
+
+func captureRequestBody(request *http.Request) *bodyCapture {
+	if request.Body == nil || !inspectableBody(request.Header.Get("Content-Type")) {
+		return nil
+	}
+	capture := &bodyCapture{}
+	request.Body = &capturingReadCloser{ReadCloser: request.Body, capture: capture}
+	return capture
+}
+
+func captureResponseBody(headers http.Header) *bodyCapture {
+	if !inspectableBody(headers.Get("Content-Type")) {
+		return nil
+	}
+	return &bodyCapture{}
+}
+
+func inspectableBody(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if mediaType == "" || strings.HasPrefix(mediaType, "text/") {
+		return true
+	}
+	return strings.Contains(mediaType, "json") || strings.Contains(mediaType, "xml") ||
+		mediaType == "application/x-www-form-urlencoded" || mediaType == "application/graphql" ||
+		mediaType == "application/javascript"
 }
 
 func (m *Manager) applyDelay(ctx context.Context, fault model.FaultRule) {

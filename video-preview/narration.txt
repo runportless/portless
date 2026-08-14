@@ -1,0 +1,9 @@
+Local development gets messy fast. Projects compete for Postgres, Redis, and the same ports. Understanding what is happening means bouncing between terminals.
+
+Portless turns your environment into one control plane. Run Portless up. It starts processes and containers, then gives every application a clean localhost address.
+
+Watch traffic flow from checkout to orders, Postgres, and Redis. Open a request to inspect status, timing, headers, and response.
+
+Record a workflow, or introduce latency, errors, and aborted connections on one edge.
+
+One project. Multiple environments. Run it, see it, and break it—locally.

@@ -618,6 +618,55 @@ function isWebURL(value: string) { return /^https?:\/\//.test(value) }
 
 function Detail({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 
+function trafficHeaders(headers: Record<string, string> | undefined, host?: string) {
+  const values = Object.entries(headers || {}).filter(([name]) => !host || name.toLowerCase() !== 'host')
+  if (host) values.push(['Host', host])
+  return values.length
+    ? values.sort(([left], [right]) => left.localeCompare(right)).map(([name, value]) => `${name}: ${value}`).join('\n')
+    : 'No headers captured'
+}
+
+function trafficBodySummary(bytes: number, direction: 'request' | 'response') {
+  if (bytes <= 0) return `No ${direction} body`
+  return `Body content is not available · ${formatBytes(bytes)} transferred`
+}
+
+function formatTrafficBody(body: string) {
+  const trimmed = body.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try { return JSON.stringify(JSON.parse(body), null, 2) } catch { /* Preserve malformed or streaming JSON as received. */ }
+  }
+  return body
+}
+
+function TrafficMessage({ event, direction }: { event: TrafficEvent; direction: 'request' | 'response' }) {
+  const request = direction === 'request'
+  const bytes = request ? event.requestBytes : event.responseBytes
+  const body = request ? event.requestBody : event.responseBody
+  const truncated = request ? event.requestBodyTruncated : event.responseBodyTruncated
+  const startLine = request
+    ? `${event.method || 'HTTP'} ${event.path || '/'}`
+    : event.status ? `HTTP ${event.status}` : event.error ? 'HTTP ERROR' : 'HTTP response'
+  const headers = trafficHeaders(request ? event.requestHeaders : event.responseHeaders, request ? event.host : undefined)
+  return <section className={`traffic-message traffic-message--${direction}`}>
+    <div className="traffic-message__title"><span>{direction.toUpperCase()}</span><small>{formatBytes(Math.max(0, bytes))}</small></div>
+    <div className="traffic-message__line"><code>{startLine}</code></div>
+    <div className="traffic-message__headers"><span>HEADERS · REDACTED</span><pre>{headers}</pre></div>
+    <div className="traffic-message__body"><span>BODY{truncated ? ' · TRUNCATED' : ''}</span>{body ? <><pre>{formatTrafficBody(body)}</pre>{truncated && <small>Showing the first 64 KB of the {direction} body.</small>}</> : <strong>{trafficBodySummary(bytes, direction)}</strong>}</div>
+  </section>
+}
+
+export function TrafficDetail({ event, onClose }: { event: TrafficEvent; onClose: () => void }) {
+  return <aside className="traffic-detail" role="dialog" aria-label={`Traffic request and response ${event.sequence}`}>
+    <header><div><span className="eyebrow">{event.protocol.toUpperCase()} TRAFFIC #{event.sequence}</span><h3>{event.method || event.protocol.toUpperCase()} {event.path || `${event.source} → ${event.target}`}</h3></div><button onClick={onClose} aria-label="Close traffic details" title="Close">×</button></header>
+    <div className="detail-grid"><Detail label="EDGE" value={`${event.source} → ${event.target}`} /><Detail label="STATUS" value={event.error ? 'error' : String(event.status || 'ok')} /><Detail label="DURATION" value={duration(event.durationMs)} /><Detail label="PROVIDER" value={event.targetProvider || '—'} /><Detail label="FAULT" value={event.fault || 'none'} /><Detail label="RECORDING" value={event.recording || 'none'} /></div>
+    {event.error && <div className="traffic-detail__error"><span>REQUEST ERROR</span><strong>{event.error}</strong></div>}
+    {event.protocol === 'http'
+      ? <div className="traffic-exchange"><TrafficMessage event={event} direction="request" /><TrafficMessage event={event} direction="response" /></div>
+      : <div className="traffic-detail__notice"><span>TCP SESSION</span><strong>Payload content is not captured.</strong><small>{formatBytes(Math.max(0, event.requestBytes))} sent · {formatBytes(Math.max(0, event.responseBytes))} received</small></div>}
+  </aside>
+}
+
 function TrafficPanel({ environment }: { environment: Environment }) {
   const requested = new URLSearchParams(location.search)
   const [traffic, setTraffic] = useState<TrafficEvent[]>([])
@@ -646,7 +695,7 @@ function TrafficPanel({ environment }: { environment: Environment }) {
     <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Method</span><span>Path</span><span>Edge</span><span>Status</span><span>Duration</span><span>Fault / recording</span></div>
     {filtered.map((event) => <button className="table-row traffic-row" key={event.sequence} onClick={() => inspect(event)}><code>#{event.sequence}</code><span>{new Date(event.startedAt).toLocaleTimeString()}</span><strong>{event.method || event.protocol.toUpperCase()}</strong><code className="truncate">{event.path || 'TCP session'}</code><span>{event.source}<i className="edge-arrow">→</i>{event.target}</span><span className={event.error || (event.status || 0) >= 500 ? 'danger-text' : (event.status || 0) >= 400 ? 'warning-text' : ''}>{event.error ? 'ERR' : event.status || (event.protocol === 'tcp' ? 'OK' : '—')}</span><span>{duration(event.durationMs)}</span><span>{event.fault ? <b className="fault-chip">▲ {event.fault}</b> : event.recording ? <b className="record-chip">● {event.recording}</b> : '—'}</span></button>)}
     {filtered.length === 0 && <div className="empty-row">No matching {protocol.toUpperCase()} traffic yet.{protocol === 'http' && <> Requests through <code>service.{environment.name}.{environment.project}.localhost</code> or a discovered HTTP edge appear here.</>}</div>}
-    {selected && <div className="traffic-detail"><header><div><span className="eyebrow">{selected.protocol.toUpperCase()} TRAFFIC #{selected.sequence}</span><h3>{selected.method || selected.protocol.toUpperCase()} {selected.path}</h3></div><button onClick={() => setSelected(null)}>×</button></header><div className="detail-grid"><Detail label="EDGE" value={`${selected.source} → ${selected.target}`} /><Detail label="STATUS" value={selected.error ? 'error' : String(selected.status || 'ok')} /><Detail label="DURATION" value={duration(selected.durationMs)} /><Detail label="REQUEST" value={`${selected.requestBytes} B`} /><Detail label="RESPONSE" value={`${selected.responseBytes} B`} /><Detail label="FAULT" value={selected.fault || 'none'} /></div>{selected.protocol === 'http' && <><div className="drawer-section"><div className="eyebrow">REDACTED REQUEST HEADERS</div><pre>{JSON.stringify(selected.requestHeaders || {}, null, 2)}</pre></div><div className="drawer-section"><div className="eyebrow">REDACTED RESPONSE HEADERS</div><pre>{JSON.stringify(selected.responseHeaders || {}, null, 2)}</pre></div></>}</div>}
+    {selected && <TrafficDetail event={selected} onClose={() => setSelected(null)} />}
   </section>
 }
 

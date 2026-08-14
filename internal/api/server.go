@@ -1409,6 +1409,10 @@ func limited[T any](items []T, limit int) []T {
 func trafficSummary(event model.TrafficEvent) model.TrafficEvent {
 	event.RequestHeaders = nil
 	event.ResponseHeaders = nil
+	event.RequestBody = ""
+	event.ResponseBody = ""
+	event.RequestBodyTruncated = false
+	event.ResponseBodyTruncated = false
 	return event
 }
 

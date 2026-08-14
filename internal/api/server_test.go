@@ -233,13 +233,13 @@ func TestApplicationHostRequiresServiceEnvironmentProject(t *testing.T) {
 	}
 }
 
-func TestTrafficSummaryOmitsHeadersWithoutMutatingDetail(t *testing.T) {
-	detail := model.TrafficEvent{RequestHeaders: map[string]string{"Authorization": "[REDACTED]"}, ResponseHeaders: map[string]string{"Set-Cookie": "[REDACTED]"}}
+func TestTrafficSummaryOmitsDetailContentWithoutMutatingDetail(t *testing.T) {
+	detail := model.TrafficEvent{RequestHeaders: map[string]string{"Authorization": "[REDACTED]"}, ResponseHeaders: map[string]string{"Set-Cookie": "[REDACTED]"}, RequestBody: `{"request":true}`, ResponseBody: `{"response":true}`, RequestBodyTruncated: true, ResponseBodyTruncated: true}
 	summary := trafficSummary(detail)
-	if summary.RequestHeaders != nil || summary.ResponseHeaders != nil {
-		t.Fatalf("summary retained headers: %#v", summary)
+	if summary.RequestHeaders != nil || summary.ResponseHeaders != nil || summary.RequestBody != "" || summary.ResponseBody != "" || summary.RequestBodyTruncated || summary.ResponseBodyTruncated {
+		t.Fatalf("summary retained detail content: %#v", summary)
 	}
-	if len(detail.RequestHeaders) != 1 || len(detail.ResponseHeaders) != 1 {
+	if len(detail.RequestHeaders) != 1 || len(detail.ResponseHeaders) != 1 || detail.RequestBody == "" || detail.ResponseBody == "" || !detail.RequestBodyTruncated || !detail.ResponseBodyTruncated {
 		t.Fatalf("summary mutated detail: %#v", detail)
 	}
 }

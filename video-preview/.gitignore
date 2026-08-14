@@ -1,0 +1,5 @@
+node_modules/
+.voice-venv/
+.remotion/
+out/*-silent.mp4
+public/narration.*

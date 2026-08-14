@@ -176,6 +176,10 @@ export interface TrafficEvent {
   error?: string
   requestHeaders?: Record<string, string>
   responseHeaders?: Record<string, string>
+  requestBody?: string
+  responseBody?: string
+  requestBodyTruncated?: boolean
+  responseBodyTruncated?: boolean
 }
 
 export interface TrafficActivity {

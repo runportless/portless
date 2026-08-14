@@ -2,11 +2,39 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficEvent } from '../types'
-import { buildTopology, EnvironmentPage, overviewServiceEndpoint, paginateOverview, serviceEndpoints, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, EnvironmentPage, overviewServiceEndpoint, paginateOverview, serviceEndpoints, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion, TrafficDetail } from './ProjectPage'
 
 const service = (name: string): Service => ({ name } as Service)
 
 describe('environment topology', () => {
+  it('renders an inspected HTTP event as a request and response exchange', () => {
+    const event = {
+      project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
+      source: 'checkout', target: 'orders', targetProvider: 'local',
+      startedAt: '2026-08-13T12:00:00Z', completedAt: '2026-08-13T12:00:00.024Z',
+      method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
+      durationMs: 24, requestBytes: 42, responseBytes: 118,
+      requestHeaders: { Authorization: '[REDACTED]', 'Content-Type': 'application/json' },
+      responseHeaders: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-7' },
+      requestBody: '{"sku":"coffee","quantity":2}',
+      responseBody: '{"order":42,"state":"created"}',
+    } as TrafficEvent
+
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { event, onClose: () => undefined }))
+
+    expect(markup).toContain('aria-label="Traffic request and response 7"')
+    expect(markup).toContain('>REQUEST<')
+    expect(markup).toContain('POST /orders')
+    expect(markup).toContain('Host: orders.local.billing.localhost')
+    expect(markup).toContain('Authorization: [REDACTED]')
+    expect(markup).toContain('>RESPONSE<')
+    expect(markup).toContain('HTTP 201')
+    expect(markup).toContain('X-Request-Id: req-7')
+    expect(markup).toContain('&quot;sku&quot;: &quot;coffee&quot;')
+    expect(markup).toContain('&quot;order&quot;: 42')
+    expect(markup).not.toContain('{&quot;Authorization&quot;')
+  })
+
   it('renders the overview topology as a bounded preview that opens the dedicated view', () => {
     const environment = {
       project: 'billing', name: 'local', status: 'healthy', revision: 1,

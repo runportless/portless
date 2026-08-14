@@ -247,28 +247,32 @@ type OperationEvent struct {
 }
 
 type TrafficEvent struct {
-	Project              string               `json:"project"`
-	Environment          string               `json:"environment"`
-	Sequence             int64                `json:"sequence"`
-	Protocol             Protocol             `json:"protocol"`
-	Source               string               `json:"source"`
-	Target               string               `json:"target"`
-	TargetProvider       ProviderKind         `json:"targetProvider,omitempty"`
-	RemoteClassification RemoteClassification `json:"remoteClassification,omitempty"`
-	StartedAt            time.Time            `json:"startedAt"`
-	CompletedAt          time.Time            `json:"completedAt"`
-	Method               string               `json:"method,omitempty"`
-	Host                 string               `json:"host,omitempty"`
-	Path                 string               `json:"path,omitempty"`
-	Status               int                  `json:"status,omitempty"`
-	DurationMS           int64                `json:"durationMs"`
-	RequestBytes         int64                `json:"requestBytes"`
-	ResponseBytes        int64                `json:"responseBytes"`
-	Fault                string               `json:"fault,omitempty"`
-	Recording            string               `json:"recording,omitempty"`
-	Error                string               `json:"error,omitempty"`
-	RequestHeaders       map[string]string    `json:"requestHeaders,omitempty"`
-	ResponseHeaders      map[string]string    `json:"responseHeaders,omitempty"`
+	Project               string               `json:"project"`
+	Environment           string               `json:"environment"`
+	Sequence              int64                `json:"sequence"`
+	Protocol              Protocol             `json:"protocol"`
+	Source                string               `json:"source"`
+	Target                string               `json:"target"`
+	TargetProvider        ProviderKind         `json:"targetProvider,omitempty"`
+	RemoteClassification  RemoteClassification `json:"remoteClassification,omitempty"`
+	StartedAt             time.Time            `json:"startedAt"`
+	CompletedAt           time.Time            `json:"completedAt"`
+	Method                string               `json:"method,omitempty"`
+	Host                  string               `json:"host,omitempty"`
+	Path                  string               `json:"path,omitempty"`
+	Status                int                  `json:"status,omitempty"`
+	DurationMS            int64                `json:"durationMs"`
+	RequestBytes          int64                `json:"requestBytes"`
+	ResponseBytes         int64                `json:"responseBytes"`
+	Fault                 string               `json:"fault,omitempty"`
+	Recording             string               `json:"recording,omitempty"`
+	Error                 string               `json:"error,omitempty"`
+	RequestHeaders        map[string]string    `json:"requestHeaders,omitempty"`
+	ResponseHeaders       map[string]string    `json:"responseHeaders,omitempty"`
+	RequestBody           string               `json:"requestBody,omitempty"`
+	ResponseBody          string               `json:"responseBody,omitempty"`
+	RequestBodyTruncated  bool                 `json:"requestBodyTruncated,omitempty"`
+	ResponseBodyTruncated bool                 `json:"responseBodyTruncated,omitempty"`
 }
 
 type TrafficActivity struct {

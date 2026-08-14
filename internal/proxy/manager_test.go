@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,11 +23,15 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	controlStore := environmentStore(t)
 	defer controlStore.Close()
 	scope := model.EnvironmentSelector("billing", "local")
+	var upstreamRequestBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		upstreamRequestBody = string(body)
 		writer.Header().Set("X-Upstream", "checkout")
 		writer.Header().Set("Set-Cookie", "session=should-not-leak")
+		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusCreated)
-		_, _ = writer.Write([]byte("created"))
+		_, _ = writer.Write([]byte(`{"created":true}`))
 	}))
 	defer upstream.Close()
 	parsed, _ := url.Parse(upstream.URL)
@@ -35,16 +40,17 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	manager := NewManager(controlStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 
-	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/orders", nil)
+	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/orders", strings.NewReader(`{"sku":"coffee"}`))
+	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer should-not-leak")
 	request.Header.Set("X-Trace", "visible")
 	response := httptest.NewRecorder()
 	manager.ServeIngress(response, request, scope, "checkout")
-	if response.Code != http.StatusCreated || response.Header().Get("X-Upstream") != "checkout" {
+	if response.Code != http.StatusCreated || response.Header().Get("X-Upstream") != "checkout" || upstreamRequestBody != `{"sku":"coffee"}` {
 		t.Fatalf("response code=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 	traffic := broker.RecentTraffic(scope, 10)
-	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].RequestHeaders["Authorization"] != "[REDACTED]" || traffic[0].RequestHeaders["X-Trace"] != "visible" || traffic[0].ResponseHeaders["Set-Cookie"] != "[REDACTED]" || traffic[0].ResponseHeaders["X-Upstream"] != "checkout" {
+	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].RequestHeaders["Authorization"] != "[REDACTED]" || traffic[0].RequestHeaders["X-Trace"] != "visible" || traffic[0].ResponseHeaders["Set-Cookie"] != "[REDACTED]" || traffic[0].ResponseHeaders["X-Upstream"] != "checkout" || traffic[0].RequestBody != `{"sku":"coffee"}` || traffic[0].ResponseBody != `{"created":true}` {
 		t.Fatalf("unexpected traffic %#v", traffic)
 	}
 
@@ -54,7 +60,7 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	response = httptest.NewRecorder()
 	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/recorded", nil), scope, "checkout")
 	recorded, err := controlStore.RecordedTraffic(ctx, scope, "checkout-debug", 10)
-	if err != nil || len(recorded) != 1 || recorded[0].Recording != "checkout-debug" {
+	if err != nil || len(recorded) != 1 || recorded[0].Recording != "checkout-debug" || recorded[0].RequestBody != "" || recorded[0].ResponseBody != "" {
 		t.Fatalf("recorded traffic=%#v err=%v", recorded, err)
 	}
 
@@ -65,6 +71,51 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/faulted", nil), scope, "checkout")
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-Portless-Fault") != "checkout-down" {
 		t.Fatalf("fault response code=%d headers=%v", response.Code, response.Header())
+	}
+}
+
+func TestHTTPBodyCaptureIsBoundedWithoutChangingForwardedPayloads(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	requestContent := strings.Repeat("r", trafficBodyLimit+128)
+	responseContent := strings.Repeat("s", trafficBodyLimit+256)
+	var received int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		received = len(body)
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte(responseContent))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	broker := events.NewBroker()
+	manager := NewManager(controlStore, broker)
+	manager.SetTarget(scope, "checkout", port)
+
+	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/upload", strings.NewReader(requestContent))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	manager.ServeIngress(response, request, scope, "checkout")
+
+	traffic := broker.RecentTraffic(scope, 1)
+	if received != len(requestContent) || response.Body.String() != responseContent {
+		t.Fatalf("proxy changed payload lengths: request=%d response=%d", received, response.Body.Len())
+	}
+	if len(traffic) != 1 || len(traffic[0].RequestBody) != trafficBodyLimit || len(traffic[0].ResponseBody) != trafficBodyLimit || !traffic[0].RequestBodyTruncated || !traffic[0].ResponseBodyTruncated {
+		t.Fatalf("unexpected bounded capture: %#v", traffic)
+	}
+}
+
+func TestHTTPBodyCaptureSkipsBinaryContent(t *testing.T) {
+	if inspectableBody("application/octet-stream") {
+		t.Fatal("binary content should not be captured")
+	}
+	for _, contentType := range []string{"application/json", "application/problem+json; charset=utf-8", "text/plain", ""} {
+		if !inspectableBody(contentType) {
+			t.Fatalf("text content %q should be captured", contentType)
+		}
 	}
 }
 

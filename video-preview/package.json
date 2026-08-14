@@ -1,0 +1,23 @@
+{
+  "name": "portless-explainer-preview",
+  "private": true,
+  "scripts": {
+    "preview": "remotion studio src/index.ts",
+    "voice:env": "python3 -m venv .voice-venv",
+    "prevoice:deps": "npm run voice:env",
+    "voice:deps": ".voice-venv/bin/pip install --disable-pip-version-check -r requirements-voice.txt",
+    "prevoice": "npm run voice:deps",
+    "voice": ".voice-venv/bin/edge-tts --voice en-US-AndrewMultilingualNeural --rate=-3% --file narration.txt --write-media public/narration-neural.mp3",
+    "render": "remotion render src/index.ts PortlessExplainer out/portless-explainer-silent.mp4 --codec=h264 --crf=18",
+    "mux": "ffmpeg -y -i out/portless-explainer-silent.mp4 -i public/narration-neural.mp3 -filter_complex '[1:a]aresample=48000,highpass=f=70,lowpass=f=11000,loudnorm=I=-16:TP=-1.5:LRA=7,aresample=48000,apad=pad_dur=2[a]' -map 0:v:0 -map '[a]' -c:v copy -c:a aac -b:a 192k -ar 48000 -ac 2 -shortest -movflags +faststart out/portless-explainer-preview.mp4",
+    "prebuild": "npm run voice",
+    "build": "npm run render",
+    "postbuild": "npm run mux"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.509",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "remotion": "^4.0.509"
+  }
+}
