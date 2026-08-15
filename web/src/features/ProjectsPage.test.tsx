@@ -89,6 +89,25 @@ describe('projects page', () => {
     expect(markup.match(/class="table-row project-source-row"/g)).toHaveLength(1)
   })
 
+  it('distinguishes an environment that needs source configuration from one using remote providers', () => {
+    const inventoryProject = { ...project, sources: [{ name: 'inventory', services: ['inventory'] }] } as Project
+    const local = { ...environment, sources: [{ ...environment.sources[0], name: 'inventory', path: '/Users/dev/workspace/inventory' }] } satisfies Environment
+    const needsConfiguration = {
+      ...qaEnvironment,
+      sources: [],
+      issues: [{ code: 'MISSING_BINDING', subject: 'inventory', message: 'component has no provider binding' }],
+    } satisfies Environment
+    const remote = { ...qaEnvironment, name: 'remote', sources: [], issues: [] } satisfies Environment
+
+    const markup = renderProjects(inventoryProject, [local, needsConfiguration, remote])
+
+    expect(markup).toContain('configuration required')
+    expect(markup).toContain('not bound locally')
+    expect(markup).toContain('<small>qa-local</small>')
+    expect(markup).toContain('<small>remote</small>')
+    expect(markup).toContain('component has no provider binding')
+  })
+
   it('keeps the empty project state focused on setup instructions', () => {
     const markup = renderToStaticMarkup(<ProjectsPage projects={[]} environments={[]} onNavigate={() => undefined} onChanged={async () => undefined} />)
 

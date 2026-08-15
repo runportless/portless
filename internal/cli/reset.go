@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,8 +12,6 @@ import (
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/runtime/container"
 )
-
-const resetInventoryLimit = 1000
 
 var (
 	resetRemovalCategories = []string{
@@ -32,10 +28,11 @@ var (
 )
 
 type resetPlan struct {
-	Projects              []model.Project
-	Environments          []model.Environment
-	ContainerEnvironments []model.Environment
-	ActiveEnvironments    []string
+	Projects                  int      `json:"projects"`
+	Environments              int      `json:"environments"`
+	ManagedVolumeEnvironments int      `json:"managedVolumeEnvironments"`
+	ActiveEnvironments        []string `json:"activeEnvironments"`
+	TopologyIncompatible      bool     `json:"topologyIncompatible"`
 }
 
 type resetDaemonOutput struct {
@@ -60,10 +57,19 @@ type resetOutput struct {
 	ProcessesStopped          int                     `json:"processesStopped"`
 	RuntimeCleanup            []container.ResetResult `json:"runtimeCleanup,omitempty"`
 	Daemon                    *resetDaemonOutput      `json:"daemon,omitempty"`
+	TopologyIncompatible      bool                    `json:"topologyIncompatible"`
 }
 
 func (c *CLI) reset(ctx context.Context, options resetOptions) error {
-	client, _, err := bootstrap.Connect(ctx, c.paths)
+	var (
+		client *bootstrap.Client
+		err    error
+	)
+	if options.force && options.yes {
+		client, err = c.connectCurrentDaemonForForcedReset(ctx)
+	} else {
+		client, _, err = bootstrap.Connect(ctx, c.paths)
+	}
 	if err != nil {
 		return err
 	}
@@ -73,25 +79,23 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	}
 	preview := resetOutput{
 		Action: "reset", Confirmed: options.yes, Forced: options.force, Changed: false,
-		Projects: len(plan.Projects), Environments: len(plan.Environments),
-		ManagedVolumeEnvironments: len(plan.ContainerEnvironments),
+		Projects: plan.Projects, Environments: plan.Environments,
+		ManagedVolumeEnvironments: plan.ManagedVolumeEnvironments,
 		ActiveEnvironments:        append([]string{}, plan.ActiveEnvironments...),
 		WillRemove:                append([]string(nil), resetRemovalCategories...),
 		Preserved:                 append([]string(nil), resetPreservedCategories...),
+		TopologyIncompatible:      plan.TopologyIncompatible,
 	}
 	if !options.yes {
 		return c.printResetPreview(preview)
 	}
+	if len(plan.ActiveEnvironments) > 0 && plan.TopologyIncompatible && !options.force {
+		return incompatibleActiveResetError(plan.ActiveEnvironments)
+	}
 	if len(plan.ActiveEnvironments) > 0 && !options.force {
 		return activeResetError(plan.ActiveEnvironments)
 	}
-	if options.force {
-		client, err = c.connectCurrentDaemonForForcedReset(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	if !c.jsonOutput && len(plan.ContainerEnvironments) > 0 {
+	if !c.jsonOutput && (plan.ManagedVolumeEnvironments > 0 || plan.TopologyIncompatible) {
 		fmt.Fprintln(c.Out, "Removing Portless-managed container resources...")
 	}
 	var prepared struct {
@@ -150,44 +154,14 @@ func (c *CLI) connectCurrentDaemonForForcedReset(ctx context.Context) (*bootstra
 }
 
 func loadResetPlan(ctx context.Context, client *bootstrap.Client) (resetPlan, error) {
-	var projectResponse struct {
-		Projects []model.Project `json:"projects"`
-		Total    int             `json:"total"`
-	}
-	if err := client.Do(ctx, http.MethodGet, "/api/v1/projects?limit="+strconv.Itoa(resetInventoryLimit), nil, &projectResponse); err != nil {
+	var plan resetPlan
+	if err := client.Do(ctx, http.MethodGet, "/api/v1/runtime/reset", nil, &plan); err != nil {
 		return resetPlan{}, err
 	}
-	var environmentResponse struct {
-		Environments []model.Environment `json:"environments"`
-		Total        int                 `json:"total"`
+	if plan.ActiveEnvironments == nil {
+		plan.ActiveEnvironments = []string{}
 	}
-	if err := client.Do(ctx, http.MethodGet, "/api/v1/environments?limit="+strconv.Itoa(resetInventoryLimit), nil, &environmentResponse); err != nil {
-		return resetPlan{}, err
-	}
-	if projectResponse.Total > len(projectResponse.Projects) || environmentResponse.Total > len(environmentResponse.Environments) {
-		return resetPlan{}, fmt.Errorf("reset safety inventory exceeds %d projects or environments; Portless refused to erase ownership records without inventorying every environment", resetInventoryLimit)
-	}
-	plan := resetPlan{Projects: projectResponse.Projects, Environments: environmentResponse.Environments}
-	for _, environment := range plan.Environments {
-		selector := model.EnvironmentSelector(environment.Project, environment.Name)
-		if environment.Status != model.EnvironmentStopped {
-			plan.ActiveEnvironments = append(plan.ActiveEnvironments, selector)
-		}
-		if environmentHasContainers(environment) {
-			plan.ContainerEnvironments = append(plan.ContainerEnvironments, environment)
-		}
-	}
-	sort.Strings(plan.ActiveEnvironments)
 	return plan, nil
-}
-
-func environmentHasContainers(environment model.Environment) bool {
-	for _, service := range environment.Services {
-		if service.Kind == model.ServiceContainer {
-			return true
-		}
-	}
-	return false
 }
 
 func verifyEmptyReset(ctx context.Context, paths bootstrap.Paths) error {
@@ -209,7 +183,11 @@ func verifyEmptyReset(ctx context.Context, paths bootstrap.Paths) error {
 }
 
 func activeResetError(environments []string) error {
-	return fmt.Errorf("reset requires every environment to be stopped; active: %s; stop each with `portless --env project/environment down`, then retry", strings.Join(environments, ", "))
+	return fmt.Errorf("reset requires every environment to be stopped; active: %s; run `portless down --all`, then retry", strings.Join(environments, ", "))
+}
+
+func incompatibleActiveResetError(environments []string) error {
+	return fmt.Errorf("stored application topology is incompatible with this Portless build, so active environments cannot be shut down individually: %s; run `portless reset --force --yes` to stop verified runtimes and rediscover sources", strings.Join(environments, ", "))
 }
 
 func (c *CLI) printResetPreview(result resetOutput) error {
@@ -225,6 +203,10 @@ func (c *CLI) printResetPreview(result resetOutput) error {
 	fmt.Fprintln(c.Out, "  "+result.WillRemove[2])
 	fmt.Fprintln(c.Out, "  "+result.WillRemove[3])
 	printResetPreserved(c, result.Preserved)
+	if result.TopologyIncompatible {
+		fmt.Fprintln(c.Out)
+		fmt.Fprintln(c.Out, c.warning(c.Out, "The stored project topology is incompatible with this build; reset will use format-independent runtime ownership records."))
+	}
 	if len(result.ActiveEnvironments) > 0 {
 		fmt.Fprintln(c.Out)
 		if result.Forced {
@@ -238,7 +220,7 @@ func (c *CLI) printResetPreview(result resetOutput) error {
 	}
 	fmt.Fprintln(c.Out)
 	command := "portless reset --yes"
-	if result.Forced {
+	if result.Forced || result.TopologyIncompatible && len(result.ActiveEnvironments) > 0 {
 		command = "portless reset --force --yes"
 	}
 	fmt.Fprintf(c.Out, "No changes were made. Run `%s` to continue.\n", command)

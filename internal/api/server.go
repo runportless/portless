@@ -19,11 +19,12 @@ import (
 	"github.com/portless-run/portless/internal/daemon"
 	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/project/compiler"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/store"
 )
 
-const APIVersion = "4"
+const APIVersion = "6.0.0"
 
 type Server struct {
 	app           *application.Service
@@ -301,6 +302,15 @@ func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request
 		writeJSON(writer, http.StatusOK, result)
 		return
 	}
+	if len(segments) == 2 && segments[1] == "reset" && request.Method == http.MethodGet {
+		plan, err := s.app.ResetPlan(request.Context())
+		if err != nil {
+			s.writeError(writer, err, nil)
+			return
+		}
+		writeJSON(writer, http.StatusOK, plan)
+		return
+	}
 	if len(segments) == 2 && segments[1] == "reset" && request.Method == http.MethodPost {
 		if principal.Session {
 			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "runtime reset preparation may only be requested by the local CLI"})
@@ -467,6 +477,51 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 		writer.Header().Set("Content-Disposition", `attachment; filename="portless.project.json"`)
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write(content)
+		return
+	}
+	if len(segments) == 3 && segments[2] == "sources" {
+		if request.Method != http.MethodPost {
+			methodNotAllowed(writer, http.MethodPost)
+			return
+		}
+		if principal.Session {
+			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "project source discovery may only be requested by the local CLI"})
+			return
+		}
+		var input struct {
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Environment string `json:"environment"`
+		}
+		if err := decodeJSON(request, &input); err != nil {
+			writeDecodeError(writer, err)
+			return
+		}
+		if err := model.ValidateEnvironmentName(input.Environment); err != nil {
+			writeAPIError(writer, http.StatusBadRequest, APIError{Code: "INVALID_ENVIRONMENT_NAME", Message: err.Error(), Subject: map[string]any{"project": project, "environment": input.Environment}})
+			return
+		}
+		updatedProject, environment, warnings, err := s.app.AddProjectSource(ctx, project, input.Environment, input.Name, input.Path)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project, "environment": input.Environment, "source": input.Name})
+			return
+		}
+		environments, err := s.app.Environments(ctx, project)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project})
+			return
+		}
+		var configurationRequired []string
+		for _, candidate := range environments {
+			if strings.EqualFold(candidate.Name, environment.Name) || len(candidate.Issues) == 0 {
+				continue
+			}
+			configurationRequired = append(configurationRequired, model.EnvironmentSelector(project, candidate.Name))
+		}
+		writeJSON(writer, http.StatusCreated, map[string]any{
+			"project": updatedProject, "environment": environment, "warnings": nonNil(warnings),
+			"configurationRequired": nonNil(configurationRequired),
+		})
 		return
 	}
 	writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "project route not found"})
@@ -1281,6 +1336,8 @@ func (s *Server) writeError(writer http.ResponseWriter, err error, subject map[s
 	status := http.StatusBadRequest
 	apiError := APIError{Code: "REQUEST_FAILED", Message: err.Error(), Subject: subject}
 	var conflict application.NameConflictError
+	var active store.ActiveProjectEnvironmentsError
+	var configuration compiler.ConfigurationError
 	switch {
 	case errors.As(err, &conflict):
 		status = http.StatusConflict
@@ -1298,6 +1355,18 @@ func (s *Server) writeError(writer http.ResponseWriter, err error, subject map[s
 	case errors.Is(err, store.ErrAlreadyExists):
 		status = http.StatusConflict
 		apiError.Code = "RESOURCE_ALREADY_EXISTS"
+	case errors.As(err, &active):
+		status = http.StatusConflict
+		apiError.Code = "ACTIVE_ENVIRONMENTS"
+		apiError.Details = map[string]any{"activeEnvironments": nonNil(active.Environments)}
+	case errors.As(err, &configuration):
+		status = http.StatusConflict
+		apiError.Code = "CONFIGURATION_INVALID"
+		apiError.Details = map[string]any{"issues": nonNil(configuration.Issues)}
+	case errors.Is(err, store.ErrIncompatibleState):
+		status = http.StatusConflict
+		apiError.Code = "INCOMPATIBLE_STATE"
+		apiError.Remediation = []Remediation{{Label: "Reset incompatible application state", Command: "portless reset --force --yes"}}
 	case errors.As(err, &application.RuntimeInUseError{}):
 		status = http.StatusConflict
 		apiError.Code = "CONTAINER_RUNTIME_IN_USE"

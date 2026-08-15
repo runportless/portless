@@ -17,6 +17,98 @@ type DaemonInstance struct {
 	StoppedAt  *time.Time
 }
 
+// EnvironmentRuntimeInventory is the format-independent runtime ownership
+// view used by lifecycle authentication and destructive recovery. It is
+// intentionally assembled from normalized environment and service-runtime
+// rows, so an incompatible persisted project model cannot hide active work or
+// block a guarded reset.
+type EnvironmentRuntimeInventory struct {
+	Project     string
+	Environment string
+	Status      model.EnvironmentStatus
+	Services    []ServiceRuntimeRecord
+}
+
+func (s *Store) RuntimeInventory(ctx context.Context) ([]EnvironmentRuntimeInventory, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.name, e.name, e.status
+FROM environments e JOIN projects p ON p.private_key = e.project_key
+ORDER BY p.name COLLATE NOCASE, e.name COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	var result []EnvironmentRuntimeInventory
+	for rows.Next() {
+		var item EnvironmentRuntimeInventory
+		var status string
+		if err := rows.Scan(&item.Project, &item.Environment, &status); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		item.Status = model.EnvironmentStatus(status)
+		item.Services = []ServiceRuntimeRecord{}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for index := range result {
+		selector := model.EnvironmentSelector(result[index].Project, result[index].Environment)
+		services, err := s.ServiceRuntimes(ctx, selector)
+		if err != nil {
+			return nil, err
+		}
+		result[index].Services = services
+	}
+	if result == nil {
+		result = []EnvironmentRuntimeInventory{}
+	}
+	return result, nil
+}
+
+func (s *Store) ServiceRuntimes(ctx context.Context, selector string) ([]ServiceRuntimeRecord, error) {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT service_name, status, reason, generation, pid, upstream_port, started_at, restart_count,
+       log_path, private_run_key, owner_instance_id, supervisor_socket, supervisor_state, supervisor_pid, container_name, observed_at
+FROM service_runtime WHERE environment_key = ? ORDER BY service_name COLLATE NOCASE`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ServiceRuntimeRecord
+	for rows.Next() {
+		var item ServiceRuntimeRecord
+		var status string
+		var started, observed sql.NullString
+		if err := rows.Scan(
+			&item.ServiceName, &status, &item.Reason, &item.Generation, &item.PID, &item.UpstreamPort,
+			&started, &item.RestartCount, &item.LogPath, &item.PrivateRunKey, &item.OwnerInstanceID,
+			&item.SupervisorSocket, &item.SupervisorState, &item.SupervisorPID, &item.ContainerName, &observed,
+		); err != nil {
+			return nil, err
+		}
+		item.Status = model.ServiceStatus(status)
+		item.StartedAt = parseOptionalTime(started)
+		item.ObservedAt = parseOptionalTime(observed)
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []ServiceRuntimeRecord{}
+	}
+	return result, nil
+}
+
 func (s *Store) RecordDaemonInstance(ctx context.Context, instance DaemonInstance) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO daemon_instances(instance_id, build_id, pid, state, started_at)

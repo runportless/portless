@@ -404,16 +404,38 @@ func TestResetPreviewIsNonMutatingAndExplainsConfirmation(t *testing.T) {
 
 func TestResetActiveEnvironmentErrorGivesExplicitShutdownCommand(t *testing.T) {
 	err := activeResetError([]string{"billing/local", "search/dev"})
-	for _, expected := range []string{"billing/local", "search/dev", "portless --env project/environment down"} {
+	for _, expected := range []string{"billing/local", "search/dev", "portless down --all"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("active reset error does not contain %q: %v", expected, err)
 		}
 	}
 }
 
+func TestIncompatibleActiveResetRequiresForcedRecovery(t *testing.T) {
+	err := incompatibleActiveResetError([]string{"store/local"})
+	for _, expected := range []string{"store/local", "cannot be shut down individually", "portless reset --force --yes"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("incompatible reset error does not contain %q: %v", expected, err)
+		}
+	}
+	application, output, _ := newTestCLI(t)
+	if err := application.printResetPreview(resetOutput{
+		Projects: 1, Environments: 1, ActiveEnvironments: []string{"store/local"},
+		WillRemove: append([]string(nil), resetRemovalCategories...), Preserved: append([]string(nil), resetPreservedCategories...),
+		TopologyIncompatible: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"format-independent runtime ownership records", "portless reset --force --yes"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("incompatible reset preview does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
 func TestCobraDaemonStatusExplainsOneTimeLegacyReplacement(t *testing.T) {
 	application, _, errorsOutput := newTestCLI(t)
-	record := bootstrap.ControlRecord{PID: os.Getpid(), Port: 7331, APIVersion: "1", TokenPath: application.paths.Token}
+	record := bootstrap.ControlRecord{PID: os.Getpid(), Port: 7331, APIVersion: "1.0.0", TokenPath: application.paths.Token}
 	content, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -436,19 +458,19 @@ func TestPrintDaemonStatusUsesExplicitVersionLabels(t *testing.T) {
 		PID:                33083,
 		InstanceID:         "f8ecffdf6d6f",
 		BuildID:            "9f15670e7324",
-		ProtocolVersion:    "2",
-		APIVersion:         "3",
+		ProtocolVersion:    "2.0.0",
+		APIVersion:         "3.0.0",
 		RuntimeState:       "ready",
 		HandoffReady:       true,
 		ActiveEnvironments: []string{"store/local"},
 	})
 
-	for _, expected := range []string{"Protocol Version: 2\n", "API Version: 3\n"} {
+	for _, expected := range []string{"Protocol Version: 2.0.0\n", "API Version: 3.0.0\n"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("daemon status does not contain %q:\n%s", expected, output.String())
 		}
 	}
-	if strings.Contains(output.String(), "Protocol: 2  API: 3") {
+	if strings.Contains(output.String(), "Protocol: 2.0.0  API: 3.0.0") {
 		t.Fatalf("daemon status still combines protocol and API versions:\n%s", output.String())
 	}
 }
@@ -459,10 +481,10 @@ func TestPrintStatusShowsHTTPAndPublishedContainerEndpoints(t *testing.T) {
 		Project: "billing", Name: "local", DashboardURL: "http://portless.localhost/environments/billing/local",
 		Services: []model.Service{
 			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess}, Status: model.ServiceReady, Endpoints: []model.Endpoint{{Kind: model.EndpointPublic, Protocol: model.ProtocolHTTP, URL: "http://checkout.local.billing.localhost"}}, UpstreamPort: 49100},
-			{ServiceDefinition: model.ServiceDefinition{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"}, Status: model.ServiceReady, Endpoints: []model.Endpoint{{Kind: model.EndpointPublic, Protocol: model.ProtocolPostgres, URL: "postgresql://postgres.local.billing.portless.test:5432/portless"}}, UpstreamPort: 49101},
+			{ServiceDefinition: model.ServiceDefinition{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432}, Status: model.ServiceReady, Endpoints: []model.Endpoint{{Kind: model.EndpointPublic, Protocol: model.ProtocolTCP, URL: "tcp://postgres.local.billing.portless.test:5432"}}, UpstreamPort: 49101},
 		},
 	})
-	for _, expected := range []string{"http://checkout.local.billing.localhost", "postgresql://postgres.local.billing.portless.test:5432/portless", "http://portless.localhost/environments/billing/local"} {
+	for _, expected := range []string{"http://checkout.local.billing.localhost", "tcp://postgres.local.billing.portless.test:5432", "http://portless.localhost/environments/billing/local"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("status does not contain %q:\n%s", expected, output.String())
 		}
@@ -697,9 +719,9 @@ func TestLogServiceSelectionAndCombinedFormatting(t *testing.T) {
 func TestTCPApplicationTrafficUsesProtocolSpecificHumanOutput(t *testing.T) {
 	application, output, _ := newTestCLI(t)
 	application.printTrafficList(model.Environment{Project: "billing", Name: "local"}, "tcp", []model.TrafficEvent{{
-		Sequence: 9, Protocol: model.ProtocolPostgres, Source: "checkout", Target: "postgres", DurationMS: 4,
+		Sequence: 9, Protocol: model.ProtocolTCP, Source: "checkout", Target: "postgres", DurationMS: 4,
 	}})
-	for _, expected := range []string{"TCP traffic", "PROTOCOL", "POSTGRES", "checkout:postgres", "ok"} {
+	for _, expected := range []string{"TCP traffic", "PROTOCOL", "TCP", "checkout:postgres", "ok"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("TCP traffic output does not contain %q:\n%s", expected, output.String())
 		}
@@ -1040,6 +1062,8 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless runtime start":   runAction,
 		"portless runtime use":     showHelp,
 	}
+	expected["portless project source"] = showHelp
+	expected["portless project source add"] = showHelp
 
 	application, _, _ := newTestCLI(t)
 	actual := map[string]*cobra.Command{}
@@ -1104,6 +1128,7 @@ func TestBareLeafCommandsWithRequiredArgumentsShowHelp(t *testing.T) {
 		want string
 	}{
 		{name: "env select", args: []string{"env", "select"}, want: "portless env select <project/environment>"},
+		{name: "project source add", args: []string{"project", "source", "add"}, want: "portless project source add <name>"},
 		{name: "record start", args: []string{"record", "start"}, want: "portless record start <name>"},
 		{name: "partial fault add", args: []string{"fault", "add", "slow"}, want: "portless fault add <name> <source:target>"},
 		{name: "runtime use", args: []string{"runtime", "use"}, want: "portless runtime use <auto|docker|podman>"},
@@ -1130,6 +1155,7 @@ func TestBareLeafCommandsWithRequiredArgumentsShowHelp(t *testing.T) {
 func TestRequiredArgumentCountUsesCommandSyntax(t *testing.T) {
 	for use, expected := range map[string]int{
 		"env select <project/environment>": 1,
+		"project source add <name>":        1,
 		"fault add <name> <source:target>": 2,
 		"logs [service]":                   0,
 		"doctor [daemon|relay|runtime]":    0,

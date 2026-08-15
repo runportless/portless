@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -34,7 +35,9 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if _, err := controlStore.CreateProject(context.Background(), "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controlStore.CreateEnvironment(context.Background(), "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
+	checkoutSource := t.TempDir()
+	sources := []model.SourceBinding{{Name: "checkout", Path: checkoutSource, Status: "ready", ScannedAt: time.Now().UTC(), Definition: definition}}
+	if _, err := controlStore.CreateEnvironment(context.Background(), "billing", "local", definition, sources, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
 		t.Fatal(err)
 	}
 	authManager, err := auth.LoadOrCreate(filepath.Join(data, "install.key"))
@@ -46,7 +49,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>portless</html>"), Mode: fs.FileMode(0o600)}}
 	daemonControl := &fakeDaemonControl{identity: daemon.Identity{
 		Product: daemon.Product, State: "ready", PID: 33083, StartedAt: time.Now().UTC().Add(-time.Minute),
-		InstanceID: "instance-current", BuildID: "build-current", ProtocolVersion: "2", APIVersion: APIVersion,
+		InstanceID: "instance-current", BuildID: "build-current", ProtocolVersion: "2.0.0", APIVersion: APIVersion,
 		HandoffReady: true, RecoveryProblems: []string{}, ActiveEnvironments: []string{"billing/local"},
 	}}
 	server, err := New(app, authManager, assets, daemonControl)
@@ -71,16 +74,24 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
 		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
+	inventorySource := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inventorySource, "package.json"), []byte(`{"name":"inventory","scripts":{"start:dev":"node server.js"},"dependencies":{"@nestjs/core":"1.0.0"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addedSource := request(server, authManager, http.MethodPost, "/api/v1/projects/billing/sources", `{"name":"inventory","environment":"local","path":`+strconv.Quote(inventorySource)+`}`, true)
+	if addedSource.Code != http.StatusCreated || !strings.Contains(addedSource.Body.String(), `"name":"inventory"`) || !strings.Contains(addedSource.Body.String(), `"environment":{"project":"billing","name":"local"`) || !strings.Contains(addedSource.Body.String(), `"configurationRequired":[]`) {
+		t.Fatalf("project source response code=%d body=%s", addedSource.Code, addedSource.Body.String())
+	}
 
 	started := time.Now().UTC().Add(-time.Second)
 	httpEvent := app.Broker().AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Source: "checkout", Target: "orders", StartedAt: started, CompletedAt: started.Add(12 * time.Millisecond), Method: "GET", Path: "/orders", Status: 200, RequestHeaders: map[string]string{"Accept": "application/json"}, ResponseHeaders: map[string]string{"Content-Type": "application/json"}})
-	app.Broker().AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolPostgres, Source: "checkout", Target: "postgres", StartedAt: started, CompletedAt: started.Add(2 * time.Millisecond)})
+	app.Broker().AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Source: "checkout", Target: "postgres", StartedAt: started, CompletedAt: started.Add(2 * time.Millisecond)})
 	httpTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic?protocol=http&service=checkout&limit=10", "", true)
 	if httpTraffic.Code != http.StatusOK || !strings.Contains(httpTraffic.Body.String(), `"target":"orders"`) || strings.Contains(httpTraffic.Body.String(), `"target":"postgres"`) || strings.Contains(httpTraffic.Body.String(), `"requestHeaders"`) {
 		t.Fatalf("filtered HTTP traffic response code=%d body=%s", httpTraffic.Code, httpTraffic.Body.String())
 	}
 	tcpTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic?protocol=tcp&edge=checkout:postgres", "", true)
-	if tcpTraffic.Code != http.StatusOK || !strings.Contains(tcpTraffic.Body.String(), `"protocol":"postgres"`) {
+	if tcpTraffic.Code != http.StatusOK || !strings.Contains(tcpTraffic.Body.String(), `"protocol":"tcp"`) {
 		t.Fatalf("filtered TCP traffic response code=%d body=%s", tcpTraffic.Code, tcpTraffic.Body.String())
 	}
 	trafficDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/"+strconv.FormatInt(httpEvent.Sequence, 10), "", true)
@@ -94,6 +105,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	invalidLimit := request(server, authManager, http.MethodGet, "/api/v1/projects?limit=0", "", true)
 	if invalidLimit.Code != http.StatusBadRequest || !strings.Contains(invalidLimit.Body.String(), `"code":"INVALID_LIMIT"`) {
 		t.Fatalf("invalid limit response code=%d body=%s", invalidLimit.Code, invalidLimit.Body.String())
+	}
+	resetPlan := request(server, authManager, http.MethodGet, "/api/v1/runtime/reset", "", true)
+	if resetPlan.Code != http.StatusOK || !strings.Contains(resetPlan.Body.String(), `"projects":1`) || !strings.Contains(resetPlan.Body.String(), `"environments":1`) || !strings.Contains(resetPlan.Body.String(), `"topologyIncompatible":false`) {
+		t.Fatalf("runtime reset plan response code=%d body=%s", resetPlan.Code, resetPlan.Body.String())
 	}
 	faultPath := "/api/v1/environments/billing/local/faults/api-latency"
 	createdFault := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/faults", `{"name":"api-latency","source":"external","target":"checkout","probability":1,"latencyMs":50}`, true)
@@ -121,7 +136,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("deleted fault response code=%d body=%s", missingFault.Code, missingFault.Body.String())
 	}
 	daemonStatus := request(server, authManager, http.MethodGet, "/api/v1/daemon", "", true)
-	if daemonStatus.Code != http.StatusOK || !strings.Contains(daemonStatus.Body.String(), `"instanceId":"instance-current"`) || !strings.Contains(daemonStatus.Body.String(), `"protocolVersion":"2"`) || strings.Contains(daemonStatus.Body.String(), "installationId") {
+	if daemonStatus.Code != http.StatusOK || !strings.Contains(daemonStatus.Body.String(), `"instanceId":"instance-current"`) || !strings.Contains(daemonStatus.Body.String(), `"protocolVersion":"2.0.0"`) || strings.Contains(daemonStatus.Body.String(), "installationId") {
 		t.Fatalf("daemon status response code=%d body=%s", daemonStatus.Code, daemonStatus.Body.String())
 	}
 	relayStatus := request(server, authManager, http.MethodGet, "/api/v1/relay", "", true)
@@ -220,6 +235,21 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	unknown := requestHost(server, authManager, http.MethodGet, "/api/v1/health", "", false, "malicious.example")
 	if unknown.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("unknown host returned %d", unknown.Code)
+	}
+	legacyModel := []byte(`{"suggestedName":"billing"}`)
+	if _, err := controlStore.DB().ExecContext(context.Background(), `UPDATE projects SET model_json = ?`, legacyModel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.DB().ExecContext(context.Background(), `UPDATE environments SET model_json = ?`, legacyModel); err != nil {
+		t.Fatal(err)
+	}
+	incompatible := request(server, authManager, http.MethodGet, "/api/v1/environments", "", true)
+	if incompatible.Code != http.StatusConflict || !strings.Contains(incompatible.Body.String(), `"code":"INCOMPATIBLE_STATE"`) || !strings.Contains(incompatible.Body.String(), "portless reset --force --yes") {
+		t.Fatalf("incompatible environment response code=%d body=%s", incompatible.Code, incompatible.Body.String())
+	}
+	recoveryPlan := request(server, authManager, http.MethodGet, "/api/v1/runtime/reset", "", true)
+	if recoveryPlan.Code != http.StatusOK || !strings.Contains(recoveryPlan.Body.String(), `"topologyIncompatible":true`) || !strings.Contains(recoveryPlan.Body.String(), `"environments":1`) {
+		t.Fatalf("incompatible-state reset plan response code=%d body=%s", recoveryPlan.Code, recoveryPlan.Body.String())
 	}
 }
 

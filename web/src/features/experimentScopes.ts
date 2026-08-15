@@ -1,26 +1,26 @@
-import type { Environment, Recording } from '../types'
+import type { Environment, Protocol, Recording } from '../types'
 
 export interface ExperimentScope {
   id: string
   source: string
   target: string
-  protocol: 'http' | 'tcp' | 'postgres' | 'redis'
+  protocol: Protocol
   label: string
 }
 
 export function experimentScopes(environment: Environment): ExperimentScope[] {
   const scopes: ExperimentScope[] = []
   const seen = new Set<string>()
-  const add = (source: string, target: string, protocol: ExperimentScope['protocol']) => {
+  const add = (source: string, target: string, protocol: ExperimentScope['protocol'], binding?: string) => {
     const id = experimentScopeID(source, target)
     if (!source || !target || seen.has(id)) return
     seen.add(id)
-    scopes.push({ id, source, target, protocol, label: `${source} → ${target} · ${protocolLabel(protocol)}` })
+    scopes.push({ id, source, target, protocol, label: `${source} → ${target} · ${protocolLabel(protocol, binding)}` })
   }
 
   const primary = environment.services.find((service) => service.name === environment.primaryService)
   if (primary?.kind === 'process') add('external', primary.name, 'http')
-  for (const connection of environment.connections || []) add(connection.source, connection.target, connection.protocol)
+  for (const connection of environment.connections || []) add(connection.source, connection.target, connection.protocol, connection.binding)
   return scopes
 }
 
@@ -37,7 +37,7 @@ export function recordingScopeLabel(recording: Pick<Recording, 'source' | 'targe
   return `${recording.source} → ${recording.target}`
 }
 
-function protocolLabel(protocol: ExperimentScope['protocol']) {
-  if (protocol === 'postgres') return 'POSTGRESQL'
+function protocolLabel(protocol: ExperimentScope['protocol'], binding?: string) {
+	if (binding) return binding.replaceAll('-', ' ').toUpperCase()
   return protocol.toUpperCase()
 }

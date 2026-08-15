@@ -16,6 +16,83 @@ type Result struct {
 	Issues     []model.ConfigurationIssue
 }
 
+// AddSource merges one newly discovered source into an existing logical
+// project. The returned bindings are defaults only for components introduced
+// by the source; callers decide which environment receives them.
+func AddSource(project model.ProjectModel, projectSources []model.ProjectSource, source model.SourceBinding) (model.ProjectModel, []model.ProjectSource, []model.ComponentBinding, error) {
+	if err := model.ValidateSourceName(source.Name); err != nil {
+		return model.ProjectModel{}, nil, nil, fmt.Errorf("source %q: %w", source.Name, err)
+	}
+	for _, existing := range projectSources {
+		if strings.EqualFold(existing.Name, source.Name) {
+			return model.ProjectModel{}, nil, nil, fmt.Errorf("source %s already exists", source.Name)
+		}
+	}
+
+	definition := project
+	definition.Services = append([]model.ServiceDefinition{}, project.Services...)
+	definition.Connections = append([]model.Connection{}, project.Connections...)
+	definition.References = append([]model.ConnectionReference{}, project.References...)
+
+	serviceDefinitions := make(map[string]model.ServiceDefinition, len(project.Services))
+	serviceOwners := make(map[string]string, len(project.Services))
+	for _, service := range project.Services {
+		serviceDefinitions[strings.ToLower(service.Name)] = service
+	}
+	for _, existingSource := range projectSources {
+		for _, serviceName := range existingSource.Services {
+			serviceOwners[strings.ToLower(serviceName)] = existingSource.Name
+		}
+	}
+
+	var provided []string
+	var defaults []model.ComponentBinding
+	for _, service := range source.Definition.Services {
+		key := strings.ToLower(service.Name)
+		if previous, exists := serviceDefinitions[key]; exists {
+			if sameResourceService(service, previous) {
+				continue
+			}
+			owner := serviceOwners[key]
+			if owner == "" {
+				owner = "the project"
+			}
+			return model.ProjectModel{}, nil, nil, fmt.Errorf("service %s is already provided by %s", service.Name, owner)
+		}
+
+		logical := service
+		logical.WorkingDirectory = ""
+		definition.Services = append(definition.Services, logical)
+		serviceDefinitions[key] = logical
+		if service.Kind == model.ServiceProcess {
+			provided = append(provided, service.Name)
+			serviceOwners[key] = source.Name
+			defaults = append(defaults, model.ComponentBinding{Service: service.Name, Provider: model.ProviderLocal, Source: source.Name})
+		} else {
+			defaults = append(defaults, model.ComponentBinding{Service: service.Name, Provider: model.ProviderContainer})
+		}
+	}
+
+	if definition.PrimaryService == "" && source.Definition.PrimaryService != "" {
+		definition.PrimaryService = source.Definition.PrimaryService
+	}
+	definition.Connections = append(definition.Connections, source.Definition.Connections...)
+	definition.References = append(definition.References, source.Definition.References...)
+	sort.Slice(definition.Services, func(i, j int) bool { return definition.Services[i].Name < definition.Services[j].Name })
+	definition.Connections = resolveConnections(definition.Services, definition.Connections, definition.References)
+	definition.References = uniqueConnectionReferences(unresolvedReferences(definition.Services, definition.References))
+	if definition.PrimaryService == "" && len(definition.Services) > 0 {
+		definition.PrimaryService = definition.Services[0].Name
+	}
+
+	sort.Strings(provided)
+	sources := append([]model.ProjectSource{}, projectSources...)
+	sources = append(sources, model.ProjectSource{Name: source.Name, Services: provided})
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+	sort.Slice(defaults, func(i, j int) bool { return defaults[i].Service < defaults[j].Service })
+	return definition, sources, defaults, nil
+}
+
 func InitialProject(name string, sources []model.SourceBinding) (model.ProjectModel, []model.ProjectSource, []model.ComponentBinding, error) {
 	definition := model.ProjectModel{SuggestedName: name}
 	serviceOwner := map[string]string{}
@@ -29,7 +106,7 @@ func InitialProject(name string, sources []model.SourceBinding) (model.ProjectMo
 		for _, service := range source.Definition.Services {
 			key := strings.ToLower(service.Name)
 			if previous, exists := serviceDefinitions[key]; exists {
-				if service.Kind == model.ServiceContainer && previous.Kind == model.ServiceContainer && previous.Template == service.Template {
+				if sameResourceService(service, previous) {
 					continue
 				}
 				return model.ProjectModel{}, nil, nil, fmt.Errorf("service %s is provided by both %s and %s", service.Name, serviceOwner[key], source.Name)
@@ -61,7 +138,7 @@ func InitialProject(name string, sources []model.SourceBinding) (model.ProjectMo
 	}
 	bindings := make([]model.ComponentBinding, 0, len(definition.Services))
 	for _, service := range definition.Services {
-		if service.Kind == model.ServiceContainer {
+		if service.Kind == model.ServiceResource {
 			bindings = append(bindings, model.ComponentBinding{Service: service.Name, Provider: model.ProviderContainer})
 			continue
 		}
@@ -99,7 +176,7 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 	for _, logical := range project.Services {
 		binding, ok := bindingByService[strings.ToLower(logical.Name)]
 		if !ok {
-			result.Issues = append(result.Issues, issue("MISSING_BINDING", logical.Name, "component has no provider binding", "bind it to a local source, managed container, or remote service"))
+			result.Issues = append(result.Issues, issue("MISSING_BINDING", logical.Name, "component has no provider binding", "bind it to a local source, managed resource, or remote service"))
 			continue
 		}
 		switch binding.Provider {
@@ -116,14 +193,14 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 			}
 			effective = append(effective, implementation)
 		case model.ProviderContainer:
-			if logical.Kind != model.ServiceContainer {
-				result.Issues = append(result.Issues, issue("INVALID_CONTAINER_BINDING", logical.Name, "component is not a managed container template", "bind it to its local source or a remote HTTP service"))
+			if logical.Kind != model.ServiceResource {
+				result.Issues = append(result.Issues, issue("INVALID_RESOURCE_BINDING", logical.Name, "component is not a managed resource", "bind it to its local source or a remote HTTP service"))
 				continue
 			}
 			effective = append(effective, logical)
 		case model.ProviderRemote:
 			if logical.Kind != model.ServiceProcess {
-				result.Issues = append(result.Issues, issue("REMOTE_PROTOCOL_UNSUPPORTED", logical.Name, "only HTTP application services can be remote in this release", "use a local managed dependency"))
+				result.Issues = append(result.Issues, issue("REMOTE_PROTOCOL_UNSUPPORTED", logical.Name, "only HTTP application services can be remote in this release", "use a local managed resource"))
 				continue
 			}
 			if err := ValidateRemote(binding.Remote); err != nil {
@@ -144,7 +221,7 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 		references = append(references, source.Definition.References...)
 	}
 	resolved := resolveConnections(effective, connections, references)
-	effective = pruneUnusedContainers(effective, resolved, bindingByService)
+	effective = pruneUnusedResources(effective, resolved, bindingByService)
 	result.Definition.Services = effective
 	result.Definition.Connections = resolveConnections(effective, connections, references)
 	result.Definition.References = unresolvedReferences(effective, references)
@@ -180,7 +257,7 @@ func sourceTopology(services []model.ServiceDefinition, sources []model.SourceBi
 }
 
 func referenceKey(reference model.ConnectionReference) string {
-	return strings.ToLower(reference.Source + "\x00" + reference.TargetHint + "\x00" + reference.Environment)
+	return strings.ToLower(reference.Source + "\x00" + reference.TargetHint + "\x00" + reference.Environment + "\x00" + string(reference.Protocol) + "\x00" + reference.Binding)
 }
 
 func uniqueConnectionReferences(input []model.ConnectionReference) []model.ConnectionReference {
@@ -197,7 +274,7 @@ func uniqueConnectionReferences(input []model.ConnectionReference) []model.Conne
 	return result
 }
 
-func pruneUnusedContainers(services []model.ServiceDefinition, connections []model.Connection, bindings map[string]model.ComponentBinding) []model.ServiceDefinition {
+func pruneUnusedResources(services []model.ServiceDefinition, connections []model.Connection, bindings map[string]model.ComponentBinding) []model.ServiceDefinition {
 	active := make(map[string]struct{})
 	for _, service := range services {
 		binding := bindings[strings.ToLower(service.Name)]
@@ -224,7 +301,7 @@ func pruneUnusedContainers(services []model.ServiceDefinition, connections []mod
 	}
 	result := make([]model.ServiceDefinition, 0, len(services))
 	for _, service := range services {
-		if service.Kind == model.ServiceContainer {
+		if service.Kind == model.ServiceResource {
 			if _, ok := active[strings.ToLower(service.Name)]; !ok {
 				continue
 			}
@@ -293,6 +370,11 @@ func serviceDefinition(services []model.ServiceDefinition, name string) (model.S
 	return model.ServiceDefinition{}, false
 }
 
+func sameResourceService(left, right model.ServiceDefinition) bool {
+	return left.Kind == model.ServiceResource && right.Kind == model.ServiceResource && left.Resource != nil && right.Resource != nil &&
+		*left.Resource == *right.Resource && left.Port == right.Port
+}
+
 func resolveConnections(services []model.ServiceDefinition, connections []model.Connection, references []model.ConnectionReference) []model.Connection {
 	serviceNames := make(map[string]string, len(services))
 	for _, service := range services {
@@ -307,7 +389,7 @@ func resolveConnections(services []model.ServiceDefinition, connections []model.
 		if _, ok := serviceNames[strings.ToLower(reference.Source)]; !ok {
 			continue
 		}
-		result = append(result, model.Connection{Source: reference.Source, Target: target, Protocol: reference.Protocol, Environment: reference.Environment, Required: reference.Required})
+		result = append(result, model.Connection{Source: reference.Source, Target: target, Protocol: reference.Protocol, Binding: reference.Binding, Environment: reference.Environment, Required: reference.Required})
 	}
 	seen := make(map[string]model.Connection)
 	for _, connection := range result {

@@ -10,13 +10,13 @@ func TestAllocationSpecsCreatePublicAndDirectedTCPNames(t *testing.T) {
 	definition := model.ProjectModel{
 		Services: []model.ServiceDefinition{
 			{Name: "orders", Kind: model.ServiceProcess},
-			{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"},
-			{Name: "redis", Kind: model.ServiceContainer, Template: "valkey"},
-			{Name: "cache", Kind: model.ServiceContainer, Template: "redis"},
+			resourceService("postgres", "postgres", "17", 5432),
+			resourceService("redis", "valkey", "8", 6379),
+			resourceService("cache", "valkey", "8", 6379),
 		},
 		Connections: []model.Connection{
-			{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres},
-			{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis},
+			{Source: "orders", Target: "postgres", Protocol: model.ProtocolTCP, Binding: "postgres"},
+			{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP, Binding: "valkey"},
 		},
 	}
 	specs, err := AllocationSpecs("store", "local", definition)
@@ -38,6 +38,10 @@ func TestAllocationSpecsCreatePublicAndDirectedTCPNames(t *testing.T) {
 			t.Fatalf("unexpected spec: %#v", spec)
 		}
 	}
+}
+
+func resourceService(name, resourceType, version string, port int) model.ServiceDefinition {
+	return model.ServiceDefinition{Name: name, Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: resourceType, Version: version}, Port: port}
 }
 
 func TestAllocationSpecsRequireGenericTCPPort(t *testing.T) {

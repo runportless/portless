@@ -12,14 +12,14 @@ const environment = {
     service('checkout', 'process'),
     service('inventory', 'process'),
     service('orders', 'process'),
-    service('postgres', 'container'),
-    service('redis', 'container'),
+		service('postgres', 'resource'),
+		service('redis', 'resource'),
   ],
   connections: [
     { source: 'checkout', target: 'inventory', protocol: 'http', required: true },
     { source: 'checkout', target: 'orders', protocol: 'http', required: true },
-    { source: 'orders', target: 'postgres', protocol: 'postgres', required: true },
-    { source: 'orders', target: 'redis', protocol: 'redis', required: true },
+		{ source: 'orders', target: 'postgres', protocol: 'tcp', binding: 'postgres', required: true },
+		{ source: 'orders', target: 'redis', protocol: 'tcp', binding: 'valkey', required: true },
   ],
 } as Environment
 
@@ -29,8 +29,8 @@ describe('experiment scopes', () => {
       { id: 'external:checkout', source: 'external', target: 'checkout', protocol: 'http', label: 'external → checkout · HTTP' },
       { id: 'checkout:inventory', source: 'checkout', target: 'inventory', protocol: 'http', label: 'checkout → inventory · HTTP' },
       { id: 'checkout:orders', source: 'checkout', target: 'orders', protocol: 'http', label: 'checkout → orders · HTTP' },
-      { id: 'orders:postgres', source: 'orders', target: 'postgres', protocol: 'postgres', label: 'orders → postgres · POSTGRESQL' },
-      { id: 'orders:redis', source: 'orders', target: 'redis', protocol: 'redis', label: 'orders → redis · REDIS' },
+		{ id: 'orders:postgres', source: 'orders', target: 'postgres', protocol: 'tcp', label: 'orders → postgres · POSTGRES' },
+		{ id: 'orders:redis', source: 'orders', target: 'redis', protocol: 'tcp', label: 'orders → redis · VALKEY' },
     ])
     expect(experimentScopes(environment).some((scope) => scope.id === 'orders:checkout')).toBe(false)
   })

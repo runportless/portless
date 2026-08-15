@@ -13,6 +13,7 @@ import (
 
 	"github.com/portless-run/portless/internal/api"
 	"github.com/portless-run/portless/internal/bootstrap"
+	"github.com/portless-run/portless/internal/daemon"
 	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/runtime/container"
 )
@@ -34,7 +35,7 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := bootstrap.ControlRecord{
-		PID: os.Getpid(), Port: 7331, ProtocolVersion: "1", APIVersion: api.APIVersion,
+		PID: os.Getpid(), Port: 7331, ProtocolVersion: daemon.ProtocolVersion, APIVersion: api.APIVersion,
 		InstallationID: "installation", InstanceID: "instance", BuildID: "build", State: "ready", HandoffReady: true,
 		TokenPath: paths.Token, StartedAt: time.Now().UTC(), ProcessHint: "portless-test",
 	}

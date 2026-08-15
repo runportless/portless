@@ -25,12 +25,13 @@ var uninstallRemovalCategories = []string{
 }
 
 type uninstallDaemonOutput struct {
-	State              string   `json:"state"`
-	PID                int      `json:"pid,omitempty"`
-	InstanceID         string   `json:"instanceId,omitempty"`
-	Problem            string   `json:"problem,omitempty"`
-	InventoryAvailable bool     `json:"inventoryAvailable"`
-	ActiveEnvironments []string `json:"activeEnvironments"`
+	State                string   `json:"state"`
+	PID                  int      `json:"pid,omitempty"`
+	InstanceID           string   `json:"instanceId,omitempty"`
+	Problem              string   `json:"problem,omitempty"`
+	InventoryAvailable   bool     `json:"inventoryAvailable"`
+	TopologyIncompatible bool     `json:"topologyIncompatible"`
+	ActiveEnvironments   []string `json:"activeEnvironments"`
 }
 
 type uninstallRelayOutput struct {
@@ -118,6 +119,9 @@ func (c *CLI) uninstall(ctx context.Context, options uninstallOptions) error {
 		return errors.New(strings.Join(preview.Blockers, "; "))
 	}
 	if len(preview.Daemon.ActiveEnvironments) > 0 && !options.force {
+		if preview.Daemon.TopologyIncompatible {
+			return incompatibleActiveUninstallError(preview.Daemon.ActiveEnvironments)
+		}
 		return activeUninstallError(preview.Daemon.ActiveEnvironments)
 	}
 	if preview.Data.Present && !preview.Daemon.InventoryAvailable && !options.force {
@@ -207,11 +211,12 @@ func (c *CLI) inspectUninstall(ctx context.Context) (uninstallOutput, error) {
 				if inventoryErr != nil {
 					return uninstallOutput{}, inventoryErr
 				}
-				result.Projects = len(plan.Projects)
-				result.Environments = len(plan.Environments)
-				result.ManagedVolumeEnvironments = len(plan.ContainerEnvironments)
+				result.Projects = plan.Projects
+				result.Environments = plan.Environments
+				result.ManagedVolumeEnvironments = plan.ManagedVolumeEnvironments
 				result.Daemon.ActiveEnvironments = append([]string{}, plan.ActiveEnvironments...)
 				result.Daemon.InventoryAvailable = true
+				result.Daemon.TopologyIncompatible = plan.TopologyIncompatible
 			} else {
 				result.Daemon.Problem = connectErr.Error()
 			}
@@ -274,6 +279,9 @@ func (c *CLI) prepareUninstallRuntime(ctx context.Context, dataPresent, force bo
 		return uninstallRuntimePreparation{}, err
 	}
 	if len(plan.ActiveEnvironments) > 0 && !force {
+		if plan.TopologyIncompatible {
+			return uninstallRuntimePreparation{}, incompatibleActiveUninstallError(plan.ActiveEnvironments)
+		}
 		return uninstallRuntimePreparation{}, activeUninstallError(plan.ActiveEnvironments)
 	}
 	var prepared struct {
@@ -289,8 +297,8 @@ func (c *CLI) prepareUninstallRuntime(ctx context.Context, dataPresent, force bo
 		_ = client.Do(cancelContext, http.MethodPost, "/api/v1/runtime/reset/cancel", nil, nil)
 	}
 	return uninstallRuntimePreparation{
-		Prepared: true, Projects: len(plan.Projects), Environments: len(plan.Environments),
-		ManagedVolumeEnvironments: len(plan.ContainerEnvironments), ActiveEnvironments: append([]string{}, plan.ActiveEnvironments...),
+		Prepared: true, Projects: plan.Projects, Environments: plan.Environments,
+		ManagedVolumeEnvironments: plan.ManagedVolumeEnvironments, ActiveEnvironments: append([]string{}, plan.ActiveEnvironments...),
 		Processes: prepared.Processes, Runtimes: append([]container.ResetResult(nil), prepared.Runtimes...), Cancel: cancel,
 	}, nil
 }
@@ -399,7 +407,11 @@ func runtimeCleanupChanged(results []container.ResetResult) bool {
 }
 
 func activeUninstallError(environments []string) error {
-	return fmt.Errorf("uninstall requires every environment to be stopped; active: %s; stop each with `portless --env project/environment down`, then retry, or use `portless uninstall --force --yes`", strings.Join(environments, ", "))
+	return fmt.Errorf("uninstall requires every environment to be stopped; active: %s; run `portless down --all`, then retry, or use `portless uninstall --force --yes`", strings.Join(environments, ", "))
+}
+
+func incompatibleActiveUninstallError(environments []string) error {
+	return fmt.Errorf("stored application topology is incompatible with this Portless build, so active environments cannot be shut down individually: %s; use `portless uninstall --force --yes` to stop verified runtimes and remove Portless", strings.Join(environments, ", "))
 }
 
 func (c *CLI) printUninstallPreview(result uninstallOutput) error {

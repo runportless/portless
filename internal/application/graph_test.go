@@ -33,8 +33,8 @@ func TestExecutionOrderSkipsRemoteServicesAndTheirUnusedContainers(t *testing.T)
 		Services: []model.ServiceDefinition{
 			{Name: "checkout", Kind: model.ServiceProcess},
 			{Name: "payments", Kind: model.ServiceProcess},
-			{Name: "checkout-db", Kind: model.ServiceContainer},
-			{Name: "payments-db", Kind: model.ServiceContainer},
+			{Name: "checkout-db", Kind: model.ServiceResource},
+			{Name: "payments-db", Kind: model.ServiceResource},
 		},
 		Connections: []model.Connection{
 			{Source: "checkout", Target: "payments"},

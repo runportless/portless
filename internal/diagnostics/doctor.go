@@ -13,6 +13,7 @@ import (
 
 	"github.com/portless-run/portless/internal/api"
 	"github.com/portless-run/portless/internal/bootstrap"
+	"github.com/portless-run/portless/internal/daemon"
 	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/runtime/container/docker"
@@ -193,8 +194,10 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 		checks = append(checks, failed("daemon.api", "daemon", "Legacy daemon cannot prove its identity to this CLI", healthErr.Error(), "Replace it once with `portless daemon restart --force`. The guarded fallback verifies process ownership and command arguments before signaling it."))
 	case healthErr != nil:
 		checks = append(checks, failed("daemon.api", "daemon", "Daemon identity or compatibility check failed", healthErr.Error(), "Run `portless daemon status`, then `portless daemon restart`; use `--force` only for a verified legacy daemon or when interrupting active environments is acceptable."))
+	case healthRecord.ProtocolVersion != daemon.ProtocolVersion:
+		checks = append(checks, failed("daemon.api", "daemon", "Daemon protocol version does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.ProtocolVersion, daemon.ProtocolVersion), "Restart the Portless daemon with the current CLI."))
 	case healthRecord.APIVersion != api.APIVersion:
-		checks = append(checks, failed("daemon.api", "daemon", "Daemon protocol does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.APIVersion, api.APIVersion), "Restart the Portless daemon with the current CLI."))
+		checks = append(checks, failed("daemon.api", "daemon", "Daemon API version does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.APIVersion, api.APIVersion), "Restart the Portless daemon with the current CLI."))
 	default:
 		checks = append(checks, passed("daemon.api", "daemon", "Daemon identity is authenticated and compatible", fmt.Sprintf("protocol %s; API %s; instance %s; build %s", healthRecord.ProtocolVersion, healthRecord.APIVersion, shortIdentity(healthRecord.InstanceID), shortIdentity(healthRecord.BuildID))))
 	}

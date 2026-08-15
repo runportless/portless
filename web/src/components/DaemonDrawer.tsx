@@ -90,8 +90,8 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
             <Detail label="PID" value={String(status.pid)} />
             <Detail label="STARTED" value={`${relativeTime(status.startedAt)} ago`} />
             <Detail label="BUILD" value={shortFingerprint(status.buildId)} title={status.buildId} />
-            <Detail label="PROTOCOL" value={`Version ${status.protocolVersion}`} />
-            <Detail label="API" value={`Version ${status.apiVersion}`} />
+            <Detail label="PROTOCOL" value={status.protocolVersion} />
+            <Detail label="API" value={status.apiVersion} />
             <Detail label="RUNTIME" value={runtimeDescription(runtime)} />
           </div>
           <section className={`drawer-section daemon-handoff ${restartSafe ? '' : 'daemon-handoff--blocked'}`}>

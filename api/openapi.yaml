@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 0.5.0
+  version: 6.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -27,7 +27,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '6.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -113,6 +113,15 @@ paths:
         '200': { description: Selected container runtime is ready }
         '503': { $ref: '#/components/responses/Unavailable' }
   /runtime/reset:
+    get:
+      operationId: planRuntimeReset
+      description: Format-independent reset inventory derived from normalized runtime ownership rows. Remains available when the stored project topology requires reset-and-rediscover recovery.
+      responses:
+        '200':
+          description: Counts, active environments, and topology compatibility needed to plan a guarded reset.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResetPlan' }
     post:
       operationId: prepareRuntimeReset
       description: CLI-only runtime cleanup performed before application state is erased. Force permits active or unknown environments but never bypasses runtime ownership verification.
@@ -248,6 +257,29 @@ paths:
       operationId: exportProjectDeclaration
       responses:
         '200': { description: Generated portless.project.json }
+  /projects/{projectName}/sources:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+    post:
+      operationId: addProjectSource
+      description: >-
+        CLI-only discovery that adds a logical source to the project and binds its absolute
+        checkout path only to the selected environment. Every environment in the project must
+        be stopped; other environments remain unbound until configured explicitly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, path, environment]
+              properties:
+                name: { $ref: '#/components/schemas/SourceName' }
+                path: { type: string, description: Absolute checkout path from the CLI process. }
+                environment: { $ref: '#/components/schemas/EnvironmentName' }
+      responses:
+        '201': { description: Updated project, selected environment, discovery warnings, and environment selectors requiring configuration }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments:
     get:
       operationId: listEnvironments
@@ -904,6 +936,17 @@ components:
         version: { type: string }
         reason: { type: string }
         candidates: { type: array, items: { type: object, additionalProperties: true } }
+    ResetPlan:
+      type: object
+      required: [projects, environments, managedVolumeEnvironments, activeEnvironments, topologyIncompatible]
+      properties:
+        projects: { type: integer, minimum: 0 }
+        environments: { type: integer, minimum: 0 }
+        managedVolumeEnvironments: { type: integer, minimum: 0 }
+        activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+        topologyIncompatible:
+          type: boolean
+          description: True when ordinary environment operations cannot decode the stored topology and active state requires an explicit forced reset.
     DaemonStatus:
       type: object
       required: [state, pid, startedAt, instanceId, buildId, protocolVersion, apiVersion, handoffReady, recoveryProblems, activeEnvironments]
@@ -913,8 +956,8 @@ components:
         startedAt: { type: string, format: date-time }
         instanceId: { type: string }
         buildId: { type: string }
-        protocolVersion: { type: string }
-        apiVersion: { type: string }
+        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '2.0.0', description: Stable semantic daemon protocol version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '6.0.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1002,14 +1045,18 @@ components:
       required: [name, kind, required, health]
       properties:
         name: { $ref: '#/components/schemas/ServiceName' }
-        kind: { type: string, enum: [process, container] }
+        kind: { type: string, enum: [process, resource] }
         framework: { type: string }
-        template: { type: string, enum: [postgres, valkey] }
-        version: { type: string }
+        resource:
+          type: object
+          required: [type, version]
+          properties:
+            type: { type: string, example: postgres }
+            version: { type: string, example: '17' }
         command: { type: array, items: { type: string } }
         workingDirectory: { type: string }
         portEnvironment: { type: string }
-        port: { type: integer, minimum: 1, maximum: 65535, description: Client-facing port for a generic TCP service. }
+        port: { type: integer, minimum: 1, maximum: 65535, description: Plugin-resolved client-facing port for a TCP service. }
         environment: { type: object, additionalProperties: { type: string } }
         required: { type: boolean }
         health: { $ref: '#/components/schemas/HealthCheck' }
@@ -1035,7 +1082,8 @@ components:
       properties:
         source: { type: string, description: Service name or external. }
         target: { $ref: '#/components/schemas/ServiceName' }
-        protocol: { type: string, enum: [http, tcp, postgres, redis] }
+        protocol: { type: string, enum: [http, tcp] }
+        binding: { type: string, description: Resource plugin responsible for connection formatting. }
         environment: { type: string }
         required: { type: boolean }
     Endpoint:
@@ -1043,10 +1091,10 @@ components:
       required: [kind, protocol, host, port, url]
       properties:
         kind: { type: string, enum: [public, connection] }
-        protocol: { type: string, enum: [http, tcp, postgres, redis] }
+        protocol: { type: string, enum: [http, tcp] }
         host: { type: string }
         port: { type: integer, minimum: 1, maximum: 65535 }
-        url: { type: string, format: uri, example: 'postgresql://postgres.local.store.portless.test:5432/portless' }
+        url: { type: string, format: uri, example: 'tcp://postgres.local.store.portless.test:5432' }
         address: { type: string, description: Internal listener address when needed for diagnostics. }
     EffectiveConnection:
       allOf:
@@ -1058,8 +1106,10 @@ components:
             targetStatus: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
             endpoint: { $ref: '#/components/schemas/Endpoint' }
             runtimeTarget: { type: string, description: Raw process, container, or remote target retained only for diagnostics. }
-            injectedEnvVar: { type: string }
-            injectedValue: { type: string, description: Redacted value injected into the source service. }
+            injectedEnvironment:
+              type: object
+              additionalProperties: { type: string }
+              description: Redacted environment values generated for the source service.
     ConfigurationValue:
       type: object
       required: [key, value, classification, source]
@@ -1102,7 +1152,7 @@ components:
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         sequence: { type: integer, format: int64, minimum: 1 }
-        protocol: { type: string, enum: [http, tcp, postgres, redis] }
+        protocol: { type: string, enum: [http, tcp] }
         source: { type: string }
         target: { type: string }
         targetProvider: { type: string, enum: [local, container, remote] }

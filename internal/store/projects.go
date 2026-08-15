@@ -38,7 +38,7 @@ func (s *Store) CreateProject(ctx context.Context, name string, definition model
 		return model.Project{}, err
 	}
 	definition.SuggestedName = name
-	modelJSON, err := json.Marshal(logicalDefinition(definition))
+	modelJSON, err := encodeProjectModel(logicalDefinition(definition))
 	if err != nil {
 		return model.Project{}, err
 	}
@@ -71,8 +71,8 @@ FROM projects WHERE name = ? COLLATE NOCASE`, name).Scan(
 	if err != nil {
 		return model.Project{}, mapSQLError(err)
 	}
-	var definition model.ProjectModel
-	if err := json.Unmarshal(modelJSON, &definition); err != nil {
+	definition, err := decodeProjectModel(modelJSON)
+	if err != nil {
 		return model.Project{}, fmt.Errorf("decode project %s: %w", name, err)
 	}
 	if err := json.Unmarshal(sourcesJSON, &result.Sources); err != nil {
@@ -139,8 +139,8 @@ func (s *Store) ProjectModel(ctx context.Context, name string) (model.ProjectMod
 	if err := s.db.QueryRowContext(ctx, `SELECT model_json FROM projects WHERE name = ? COLLATE NOCASE`, name).Scan(&encoded); err != nil {
 		return model.ProjectModel{}, mapSQLError(err)
 	}
-	var definition model.ProjectModel
-	if err := json.Unmarshal(encoded, &definition); err != nil {
+	definition, err := decodeProjectModel(encoded)
+	if err != nil {
 		return model.ProjectModel{}, err
 	}
 	return definition, nil
@@ -148,7 +148,7 @@ func (s *Store) ProjectModel(ctx context.Context, name string) (model.ProjectMod
 
 func (s *Store) UpdateProjectDefinition(ctx context.Context, name string, expectedRevision int64, definition model.ProjectModel, sources []model.ProjectSource) (model.Project, error) {
 	definition.SuggestedName = name
-	modelJSON, err := json.Marshal(logicalDefinition(definition))
+	modelJSON, err := encodeProjectModel(logicalDefinition(definition))
 	if err != nil {
 		return model.Project{}, err
 	}
@@ -273,7 +273,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentN
 	if err != nil {
 		return model.Environment{}, err
 	}
-	modelJSON, err := json.Marshal(definition)
+	modelJSON, err := encodeProjectModel(definition)
 	if err != nil {
 		return model.Environment{}, err
 	}
@@ -420,15 +420,15 @@ WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, env
 	if err != nil {
 		return model.ProjectModel{}, mapSQLError(err)
 	}
-	var definition model.ProjectModel
-	if err := json.Unmarshal(encoded, &definition); err != nil {
+	definition, err := decodeProjectModel(encoded)
+	if err != nil {
 		return model.ProjectModel{}, err
 	}
 	return definition, nil
 }
 
 func (s *Store) ReplaceEnvironmentConfiguration(ctx context.Context, projectName, environmentName string, expectedRevision int64, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
-	modelJSON, err := json.Marshal(definition)
+	modelJSON, err := encodeProjectModel(definition)
 	if err != nil {
 		return model.Environment{}, err
 	}
@@ -482,7 +482,7 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 
 func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environmentName string, expectedEnvironmentRevision int64, environmentDefinition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
 	projectDefinition.SuggestedName = projectName
-	projectJSON, err := json.Marshal(logicalDefinition(projectDefinition))
+	projectJSON, err := encodeProjectModel(logicalDefinition(projectDefinition))
 	if err != nil {
 		return model.Environment{}, err
 	}
@@ -490,7 +490,7 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 	if err != nil {
 		return model.Environment{}, err
 	}
-	environmentJSON, err := json.Marshal(environmentDefinition)
+	environmentJSON, err := encodeProjectModel(environmentDefinition)
 	if err != nil {
 		return model.Environment{}, err
 	}
@@ -510,6 +510,25 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 	}
 	if expectedProjectRevision > 0 && projectRevision != expectedProjectRevision {
 		return model.Environment{}, ErrConflict
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM environments WHERE project_key = ? AND status != ? ORDER BY name COLLATE NOCASE`, projectKey, string(model.EnvironmentStopped))
+	if err != nil {
+		return model.Environment{}, err
+	}
+	var active []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return model.Environment{}, err
+		}
+		active = append(active, model.EnvironmentSelector(projectName, name))
+	}
+	if err := rows.Close(); err != nil {
+		return model.Environment{}, err
+	}
+	if len(active) > 0 {
+		return model.Environment{}, ActiveProjectEnvironmentsError{Environments: active}
 	}
 	var environmentKey string
 	var environmentRevision int64
@@ -832,8 +851,8 @@ func scanEnvironmentRow(scanner rowScanner) (environmentRow, error) {
 
 func (s *Store) hydrateEnvironment(ctx context.Context, row environmentRow) (model.Environment, error) {
 	selector := model.EnvironmentSelector(row.projectName, row.environment)
-	var definition model.ProjectModel
-	if err := json.Unmarshal(row.modelJSON, &definition); err != nil {
+	definition, err := decodeProjectModel(row.modelJSON)
+	if err != nil {
 		return model.Environment{}, fmt.Errorf("decode environment %s: %w", selector, err)
 	}
 	runtimeRows, err := s.db.QueryContext(ctx, `
@@ -902,9 +921,11 @@ FROM environment_sources WHERE environment_key = ? ORDER BY source_name COLLATE 
 			return nil, err
 		}
 		_ = json.Unmarshal(warningsJSON, &source.Warnings)
-		if err := json.Unmarshal(discoveryJSON, &source.Definition); err != nil {
+		definition, err := decodeProjectModel(discoveryJSON)
+		if err != nil {
 			return nil, err
 		}
+		source.Definition = definition
 		source.ScannedAt = parseTime(scannedAt)
 		result = append(result, source)
 	}
@@ -972,7 +993,7 @@ func insertSource(ctx context.Context, executor sqlExecutor, environmentKey stri
 		return err
 	}
 	warningsJSON, _ := json.Marshal(source.Warnings)
-	discoveryJSON, err := json.Marshal(source.Definition)
+	discoveryJSON, err := encodeProjectModel(source.Definition)
 	if err != nil {
 		return err
 	}
@@ -1012,6 +1033,28 @@ func logicalDefinition(input model.ProjectModel) model.ProjectModel {
 		result.Services[index].WorkingDirectory = ""
 	}
 	return result
+}
+
+const projectModelFormatVersion = 1
+
+type persistedProjectModel struct {
+	FormatVersion int                `json:"formatVersion"`
+	Definition    model.ProjectModel `json:"definition"`
+}
+
+func encodeProjectModel(definition model.ProjectModel) ([]byte, error) {
+	return json.Marshal(persistedProjectModel{FormatVersion: projectModelFormatVersion, Definition: definition})
+}
+
+func decodeProjectModel(encoded []byte) (model.ProjectModel, error) {
+	var persisted persistedProjectModel
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		return model.ProjectModel{}, err
+	}
+	if persisted.FormatVersion != projectModelFormatVersion {
+		return model.ProjectModel{}, fmt.Errorf("%w: found format %d, expected %d; reset application state and rediscover sources", ErrIncompatibleState, persisted.FormatVersion, projectModelFormatVersion)
+	}
+	return persisted.Definition, nil
 }
 
 func canonicalPath(path string) (string, error) {

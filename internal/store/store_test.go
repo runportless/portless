@@ -250,6 +250,24 @@ func TestOnlyOneRecordingIsActivePerEnvironment(t *testing.T) {
 	}
 }
 
+func TestLegacyProjectModelFailsWithExplicitFormatError(t *testing.T) {
+	ctx := context.Background()
+	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	if _, err := controlStore.CreateProject(ctx, "billing", testDefinition(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.DB().ExecContext(ctx, `UPDATE projects SET model_json = ? WHERE name = 'billing'`, []byte(`{"suggestedName":"billing"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.ProjectModel(ctx, "billing"); !errors.Is(err, ErrIncompatibleState) || !strings.Contains(err.Error(), "reset application state") {
+		t.Fatalf("legacy format error = %v", err)
+	}
+}
+
 func testDefinition() model.ProjectModel {
 	return model.ProjectModel{SuggestedName: "billing", PrimaryService: "checkout", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true, Command: []string{"node", "server.js"}, Health: model.HealthCheck{Kind: "http", Path: "/health"}}}}
 }

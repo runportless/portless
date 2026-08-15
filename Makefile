@@ -7,7 +7,7 @@ BINARY ?= bin/portless
 WEB_DEPENDENCIES := web/node_modules/.package-lock.json
 WEB_MANIFESTS := web/package.json web/package-lock.json
 
-.PHONY: build web test test-go test-web install clean reinstall-web-dependencies
+.PHONY: build web test test-go test-web test-e2e install clean reinstall-web-dependencies
 
 build: web
 	@mkdir -p "$(dir $(BINARY))"
@@ -29,6 +29,9 @@ test-web: $(WEB_DEPENDENCIES)
 	$(NPM) --prefix web run typecheck
 	$(NPM) --prefix web test
 	$(NPM) --prefix web run build
+
+test-e2e: build
+	PORTLESS_E2E_BINARY="$(abspath $(BINARY))" $(GO) test -count=1 -tags=e2e ./tests/e2e
 
 install: build
 	@install_directory="$${GOBIN:-$$($(GO) env GOPATH)/bin}"; \

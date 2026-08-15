@@ -32,7 +32,7 @@ func ResetDaemonApplicationState(ctx context.Context, paths Paths, force bool) (
 		if len(inspection.Identity.ActiveEnvironments) > 0 && !force {
 			return ResetStateResult{}, ControlRecord{}, &ActiveEnvironmentsError{Environments: append([]string(nil), inspection.Identity.ActiveEnvironments...)}
 		}
-		if _, err := stopVerifiedDaemon(ctx, paths, inspection, StopOptions{Timeout: 15 * time.Second}, true, "reset application state"); err != nil {
+		if _, err := stopVerifiedDaemon(ctx, paths, inspection, StopOptions{Force: force, Timeout: 15 * time.Second}, true, "reset application state"); err != nil {
 			return ResetStateResult{}, ControlRecord{}, err
 		}
 	} else if err := prepareStoppedDaemonForReset(ctx, paths, inspectErr); err != nil {

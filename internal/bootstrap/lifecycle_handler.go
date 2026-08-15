@@ -51,12 +51,7 @@ func (h *lifecycleHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 			writeDaemonError(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil)
 			return
 		}
-		identity, err := h.Status(request.Context())
-		if err != nil {
-			writeDaemonError(writer, http.StatusInternalServerError, "DAEMON_STATE_UNAVAILABLE", err.Error(), nil)
-			return
-		}
-		writeDaemonJSON(writer, http.StatusOK, identity)
+		writeDaemonJSON(writer, http.StatusOK, h.Identity(request.Context()))
 	case daemon.ShutdownPath:
 		if request.Method != http.MethodPost {
 			writer.Header().Set("Allow", http.MethodPost)
@@ -76,8 +71,11 @@ func (h *lifecycleHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		}
 		active, err := h.currentActiveEnvironments(request.Context())
 		if err != nil {
-			writeDaemonError(writer, http.StatusInternalServerError, "DAEMON_STATE_UNAVAILABLE", err.Error(), nil)
-			return
+			if !input.Force {
+				writeDaemonError(writer, http.StatusInternalServerError, "DAEMON_STATE_UNAVAILABLE", err.Error(), nil)
+				return
+			}
+			active = []string{}
 		}
 		if len(active) > 0 && !input.Force {
 			if !input.Handoff {
@@ -96,6 +94,23 @@ func (h *lifecycleHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		writeDaemonJSON(writer, http.StatusAccepted, daemon.ShutdownResponse{Stopping: true, Handoff: input.Handoff, InstanceID: h.identity.InstanceID, ActiveEnvironments: active})
 		h.shutdown()
 	}
+}
+
+// Identity always returns the authenticated process identity, even when the
+// application inventory is unreadable. Lifecycle authentication must remain
+// available for guarded recovery; ordinary shutdown and browser restart still
+// use Status and fail closed when active-environment safety cannot be proven.
+func (h *lifecycleHandler) Identity(ctx context.Context) daemon.Identity {
+	identity, err := h.Status(ctx)
+	if err == nil {
+		return identity
+	}
+	identity = h.identity
+	identity.ActiveEnvironments = []string{}
+	identity.HandoffReady = false
+	identity.RecoveryProblems = append([]string(nil), h.identity.RecoveryProblems...)
+	identity.RecoveryProblems = append(identity.RecoveryProblems, "active environment inventory is unavailable: "+err.Error())
+	return identity
 }
 
 func (h *lifecycleHandler) Status(ctx context.Context) (daemon.Identity, error) {

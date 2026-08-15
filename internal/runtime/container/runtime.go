@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/resource"
 )
 
 type RuntimeName string
@@ -63,18 +64,18 @@ type Runtime interface {
 	Name() RuntimeName
 	Probe(context.Context) ProbeResult
 	StartHost(context.Context) ProbeResult
-	Start(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error)
+	Start(context.Context, string, string, model.ServiceDefinition, resource.ContainerPlan, int64, string) (StartResult, error)
 	StopEnvironment(context.Context, string, bool) error
 	StopService(context.Context, string, string) error
 	ResetInstallation(context.Context) (ResetResult, error)
 }
 
 type Adopter interface {
-	Adopt(context.Context, string, string, model.ServiceDefinition, int64, string) (StartResult, error)
+	Adopt(context.Context, string, string, model.ServiceDefinition, resource.ContainerPlan, int64, string) (StartResult, error)
 }
 
 type Verifier interface {
-	Verify(context.Context, string, model.ServiceDefinition, int64, string) error
+	Verify(context.Context, string, model.ServiceDefinition, resource.ContainerPlan, int64, string) error
 }
 
 type Closer interface {

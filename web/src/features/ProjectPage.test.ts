@@ -86,8 +86,8 @@ describe('environment topology', () => {
     expect(serviceEndpoints({ name: 'orders', kind: 'process' } as Service, remoteBinding)).toEqual([
       { label: 'REMOTE PROVIDER', value: 'https://orders.qa.example.com', detail: 'qa · read-only', href: 'https://orders.qa.example.com' },
     ])
-    expect(serviceEndpoints({ name: 'postgres', kind: 'container', template: 'postgres', endpoints: [{ kind: 'public', protocol: 'postgres', host: 'postgres.local.store.portless.test', port: 5432, url: 'postgresql://postgres.local.store.portless.test:5432/portless' }] } as Service)[0].value).toBe('postgresql://postgres.local.store.portless.test:5432/portless')
-    expect(serviceEndpoints({ name: 'redis', kind: 'container', template: 'valkey', endpoints: [{ kind: 'public', protocol: 'redis', host: 'redis.local.store.portless.test', port: 6379, url: 'redis://redis.local.store.portless.test:6379' }] } as Service)[0].value).toBe('redis://redis.local.store.portless.test:6379')
+    expect(serviceEndpoints({ name: 'postgres', kind: 'resource', resource: { type: 'postgres', version: '17' }, endpoints: [{ kind: 'public', protocol: 'tcp', host: 'postgres.local.store.portless.test', port: 5432, url: 'tcp://postgres.local.store.portless.test:5432' }] } as Service)[0].value).toBe('tcp://postgres.local.store.portless.test:5432')
+    expect(serviceEndpoints({ name: 'redis', kind: 'resource', resource: { type: 'valkey', version: '8' }, endpoints: [{ kind: 'public', protocol: 'tcp', host: 'redis.local.store.portless.test', port: 6379, url: 'tcp://redis.local.store.portless.test:6379' }] } as Service)[0].value).toBe('tcp://redis.local.store.portless.test:6379')
   })
 
   it('renders copyable service endpoints on the overview', () => {
@@ -179,8 +179,8 @@ describe('environment topology', () => {
       services: ['checkout', 'orders', 'redis', 'postgres'].map(service),
       connections: [
         { source: 'checkout', target: 'orders', protocol: 'http', required: true },
-        { source: 'orders', target: 'redis', protocol: 'redis', required: true },
-        { source: 'orders', target: 'postgres', protocol: 'postgres', required: true },
+		{ source: 'orders', target: 'redis', protocol: 'tcp', binding: 'valkey', required: true },
+		{ source: 'orders', target: 'postgres', protocol: 'tcp', binding: 'postgres', required: true },
       ],
     } as Environment
 
@@ -218,8 +218,8 @@ describe('environment topology', () => {
       services: ['checkout', 'orders', 'redis'].map(service),
       connections: [
         { source: 'checkout', target: 'orders', protocol: 'http', required: true },
-        { source: 'checkout', target: 'redis', protocol: 'redis', required: true },
-        { source: 'orders', target: 'redis', protocol: 'redis', required: true },
+		{ source: 'checkout', target: 'redis', protocol: 'tcp', binding: 'valkey', required: true },
+		{ source: 'orders', target: 'redis', protocol: 'tcp', binding: 'valkey', required: true },
       ],
     } as Environment
 

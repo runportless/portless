@@ -27,17 +27,18 @@ postgres.local.billing.portless.test:5432
 redis.local.billing.portless.test:6379
 ```
 
-Processes and containers still receive private dynamic runtime ports. Portless allocates a distinct loopback IP to each public TCP endpoint and each directed service connection, so multiple projects can all expose Postgres on `5432` and Redis-compatible storage on `6379` without conflicts. A process receives a source-aware name such as `postgres.via-orders.local.billing.portless.test`; this preserves the exact caller for traffic, recordings, and faults. The first release reserves 64 such endpoint addresses across the installation and rejects a configuration atomically if that pool is exhausted.
+Processes and managed resource containers still receive private dynamic runtime ports. Portless allocates a distinct loopback IP to each public TCP endpoint and each directed service connection, so multiple projects can all expose conventional resource ports without conflicts. A process receives a source-aware name such as `postgres.via-orders.local.billing.portless.test`; this preserves the exact caller for traffic, recordings, and faults. The first release reserves 64 such endpoint addresses across the installation and rejects a configuration atomically if that pool is exhausted.
 
 ## What is implemented
 
 - One lazily started, machine-local Go daemon with an authenticated installation/instance/build handshake, plus one native Cobra CLI executable with generated nested help and shell completion.
-- Static Spring Boot/Gradle and NestJS discovery across one or many repositories, with Postgres and Redis-compatible hints.
+- Bounded, plugin-driven framework discovery for Spring Boot (Gradle and Maven), NestJS, Express, Fastify, Next.js, Go HTTP/RPC services, and FastAPI.
+- A separate managed-resource plugin registry in which each plugin owns static detection, declarative container provisioning, readiness, credentials, and process bindings. The built-in registry supports PostgreSQL 17, Valkey 8, MySQL 8.4, and NATS 2.
 - Reusable projects with independently runnable environments, per-environment checkout paths, and local, managed-container, or remote HTTP(S) providers.
 - Explicit remote classification and write policy; read-only targets reject unsafe methods before traffic leaves the machine.
 - Readable project and service names throughout the CLI, API, URLs, and UI; immutable ownership keys remain private.
 - Persistent per-service supervisors, dynamic ports, HTTP/TCP readiness, bounded structured process/container logs, dependency-aware environment and individual-service lifecycle, daemon-crash reconciliation, and durable operations.
-- Direct Docker Engine or Podman networks, volumes, Postgres 17, and Valkey 8 with generated local credentials. Docker Compose is not used.
+- Generic declarative Docker Engine or Podman networks, named volumes, generated local credentials, commands, and TCP/exec readiness. Docker Compose is not used.
 - Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
 - Unified, filtered HTTP/TCP traffic inspection with redacted request/response headers and durable detail lookup through recordings.
 - Named, bounded local recordings and JSON export.
@@ -72,7 +73,7 @@ The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin
 ## First run
 
 1. Run `portless setup` once. It asks for administrator approval to install the narrow loopback relay used by clean HTTP URLs and TCP endpoint DNS, then immediately drops to your user account. `portless relay install` is the explicit equivalent.
-2. Install and start Docker Engine or Podman if the project needs Postgres or Redis-compatible storage.
+2. Install and start Docker Engine or Podman if the project needs a managed resource.
 3. Enter a Spring Boot or NestJS repository.
 4. Run `portless up` to discover and start its `local` environment.
 5. Use the browser dashboard to inspect and control the running environment.
@@ -142,6 +143,7 @@ portless fault show slow-orders
 portless fault clear
 
 portless down
+portless down --all
 portless down --volumes --yes
 ```
 
@@ -158,9 +160,9 @@ Human-readable output is the default across the CLI. Add the global `--json` fla
 
 CLI color defaults to `auto`, which uses a restrained status palette only when output is going to an interactive terminal. `portless config color always` or `portless config color never` saves a machine-local preference in `~/.portless/preferences.json`; `portless config color auto` restores terminal detection. `portless config reset` removes all saved CLI preferences and restores their built-in defaults. The global `--no-color` flag and the `NO_COLOR` environment variable override the saved preference for one invocation. JSON, redirected output in `auto` mode, and generated completion scripts never contain ANSI color codes.
 
-Ordinary `down` preserves managed volumes, history, logs, and recordings. Volume removal requires the separate destructive flag and confirmation.
+Ordinary `down` preserves managed volumes, history, logs, and recordings. `portless down --all` ignores checkout ambiguity, requests shutdown for every active environment across all projects, and waits for every accepted operation while reporting all failures together. It cannot be combined with `--env`; add `--no-wait` to return after every shutdown request has been submitted. Volume removal requires the separate destructive flag and confirmation; `portless down --all --volumes --yes` also visits stopped environments so every managed environment volume is removed.
 
-`portless reset` previews a machine-wide application-state reset and does not change anything. `portless reset --yes` requires every environment to be stopped. `portless reset --force --yes` is the explicit recovery path for active, recovering, or unknown environments: it can first replace an authenticated outdated daemon while leaving runtimes in place, then stops every process supervisor whose private ownership record can be authenticated and removes installation-labeled runtime resources before erasing state. Both confirmed forms remove all projects, environments, traffic, recordings, faults, timelines, service logs, generated credentials, and every Portless-owned container, network, database volume, and cache volume from each container runtime Portless has used, then restart the daemon with an empty database. Force never authorizes killing an unverified process. If a previously used runtime is unavailable or runtime ownership cannot be proven, reset stops before erasing the ownership records so it can be retried safely. CLI preferences, the selected runtime, installation identity, authentication, and the privileged localhost relay installation are preserved. Use `portless config reset` instead when only CLI preferences should return to their defaults.
+`portless reset` previews a machine-wide application-state reset and does not change anything. `portless reset --yes` requires every environment to be stopped. `portless reset --force --yes` is the explicit recovery path for active, recovering, unknown, or format-incompatible environments: it can first replace an authenticated outdated daemon while leaving runtimes in place, then stops every process supervisor whose private ownership record can be authenticated and removes installation-labeled runtime resources before erasing state. Lifecycle authentication and reset planning use normalized ownership rows rather than the versioned project model, so the reset-and-rediscover path remains available even when ordinary environment commands cannot decode old state. Both confirmed forms remove all projects, environments, traffic, recordings, faults, timelines, service logs, generated credentials, and every Portless-owned container, network, database volume, and cache volume from each container runtime Portless has used, then restart the daemon with an empty database. Force never authorizes killing an unverified process. If a previously used runtime is unavailable or runtime ownership cannot be proven, reset stops before erasing the ownership records so it can be retried safely. CLI preferences, the selected runtime, installation identity, authentication, and the privileged localhost relay installation are preserved. Use `portless config reset` instead when only CLI preferences should return to their defaults.
 
 ## Uninstall Portless completely
 
@@ -236,7 +238,26 @@ portless env select billing/local
 portless up
 ```
 
-The initial `local` environment runs all application services from those checkouts and manages discovered Postgres/Valkey dependencies directly through Docker or Podman.
+The initial `local` environment runs all application services from those checkouts and manages discovered PostgreSQL, Valkey, MySQL, and NATS resources directly through Docker or Podman.
+
+Add another repository later without recreating the project. Stop every environment in the project first, then add the logical source while selecting the environment whose checkout path you are supplying:
+
+```bash
+portless --env billing/local project source add inventory --path ../inventory-service
+```
+
+The source and its discovered services become part of `billing`, but `../inventory-service` belongs only to `billing/local`. Portless leaves every other environment explicitly unconfigured instead of copying a machine-specific path. Give each one its own checkout or bind the new service remotely:
+
+```bash
+portless --env billing/qa-assisted env source inventory --path ../inventory-qa
+
+# Or use the QA service without a local inventory checkout.
+portless --env billing/qa-assisted env bind inventory \
+  --remote https://inventory.qa.example.com \
+  --classification qa --write-policy read-only --health-path /health
+```
+
+`portless up` refuses to start an environment until every newly declared component has a valid provider.
 
 Clone an environment when you want a different composition. Cloning copies configuration, not runtime state or data volumes, and does not require the source environment to stop:
 
@@ -272,7 +293,7 @@ portless --env billing/qa up
 
 ## No mandatory project file
 
-Portless starts with static discovery. It reads supported build manifests and example environment files; it never runs a Gradle task or package script during discovery. The discovered model is kept in the user-private SQLite database.
+Portless starts with static discovery. A registry of framework plugins discovers runnable applications, while a separate registry of resource plugins discovers managed dependencies and supplies their provisioning and connection semantics. Both read supported build manifests, source entrypoints, static configuration, and example environment files through a root-confined, size-bounded workspace; neither runs a build task, package script, container, or network request during discovery. Symlinks and non-regular files are not scanned, actual `.env` files are excluded, conflicting service or environment claims fail closed, and incomplete rescans do not replace the stored topology. The discovered model is kept in the user-private SQLite database.
 
 When a team wants a shareable declaration, this is additive rather than required:
 

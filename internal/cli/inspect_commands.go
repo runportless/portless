@@ -125,8 +125,8 @@ func serviceType(service model.ServiceDefinition) string {
 	if service.Framework != "" {
 		return service.Framework
 	}
-	if service.Template != "" {
-		return service.Template
+	if service.Resource != nil {
+		return service.Resource.Type
 	}
 	return string(service.Kind)
 }
@@ -313,7 +313,7 @@ func (c *CLI) listConnections(ctx context.Context, limit int) error {
 		if connection.Endpoint != nil {
 			endpoint = connection.Endpoint.URL
 		}
-		fmt.Fprintf(c.Out, "%-30s %-10s %-11s %s %-52s %s\n", connection.Source+":"+connection.Target, connection.Protocol, connection.TargetProvider, c.state(c.Out, fmt.Sprintf("%-12s", connection.TargetStatus)), endpoint, emptyAs(connection.InjectedEnvVar, "—"))
+		fmt.Fprintf(c.Out, "%-30s %-10s %-11s %s %-52s %s\n", connection.Source+":"+connection.Target, connection.Protocol, connection.TargetProvider, c.state(c.Out, fmt.Sprintf("%-12s", connection.TargetStatus)), endpoint, emptyAs(strings.Join(sortedMapKeys(connection.InjectedEnvironment), ", "), "—"))
 	}
 	return nil
 }
@@ -345,10 +345,28 @@ func (c *CLI) showConnection(ctx context.Context, edge string) error {
 	}
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Endpoint:", endpointURL)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Listener:", listener)
-	fmt.Fprintf(c.Out, "  %-18s %s\n", "Injected as:", emptyAs(connection.InjectedEnvVar, "none"))
-	fmt.Fprintf(c.Out, "  %-18s %s\n", "Injected value:", emptyAs(connection.InjectedValue, "not active"))
+	if len(connection.InjectedEnvironment) == 0 {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Injected values:", "none")
+	} else {
+		for index, key := range sortedMapKeys(connection.InjectedEnvironment) {
+			label := ""
+			if index == 0 {
+				label = "Injected values:"
+			}
+			fmt.Fprintf(c.Out, "  %-18s %s=%s\n", label, key, connection.InjectedEnvironment[key])
+		}
+	}
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Runtime target:", emptyAs(connection.RuntimeTarget, "not active"))
 	return nil
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func relative(value time.Time) string {

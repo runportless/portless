@@ -107,27 +107,16 @@ func AllocationSpecs(project, environment string, definition model.ProjectModel)
 // serviceTCPProtocol identifies services that should be reachable directly
 // from host tools even when no application connection currently targets them.
 func serviceTCPProtocol(service model.ServiceDefinition) (model.Protocol, bool) {
-	switch strings.ToLower(service.Template) {
-	case "postgres":
-		return model.ProtocolPostgres, true
-	case "redis", "valkey":
-		return model.ProtocolRedis, true
-	default:
-		if service.Port > 0 {
-			return model.ProtocolTCP, true
-		}
-		return "", false
+	if service.Kind == model.ServiceResource || service.Port > 0 {
+		return model.ProtocolTCP, true
 	}
+	return "", false
 }
 
 func AdvertisedPort(service model.ServiceDefinition, protocol model.Protocol) (int, error) {
 	port := service.Port
 	if port == 0 {
 		switch protocol {
-		case model.ProtocolPostgres:
-			port = 5432
-		case model.ProtocolRedis:
-			port = 6379
 		case model.ProtocolTCP:
 			return 0, fmt.Errorf("generic TCP service %s must declare a client-facing port", service.Name)
 		default:
@@ -153,10 +142,6 @@ func EndpointURL(protocol model.Protocol, host string, port int) string {
 	switch protocol {
 	case model.ProtocolHTTP:
 		return "http://" + address
-	case model.ProtocolPostgres:
-		return "postgresql://" + address + "/portless"
-	case model.ProtocolRedis:
-		return "redis://" + address
 	default:
 		return "tcp://" + address
 	}

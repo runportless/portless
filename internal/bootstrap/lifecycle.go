@@ -39,7 +39,7 @@ type ActiveEnvironmentsError struct {
 }
 
 func (e *ActiveEnvironmentsError) Error() string {
-	return fmt.Sprintf("daemon is managing active environments: %s; stop them first, or use `portless daemon restart --force` (or `stop --force`) to leave their processes and containers unmanaged", strings.Join(e.Environments, ", "))
+	return fmt.Sprintf("daemon is managing active environments: %s; stop them first with `portless down --all`, or use `portless daemon restart --force` (or `stop --force`) to leave their processes and containers unmanaged", strings.Join(e.Environments, ", "))
 }
 
 func StopDaemon(ctx context.Context, paths Paths, options StopOptions) (StopResult, error) {

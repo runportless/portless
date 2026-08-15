@@ -145,7 +145,7 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	for _, serviceDefinition := range definition.Services {
 		binding := bindingForEnvironment(environment, serviceDefinition.Name)
 		if binding.Provider == "" {
-			if serviceDefinition.Kind == model.ServiceContainer {
+			if serviceDefinition.Kind == model.ServiceResource {
 				binding.Provider = model.ProviderContainer
 			} else {
 				binding.Provider = model.ProviderLocal
@@ -444,7 +444,7 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 			}
 			binding := bindingForEnvironment(environment, service.Name)
 			if binding.Provider == "" {
-				if service.Kind == model.ServiceContainer {
+				if service.Kind == model.ServiceResource {
 					binding.Provider = model.ProviderContainer
 				} else {
 					binding.Provider = model.ProviderLocal

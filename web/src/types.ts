@@ -67,10 +67,9 @@ export interface HealthCheck { kind: string; path?: string; timeout: number; int
 
 export interface ServiceDefinition {
   name: string
-  kind: 'process' | 'container'
+  kind: 'process' | 'resource'
   framework?: string
-  template?: string
-  version?: string
+  resource?: { type: string; version: string }
   command?: string[]
   workingDirectory?: string
   portEnvironment?: string
@@ -81,7 +80,7 @@ export interface ServiceDefinition {
   evidence?: Evidence[]
 }
 
-export type Protocol = 'http' | 'tcp' | 'postgres' | 'redis'
+export type Protocol = 'http' | 'tcp'
 export type EndpointKind = 'public' | 'connection'
 export interface Endpoint {
   kind: EndpointKind
@@ -109,6 +108,7 @@ export interface Connection {
   source: string
   target: string
   protocol: Protocol
+  binding?: string
   environment?: string
   required: boolean
 }
@@ -118,8 +118,7 @@ export interface EffectiveConnection extends Connection {
   targetStatus: ServiceStatus
   endpoint?: Endpoint
   runtimeTarget?: string
-  injectedEnvVar?: string
-  injectedValue?: string
+  injectedEnvironment?: Record<string, string>
 }
 
 export interface ProjectSource { name: string; services?: string[] }

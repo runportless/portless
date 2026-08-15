@@ -46,6 +46,11 @@ type discoverResponse struct {
 	Warnings    []string          `json:"warnings"`
 }
 
+type projectSourceResponse struct {
+	discoverResponse
+	ConfigurationRequired []string `json:"configurationRequired"`
+}
+
 type upOutput struct {
 	Environment model.Environment `json:"environment"`
 	Operation   model.Operation   `json:"operation"`
@@ -449,23 +454,28 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 }
 
 func (c *CLI) down(ctx context.Context, selector string, options downOptions) error {
+	if options.all {
+		if selector != "" || strings.TrimSpace(c.environmentOverride) != "" {
+			return usageError("--all cannot be combined with --env or an environment selector")
+		}
+		client, _, err := bootstrap.Connect(ctx, c.paths)
+		if err != nil {
+			return err
+		}
+		return c.downAll(ctx, client, options)
+	}
 	client, environment, err := c.currentOrNamed(ctx, selector)
 	if err != nil {
 		return err
 	}
-	var operation model.Operation
-	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/down", map[string]any{"removeVolumes": options.volumes}, &operation); err != nil {
+	operation, err := c.startDown(ctx, client, environment, options.volumes)
+	if err != nil {
 		return err
 	}
 	if options.wait {
-		waitContext, cancel := context.WithTimeout(ctx, options.timeout)
-		defer cancel()
-		operation, err = c.waitOperation(waitContext, client, operation, c.jsonOutput)
+		operation, err = c.waitDown(ctx, client, operation, options.timeout, c.jsonOutput)
 		if err != nil {
 			return err
-		}
-		if operation.State != "succeeded" {
-			return errors.New(operation.Error)
 		}
 	}
 	if c.jsonOutput {
@@ -1121,6 +1131,43 @@ func (c *CLI) createProject(ctx context.Context, name string, sourceValues []str
 	return nil
 }
 
+func (c *CLI) addProjectSource(ctx context.Context, source, pathValue string) error {
+	sourcePath, err := absoluteSourcePath(pathValue)
+	if err != nil {
+		return err
+	}
+	client, environment, err := c.current(ctx)
+	if err != nil {
+		return err
+	}
+	var response projectSourceResponse
+	path := "/api/v1/projects/" + bootstrap.EscapePath(environment.Project) + "/sources"
+	input := map[string]string{"name": source, "path": sourcePath, "environment": environment.Name}
+	if err := client.Do(ctx, http.MethodPost, path, input, &response); err != nil {
+		return err
+	}
+	response.Warnings = nonNilStrings(response.Warnings)
+	if c.jsonOutput {
+		return writeJSON(c.Out, response)
+	}
+	c.printWarnings(response.Warnings)
+	fmt.Fprintf(c.Out, "%s source %s to project %s\n", c.success(c.Out, "added"), source, response.Project.Name)
+	fmt.Fprintf(c.Out, "%s now uses %s for source %s\n", model.EnvironmentSelector(response.Environment.Project, response.Environment.Name), sourcePath, source)
+	pending := nonNilStrings(response.ConfigurationRequired)
+	if len(pending) > 0 {
+		label := "environment requires"
+		if len(pending) != 1 {
+			label = "environments require"
+		}
+		fmt.Fprintf(c.Out, "%d other %s configuration: %s\n", len(pending), label, strings.Join(pending, ", "))
+		for _, selector := range pending {
+			fmt.Fprintln(c.Out, "  "+c.accent(c.Out, "portless --env "+selector+" env source "+source+" --path <checkout>"))
+		}
+		fmt.Fprintln(c.Out, "Or bind the new services remotely with `portless env bind`.")
+	}
+	return nil
+}
+
 func (c *CLI) exportProject(ctx context.Context, output string) error {
 	client, environment, err := c.current(ctx)
 	if err != nil {
@@ -1354,7 +1401,7 @@ func (c *CLI) selectEnvironment(ctx context.Context, selector string) error {
 	if _, err := c.loadEnvironment(ctx, client, selector); err != nil {
 		return err
 	}
-	root, err := currentSourceRoot()
+	root, err := currentSourceRoot(ctx)
 	if err != nil {
 		return err
 	}
@@ -1393,7 +1440,7 @@ func (c *CLI) clearEnvironmentSelection(ctx context.Context) error {
 	if c.environmentOverride != "" {
 		return usageError("--env cannot be used with env clear; clear always applies to the current checkout")
 	}
-	root, err := currentSourceRoot()
+	root, err := currentSourceRoot(ctx)
 	if err != nil {
 		return err
 	}
@@ -1553,7 +1600,7 @@ func (c *CLI) effectiveEnvironmentSelector(selector string) (string, error) {
 }
 
 func (c *CLI) resolveEnvironmentContext(ctx context.Context, client *bootstrap.Client) (environmentContextOutput, error) {
-	root, err := currentSourceRoot()
+	root, err := currentSourceRoot(ctx)
 	if err != nil {
 		return environmentContextOutput{}, err
 	}
@@ -1586,7 +1633,7 @@ func (c *CLI) resolveEnvironmentContext(ctx context.Context, client *bootstrap.C
 }
 
 func (c *CLI) environmentsForCurrentPath(ctx context.Context, client *bootstrap.Client) ([]model.Environment, error) {
-	root, err := currentSourceRoot()
+	root, err := currentSourceRoot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1600,13 +1647,16 @@ func (c *CLI) environmentsForCurrentPath(ctx context.Context, client *bootstrap.
 	return response.Environments, nil
 }
 
-func currentSourceRoot() (string, error) {
+func currentSourceRoot(ctx context.Context) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	root, err := discovery.FindRoot(cwd)
+	root, err := discovery.FindRoot(ctx, cwd)
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		root = cwd
 	}
 	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
@@ -1814,8 +1864,8 @@ func (c *CLI) printStatus(environment model.Environment) {
 		kind := string(service.Kind)
 		if service.Framework != "" {
 			kind = service.Framework
-		} else if service.Template != "" {
-			kind = service.Template
+		} else if service.Resource != nil {
+			kind = service.Resource.Type
 		}
 		provider := "local"
 		for _, binding := range environment.Bindings {

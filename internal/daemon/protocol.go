@@ -4,7 +4,7 @@ import "time"
 
 const (
 	Product         = "portless"
-	ProtocolVersion = "2"
+	ProtocolVersion = "2.0.0"
 	IdentityPath    = "/_portless/daemon/v1/identity"
 	ShutdownPath    = "/_portless/daemon/v1/shutdown"
 )

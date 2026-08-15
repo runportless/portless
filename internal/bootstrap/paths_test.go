@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/portless-run/portless/internal/api"
+	"github.com/portless-run/portless/internal/auth"
 	"github.com/portless-run/portless/internal/daemon"
 )
 
@@ -238,6 +240,65 @@ func TestResetRefusesMissingControlRecordWhileDaemonInstanceLockIsHeld(t *testin
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if err := prepareStoppedDaemonForReset(context.Background(), paths, os.ErrNotExist); err == nil || !strings.Contains(err.Error(), "instance lock is still held") {
 		t.Fatalf("unexpected missing-control reset error: %v", err)
+	}
+}
+
+func TestForcedResetPropagatesForceToActiveDaemonShutdown(t *testing.T) {
+	paths, err := ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.OwnershipKey, []byte("installation-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authManager, err := auth.LoadOrCreate(paths.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installationID, err := InstallationID(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildID, err := CurrentBuildID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := daemon.Identity{
+		Product: daemon.Product, ProtocolVersion: daemon.ProtocolVersion, APIVersion: api.APIVersion,
+		InstallationID: installationID, InstanceID: "active-reset-instance", BuildID: buildID,
+		PID: os.Getpid(), StartedAt: time.Now().UTC(),
+	}
+	var shutdowns atomic.Int32
+	handler := &lifecycleHandler{
+		next: http.NotFoundHandler(), auth: authManager, identity: identity,
+		activeEnvironments: func(context.Context) ([]string, error) { return []string{"store/local"}, nil },
+		shutdown: func() {
+			shutdowns.Add(1)
+			_ = os.Remove(paths.Control)
+		},
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	record := ControlRecord{
+		PID: identity.PID, Port: server.Listener.Addr().(*net.TCPAddr).Port,
+		ProtocolVersion: identity.ProtocolVersion, APIVersion: identity.APIVersion,
+		InstallationID: identity.InstallationID, InstanceID: identity.InstanceID, BuildID: identity.BuildID,
+		TokenPath: paths.Token, StartedAt: identity.StartedAt,
+	}
+	if err := writeControl(paths, record); err != nil {
+		t.Fatal(err)
+	}
+	// Stop after the authenticated shutdown. The reset preflight error keeps this
+	// test from spawning a replacement daemon while still proving that an active
+	// daemon accepted the forced shutdown request.
+	if err := os.Symlink(t.TempDir(), filepath.Join(paths.Root, "environments")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResetDaemonApplicationState(context.Background(), paths, true); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("forced reset did not reach application-state preflight: %v", err)
+	}
+	if shutdowns.Load() != 1 {
+		t.Fatalf("active daemon shutdowns = %d, want 1", shutdowns.Load())
 	}
 }
 

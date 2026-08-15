@@ -22,7 +22,11 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
   const projectRows = projects.map((project) => projectOverview(project, environments))
   const summarized = selectedProject ? shown : projectRows
   const counts = summarized.reduce<Record<string, number>>((result, item) => { result[item.status] = (result[item.status] ?? 0) + 1; return result }, {})
-  const sourceRows = selectedProject?.sources?.map((source) => ({ ...source, checkouts: sourceCheckouts(shown, source.name) })) ?? []
+  const sourceRows = selectedProject?.sources?.map((source) => ({
+    ...source,
+    checkouts: sourceCheckouts(shown, source.name),
+    unbound: sourceUnboundEnvironments(shown, source.name, source.services ?? []),
+  })) ?? []
   useEffect(() => {
     if (createOpen) nameInput.current?.focus()
   }, [createOpen])
@@ -86,7 +90,7 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
         const ready = environment.services.filter((service) => service.status === 'ready').length
         const remote = environment.bindings?.filter((binding) => binding.provider === 'remote').length || 0
         return <button className="table-row environment-row" key={`${environment.project}/${environment.name}`} onClick={() => onNavigate(environmentRoute(environment))}>
-          <span><StatusMark status={environment.status} /></span><strong>{environment.project}</strong><code>{environment.name}</code><span>{ready}/{environment.services.length}</span><span className={remote ? 'warning-text' : ''}>{remote || '—'}</span><span>{relativeTime(environment.updatedAt)}</span><span className="muted truncate">{environment.reason || (environment.status === 'stopped' ? 'not running' : environment.status === 'healthy' ? 'all required services are ready' : 'state is being reconciled')}</span>
+          <span><StatusMark status={environment.status} /></span><strong>{environment.project}</strong><code>{environment.name}</code><span>{ready}/{environment.services.length}</span><span className={remote ? 'warning-text' : ''}>{remote || '—'}</span><span>{relativeTime(environment.updatedAt)}</span><span className={environment.issues?.length ? 'warning-text truncate' : 'muted truncate'}>{environment.reason || environment.issues?.[0]?.message || (environment.status === 'stopped' ? 'not running' : environment.status === 'healthy' ? 'all required services are ready' : 'state is being reconciled')}</span>
         </button>
       })}
     </section> : <section className="empty-environment panel"><div><div className="eyebrow">No environments yet</div><h2>Start one repository or assemble several.</h2><p>For one repository, run:</p><pre><span>$</span> portless up</pre><p>For several repositories, create one project and name each source:</p><pre><span>$</span> portless project create billing --source checkout=../checkout --source ledger=../ledger</pre></div></section>
@@ -102,9 +106,11 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
       <div className="table-row table-row--header project-source-row"><span>Source</span><span>Filesystem bindings</span><span>Services</span></div>
       {sourceRows.map((source) => <div className="table-row project-source-row" key={source.name}>
         <strong>{source.name}</strong>
-        <div className="project-source-bindings">{source.checkouts.length > 0 ? source.checkouts.map((checkout) => <div className="project-source-binding" key={checkout.path}>
+        <div className="project-source-bindings">{source.checkouts.map((checkout) => <div className="project-source-binding" key={checkout.path}>
           <StatusMark status={checkout.status} label={false} /><code className="truncate" title={checkout.path}>{checkout.path}</code><small>{checkout.environments.join(', ')}</small>
-        </div>) : <span className="muted">not bound in an environment</span>}</div>
+        </div>)}{source.unbound.map((environment) => <div className="project-source-binding" key={`unbound-${environment.name}`}>
+          <StatusMark status={environment.configurationRequired ? 'degraded' : 'unknown'} label={false} /><span className={environment.configurationRequired ? 'warning-text truncate' : 'muted truncate'}>{environment.configurationRequired ? 'configuration required' : 'not bound locally'}</span><small>{environment.name}</small>
+        </div>)}</div>
         <span className="muted truncate" title={source.services?.join(', ')}>{source.services?.join(', ') || '—'}</span>
       </div>)}
     </section>}
@@ -186,4 +192,15 @@ function sourceCheckouts(environments: Environment[], sourceName: string) {
     environments: checkout.environments,
     status: checkout.statuses.every((status) => status === checkout.statuses[0]) ? checkout.statuses[0] : 'unknown',
   }))
+}
+
+function sourceUnboundEnvironments(environments: Environment[], sourceName: string, services: string[]) {
+  const serviceNames = new Set(services.map((service) => service.toLowerCase()))
+  return environments.flatMap((environment) => {
+    if ((environment.sources ?? []).some((source) => source.name.toLowerCase() === sourceName.toLowerCase())) return []
+    const configurationRequired = (environment.issues ?? []).some((issue) =>
+      (issue.code === 'MISSING_BINDING' || issue.code === 'MISSING_SOURCE') && Boolean(issue.subject) && serviceNames.has(issue.subject!.toLowerCase()),
+    )
+    return [{ name: environment.name, configurationRequired }]
+  })
 }

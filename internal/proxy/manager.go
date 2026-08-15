@@ -170,8 +170,8 @@ func (m *Manager) EnsureEdgeAtPort(ctx context.Context, scope string, connection
 }
 
 // EnsureEdgeAtAddress binds a directed edge to an exact loopback address. A
-// distinct address lets multiple Postgres or Redis edges use their conventional
-// port while preserving source identity for traffic controls.
+// distinct address lets multiple resource edges use the same conventional
+// client port while preserving source identity for traffic controls.
 func (m *Manager) EnsureEdgeAtAddress(ctx context.Context, scope string, connection model.Connection, requestedAddress string) (string, error) {
 	parsed, err := net.ResolveTCPAddr("tcp", requestedAddress)
 	if err != nil || parsed.IP == nil || !parsed.IP.IsLoopback() || parsed.Port < 1 || parsed.Port > 65535 {

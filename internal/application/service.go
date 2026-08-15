@@ -21,6 +21,8 @@ import (
 	"github.com/portless-run/portless/internal/project/compiler"
 	"github.com/portless-run/portless/internal/project/discovery"
 	"github.com/portless-run/portless/internal/proxy"
+	"github.com/portless-run/portless/internal/resource"
+	resourcebuiltin "github.com/portless-run/portless/internal/resource/builtin"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/runtime/container/docker"
 	"github.com/portless-run/portless/internal/runtime/container/podman"
@@ -48,6 +50,14 @@ type ResetRuntimeResult struct {
 	Runtimes  []container.ResetResult `json:"runtimes"`
 }
 
+type ResetPlan struct {
+	Projects                  int      `json:"projects"`
+	Environments              int      `json:"environments"`
+	ManagedVolumeEnvironments int      `json:"managedVolumeEnvironments"`
+	ActiveEnvironments        []string `json:"activeEnvironments"`
+	TopologyIncompatible      bool     `json:"topologyIncompatible"`
+}
+
 type EnvironmentContext struct {
 	Resolution  string              `json:"resolution"`
 	Environment *model.Environment  `json:"environment,omitempty"`
@@ -71,6 +81,8 @@ type Config struct {
 	InstallationKey  string
 	DaemonInstanceID string
 	Executable       string
+	Discoverer       discovery.Discoverer
+	Resources        *resource.Registry
 }
 
 type Service struct {
@@ -88,18 +100,34 @@ type Service struct {
 	projectLocks         map[string]*sync.Mutex
 	containerEnvironment map[string]map[string]string
 	sourceLeases         map[string]string
+	discoverer           discovery.Discoverer
+	resources            *resource.Registry
 }
 
 func New(controlStore *store.Store, broker *events.Broker, config Config) *Service {
+	resources := config.Resources
+	if resources == nil {
+		resources = resourcebuiltin.Registry()
+	}
+	discoverer := config.Discoverer
+	if discoverer == nil {
+		created, err := discovery.NewDefault(discovery.Config{Resources: resources})
+		if err != nil {
+			panic("construct default discovery engine: " + err.Error())
+		}
+		discoverer = created
+	}
 	service := &Service{
 		store: controlStore, broker: broker, dataDirectory: config.DataDirectory,
 		installationKey: config.InstallationKey, daemonInstanceID: config.DaemonInstanceID,
 		projectLocks: make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string), sourceLeases: make(map[string]string),
+		discoverer: discoverer, resources: resources,
 	}
 	service.proxy = proxy.NewManager(controlStore, broker)
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
 	service.containers = container.NewManager(
 		filepath.Join(config.DataDirectory, "runtime.json"),
+		resources,
 		podman.New(config.InstallationKey, temporaryRoot),
 		docker.New(config.InstallationKey, temporaryRoot),
 	)
@@ -137,7 +165,7 @@ type SourceInput struct {
 }
 
 func (s *Service) Discover(ctx context.Context, path, requestedName string) (model.Project, model.Environment, []string, error) {
-	result, err := discovery.Discover(path)
+	result, err := s.discoverer.Discover(ctx, path)
 	if err != nil {
 		return model.Project{}, model.Environment{}, nil, err
 	}
@@ -181,7 +209,7 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 		if !filepath.IsAbs(input.Path) {
 			return model.Project{}, model.Environment{}, warnings, fmt.Errorf("source %s path must be absolute", input.Name)
 		}
-		result, err := discovery.Discover(input.Path)
+		result, err := s.discoverer.Discover(ctx, input.Path)
 		if err != nil {
 			return model.Project{}, model.Environment{}, warnings, fmt.Errorf("discover source %s: %w", input.Name, err)
 		}
@@ -215,6 +243,63 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 	return s.decorateProject(project), s.decorateEnvironment(environment), warnings, nil
 }
 
+func (s *Service) AddProjectSource(ctx context.Context, projectName, environmentName, sourceName, path string) (model.Project, model.Environment, []string, error) {
+	sourceName = model.NormalizeDNSName(sourceName)
+	if err := model.ValidateSourceName(sourceName); err != nil {
+		return model.Project{}, model.Environment{}, nil, err
+	}
+	if !filepath.IsAbs(path) {
+		return model.Project{}, model.Environment{}, nil, errors.New("source path must be absolute")
+	}
+	project, err := s.store.Project(ctx, projectName)
+	if err != nil {
+		return model.Project{}, model.Environment{}, nil, err
+	}
+	projectDefinition, err := s.store.ProjectModel(ctx, projectName)
+	if err != nil {
+		return model.Project{}, model.Environment{}, nil, err
+	}
+	environment, err := s.store.Environment(ctx, projectName, environmentName)
+	if err != nil {
+		return model.Project{}, model.Environment{}, nil, err
+	}
+
+	result, err := s.discoverer.Discover(ctx, path)
+	if err != nil {
+		return model.Project{}, model.Environment{}, nil, fmt.Errorf("discover source %s: %w", sourceName, err)
+	}
+	source := model.SourceBinding{
+		Name: sourceName, Path: result.Root, Status: "ready", Warnings: result.Warnings,
+		ScannedAt: time.Now().UTC(), Definition: result.Model,
+	}
+	projectDefinition, projectSources, defaults, err := compiler.AddSource(projectDefinition, project.Sources, source)
+	if err != nil {
+		return model.Project{}, model.Environment{}, result.Warnings, err
+	}
+	sources := append([]model.SourceBinding{}, environment.Sources...)
+	sources = append(sources, source)
+	bindings := append([]model.ComponentBinding{}, environment.Bindings...)
+	bindings = append(bindings, defaults...)
+	compiled := compiler.Compile(projectDefinition, sources, bindings)
+	if len(compiled.Issues) > 0 {
+		return model.Project{}, model.Environment{}, result.Warnings, compiler.ConfigurationError{Issues: compiled.Issues}
+	}
+	updated, err := s.store.ReplaceProjectAndEnvironmentConfiguration(
+		ctx, projectName, project.Revision, projectDefinition, projectSources,
+		environmentName, environment.Revision, compiled.Definition, sources, compiled.Bindings,
+	)
+	if err != nil {
+		return model.Project{}, model.Environment{}, result.Warnings, err
+	}
+	project, err = s.store.Project(ctx, projectName)
+	if err != nil {
+		return model.Project{}, model.Environment{}, result.Warnings, err
+	}
+	scope := model.EnvironmentSelector(projectName, environmentName)
+	_, _ = s.timeline(ctx, scope, "CLI", "project.source_added", sourceName, "info", "Added project source "+sourceName, map[string]any{"path": result.Root})
+	return s.decorateProject(project), s.decorateEnvironment(updated), result.Warnings, nil
+}
+
 func (s *Service) Rescan(ctx context.Context, projectName, environmentName string) (model.Environment, []string, error) {
 	environment, err := s.store.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -225,7 +310,7 @@ func (s *Service) Rescan(ctx context.Context, projectName, environmentName strin
 	}
 	var warnings []string
 	for index := range environment.Sources {
-		result, err := discovery.Discover(environment.Sources[index].Path)
+		result, err := s.discoverer.Discover(ctx, environment.Sources[index].Path)
 		if err != nil {
 			return model.Environment{}, warnings, fmt.Errorf("rescan source %s: %w", environment.Sources[index].Name, err)
 		}
@@ -297,7 +382,17 @@ func (s *Service) Environments(ctx context.Context, projectName string) ([]model
 	if err != nil {
 		return nil, err
 	}
+	definitions := make(map[string]model.ProjectModel)
 	for index := range environments {
+		definition, ok := definitions[environments[index].Project]
+		if !ok {
+			definition, err = s.store.ProjectModel(ctx, environments[index].Project)
+			if err != nil {
+				return nil, err
+			}
+			definitions[environments[index].Project] = definition
+		}
+		environments[index].Issues = compiler.Compile(definition, environments[index].Sources, environments[index].Bindings).Issues
 		environments[index] = s.decorateEnvironment(environments[index])
 	}
 	return environments, nil
@@ -338,8 +433,9 @@ func (s *Service) SetBinding(ctx context.Context, projectName, environmentName, 
 	}
 	found := false
 	for _, service := range projectDefinition.Services {
-		if service.Name == serviceName {
+		if strings.EqualFold(service.Name, serviceName) {
 			found = true
+			serviceName = service.Name
 			switch binding.Provider {
 			case model.ProviderLocal:
 				if service.Kind != model.ServiceProcess {
@@ -350,8 +446,8 @@ func (s *Service) SetBinding(ctx context.Context, projectName, environmentName, 
 				}
 				binding.Remote = nil
 			case model.ProviderContainer:
-				if service.Kind != model.ServiceContainer {
-					return model.Environment{}, errors.New("only managed dependency templates can use the container provider")
+				if service.Kind != model.ServiceResource {
+					return model.Environment{}, errors.New("only managed resources can use the container provider")
 				}
 				binding.Source, binding.Remote = "", nil
 			case model.ProviderRemote:
@@ -371,27 +467,47 @@ func (s *Service) SetBinding(ctx context.Context, projectName, environmentName, 
 		return model.Environment{}, store.ErrNotFound
 	}
 	binding.Service = serviceName
+	replaced := false
 	for index := range environment.Bindings {
-		if environment.Bindings[index].Service == serviceName {
+		if strings.EqualFold(environment.Bindings[index].Service, serviceName) {
 			environment.Bindings[index] = binding
-			found = true
+			replaced = true
 			break
 		}
 	}
+	if !replaced {
+		environment.Bindings = append(environment.Bindings, binding)
+	}
 	compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings)
-	if len(compiled.Issues) > 0 {
+	if !configurationCanBeSaved(compiled.Issues) {
 		return model.Environment{}, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.store.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
+	updated, err := s.store.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, environment.Bindings)
 	if err != nil {
 		return model.Environment{}, err
 	}
+	updated.Issues = compiled.Issues
 	return s.decorateEnvironment(updated), nil
 }
 
 func (s *Service) SetSource(ctx context.Context, projectName, environmentName, sourceName, path string) (model.Environment, []string, error) {
 	if !filepath.IsAbs(path) {
 		return model.Environment{}, nil, errors.New("source path must be absolute")
+	}
+	project, err := s.store.Project(ctx, projectName)
+	if err != nil {
+		return model.Environment{}, nil, err
+	}
+	var declared *model.ProjectSource
+	for index := range project.Sources {
+		if strings.EqualFold(project.Sources[index].Name, sourceName) {
+			declared = &project.Sources[index]
+			sourceName = project.Sources[index].Name
+			break
+		}
+	}
+	if declared == nil {
+		return model.Environment{}, nil, store.ErrNotFound
 	}
 	environment, err := s.store.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -400,7 +516,7 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 	if environment.Status != model.EnvironmentStopped {
 		return model.Environment{}, nil, errors.New("environment must be stopped before a source changes")
 	}
-	result, err := discovery.Discover(path)
+	result, err := s.discoverer.Discover(ctx, path)
 	if err != nil {
 		return model.Environment{}, nil, fmt.Errorf("discover source %s: %w", sourceName, err)
 	}
@@ -416,25 +532,37 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 		}
 	}
 	if !found {
-		return model.Environment{}, result.Warnings, store.ErrNotFound
-	}
-	project, err := s.store.Project(ctx, projectName)
-	if err != nil {
-		return model.Environment{}, result.Warnings, err
+		environment.Sources = append(environment.Sources, model.SourceBinding{
+			Name: sourceName, Path: result.Root, Status: "ready", Warnings: result.Warnings,
+			ScannedAt: time.Now().UTC(), Definition: result.Model,
+		})
 	}
 	projectDefinition, err := s.store.ProjectModel(ctx, projectName)
 	if err != nil {
 		return model.Environment{}, result.Warnings, err
 	}
-	projectDefinition = compiler.RefreshDiscoveredTopology(projectDefinition, environment.Sources)
+	for _, serviceName := range declared.Services {
+		if _, exists := bindingByName(environment.Bindings, serviceName); !exists {
+			environment.Bindings = append(environment.Bindings, model.ComponentBinding{Service: serviceName, Provider: model.ProviderLocal, Source: sourceName})
+		}
+	}
+	for _, service := range projectDefinition.Services {
+		if service.Kind != model.ServiceResource {
+			continue
+		}
+		if _, exists := bindingByName(environment.Bindings, service.Name); !exists {
+			environment.Bindings = append(environment.Bindings, model.ComponentBinding{Service: service.Name, Provider: model.ProviderContainer})
+		}
+	}
 	compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings)
-	if len(compiled.Issues) > 0 {
+	if !configurationCanBeSaved(compiled.Issues) {
 		return model.Environment{}, result.Warnings, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.store.ReplaceProjectAndEnvironmentConfiguration(ctx, projectName, project.Revision, projectDefinition, project.Sources, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
+	updated, err := s.store.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, environment.Bindings)
 	if err != nil {
 		return model.Environment{}, result.Warnings, err
 	}
+	updated.Issues = compiled.Issues
 	scope := model.EnvironmentSelector(projectName, environmentName)
 	_, _ = s.timeline(ctx, scope, "CLI", "environment.source_changed", sourceName, "info", "Source "+sourceName+" now uses "+result.Root, nil)
 	return s.decorateEnvironment(updated), result.Warnings, nil
@@ -498,8 +626,16 @@ func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, i
 	if s.resetting {
 		return model.Operation{}, errors.New("Portless reset preparation is in progress")
 	}
-	if _, err := s.store.Environment(ctx, projectName, environmentName); err != nil {
+	environment, err := s.store.Environment(ctx, projectName, environmentName)
+	if err != nil {
 		return model.Operation{}, err
+	}
+	projectDefinition, err := s.store.ProjectModel(ctx, projectName)
+	if err != nil {
+		return model.Operation{}, err
+	}
+	if compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings); len(compiled.Issues) > 0 {
+		return model.Operation{}, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
 	operation, err := s.store.CreateOperation(ctx, scope, "up", actor, idempotencyKey)
@@ -562,7 +698,11 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 		if provider == "" {
 			provider = bindingForEnvironment(environment, connection.Target).Provider
 			if provider == "" {
-				provider = model.ProviderLocal
+				if target.Kind == model.ServiceResource {
+					provider = model.ProviderContainer
+				} else {
+					provider = model.ProviderLocal
+				}
 			}
 		}
 		if runtimeTarget == "" && provider == model.ProviderRemote {
@@ -585,14 +725,23 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 			value := allocation.Endpoint(model.EndpointConnection)
 			endpoint = &value
 		}
-		injected := "not active"
-		if proxyAddress != "" {
-			injected = safeInjectedValue(connection, endpoint)
+		targetDefinition, targetExists := serviceDefinitionForEnvironment(environment, connection.Target)
+		injected := map[string]string{}
+		if targetExists && connection.Environment != "" {
+			host, port := "", 0
+			if endpoint != nil {
+				host, port = endpoint.Host, endpoint.Port
+			}
+			binding, bindingErr := s.connectionBinding(targetDefinition, connection, host, port, s.containerEnvironmentFor(scope, connection.Target), proxyAddress != "" && endpoint != nil)
+			if bindingErr != nil {
+				return nil, bindingErr
+			}
+			injected = binding.SafeValues
 		}
 		result = append(result, model.EffectiveConnection{
 			Connection: connection, TargetProvider: provider, TargetStatus: target.Status,
 			Endpoint: endpoint, RuntimeTarget: runtimeTarget,
-			InjectedEnvVar: connection.Environment, InjectedValue: injected,
+			InjectedEnvironment: injected,
 		})
 	}
 	return result, nil
@@ -620,8 +769,11 @@ func (s *Service) ServiceConfiguration(ctx context.Context, projectName, environ
 		return model.ServiceConfiguration{}, err
 	}
 	for _, connection := range connections {
-		if connection.Source == serviceName && connection.InjectedEnvVar != "" {
-			values = append(values, model.ConfigurationValue{Key: connection.InjectedEnvVar, Value: connection.InjectedValue, Classification: "generated", Source: "Portless connection " + connection.Source + ":" + connection.Target})
+		if connection.Source != serviceName {
+			continue
+		}
+		for key, value := range connection.InjectedEnvironment {
+			values = append(values, model.ConfigurationValue{Key: key, Value: value, Classification: "generated", Source: "Portless connection " + connection.Source + ":" + connection.Target})
 		}
 	}
 	sort.Slice(values, func(i, j int) bool { return values[i].Key < values[j].Key })
@@ -648,6 +800,13 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 	environment, err := s.store.Environment(ctx, projectName, environmentName)
 	if err != nil {
 		return model.Operation{}, err
+	}
+	projectDefinition, err := s.store.ProjectModel(ctx, projectName)
+	if err != nil {
+		return model.Operation{}, err
+	}
+	if compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings); len(compiled.Issues) > 0 {
+		return model.Operation{}, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
 	_, ok := serviceDefinitionForEnvironment(environment, serviceName)
 	if !ok {
@@ -858,7 +1017,7 @@ func (s *Service) UseRuntime(ctx context.Context, value string) (container.Statu
 		}
 		for _, environment := range environments {
 			for _, service := range environment.Services {
-				if service.Kind != model.ServiceContainer {
+				if service.Kind != model.ServiceResource {
 					continue
 				}
 				switch service.Status {
@@ -886,18 +1045,12 @@ func (s *Service) PrepareReset(ctx context.Context, force bool) (result ResetRun
 			s.resetting = false
 		}
 	}()
-	environments, err := s.store.ListEnvironments(ctx, "")
+	inventory, err := s.store.RuntimeInventory(ctx)
 	if err != nil {
 		return result, err
 	}
-	active := make([]string, 0)
-	for _, environment := range environments {
-		if environment.Status != model.EnvironmentStopped {
-			active = append(active, model.EnvironmentSelector(environment.Project, environment.Name))
-		}
-	}
+	active := activeRuntimeEnvironments(inventory)
 	if len(active) > 0 && !force {
-		sort.Strings(active)
 		return result, ResetActiveEnvironmentsError{Environments: active}
 	}
 	running, err := s.store.RunningOperationScopes(ctx)
@@ -907,12 +1060,74 @@ func (s *Service) PrepareReset(ctx context.Context, force bool) (result ResetRun
 	if len(running) > 0 {
 		return result, fmt.Errorf("environment operations are still running: %s; wait for them to finish, then retry", strings.Join(running, ", "))
 	}
-	result.Processes, err = s.stopResetSupervisors(ctx, environments)
+	result.Processes, err = s.stopResetSupervisors(ctx, inventory)
 	if err != nil {
 		return result, err
 	}
 	result.Runtimes, err = s.containers.ResetInstallations(ctx)
 	return result, err
+}
+
+func (s *Service) ActiveEnvironments(ctx context.Context) ([]string, error) {
+	inventory, err := s.store.RuntimeInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return activeRuntimeEnvironments(inventory), nil
+}
+
+func (s *Service) ResetPlan(ctx context.Context) (ResetPlan, error) {
+	inventory, err := s.store.RuntimeInventory(ctx)
+	if err != nil {
+		return ResetPlan{}, err
+	}
+	projects := make(map[string]struct{})
+	managed := make(map[string]struct{})
+	for _, environment := range inventory {
+		projects[environment.Project] = struct{}{}
+		selector := model.EnvironmentSelector(environment.Project, environment.Environment)
+		for _, runtime := range environment.Services {
+			if runtime.ContainerName != "" {
+				managed[selector] = struct{}{}
+			}
+		}
+	}
+	compatible := true
+	environments, modelErr := s.store.ListEnvironments(ctx, "")
+	if modelErr == nil {
+		_, modelErr = s.store.ListProjects(ctx)
+	}
+	switch {
+	case modelErr == nil:
+		for _, environment := range environments {
+			selector := model.EnvironmentSelector(environment.Project, environment.Name)
+			for _, service := range environment.Services {
+				if service.Kind == model.ServiceResource {
+					managed[selector] = struct{}{}
+					break
+				}
+			}
+		}
+	case errors.Is(modelErr, store.ErrIncompatibleState):
+		compatible = false
+	default:
+		return ResetPlan{}, modelErr
+	}
+	return ResetPlan{
+		Projects: len(projects), Environments: len(inventory), ManagedVolumeEnvironments: len(managed),
+		ActiveEnvironments: activeRuntimeEnvironments(inventory), TopologyIncompatible: !compatible,
+	}, nil
+}
+
+func activeRuntimeEnvironments(inventory []store.EnvironmentRuntimeInventory) []string {
+	active := make([]string, 0, len(inventory))
+	for _, environment := range inventory {
+		if environment.Status != model.EnvironmentStopped {
+			active = append(active, model.EnvironmentSelector(environment.Project, environment.Environment))
+		}
+	}
+	sort.Strings(active)
+	return active
 }
 
 func (s *Service) CancelReset() {
@@ -921,53 +1136,48 @@ func (s *Service) CancelReset() {
 	s.resetGate.Unlock()
 }
 
-func (s *Service) stopResetSupervisors(ctx context.Context, environments []model.Environment) (int, error) {
+func (s *Service) stopResetSupervisors(ctx context.Context, environments []store.EnvironmentRuntimeInventory) (int, error) {
 	stopped := 0
 	for _, environment := range environments {
-		scope := model.EnvironmentSelector(environment.Project, environment.Name)
-		for _, service := range environment.Services {
-			if service.Kind != model.ServiceProcess {
-				continue
-			}
-			runtime, err := s.store.ServiceRuntime(ctx, scope, service.Name)
-			if err != nil {
-				return stopped, err
-			}
+		scope := model.EnvironmentSelector(environment.Project, environment.Environment)
+		for _, runtime := range environment.Services {
+			serviceName := runtime.ServiceName
 			if runtime.SupervisorSocket == "" && runtime.PrivateRunKey == "" && runtime.SupervisorState == "" {
 				continue
 			}
 			if runtime.SupervisorSocket == "" || runtime.PrivateRunKey == "" || runtime.SupervisorState == "" {
-				return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s because its supervisor ownership record is incomplete", scope, service.Name)
+				return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s because its supervisor ownership record is incomplete", scope, serviceName)
 			}
 			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			status, liveErr := supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
 			cancel()
 			if liveErr != nil {
-				status, err = supervisor.StatusFor(ctx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
-				if err != nil {
-					return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s: %w", scope, service.Name, liveErr)
+				var statusErr error
+				status, statusErr = supervisor.StatusFor(ctx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
+				if statusErr != nil {
+					return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s: %w", scope, serviceName, liveErr)
 				}
-				if err := validateResetSupervisor(status, scope, service.Name, runtime.Generation); err != nil {
+				if err := validateResetSupervisor(status, scope, serviceName, runtime.Generation); err != nil {
 					return stopped, err
 				}
 				if !supervisorTerminalState(status.State) {
-					return stopped, fmt.Errorf("cannot stop previous process runtime %s/%s because its supervisor is unavailable and persisted state is %s", scope, service.Name, status.State)
+					return stopped, fmt.Errorf("cannot stop previous process runtime %s/%s because its supervisor is unavailable and persisted state is %s", scope, serviceName, status.State)
 				}
 				continue
 			}
-			if err := validateResetSupervisor(status, scope, service.Name, runtime.Generation); err != nil {
+			if err := validateResetSupervisor(status, scope, serviceName, runtime.Generation); err != nil {
 				return stopped, err
 			}
 			if supervisorTerminalState(status.State) {
 				continue
 			}
 			stopCtx, stopCancel := context.WithTimeout(ctx, 12*time.Second)
-			status, err = supervisor.Stop(stopCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
+			status, stopErr := supervisor.Stop(stopCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
 			stopCancel()
-			if err != nil {
-				return stopped, fmt.Errorf("stop previous process runtime %s/%s: %w", scope, service.Name, err)
+			if stopErr != nil {
+				return stopped, fmt.Errorf("stop previous process runtime %s/%s: %w", scope, serviceName, stopErr)
 			}
-			if err := validateResetSupervisor(status, scope, service.Name, runtime.Generation); err != nil {
+			if err := validateResetSupervisor(status, scope, serviceName, runtime.Generation); err != nil {
 				return stopped, err
 			}
 			stopped++
@@ -1324,7 +1534,7 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		}
 		service, _ := serviceDefinition(definition, serviceName)
 		_ = s.serviceEvent(scope, operation, serviceName, "starting", "Starting "+serviceName)
-		if service.Kind == model.ServiceContainer {
+		if service.Kind == model.ServiceResource {
 			err = s.startContainer(ctx, environment, service, 0)
 		} else {
 			err = s.startProcess(ctx, environment, service, operation, 0)
@@ -1388,7 +1598,7 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
 	containerDefined, containerMayBeRunning := false, false
 	for _, service := range environment.Services {
-		if service.Kind != model.ServiceContainer {
+		if service.Kind != model.ServiceResource {
 			continue
 		}
 		containerDefined = true
@@ -1526,7 +1736,17 @@ func (s *Service) startProcess(ctx context.Context, environment model.Environmen
 		if dnsName != "" {
 			host = dnsName
 		}
-		applyBinding(processEnvironment, connection, host, port, s.containerEnvironmentFor(scope, connection.Target))
+		target, exists := serviceDefinition(modelDefinition, connection.Target)
+		if !exists {
+			return fmt.Errorf("connection target %s is not defined", connection.Target)
+		}
+		binding, bindErr := s.connectionBinding(target, connection, host, port, s.containerEnvironmentFor(scope, connection.Target), true)
+		if bindErr != nil {
+			return bindErr
+		}
+		for name, value := range binding.Values {
+			processEnvironment[name] = value
+		}
 	}
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
@@ -1831,50 +2051,27 @@ func (s *Service) releaseSourceLeasesIfIdle(scope string) {
 	s.releaseSourceLeases(scope)
 }
 
-func applyBinding(environment map[string]string, connection model.Connection, host string, port int, targetEnvironment map[string]string) {
+func (s *Service) connectionBinding(target model.ServiceDefinition, connection model.Connection, host string, port int, targetEnvironment map[string]string, active bool) (resource.BindingResult, error) {
+	if connection.Environment == "" {
+		return resource.BindingResult{}, nil
+	}
+	if connection.Binding != "" {
+		return s.resources.Bind(target, connection, resource.BindingContext{
+			Environment: connection.Environment, Host: host, Port: port,
+			TargetEnvironment: targetEnvironment, Active: active,
+		})
+	}
+	if !active {
+		return resource.BindingResult{SafeValues: map[string]string{connection.Environment: "not active"}}, nil
+	}
 	address := net.JoinHostPort(host, strconv.Itoa(port))
-	switch connection.Protocol {
-	case model.ProtocolHTTP:
-		environment[connection.Environment] = "http://" + address
-	case model.ProtocolPostgres:
-		user := targetEnvironment["POSTGRES_USER"]
-		password := targetEnvironment["POSTGRES_PASSWORD"]
-		database := targetEnvironment["POSTGRES_DB"]
-		if user == "" {
-			user, database = "portless", "portless"
-		}
-		if strings.Contains(connection.Environment, "SPRING_DATASOURCE") {
-			environment[connection.Environment] = "jdbc:postgresql://" + address + "/" + database
-			environment["SPRING_DATASOURCE_USERNAME"] = user
-			environment["SPRING_DATASOURCE_PASSWORD"] = password
-		} else {
-			environment[connection.Environment] = "postgresql://" + url.QueryEscape(user) + ":" + url.QueryEscape(password) + "@" + address + "/" + database
-		}
-	case model.ProtocolRedis:
-		environment[connection.Environment] = "redis://" + address
-	case model.ProtocolTCP:
-		environment[connection.Environment] = address
+	value := address
+	if connection.Protocol == model.ProtocolHTTP {
+		value = "http://" + address
 	}
-}
-
-func safeInjectedValue(connection model.Connection, endpoint *model.Endpoint) string {
-	if endpoint == nil || endpoint.Host == "" || endpoint.Port == 0 {
-		return "not active"
-	}
-	address := net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port))
-	switch connection.Protocol {
-	case model.ProtocolHTTP:
-		return "http://" + address
-	case model.ProtocolPostgres:
-		if strings.Contains(connection.Environment, "SPRING_DATASOURCE") {
-			return "jdbc:postgresql://" + address + "/portless"
-		}
-		return "postgresql://••••@" + address + "/portless"
-	case model.ProtocolRedis:
-		return "redis://" + address
-	default:
-		return address
-	}
+	return resource.BindingResult{
+		Values: map[string]string{connection.Environment: value}, SafeValues: map[string]string{connection.Environment: value},
+	}, nil
 }
 
 func secretConfigurationKey(key string) bool {
@@ -1922,6 +2119,26 @@ func bindingForEnvironment(environment model.Environment, name string) model.Com
 		}
 	}
 	return model.ComponentBinding{Service: name}
+}
+
+func bindingByName(bindings []model.ComponentBinding, name string) (model.ComponentBinding, bool) {
+	for _, binding := range bindings {
+		if strings.EqualFold(binding.Service, name) {
+			return binding, true
+		}
+	}
+	return model.ComponentBinding{}, false
+}
+
+func configurationCanBeSaved(issues []model.ConfigurationIssue) bool {
+	for _, issue := range issues {
+		switch issue.Code {
+		case "MISSING_BINDING", "MISSING_SOURCE":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func scopeNames(scope string) (string, string) {

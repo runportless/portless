@@ -23,7 +23,6 @@ import (
 	"github.com/portless-run/portless/internal/daemon"
 	portlessdns "github.com/portless-run/portless/internal/dns"
 	"github.com/portless-run/portless/internal/events"
-	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/store"
 	"github.com/portless-run/portless/webui"
 )
@@ -131,21 +130,9 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	var shutdownOnce sync.Once
 	handler := &lifecycleHandler{
 		auth: authManager, identity: identity,
-		handoffStatus: app.CanHandoff,
-		activeEnvironments: func(ctx context.Context) ([]string, error) {
-			environments, err := app.Environments(ctx, "")
-			if err != nil {
-				return nil, err
-			}
-			active := make([]string, 0, len(environments))
-			for _, environment := range environments {
-				if environment.Status != model.EnvironmentStopped {
-					active = append(active, model.EnvironmentSelector(environment.Project, environment.Name))
-				}
-			}
-			return active, nil
-		},
-		shutdown: func() { shutdownOnce.Do(func() { close(shutdownRequested) }) },
+		handoffStatus:      app.CanHandoff,
+		activeEnvironments: app.ActiveEnvironments,
+		shutdown:           func() { shutdownOnce.Do(func() { close(shutdownRequested) }) },
 		replace: func() {
 			select {
 			case restartRequested <- struct{}{}:

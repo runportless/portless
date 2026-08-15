@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/resource"
 )
 
 type persistedSelection struct {
@@ -28,10 +29,11 @@ type Manager struct {
 	used       map[RuntimeName]bool
 	runtimes   map[RuntimeName]Runtime
 	order      []RuntimeName
+	resources  *resource.Registry
 }
 
-func NewManager(statePath string, runtimes ...Runtime) *Manager {
-	manager := &Manager{statePath: statePath, preference: RuntimeAuto, used: make(map[RuntimeName]bool), runtimes: make(map[RuntimeName]Runtime)}
+func NewManager(statePath string, resources *resource.Registry, runtimes ...Runtime) *Manager {
+	manager := &Manager{statePath: statePath, preference: RuntimeAuto, used: make(map[RuntimeName]bool), runtimes: make(map[RuntimeName]Runtime), resources: resources}
 	for _, runtime := range runtimes {
 		if runtime == nil || runtime.Name() == "" {
 			continue
@@ -108,6 +110,10 @@ func (m *Manager) SetPreference(value RuntimeName) error {
 }
 
 func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
+	plan, err := m.resourcePlan(service)
+	if err != nil {
+		return StartResult{}, err
+	}
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return StartResult{}, err
@@ -115,10 +121,14 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	if err := m.markUsed(runtime.Name()); err != nil {
 		return StartResult{}, fmt.Errorf("record used container runtime: %w", err)
 	}
-	return runtime.Start(ctx, environmentName, environmentKey, service, generation, logsRoot)
+	return runtime.Start(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
 }
 
 func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
+	plan, err := m.resourcePlan(service)
+	if err != nil {
+		return StartResult{}, err
+	}
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return StartResult{}, err
@@ -130,10 +140,14 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	if err := m.markUsed(runtime.Name()); err != nil {
 		return StartResult{}, fmt.Errorf("record used container runtime: %w", err)
 	}
-	return adopter.Adopt(ctx, environmentName, environmentKey, service, generation, logsRoot)
+	return adopter.Adopt(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
 }
 
 func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) error {
+	plan, err := m.resourcePlan(service)
+	if err != nil {
+		return err
+	}
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
 		return err
@@ -145,7 +159,14 @@ func (m *Manager) Verify(ctx context.Context, environmentKey string, service mod
 	if err := m.markUsed(runtime.Name()); err != nil {
 		return fmt.Errorf("record used container runtime: %w", err)
 	}
-	return verifier.Verify(ctx, environmentKey, service, generation, containerName)
+	return verifier.Verify(ctx, environmentKey, service, plan, generation, containerName)
+}
+
+func (m *Manager) resourcePlan(service model.ServiceDefinition) (resource.ContainerPlan, error) {
+	if m.resources == nil {
+		return resource.ContainerPlan{}, errors.New("resource registry is not configured")
+	}
+	return m.resources.Plan(service)
 }
 
 func (m *Manager) Close() {

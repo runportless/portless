@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/resource"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/runtime/logstore"
 )
@@ -30,6 +33,10 @@ const (
 	labelEnvironmentName = "dev.portless.environment.name"
 	labelService         = "dev.portless.service.name"
 	labelGeneration      = "dev.portless.service.generation"
+	labelResourceType    = "dev.portless.resource.type"
+	labelResourceVersion = "dev.portless.resource.version"
+	labelResourceImage   = "dev.portless.resource.image"
+	labelResourceVolume  = "dev.portless.resource.volume"
 )
 
 type Engine interface {
@@ -66,9 +73,9 @@ func (m *Manager) StartHost(ctx context.Context) container.ProbeResult {
 	return m.engine.StartHost(ctx)
 }
 
-func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (container.StartResult, error) {
-	if service.Kind != model.ServiceContainer {
-		return container.StartResult{}, errors.New("container runtime only starts container services")
+func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, plan resource.ContainerPlan, generation int64, logsRoot string) (container.StartResult, error) {
+	if service.Kind != model.ServiceResource || service.Resource == nil {
+		return container.StartResult{}, errors.New("container runtime only starts resource services")
 	}
 	if result := m.Probe(ctx); result.State != "ready" {
 		return container.StartResult{}, errors.New(result.Reason)
@@ -83,34 +90,34 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	}
 	containerName := resourceName("portless", environmentName, service.Name, suffix)
 	logDirectory := filepath.Join(logsRoot, service.Name, strconv.FormatInt(generation, 10))
-	if running, port := m.inspectRunning(ctx, containerName, servicePort(service)); running {
+	if _, port, verifyErr := m.verifyAdoptableContainer(ctx, environmentKey, service, plan, generation, containerName); verifyErr == nil {
 		environment, _ := m.inspectEnvironment(ctx, containerName)
 		if err := m.startLogCollector(containerName, service.Name, generation, logDirectory); err != nil {
 			return container.StartResult{}, err
 		}
 		return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC(), LogDirectory: logDirectory}, nil
 	}
-	_ = m.run(ctx, "rm", "-f", containerName)
-	image, defaults, healthCommand, err := template(service)
+	staleContainers, err := m.ownedServiceContainers(ctx, environmentKey, service.Name)
 	if err != nil {
 		return container.StartResult{}, err
 	}
-	environment, envFile, err := m.environmentFile(environmentKey, service.Name, defaults)
+	if len(staleContainers) > 1 {
+		return container.StartResult{}, fmt.Errorf("found %d managed %s containers; refusing ambiguous replacement", len(staleContainers), service.Name)
+	}
+	for _, staleName := range staleContainers {
+		containerID, ownershipErr := m.verifiedContainerID(ctx, staleName, environmentKey, service.Name)
+		if ownershipErr != nil {
+			return container.StartResult{}, ownershipErr
+		}
+		if err := m.run(ctx, "rm", "-f", containerID); err != nil {
+			return container.StartResult{}, fmt.Errorf("remove stale managed %s container: %w", service.Name, err)
+		}
+	}
+	if m.engine.ResourceExists(ctx, "container", containerName) {
+		return container.StartResult{}, fmt.Errorf("container name %s is already in use by a resource Portless does not own", containerName)
+	}
+	environment, envFile, err := m.resourceEnvironmentFile(environmentKey, service.Name, plan.Environment)
 	if err != nil {
-		return container.StartResult{}, err
-	}
-	volumeName := resourceName("portless", environmentName, service.Name, "data", suffix)
-	existingVolumes, err := m.ownedServiceVolumes(ctx, environmentKey, service.Name)
-	if err != nil {
-		return container.StartResult{}, err
-	}
-	if len(existingVolumes) > 1 {
-		return container.StartResult{}, fmt.Errorf("multiple managed volumes found for %s; refusing to choose implicitly", service.Name)
-	}
-	if len(existingVolumes) == 1 {
-		volumeName = existingVolumes[0]
-	}
-	if err := m.ensureVolume(ctx, volumeName, environmentName, environmentKey, service.Name); err != nil {
 		return container.StartResult{}, err
 	}
 	args := []string{"run", "-d", "--name", containerName,
@@ -121,20 +128,30 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 		"--label", labelEnvironmentName + "=" + environmentName,
 		"--label", labelService + "=" + service.Name,
 		"--label", labelGeneration + "=" + strconv.FormatInt(generation, 10),
+		"--label", labelResourceType + "=" + service.Resource.Type,
+		"--label", labelResourceVersion + "=" + service.Resource.Version,
+		"--label", labelResourceImage + "=" + plan.Image,
 		"--env-file", envFile,
-		"-p", "127.0.0.1::" + strconv.Itoa(servicePort(service)),
-		"-v", m.engine.VolumeMount(volumeName, volumePath(service)),
-		image,
+		"-p", "127.0.0.1::" + strconv.Itoa(plan.ClientPort),
 	}
+	for _, volume := range plan.Volumes {
+		volumeName := resourceName("portless", environmentName, service.Name, volume.Key, suffix)
+		if err := m.ensureVolume(ctx, volumeName, environmentName, environmentKey, service.Name, volume.Key); err != nil {
+			return container.StartResult{}, err
+		}
+		args = append(args, "-v", m.engine.VolumeMount(volumeName, volume.Path))
+	}
+	args = append(args, plan.Image)
+	args = append(args, plan.Command...)
 	if output, err := m.output(ctx, args...); err != nil {
 		return container.StartResult{}, fmt.Errorf("start %s container: %s: %w", service.Name, strings.TrimSpace(string(output)), err)
 	}
-	port, err := m.waitForPort(ctx, containerName, servicePort(service))
+	port, err := m.waitForPort(ctx, containerName, plan.ClientPort)
 	if err != nil {
 		_ = m.run(context.Background(), "rm", "-f", containerName)
 		return container.StartResult{}, err
 	}
-	if err := m.waitForHealth(ctx, containerName, healthCommand); err != nil {
+	if err := m.waitForHealth(ctx, containerName, port, plan.Readiness); err != nil {
 		_ = m.run(context.Background(), "rm", "-f", containerName)
 		return container.StartResult{}, err
 	}
@@ -145,20 +162,16 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC(), LogDirectory: logDirectory}, nil
 }
 
-func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (container.StartResult, error) {
-	if service.Kind != model.ServiceContainer {
-		return container.StartResult{}, errors.New("only container services can be adopted")
+func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, plan resource.ContainerPlan, generation int64, logsRoot string) (container.StartResult, error) {
+	if service.Kind != model.ServiceResource || service.Resource == nil {
+		return container.StartResult{}, errors.New("only resource services can be adopted")
 	}
-	name, port, err := m.verifyAdoptableContainer(ctx, environmentKey, service, generation, "")
-	if err != nil {
-		return container.StartResult{}, err
-	}
-	_, _, healthCommand, err := template(service)
+	name, port, err := m.verifyAdoptableContainer(ctx, environmentKey, service, plan, generation, "")
 	if err != nil {
 		return container.StartResult{}, err
 	}
 	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
-	err = m.waitForHealth(healthCtx, name, healthCommand)
+	err = m.waitForHealth(healthCtx, name, port, plan.Readiness)
 	healthCancel()
 	if err != nil {
 		return container.StartResult{}, err
@@ -177,25 +190,22 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	}, nil
 }
 
-func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) error {
-	_, _, err := m.verifyAdoptableContainer(ctx, environmentKey, service, generation, containerName)
+func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan resource.ContainerPlan, generation int64, containerName string) error {
+	_, _, err := m.verifyAdoptableContainer(ctx, environmentKey, service, plan, generation, containerName)
 	return err
 }
 
-func (m *Manager) verifyAdoptableContainer(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, expectedName string) (string, int, error) {
+func (m *Manager) verifyAdoptableContainer(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan resource.ContainerPlan, generation int64, expectedName string) (string, int, error) {
+	if service.Kind != model.ServiceResource || service.Resource == nil {
+		return "", 0, errors.New("only resource services can be verified")
+	}
 	if result := m.Probe(ctx); result.State != "ready" {
 		return "", 0, errors.New(result.Reason)
 	}
-	output, err := m.output(ctx, "ps", "-a",
-		"--filter", "label="+labelOwner+"=true",
-		"--filter", "label="+labelInstall+"="+m.installationKey,
-		"--filter", "label="+labelEnvironment+"="+environmentKey,
-		"--filter", "label="+labelService+"="+service.Name,
-		"--format", "{{.Names}}")
+	names, err := m.ownedServiceContainers(ctx, environmentKey, service.Name)
 	if err != nil {
-		return "", 0, fmt.Errorf("find managed %s container: %w", service.Name, err)
+		return "", 0, err
 	}
-	names := nonemptyLines(string(output))
 	if len(names) == 0 {
 		return "", 0, fmt.Errorf("managed %s container is missing", service.Name)
 	}
@@ -214,11 +224,58 @@ func (m *Manager) verifyAdoptableContainer(ctx context.Context, environmentKey s
 	if parseErr != nil || actual != generation {
 		return "", 0, fmt.Errorf("managed %s container generation does not match persisted generation %d", service.Name, generation)
 	}
-	running, port := m.inspectRunning(ctx, name, servicePort(service))
+	for label, expected := range map[string]string{
+		labelResourceType: service.Resource.Type, labelResourceVersion: service.Resource.Version, labelResourceImage: plan.Image,
+	} {
+		actual, labelErr := m.inspectLabel(ctx, name, label)
+		if labelErr != nil || actual != expected {
+			return "", 0, fmt.Errorf("managed %s container resource identity does not match %s %s", service.Name, service.Resource.Type, service.Resource.Version)
+		}
+	}
+	running, port := m.inspectRunning(ctx, name, plan.ClientPort)
 	if !running || port == 0 {
 		return "", 0, fmt.Errorf("managed %s container is not running", service.Name)
 	}
 	return name, port, nil
+}
+
+func (m *Manager) ownedServiceContainers(ctx context.Context, environmentKey, serviceName string) ([]string, error) {
+	output, err := m.output(ctx, "ps", "-a",
+		"--filter", "label="+labelOwner+"=true",
+		"--filter", "label="+labelInstall+"="+m.installationKey,
+		"--filter", "label="+labelEnvironment+"="+environmentKey,
+		"--filter", "label="+labelService+"="+serviceName,
+		"--format", "{{.Names}}")
+	if err != nil {
+		return nil, fmt.Errorf("find managed %s container: %w", serviceName, err)
+	}
+	return nonemptyLines(string(output)), nil
+}
+
+func (m *Manager) verifiedContainerID(ctx context.Context, name, environmentKey, serviceName string) (string, error) {
+	output, err := m.output(ctx, "inspect", "--format", "{{.Id}}", name)
+	if err != nil {
+		return "", fmt.Errorf("inspect managed %s container identity: %w", serviceName, err)
+	}
+	containerID := strings.TrimSpace(string(output))
+	if containerID == "" {
+		return "", fmt.Errorf("managed %s container has no inspectable identity", serviceName)
+	}
+	expected := map[string]string{
+		labelOwner: "true", labelInstall: m.installationKey, labelEnvironment: environmentKey, labelService: serviceName,
+	}
+	labels := make([]string, 0, len(expected))
+	for label := range expected {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		actual, labelErr := m.inspectLabel(ctx, containerID, label)
+		if labelErr != nil || actual != expected[label] {
+			return "", fmt.Errorf("container %s does not have the expected Portless ownership labels", name)
+		}
+	}
+	return containerID, nil
 }
 
 func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {
@@ -379,8 +436,11 @@ func (m *Manager) stopLogCollector(containerName string) {
 }
 
 func (m *Manager) ensureNetwork(ctx context.Context, name, environmentName, environmentKey string) error {
+	expected := map[string]string{
+		labelOwner: "true", labelInstall: m.installationKey, labelEnvironment: environmentKey, labelEnvironmentName: environmentName,
+	}
 	if m.engine.ResourceExists(ctx, "network", name) {
-		return nil
+		return m.verifyResourceLabels(ctx, "network", name, expected)
 	}
 	return m.run(ctx, "network", "create",
 		"--label", labelOwner+"=true",
@@ -390,9 +450,13 @@ func (m *Manager) ensureNetwork(ctx context.Context, name, environmentName, envi
 		name)
 }
 
-func (m *Manager) ensureVolume(ctx context.Context, name, environmentName, environmentKey, service string) error {
+func (m *Manager) ensureVolume(ctx context.Context, name, environmentName, environmentKey, service, volumeKey string) error {
+	expected := map[string]string{
+		labelOwner: "true", labelInstall: m.installationKey, labelEnvironment: environmentKey,
+		labelEnvironmentName: environmentName, labelService: service, labelResourceVolume: volumeKey,
+	}
 	if m.engine.ResourceExists(ctx, "volume", name) {
-		return nil
+		return m.verifyResourceLabels(ctx, "volume", name, expected)
 	}
 	return m.run(ctx, "volume", "create",
 		"--label", labelOwner+"=true",
@@ -400,7 +464,23 @@ func (m *Manager) ensureVolume(ctx context.Context, name, environmentName, envir
 		"--label", labelEnvironment+"="+environmentKey,
 		"--label", labelEnvironmentName+"="+environmentName,
 		"--label", labelService+"="+service,
+		"--label", labelResourceVolume+"="+volumeKey,
 		name)
+}
+
+func (m *Manager) verifyResourceLabels(ctx context.Context, kind, name string, expected map[string]string) error {
+	labels := make([]string, 0, len(expected))
+	for label := range expected {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		output, err := m.output(ctx, kind, "inspect", "--format", "{{ index .Labels \""+label+"\" }}", name)
+		if err != nil || strings.TrimSpace(string(output)) != expected[label] {
+			return fmt.Errorf("existing managed %s %s has mismatched ownership labels", kind, name)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) inspectRunning(ctx context.Context, name string, containerPort int) (bool, int) {
@@ -472,14 +552,25 @@ func (m *Manager) publishedPort(ctx context.Context, name string, containerPort 
 	return strconv.Atoi(line)
 }
 
-func (m *Manager) waitForHealth(ctx context.Context, name string, command []string) error {
-	deadlineCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+func (m *Manager) waitForHealth(ctx context.Context, name string, publishedPort int, readiness resource.Readiness) error {
+	deadlineCtx, cancel := context.WithTimeout(ctx, readiness.Timeout)
 	defer cancel()
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(readiness.Interval)
 	defer ticker.Stop()
 	for {
-		args := append([]string{"exec", name}, command...)
-		if err := m.run(deadlineCtx, args...); err == nil {
+		ready := false
+		switch readiness.Kind {
+		case "exec":
+			args := append([]string{"exec", name}, readiness.Command...)
+			ready = m.run(deadlineCtx, args...) == nil
+		case "tcp":
+			connection, err := (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext(deadlineCtx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(publishedPort)))
+			if err == nil {
+				_ = connection.Close()
+				ready = true
+			}
+		}
+		if ready {
 			return nil
 		}
 		select {
@@ -546,10 +637,50 @@ func (m *Manager) environmentFile(environmentKey, serviceName string, defaults m
 	return defaults, path, nil
 }
 
+func (m *Manager) resourceEnvironmentFile(environmentKey, serviceName string, specifications []resource.EnvironmentVariable) (map[string]string, string, error) {
+	if !safePathComponent(environmentKey) || !safePathComponent(serviceName) {
+		return nil, "", errors.New("unsafe environment or service key for credential storage")
+	}
+	path := filepath.Join(m.credentialsRoot, environmentKey, serviceName+".env")
+	if content, err := os.ReadFile(path); err == nil {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return nil, "", err
+		}
+		environment := parseEnvironment(content)
+		if err := validatePersistedEnvironment(environment, specifications); err != nil {
+			return nil, "", fmt.Errorf("managed %s credentials: %w", serviceName, err)
+		}
+		return environment, path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	}
+	defaults, err := resolveEnvironment(specifications)
+	if err != nil {
+		return nil, "", err
+	}
+	return m.environmentFile(environmentKey, serviceName, defaults)
+}
+
+func validatePersistedEnvironment(environment map[string]string, specifications []resource.EnvironmentVariable) error {
+	if len(environment) != len(specifications) {
+		return errors.New("stored environment does not match the registered resource plan")
+	}
+	for _, specification := range specifications {
+		value, exists := environment[specification.Name]
+		if !exists || specification.SecretBytes > 0 && value == "" {
+			return fmt.Errorf("stored environment is missing %s", specification.Name)
+		}
+		if specification.SecretBytes == 0 && value != specification.Value {
+			return fmt.Errorf("stored value for %s does not match the registered resource plan", specification.Name)
+		}
+	}
+	return nil
+}
+
 func parseEnvironment(content []byte) map[string]string {
 	result := make(map[string]string)
 	for _, line := range strings.Split(string(content), "\n") {
-		name, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		name, value, found := strings.Cut(strings.TrimSuffix(line, "\r"), "=")
 		if found && name != "" {
 			result[name] = value
 		}
@@ -593,18 +724,6 @@ func (m *Manager) ownedInstallationResources(ctx context.Context, kind string) (
 	return nonemptyLines(string(output)), nil
 }
 
-func (m *Manager) ownedServiceVolumes(ctx context.Context, environmentKey, serviceName string) ([]string, error) {
-	output, err := m.output(ctx, "volume", "ls", "--filter", "label="+labelOwner+"=true",
-		"--filter", "label="+labelInstall+"="+m.installationKey,
-		"--filter", "label="+labelEnvironment+"="+environmentKey,
-		"--filter", "label="+labelService+"="+serviceName,
-		"--format", "{{.Name}}")
-	if err != nil {
-		return nil, err
-	}
-	return nonemptyLines(string(output)), nil
-}
-
 func (m *Manager) run(ctx context.Context, args ...string) error {
 	output, err := m.output(ctx, args...)
 	if err != nil {
@@ -632,41 +751,20 @@ func (m *Manager) output(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, m.engine.Binary(), args...).CombinedOutput()
 }
 
-func template(service model.ServiceDefinition) (string, map[string]string, []string, error) {
-	switch service.Template {
-	case "postgres":
-		password, err := secret(24)
-		if err != nil {
-			return "", nil, nil, err
+func resolveEnvironment(specifications []resource.EnvironmentVariable) (map[string]string, error) {
+	result := make(map[string]string, len(specifications))
+	for _, specification := range specifications {
+		value := specification.Value
+		if specification.SecretBytes > 0 {
+			generated, err := secret(specification.SecretBytes)
+			if err != nil {
+				return nil, fmt.Errorf("generate %s: %w", specification.Name, err)
+			}
+			value = generated
 		}
-		return "docker.io/library/postgres:" + defaultVersion(service.Version, "17"), map[string]string{
-			"POSTGRES_DB": "portless", "POSTGRES_USER": "portless", "POSTGRES_PASSWORD": password,
-		}, []string{"pg_isready", "-U", "portless", "-d", "portless"}, nil
-	case "valkey", "redis":
-		image := "docker.io/valkey/valkey:" + defaultVersion(service.Version, "8")
-		command := []string{"valkey-cli", "ping"}
-		if service.Template == "redis" {
-			image = "docker.io/library/redis:" + defaultVersion(service.Version, "7")
-			command = []string{"redis-cli", "ping"}
-		}
-		return image, map[string]string{}, command, nil
-	default:
-		return "", nil, nil, fmt.Errorf("unsupported container template %q", service.Template)
+		result[specification.Name] = value
 	}
-}
-
-func servicePort(service model.ServiceDefinition) int {
-	if service.Template == "postgres" {
-		return 5432
-	}
-	return 6379
-}
-
-func volumePath(service model.ServiceDefinition) string {
-	if service.Template == "postgres" {
-		return "/var/lib/postgresql/data"
-	}
-	return "/data"
+	return result, nil
 }
 
 func resourceName(parts ...string) string {
@@ -677,10 +775,14 @@ func resourceName(parts ...string) string {
 		}
 		return '-'
 	}, name)
-	if len(name) > 63 {
-		name = name[:63]
+	name = strings.Trim(name, "-")
+	if len(name) <= 63 {
+		return name
 	}
-	return strings.Trim(name, "-")
+	digest := sha256.Sum256([]byte(name))
+	hash := hex.EncodeToString(digest[:6])
+	prefix := strings.TrimRight(name[:63-len(hash)-1], "-")
+	return prefix + "-" + hash
 }
 
 func secret(bytes int) (string, error) {
@@ -689,13 +791,6 @@ func secret(bytes int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
-}
-
-func defaultVersion(value, fallback string) string {
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 func nonemptyLines(value string) []string {

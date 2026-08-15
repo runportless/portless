@@ -171,7 +171,7 @@ func TestTCPEdgeOutlivesTheOperationContextThatCreatedIt(t *testing.T) {
 	defer manager.Close(context.Background())
 	manager.SetTarget("billing/local", "redis", upstream.Addr().(*net.TCPAddr).Port)
 	operationContext, cancelOperation := context.WithCancel(context.Background())
-	port, err := manager.EnsureEdge(operationContext, "billing/local", model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis})
+	port, err := manager.EnsureEdge(operationContext, "billing/local", model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,10 +231,10 @@ func TestStableTCPEdgesShareTheConventionalPortAndKeepSourceFaultsIsolated(t *te
 	manager := NewManager(controlStore, events.NewBroker())
 	defer manager.Close(ctx)
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
-	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis}, checkoutAddress); err != nil {
+	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP}, checkoutAddress); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis}, ordersAddress); err != nil {
+	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP}, ordersAddress); err != nil {
 		t.Fatal(err)
 	}
 	if !manager.HasEdgeAtAddress(scope, "checkout", "redis", checkoutAddress) || !manager.HasEdgeAtAddress(scope, "orders", "redis", ordersAddress) {
@@ -296,11 +296,11 @@ func TestTCPFaultAppliesOnlyToItsDirectedSourceEdge(t *testing.T) {
 	manager := NewManager(controlStore, events.NewBroker())
 	defer manager.Close(ctx)
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
-	checkoutPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis})
+	checkoutPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ordersPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis})
+	ordersPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestTCPEdgePublishesActivityBeforeTheConnectionCloses(t *testing.T) {
 	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.tcp.activity"})
 	defer subscription.Close()
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
-	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis})
+	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {
 	defer manager.Close(context.Background())
 	scope := model.EnvironmentSelector("billing", "local")
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
-	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis})
+	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP})
 	if err != nil {
 		t.Fatal(err)
 	}

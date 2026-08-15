@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	ProtocolVersion = "1"
+	ProtocolVersion = "1.0.0"
 	statusPath      = "/v1/status"
 	stopPath        = "/v1/stop"
 )

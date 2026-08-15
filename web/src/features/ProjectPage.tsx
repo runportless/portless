@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { api, connectEvents, jsonBody, environmentPath } from '../api'
-import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficEvent, WritePolicy } from '../types'
+import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficEvent, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
@@ -498,7 +498,7 @@ function Topology({ environment, faults, paused, onService, onEdge }: { environm
       if (item.kind === 'client') return <div key={item.key} className="topology__external topology__item" style={{ left: position.x, top: position.y }}><span>INGRESS</span><strong>browser / client</strong><small>localhost</small></div>
       const service = item.service
       return <button key={item.key} style={{ left: position.x, top: position.y }} className={`topology-node topology__item topology-node--${service.kind} ${service.name === environment.primaryService ? 'is-primary' : ''}`} onClick={() => selectService(service)}>
-        <span><StatusMark status={service.status} label={false} />{service.kind === 'container' ? service.template : service.framework}</span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
+        <span><StatusMark status={service.status} label={false} />{service.kind === 'resource' ? service.resource?.type : service.framework}</span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
       </button>
     })}
   </div></div></div>
@@ -568,9 +568,9 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
       <nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>
       <div className="drawer-content">
         {drawerTab === 'details' && <>
-          <div className="detail-grid"><Detail label="KIND" value={service.framework || service.template || service.kind} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div>
+          <div className="detail-grid"><Detail label="KIND" value={service.framework || service.resource?.type || service.kind} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div>
           <section className="drawer-section service-endpoints"><div className="eyebrow">ENDPOINTS</div><div className="service-endpoint-list">{endpoints.map((endpoint) => <div className="service-endpoint" key={`${endpoint.label}:${endpoint.value}`}><span>{endpoint.label}</span>{endpoint.href ? <a href={endpoint.href} target="_blank" rel="noreferrer">{endpoint.value} ↗</a> : <code>{endpoint.value}</code>}<small>{endpoint.detail}</small></div>)}{endpoints.length === 0 && <p className="muted">No endpoint is available while this service is stopped.</p>}</div></section>
-          <section className="drawer-section"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.template} container`}</pre></section>
+          <section className="drawer-section"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.resource?.type} ${service.resource?.version}`}</pre></section>
           <section className="drawer-section"><div className="eyebrow">HEALTH</div><p><StatusMark status={service.status} /> {service.health.kind}{service.health.path ? ` ${service.health.path}` : ''}</p><small>{service.reason || 'No current readiness error.'}</small></section>
         </>}
         {drawerTab === 'logs' && <div className="log-view"><div className="log-view__meta">last {logs.length} lines · stdout + stderr</div><pre>{logs.length ? logs.map((entry, index) => <span key={`${entry.timestamp}-${entry.stream}-${index}`}><i>{new Date(entry.timestamp).toLocaleTimeString()}</i>{entry.message}{'\n'}</span>) : 'No logs captured for this service.'}</pre></div>}
@@ -605,7 +605,7 @@ export function serviceEndpoints(service: Service, binding?: ComponentBinding): 
   return endpoints
 }
 
-function publicEndpoint(service: Service, protocol?: 'http' | 'tcp' | 'postgres' | 'redis') {
+function publicEndpoint(service: Service, protocol?: Protocol) {
   return (service.endpoints || []).find((endpoint) => endpoint.kind === 'public' && (!protocol || endpoint.protocol === protocol))
 }
 
@@ -829,7 +829,7 @@ function BindingsPanel({ environment, onChanged }: { environment: Environment; o
 		<section className="panel experiment-form">
 			<div className="panel-title"><span>CONFIGURE PROVIDER</span><small>one choice per component</small></div>
 			<label><span>SERVICE</span><select value={service} onChange={(event) => setService(event.target.value)}>{environment.services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
-			<label><span>PROVIDER</span><select value={provider} onChange={(event) => setProvider(event.target.value as ProviderKind)}>{selected?.kind === 'process' && <option value="local">local source</option>}{selected?.kind === 'container' && <option value="container">managed container</option>}{selected?.kind === 'process' && <option value="remote">remote HTTP(S)</option>}</select></label>
+			<label><span>PROVIDER</span><select value={provider} onChange={(event) => setProvider(event.target.value as ProviderKind)}>{selected?.kind === 'process' && <option value="local">local source</option>}{selected?.kind === 'resource' && <option value="container">managed container</option>}{selected?.kind === 'process' && <option value="remote">remote HTTP(S)</option>}</select></label>
 			{provider === 'local' && <label><span>SOURCE</span><select value={source} onChange={(event) => setSource(event.target.value)}>{environment.sources?.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
 			{provider === 'remote' && <><label><span>REMOTE URL</span><input type="url" placeholder="https://payments.qa.example.com" value={remoteURL} onChange={(event) => setRemoteURL(event.target.value)} /></label>
 				<div className="form-pair"><label><span>CLASSIFICATION</span><select value={classification} onChange={(event) => setClassification(event.target.value as RemoteClassification)}><option value="development">development</option><option value="qa">qa</option><option value="staging">staging</option><option value="unknown">unknown</option></select></label><label><span>WRITE POLICY</span><select value={writePolicy} onChange={(event) => setWritePolicy(event.target.value as WritePolicy)}><option value="read-only">read-only</option><option value="read-write">read-write</option></select></label></div>

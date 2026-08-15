@@ -264,9 +264,18 @@ func TestExecuteUninstallStepsReportsLauncherAsOnlyPartialFailure(t *testing.T) 
 
 func TestActiveUninstallErrorOffersStoppedAndForcedPaths(t *testing.T) {
 	err := activeUninstallError([]string{"store/local", "billing/qa"})
-	for _, expected := range []string{"store/local", "billing/qa", "portless --env project/environment down", "portless uninstall --force --yes"} {
+	for _, expected := range []string{"store/local", "billing/qa", "portless down --all", "portless uninstall --force --yes"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("active uninstall error does not contain %q: %v", expected, err)
+		}
+	}
+}
+
+func TestIncompatibleActiveUninstallRequiresForcedRecovery(t *testing.T) {
+	err := incompatibleActiveUninstallError([]string{"store/local"})
+	for _, expected := range []string{"store/local", "cannot be shut down individually", "portless uninstall --force --yes"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("incompatible uninstall error does not contain %q: %v", expected, err)
 		}
 	}
 }

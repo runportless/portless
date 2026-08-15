@@ -65,6 +65,7 @@ type upOptions struct {
 }
 
 type downOptions struct {
+	all     bool
 	volumes bool
 	yes     bool
 	wait    bool
@@ -467,9 +468,12 @@ func (c *CLI) downCommand() *cobra.Command {
 	noWait := false
 	command := &cobra.Command{
 		Use:   "down",
-		Short: "Stop an environment",
+		Short: "Stop one or all environments",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if options.all && strings.TrimSpace(c.environmentOverride) != "" {
+				return usageError("--all cannot be combined with --env")
+			}
 			if options.volumes && !options.yes {
 				return usageError("--volumes permanently deletes managed database/cache data; repeat with --yes")
 			}
@@ -480,6 +484,7 @@ func (c *CLI) downCommand() *cobra.Command {
 			return c.down(cmd.Context(), "", effective)
 		},
 	}
+	command.Flags().BoolVar(&options.all, "all", false, "stop every active environment")
 	command.Flags().BoolVar(&options.volumes, "volumes", false, "remove managed data volumes")
 	command.Flags().BoolVar(&options.yes, "yes", false, "confirm volume deletion")
 	command.Flags().BoolVar(&noWait, "no-wait", false, "return after the operation is accepted")
@@ -862,6 +867,23 @@ func (c *CLI) projectCommand() *cobra.Command {
 	create.Flags().StringArrayVar(&sources, "source", nil, "source checkout as name=path (repeatable)")
 	_ = create.MarkFlagRequired("source")
 	command.AddCommand(create)
+
+	sourceGroup := commandGroup("source", "Manage project sources")
+	addPath := ""
+	add := &cobra.Command{
+		Use:     "add <name>",
+		Short:   "Add a source checkout to the current project",
+		Long:    "Discover a checkout and add its services to the logical project. All project environments must be stopped. The path is bound only to the selected environment; configure every other environment explicitly.",
+		Example: "  portless project source add inventory --path ../inventory\n  portless --env store/local project source add inventory --path ../inventory",
+		Args:    usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return c.addProjectSource(cmd.Context(), args[0], addPath)
+		},
+	}
+	add.Flags().StringVar(&addPath, "path", "", "source checkout path")
+	_ = add.MarkFlagRequired("path")
+	sourceGroup.AddCommand(add)
+	command.AddCommand(sourceGroup)
 
 	output := "portless.project.json"
 	export := &cobra.Command{

@@ -33,8 +33,8 @@ const (
 type ServiceKind string
 
 const (
-	ServiceProcess   ServiceKind = "process"
-	ServiceContainer ServiceKind = "container"
+	ServiceProcess  ServiceKind = "process"
+	ServiceResource ServiceKind = "resource"
 )
 
 type ProviderKind string
@@ -64,10 +64,8 @@ const (
 type Protocol string
 
 const (
-	ProtocolHTTP     Protocol = "http"
-	ProtocolTCP      Protocol = "tcp"
-	ProtocolPostgres Protocol = "postgres"
-	ProtocolRedis    Protocol = "redis"
+	ProtocolHTTP Protocol = "http"
+	ProtocolTCP  Protocol = "tcp"
 )
 
 type EndpointKind string
@@ -96,18 +94,24 @@ type HealthCheck struct {
 	Interval time.Duration `json:"interval"`
 }
 
+// ResourceDefinition identifies the resource plugin which owns provisioning
+// and connection semantics for a logical resource service.
+type ResourceDefinition struct {
+	Type    string `json:"type"`
+	Version string `json:"version"`
+}
+
 type ServiceDefinition struct {
-	Name             string      `json:"name"`
-	Kind             ServiceKind `json:"kind"`
-	Framework        string      `json:"framework,omitempty"`
-	Template         string      `json:"template,omitempty"`
-	Version          string      `json:"version,omitempty"`
-	Command          []string    `json:"command,omitempty"`
-	WorkingDirectory string      `json:"workingDirectory,omitempty"`
-	PortEnvironment  string      `json:"portEnvironment,omitempty"`
-	// Port is the stable client-facing port for a generic TCP service. Managed
-	// Postgres and Redis-compatible templates use their conventional ports when
-	// it is omitted.
+	Name             string              `json:"name"`
+	Kind             ServiceKind         `json:"kind"`
+	Framework        string              `json:"framework,omitempty"`
+	Resource         *ResourceDefinition `json:"resource,omitempty"`
+	Command          []string            `json:"command,omitempty"`
+	WorkingDirectory string              `json:"workingDirectory,omitempty"`
+	PortEnvironment  string              `json:"portEnvironment,omitempty"`
+	// Port is the stable client-facing port for a TCP service. Discovery copies
+	// the registered resource plugin's port into the model so persistence and
+	// endpoint allocation remain independent of executable plugin code.
 	Port        int               `json:"port,omitempty"`
 	Environment map[string]string `json:"environment,omitempty"`
 	Required    bool              `json:"required"`
@@ -125,24 +129,25 @@ type Connection struct {
 	Source      string   `json:"source"`
 	Target      string   `json:"target"`
 	Protocol    Protocol `json:"protocol"`
+	Binding     string   `json:"binding,omitempty"`
 	Environment string   `json:"environment,omitempty"`
 	Required    bool     `json:"required"`
 }
 
 type EffectiveConnection struct {
 	Connection
-	TargetProvider ProviderKind  `json:"targetProvider"`
-	TargetStatus   ServiceStatus `json:"targetStatus"`
-	Endpoint       *Endpoint     `json:"endpoint,omitempty"`
-	RuntimeTarget  string        `json:"runtimeTarget,omitempty"`
-	InjectedEnvVar string        `json:"injectedEnvVar,omitempty"`
-	InjectedValue  string        `json:"injectedValue,omitempty"`
+	TargetProvider      ProviderKind      `json:"targetProvider"`
+	TargetStatus        ServiceStatus     `json:"targetStatus"`
+	Endpoint            *Endpoint         `json:"endpoint,omitempty"`
+	RuntimeTarget       string            `json:"runtimeTarget,omitempty"`
+	InjectedEnvironment map[string]string `json:"injectedEnvironment,omitempty"`
 }
 
 type ConnectionReference struct {
 	Source      string   `json:"source"`
 	TargetHint  string   `json:"targetHint"`
 	Protocol    Protocol `json:"protocol"`
+	Binding     string   `json:"binding,omitempty"`
 	Environment string   `json:"environment,omitempty"`
 	Required    bool     `json:"required"`
 }

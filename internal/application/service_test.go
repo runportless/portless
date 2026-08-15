@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/project/discovery"
+	resourcebuiltin "github.com/portless-run/portless/internal/resource/builtin"
 	"github.com/portless-run/portless/internal/runtime/supervisor"
 	"github.com/portless-run/portless/internal/store"
 )
@@ -26,6 +30,48 @@ func TestMain(testingMain *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(testingMain.Run())
+}
+
+type fixtureDiscoverer struct {
+	result discovery.Result
+	path   string
+}
+
+func (d *fixtureDiscoverer) FindRoot(context.Context, string) (string, error) {
+	return d.result.Root, nil
+}
+
+func (d *fixtureDiscoverer) Discover(_ context.Context, path string) (discovery.Result, error) {
+	d.path = path
+	return d.result, nil
+}
+
+func TestApplicationUsesInjectedDiscoveryEngine(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	source := t.TempDir()
+	discoverer := &fixtureDiscoverer{result: discovery.Result{Root: source, Model: model.ProjectModel{
+		SuggestedName: "fixture", PrimaryService: "api",
+		Services: []model.ServiceDefinition{{
+			Name: "api", Kind: model.ServiceProcess, Framework: "fixture", Command: []string{"serve"}, WorkingDirectory: source,
+			PortEnvironment: "PORT", Required: true, Health: model.HealthCheck{Kind: "tcp", Timeout: time.Second, Interval: time.Second},
+		}},
+	}}}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", Discoverer: discoverer})
+	defer app.Close(ctx)
+
+	_, environment, _, err := app.CreateProject(ctx, "fixture", []SourceInput{{Name: "fixture", Path: source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discoverer.path != source || len(environment.Services) != 1 || environment.Services[0].Framework != "fixture" {
+		t.Fatalf("injected discovery result was not used: path=%q environment=%#v", discoverer.path, environment)
+	}
 }
 
 func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
@@ -75,6 +121,127 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	}
 }
 
+func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	checkout := nestNamedFixture(t, filepath.Join(t.TempDir(), "checkout"), "checkout")
+	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "remote"); err != nil {
+		t.Fatal(err)
+	}
+	inventoryLocal := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory-local"), "inventory")
+	project, local, warnings, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventoryLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 || len(project.Sources) != 2 || len(local.Sources) != 2 {
+		t.Fatalf("addition = project %#v environment %#v warnings %v", project.Sources, local.Sources, warnings)
+	}
+	if binding, ok := bindingByName(local.Bindings, "inventory"); !ok || binding.Provider != model.ProviderLocal || binding.Source != "inventory" {
+		t.Fatalf("local inventory binding = %#v, %v", binding, ok)
+	}
+
+	qa, err := app.Environment(ctx, "store", "qa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qa.Sources) != 1 || len(qa.Issues) != 1 || qa.Issues[0].Code != "MISSING_BINDING" || qa.Issues[0].Subject != "inventory" {
+		t.Fatalf("qa after global source addition = %#v", qa)
+	}
+	listed, err := app.Environments(ctx, "store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range listed {
+		if candidate.Name != "local" && (len(candidate.Issues) != 1 || candidate.Issues[0].Subject != "inventory") {
+			t.Fatalf("listed environment %s did not expose its source-addition issue: %#v", candidate.Name, candidate.Issues)
+		}
+	}
+	if _, err := app.Up(ctx, "store", "qa", "test", ""); err == nil || !strings.Contains(err.Error(), "no provider binding") {
+		t.Fatalf("incomplete environment start error = %v", err)
+	}
+
+	inventoryQA := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory-qa"), "inventory")
+	qa, _, err = app.SetSource(ctx, "store", "qa", "inventory", inventoryQA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qa.Issues) != 0 || len(qa.Sources) != 2 {
+		t.Fatalf("configured qa = %#v", qa)
+	}
+	qaBinding, ok := bindingByName(qa.Bindings, "inventory")
+	if !ok || qaBinding.Provider != model.ProviderLocal || qaBinding.Source != "inventory" {
+		t.Fatalf("qa inventory binding = %#v, %v", qaBinding, ok)
+	}
+	if sourcePath(qa.Sources, "inventory") == sourcePath(local.Sources, "inventory") {
+		t.Fatal("selected-environment source path leaked into another environment")
+	}
+
+	remote, err := app.SetBinding(ctx, "store", "remote", "inventory", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
+		URL: "https://inventory.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteBinding, ok := bindingByName(remote.Bindings, "inventory")
+	if !ok || remoteBinding.Provider != model.ProviderRemote || len(remote.Issues) != 0 || sourcePath(remote.Sources, "inventory") != "" {
+		t.Fatalf("remote inventory configuration = environment %#v binding %#v", remote, remoteBinding)
+	}
+}
+
+func TestProjectSourceAdditionRequiresEveryEnvironmentToBeStoppedAndRollsBack(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	checkout := nestNamedFixture(t, filepath.Join(t.TempDir(), "checkout"), "checkout")
+	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentHealthy, "test"); err != nil {
+		t.Fatal(err)
+	}
+	inventory := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory"), "inventory")
+	_, _, _, err = app.AddProjectSource(ctx, "store", "local", "inventory", inventory)
+	var active store.ActiveProjectEnvironmentsError
+	if !errors.As(err, &active) || strings.Join(active.Environments, ",") != "store/qa" {
+		t.Fatalf("active environment error = %#v, %v", active, err)
+	}
+	project, err := app.Project(ctx, "store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := app.Environment(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(project.Sources) != 1 || len(local.Sources) != 1 {
+		t.Fatalf("source addition was partially committed: project=%#v local=%#v", project.Sources, local.Sources)
+	}
+}
+
 func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()
@@ -84,10 +251,11 @@ func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testin
 	}
 	defer controlStore.Close()
 	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}}}
-	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, sources, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
 		t.Fatal(err)
 	}
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
@@ -128,6 +296,60 @@ func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testin
 	}
 }
 
+func TestResetRecoveryUsesRuntimeInventoryWhenStoredTopologyIsIncompatible(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "store", Services: []model.ServiceDefinition{{Name: "api", Kind: model.ServiceProcess, Required: true}}}
+	if _, err := controlStore.CreateProject(ctx, "store", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "store", "local", definition, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "store", "local", model.EnvironmentHealthy, "legacy runtime is active"); err != nil {
+		t.Fatal(err)
+	}
+	legacyModel, err := json.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.DB().ExecContext(ctx, `UPDATE projects SET model_json = ?`, legacyModel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.DB().ExecContext(ctx, `UPDATE environments SET model_json = ?`, legacyModel); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	if _, err := app.Environments(ctx, ""); !errors.Is(err, store.ErrIncompatibleState) {
+		t.Fatalf("ordinary environment inventory error = %v, want ErrIncompatibleState", err)
+	}
+	active, err := app.ActiveEnvironments(ctx)
+	if err != nil || strings.Join(active, ",") != "store/local" {
+		t.Fatalf("format-independent active inventory = %#v, err = %v", active, err)
+	}
+	plan, err := app.ResetPlan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Projects != 1 || plan.Environments != 1 || !plan.TopologyIncompatible || strings.Join(plan.ActiveEnvironments, ",") != "store/local" {
+		t.Fatalf("unexpected incompatible-state reset plan: %#v", plan)
+	}
+	if _, err := app.PrepareReset(ctx, false); err == nil || !strings.Contains(err.Error(), "store/local") {
+		t.Fatalf("ordinary reset accepted active incompatible state: %v", err)
+	}
+	if _, err := app.PrepareReset(ctx, true); err != nil {
+		t.Fatalf("forced reset could not prepare incompatible state: %v", err)
+	}
+	app.CancelReset()
+}
+
 func TestPrepareResetStopsAuthenticatedLingeringSupervisor(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()
@@ -141,10 +363,11 @@ func TestPrepareResetStopsAuthenticatedLingeringSupervisor(t *testing.T) {
 		Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
 		PortEnvironment: "PORT", Health: model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
 	}}}
-	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, sources, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
 		t.Fatal(err)
 	}
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-test", Executable: os.Args[0]})
@@ -270,6 +493,37 @@ func TestRescanRemovesConnectionNoLongerDiscoveredFromSource(t *testing.T) {
 	}
 }
 
+func TestIncompleteRescanPreservesLastCompleteDiscovery(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	_, before, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "package.json"), []byte(`{"name":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := app.Rescan(ctx, "billing", "local"); err == nil {
+		t.Fatal("malformed discovery unexpectedly replaced the stored source")
+	}
+	after, err := app.Environment(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Services) != 1 || len(after.Services) != 1 || before.Services[0].Name != after.Services[0].Name {
+		t.Fatalf("last complete discovery was not preserved: before=%#v after=%#v", before.Services, after.Services)
+	}
+}
+
 func TestEnvironmentDecoratesServicesWithRecentHTTPTraffic(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()
@@ -382,7 +636,8 @@ func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
 	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, sources, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
 		t.Fatal(err)
 	}
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
@@ -481,7 +736,7 @@ func TestEffectiveConnectionsAndConfigurationExplainRemoteTargetsAndMaskCredenti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(connections) != 1 || connections[0].TargetProvider != model.ProviderRemote || connections[0].RuntimeTarget != remoteURL || connections[0].InjectedEnvVar != "PAYMENTS_URL" {
+	if len(connections) != 1 || connections[0].TargetProvider != model.ProviderRemote || connections[0].RuntimeTarget != remoteURL || connections[0].InjectedEnvironment["PAYMENTS_URL"] == "" {
 		t.Fatalf("effective connections = %#v", connections)
 	}
 	configuration, err := app.ServiceConfiguration(ctx, "billing", "hybrid", "checkout")
@@ -518,9 +773,9 @@ func TestStableTCPServiceAndConnectionEndpointsAreExposedBeforeStartup(t *testin
 		SuggestedName: "store", PrimaryService: "orders",
 		Services: []model.ServiceDefinition{
 			{Name: "orders", Kind: model.ServiceProcess},
-			{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"},
+			{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432},
 		},
-		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres, Environment: "DATABASE_URL", Required: true}},
+		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolTCP, Binding: "postgres", Environment: "DATABASE_URL", Required: true}},
 	}
 	if _, err := controlStore.CreateProject(ctx, "store", definition, nil); err != nil {
 		t.Fatal(err)
@@ -552,7 +807,7 @@ func TestStableTCPServiceAndConnectionEndpointsAreExposedBeforeStartup(t *testin
 	if len(connections) != 1 || connections[0].Endpoint == nil || connections[0].Endpoint.Host != "postgres.via-orders.local.store.portless.test" || connections[0].Endpoint.Port != 5432 {
 		t.Fatalf("directed Postgres endpoint = %#v", connections)
 	}
-	if connections[0].InjectedValue != "not active" {
+	if connections[0].InjectedEnvironment["DATABASE_URL"] != "not active" {
 		t.Fatalf("stopped connection was reported as injected: %#v", connections[0])
 	}
 }
@@ -746,14 +1001,15 @@ func TestIndividualServiceStartPreparesRequiredRemoteDependency(t *testing.T) {
 		},
 		Connections: []model.Connection{{Source: "checkout", Target: "payments", Protocol: model.ProtocolHTTP, Environment: "PAYMENTS_URL", Required: true}},
 	}
-	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
 		t.Fatal(err)
 	}
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
 	bindings := []model.ComponentBinding{
-		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"},
 		{Service: "payments", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health"}},
 	}
-	if _, err := controlStore.CreateEnvironment(ctx, "billing", "hybrid", definition, nil, bindings); err != nil {
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "hybrid", definition, sources, bindings); err != nil {
 		t.Fatal(err)
 	}
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
@@ -808,14 +1064,15 @@ func TestDaemonRestartRecoversSupervisedProcessIngressAndDependencyProxy(t *test
 		},
 		Connections: []model.Connection{{Source: "checkout", Target: "payments", Protocol: model.ProtocolHTTP, Environment: "PAYMENTS_URL", Required: true}},
 	}
-	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
 		t.Fatal(err)
 	}
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
 	bindings := []model.ComponentBinding{
-		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"},
 		{Service: "payments", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health"}},
 	}
-	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, bindings); err != nil {
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, sources, bindings); err != nil {
 		t.Fatal(err)
 	}
 
@@ -970,13 +1227,13 @@ func TestValidateExperimentScopeUsesConfiguredDirectedConnections(t *testing.T) 
 		Services: []model.ServiceDefinition{
 			{Name: "checkout", Kind: model.ServiceProcess},
 			{Name: "orders", Kind: model.ServiceProcess},
-			{Name: "postgres", Kind: model.ServiceContainer},
-			{Name: "redis", Kind: model.ServiceContainer},
+			{Name: "postgres", Kind: model.ServiceResource},
+			{Name: "redis", Kind: model.ServiceResource},
 		},
 		Connections: []model.Connection{
 			{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP},
-			{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres},
-			{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis},
+			{Source: "orders", Target: "postgres", Protocol: model.ProtocolTCP, Binding: "postgres"},
+			{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP, Binding: "valkey"},
 		},
 	}
 
@@ -1014,10 +1271,42 @@ func TestValidateExperimentScopeUsesConfiguredDirectedConnections(t *testing.T) 
 }
 
 func TestApplyBindingUsesDNSHostForGenericTCP(t *testing.T) {
-	environment := map[string]string{}
-	applyBinding(environment, model.Connection{Protocol: model.ProtocolTCP, Environment: "BROKER_ADDRESS"}, "broker.via-orders.local.store.portless.test", 4222, nil)
-	if environment["BROKER_ADDRESS"] != "broker.via-orders.local.store.portless.test:4222" {
-		t.Fatalf("generic TCP binding = %q", environment["BROKER_ADDRESS"])
+	service := &Service{resources: resourcebuiltin.Registry()}
+	binding, err := service.connectionBinding(model.ServiceDefinition{Name: "broker", Kind: model.ServiceProcess}, model.Connection{Protocol: model.ProtocolTCP, Environment: "BROKER_ADDRESS"}, "broker.via-orders.local.store.portless.test", 4222, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.Values["BROKER_ADDRESS"] != "broker.via-orders.local.store.portless.test:4222" {
+		t.Fatalf("generic TCP binding = %q", binding.Values["BROKER_ADDRESS"])
+	}
+}
+
+func TestResourceBindingInjectsMultipleVariablesAndRedactsSecrets(t *testing.T) {
+	service := &Service{resources: resourcebuiltin.Registry()}
+	target := model.ServiceDefinition{
+		Name: "postgres", Kind: model.ServiceResource,
+		Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432,
+	}
+	connection := model.Connection{
+		Source: "inventory", Target: "postgres", Protocol: model.ProtocolTCP,
+		Binding: "postgres", Environment: "SPRING_DATASOURCE_URL", Required: true,
+	}
+	binding, err := service.connectionBinding(target, connection, "postgres.via-inventory.local.store.portless.test", 5432, map[string]string{
+		"POSTGRES_DB": "portless", "POSTGRES_USER": "portless", "POSTGRES_PASSWORD": "generated-secret",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binding.Values) != 3 || binding.Values["SPRING_DATASOURCE_USERNAME"] != "portless" || !strings.HasPrefix(binding.Values["SPRING_DATASOURCE_URL"], "jdbc:postgresql://") {
+		t.Fatalf("resource binding values = %#v", binding.Values)
+	}
+	if binding.SafeValues["SPRING_DATASOURCE_PASSWORD"] != "••••••••" {
+		t.Fatalf("resource binding exposed its secret: %#v", binding.SafeValues)
+	}
+	for _, value := range binding.SafeValues {
+		if strings.Contains(value, "generated-secret") {
+			t.Fatalf("resource binding exposed its secret: %#v", binding.SafeValues)
+		}
 	}
 }
 
@@ -1039,13 +1328,26 @@ func TestApplicationProcessHelper(t *testing.T) {
 }
 
 func nestFixture(t *testing.T, root string) string {
+	return nestNamedFixture(t, root, "checkout")
+}
+
+func nestNamedFixture(t *testing.T, root, name string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	content := `{"name":"checkout","scripts":{"start:dev":"node server.js"},"dependencies":{"@nestjs/core":"1.0.0"}}`
+	content := `{"name":"` + name + `","scripts":{"start:dev":"node server.js"},"dependencies":{"@nestjs/core":"1.0.0"}}`
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return root
+}
+
+func sourcePath(sources []model.SourceBinding, name string) string {
+	for _, source := range sources {
+		if strings.EqualFold(source.Name, name) {
+			return source.Path
+		}
+	}
+	return ""
 }

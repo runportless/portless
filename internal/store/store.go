@@ -10,18 +10,28 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrNameTaken     = errors.New("name already exists")
-	ErrPathTaken     = errors.New("source path already registered")
-	ErrConflict      = errors.New("revision conflict")
-	ErrAlreadyExists = errors.New("resource already exists")
+	ErrNotFound          = errors.New("not found")
+	ErrNameTaken         = errors.New("name already exists")
+	ErrPathTaken         = errors.New("source path already registered")
+	ErrConflict          = errors.New("revision conflict")
+	ErrAlreadyExists     = errors.New("resource already exists")
+	ErrIncompatibleState = errors.New("stored project model is incompatible with this Portless build")
 )
+
+type ActiveProjectEnvironmentsError struct {
+	Environments []string `json:"environments"`
+}
+
+func (e ActiveProjectEnvironmentsError) Error() string {
+	return "all project environments must be stopped before the project topology changes: " + strings.Join(e.Environments, ", ")
+}
 
 type Store struct {
 	db *sql.DB

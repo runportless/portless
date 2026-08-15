@@ -23,7 +23,7 @@ func TestCheckAtRecognizesPortlessHealth(t *testing.T) {
 			t.Errorf("unexpected request host=%q path=%q", request.Host, request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"ready":true,"apiVersion":"1"}`))
+		_, _ = writer.Write([]byte(`{"ready":true,"apiVersion":"1.0.0"}`))
 	})}
 	defer server.Close()
 	go func() { _ = server.Serve(listener) }()
@@ -102,7 +102,7 @@ func TestCheckSocketRecognizesPrivateDaemonIngress(t *testing.T) {
 			t.Errorf("unexpected request host=%q path=%q", request.Host, request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"ready":true,"apiVersion":"1"}`))
+		_, _ = writer.Write([]byte(`{"ready":true,"apiVersion":"1.0.0"}`))
 	})}
 	defer server.Close()
 	go func() { _ = server.Serve(listener) }()

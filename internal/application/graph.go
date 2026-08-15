@@ -11,7 +11,7 @@ func startOrder(definition model.ProjectModel) ([]string, error) {
 	bindings := make([]model.ComponentBinding, 0, len(definition.Services))
 	for _, service := range definition.Services {
 		provider := model.ProviderLocal
-		if service.Kind == model.ServiceContainer {
+		if service.Kind == model.ServiceResource {
 			provider = model.ProviderContainer
 		}
 		bindings = append(bindings, model.ComponentBinding{Service: service.Name, Provider: provider})

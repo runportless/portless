@@ -113,6 +113,55 @@ func TestLifecycleHandlerRefusesActiveShutdownUnlessForced(t *testing.T) {
 	}
 }
 
+func TestLifecycleIdentityRemainsAvailableWhenApplicationInventoryFails(t *testing.T) {
+	authManager, err := auth.LoadOrCreate(filepath.Join(t.TempDir(), "install.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shutdowns atomic.Int32
+	handler := &lifecycleHandler{
+		next: http.NotFoundHandler(), auth: authManager,
+		identity: daemon.Identity{Product: daemon.Product, InstanceID: "instance", State: "ready", RecoveryProblems: []string{"stored topology is incompatible"}},
+		activeEnvironments: func(context.Context) ([]string, error) {
+			return nil, errors.New("decode environment store/local")
+		},
+		shutdown: func() { shutdowns.Add(1) },
+	}
+
+	identityRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1"+daemon.IdentityPath, nil)
+	identityRequest.Header.Set("Authorization", "Bearer "+authManager.Token())
+	identityResponse := httptest.NewRecorder()
+	handler.ServeHTTP(identityResponse, identityRequest)
+	if identityResponse.Code != http.StatusOK {
+		t.Fatalf("identity returned %d: %s", identityResponse.Code, identityResponse.Body.String())
+	}
+	var identity daemon.Identity
+	if err := json.Unmarshal(identityResponse.Body.Bytes(), &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.HandoffReady || len(identity.ActiveEnvironments) != 0 || !strings.Contains(strings.Join(identity.RecoveryProblems, "; "), "active environment inventory is unavailable") {
+		t.Fatalf("unexpected degraded identity: %#v", identity)
+	}
+
+	shutdown := func(force bool) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(daemon.ShutdownRequest{InstanceID: "instance", Force: force})
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+daemon.ShutdownPath, bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+authManager.Token())
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := shutdown(false); response.Code != http.StatusInternalServerError || shutdowns.Load() != 0 {
+		t.Fatalf("ordinary shutdown returned %d and scheduled %d shutdowns: %s", response.Code, shutdowns.Load(), response.Body.String())
+	}
+	if response := shutdown(true); response.Code != http.StatusAccepted || shutdowns.Load() != 1 {
+		t.Fatalf("forced shutdown returned %d and scheduled %d shutdowns: %s", response.Code, shutdowns.Load(), response.Body.String())
+	}
+	if _, err := handler.Restart(context.Background(), "instance"); err == nil {
+		t.Fatal("browser restart accepted unavailable application inventory")
+	}
+}
+
 func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
 	var replacements atomic.Int32
 	handoffReady := false

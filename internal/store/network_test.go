@@ -21,9 +21,9 @@ func TestNetworkAllocationsAreStableAndDistinct(t *testing.T) {
 		SuggestedName: "store", PrimaryService: "orders",
 		Services: []model.ServiceDefinition{
 			{Name: "orders", Kind: model.ServiceProcess},
-			{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"},
+			{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432},
 		},
-		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres}},
+		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolTCP, Binding: "postgres"}},
 	}
 	if _, err := controlStore.CreateProject(ctx, "store", definition, nil); err != nil {
 		t.Fatal(err)
@@ -69,9 +69,9 @@ func TestNetworkAllocationsFollowProjectRenameWithoutChangingAddresses(t *testin
 		SuggestedName: "store", PrimaryService: "orders",
 		Services: []model.ServiceDefinition{
 			{Name: "orders", Kind: model.ServiceProcess},
-			{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"},
+			{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432},
 		},
-		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres}},
+		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolTCP, Binding: "postgres"}},
 	}
 	project, err := controlStore.CreateProject(ctx, "store", definition, nil)
 	if err != nil {
