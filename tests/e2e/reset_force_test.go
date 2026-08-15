@@ -134,7 +134,7 @@ func e2eBinary(t *testing.T) string {
 	binary := filepath.Join(t.TempDir(), "portless")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", binary, "./cmd/portless")
+	command := exec.CommandContext(ctx, "go", "build", "-tags=e2e", "-trimpath", "-o", binary, "./cmd/portless")
 	command.Dir = repository
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build E2E binary: %v\n%s", err, output)

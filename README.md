@@ -347,6 +347,10 @@ State defaults to `~/.portless`. Set `PORTLESS_HOME` to isolate development or t
 make test
 make
 
+# Install Chromium once, then run the real CLI and browser E2E suites:
+make install-e2e-browser
+make test-e2e
+
 # Exercise discovery against the included small environment:
 cd examples/store
 portless up --no-open
@@ -354,5 +358,12 @@ portless ui
 ```
 
 Tests cover the Cobra command tree and completion, naming and non-leakage, multi-source compilation, isolated environment state, provider and worktree switching, SQLite idempotency, browser claims and CSRF, dependency pruning and ordering, process lifecycle, control/application host isolation, remote read-only enforcement, proxy traffic redaction, recording persistence, and fault application.
+
+The E2E suites run the compiled CLI, real daemon and supervisors, real fixture
+services, edge proxies, and embedded UI in an isolated `PORTLESS_HOME`.
+`make test-e2e-cli` and `make test-e2e-ui` run either half independently. See
+[docs/e2e-testing.md](docs/e2e-testing.md) for the covered journeys, test-only
+private-ingress boundary, failure artifacts, and the separate privileged
+machine-integration boundary.
 
 API reference: [api/openapi.yaml](api/openapi.yaml). Live event contract: [api/events.md](api/events.md).

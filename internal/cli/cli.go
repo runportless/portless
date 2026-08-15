@@ -1713,6 +1713,12 @@ func (c *CLI) browserURL(ctx context.Context, client *bootstrap.Client, next str
 }
 
 func (c *CLI) requireIngress(ctx context.Context) error {
+	if e2ePrivateIngress {
+		if err := ingress.CheckSocket(ctx, c.paths.Ingress); err != nil {
+			return fmt.Errorf("verify private Portless ingress: %w", err)
+		}
+		return nil
+	}
 	status, err := ingress.Inspect(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect local endpoint networking: %w", err)
