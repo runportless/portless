@@ -95,22 +95,65 @@ client -> checkout -> inventory
 The multi-source test materializes those applications as separate temporary Go
 modules so it exercises project compilation rather than a monorepo shortcut.
 
-## Machine integration boundary
+## Destructive relay integration
 
-The default E2E suites deliberately do not mutate machine-level networking and
-do not require Docker or Podman. The following checks belong in a separate,
-disposable machine-integration job:
+The default E2E suites deliberately do not mutate machine-level networking.
+Relay installation and removal have a separate, deliberately destructive test:
 
-- privileged relay install, status, restart, and uninstall;
-- clean `http://*.localhost` routing through port 80;
-- `*.portless.test` DNS and conventional TCP ports;
+```bash
+make test-e2e-relay-destructive
+```
+
+This target builds a dedicated binary with the normal production behavior, so
+it does not replace the executable watched by a running development daemon. It
+then runs the read-only safety preflight, asks `sudo` to cache administrator
+approval, and runs serially against the real fixed Portless service, port 80,
+DNS listener, resolver configuration, and loopback address pool. It is never
+included by `make test` or `make test-e2e`.
+
+The harness performs these safety checks before changing the machine:
+
+- it must run as the normal non-root user through the deliberately named
+  destructive Make target;
+- a machine-wide lock prevents concurrent destructive relay suites;
+- an existing relay must have a valid receipt owned by the current user;
+- its HTTP and DNS sockets must identify one recognizable Portless home; and
+- the daemon behind an existing relay must be reachable and report no active
+  environments; a stopped daemon is rejected because it cannot prove that no
+  supervised runtime survived it.
+
+If an owned relay exists, the harness records its socket targets and daemon
+state, removes it, installs the test relay against a temporary
+`PORTLESS_HOME`, and restores the original relay during `TestMain` teardown.
+Restoration also runs after a failed assertion or panic. A forced cleanup is
+allowed only after the harness has removed the verified original installation
+and taken exclusive ownership of the machine relay slot.
+
+The scenario verifies:
+
+- install and idempotent repair through the public CLI;
+- receipt ownership, target sockets, launch service, helper, resolver, address
+  pool, HTTP, direct DNS, and system-resolver health;
+- a production `portless up`, clean control and application URLs through
+  `127.0.0.1:80`, and rejection of unknown hosts;
+- relay restart without losing application routing;
+- the relay's controlled `503` response while the isolated daemon is stopped,
+  followed by daemon recovery and runtime adoption; and
+- uninstall, removal of every reported system artifact and listener, resolver
+  removal, and idempotent repeated uninstall.
+
+The test is suitable for a Portless developer machine when no environment is
+running, but it temporarily interrupts the existing relay. A process kill,
+machine restart, or terminal loss can prevent teardown, so a disposable macOS
+or systemd Linux runner remains the safest place to automate it.
+
+The following machine integrations are still separate future coverage:
+
+- real `*.portless.test` application endpoints backed by PostgreSQL or Valkey;
 - Docker and Podman resource provisioning, volume preservation/removal, and
   orphan cleanup; and
-- full product uninstall, including resolver and launch service removal.
-
-Those checks require an isolated macOS or Linux runner with administrator
-access. They should never run on a developer workstation as part of
-`make test-e2e`.
+- full `portless uninstall`, including application data and CLI launcher
+  removal in addition to the relay.
 
 ## Failures and artifacts
 

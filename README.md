@@ -351,6 +351,10 @@ make
 make install-e2e-browser
 make test-e2e
 
+# Explicitly destructive: replaces and restores the machine-wide relay.
+# Stop every Portless environment first.
+make test-e2e-relay-destructive
+
 # Exercise discovery against the included small environment:
 cd examples/store
 portless up --no-open
