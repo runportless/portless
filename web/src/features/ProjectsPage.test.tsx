@@ -27,6 +27,7 @@ const environment = {
   updatedAt: new Date().toISOString(),
 } satisfies Environment
 const qaEnvironment = { ...environment, name: 'qa-local', revision: 2, sources: [{ ...environment.sources[0] }] } satisfies Environment
+const stoppedEnvironment = { ...qaEnvironment, name: 'demo', status: 'stopped' } satisfies Environment
 
 describe('projects page', () => {
   it('uses the concise Projects title without control-plane copy or runtime controls', () => {
@@ -38,6 +39,25 @@ describe('projects page', () => {
     expect(markup).not.toContain('CONTAINER RUNTIME')
   })
 
+  it('lists each project once instead of rendering one row per environment', () => {
+    const markup = renderProjects(undefined, [environment, qaEnvironment])
+
+    expect(markup).toContain('<div class="panel-title"><span>PROJECTS</span></div>')
+    expect(markup.match(/class="table-row project-index-row"/g)).toHaveLength(1)
+    expect(markup).not.toContain('class="table-row environment-row"')
+    expect(markup).toContain('title="local, qa-local"')
+    expect(markup).toContain('<span>Last updated</span>')
+    expect(markup).not.toContain('<span>Why</span>')
+    expect(markup).toContain('<time dateTime=')
+  })
+
+  it('does not degrade a project because an intentionally stopped environment exists', () => {
+    const markup = renderProjects(undefined, [environment, stoppedEnvironment])
+
+    expect(markup).toContain('<span class="status status--success" title="healthy">')
+    expect(markup).not.toContain('title="degraded"')
+  })
+
   it('keeps the project detail heading and environment listing', () => {
     const markup = renderProjects(project)
 
@@ -45,8 +65,9 @@ describe('projects page', () => {
     expect(markup).toContain('<h1>store</h1>')
     expect(markup).not.toContain('sources ·')
     expect(markup).toContain('<code>local</code>')
+    expect(markup).toContain('<span class="status status--success" title="healthy"><span class="status__mark" aria-hidden="true">●</span><span>healthy</span></span>')
     expect(markup).toContain('<span>ENVIRONMENTS</span>')
-    expect(markup).toContain('<small>1 environment</small>')
+    expect(markup).not.toContain('<small>1 environment</small>')
     expect(markup).toContain('aria-haspopup="dialog"')
     expect(markup).toContain('>CREATE ENVIRONMENT</button>')
     expect(markup).not.toContain('class="panel clone-panel"')
@@ -68,16 +89,16 @@ describe('projects page', () => {
     expect(markup.match(/class="table-row project-source-row"/g)).toHaveLength(1)
   })
 
-  it('keeps the empty state focused on setup instructions', () => {
+  it('keeps the empty project state focused on setup instructions', () => {
     const markup = renderToStaticMarkup(<ProjectsPage projects={[]} environments={[]} onNavigate={() => undefined} onChanged={async () => undefined} />)
 
-    expect(markup).toContain('No environments yet')
+    expect(markup).toContain('No projects yet')
     expect(markup).toContain('Start one repository or assemble several.')
     expect(markup).not.toContain('repository—or')
     expect(markup).not.toContain('empty-environment__graphic')
   })
 })
 
-function renderProjects(selectedProject?: Project, renderedEnvironments = [environment]) {
+function renderProjects(selectedProject?: Project, renderedEnvironments: Environment[] = [environment]) {
   return renderToStaticMarkup(<ProjectsPage projects={[project]} environments={renderedEnvironments} selectedProject={selectedProject} onNavigate={() => undefined} onChanged={async () => undefined} />)
 }

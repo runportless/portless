@@ -66,6 +66,7 @@ describe('application navigation', () => {
 
     expect(markup).toContain('aria-label="Application"')
     expect(markup).toContain('class="is-active" aria-current="page"><svg')
+    expect(markup).toContain('<svg class="settings-gear"')
     expect(markup).toContain('<span>Settings</span>')
     expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><strong aria-current="page">settings</strong></nav>')
   })
