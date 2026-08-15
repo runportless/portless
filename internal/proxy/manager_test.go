@@ -15,6 +15,7 @@ import (
 
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/networking"
 	"github.com/portless-run/portless/internal/store"
 )
 
@@ -191,6 +192,145 @@ func TestTCPEdgeOutlivesTheOperationContextThatCreatedIt(t *testing.T) {
 	}
 	if string(response) != "ping" {
 		t.Fatalf("TCP proxy response = %q", response)
+	}
+}
+
+func TestStableTCPEdgesShareTheConventionalPortAndKeepSourceFaultsIsolated(t *testing.T) {
+	ctx := context.Background()
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		for {
+			connection, acceptErr := upstream.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				defer connection.Close()
+				_, _ = io.Copy(connection, connection)
+			}()
+		}
+	}()
+
+	firstIP, secondIP := networking.EndpointLoopbackIP(0), networking.EndpointLoopbackIP(1)
+	probe, err := net.Listen("tcp", net.JoinHostPort(firstIP, "0"))
+	if err != nil {
+		t.Skipf("Portless loopback pool is not provisioned on this host: %v", err)
+	}
+	sharedPort := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+	checkoutAddress := net.JoinHostPort(firstIP, strconv.Itoa(sharedPort))
+	ordersAddress := net.JoinHostPort(secondIP, strconv.Itoa(sharedPort))
+
+	manager := NewManager(controlStore, events.NewBroker())
+	defer manager.Close(ctx)
+	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
+	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis}, checkoutAddress); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis}, ordersAddress); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.HasEdgeAtAddress(scope, "checkout", "redis", checkoutAddress) || !manager.HasEdgeAtAddress(scope, "orders", "redis", ordersAddress) {
+		t.Fatal("source-specific TCP edges were not bound to their stable addresses")
+	}
+	if _, err := controlStore.CreateFault(ctx, model.FaultRule{Project: "billing", Environment: "local", Name: "checkout-redis-down", Source: "checkout", Target: "redis", Abort: true, Probability: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	rejected, err := net.DialTimeout("tcp", checkoutAddress, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rejected.SetDeadline(time.Now().Add(time.Second))
+	_, _ = rejected.Write([]byte("ping"))
+	buffer := make([]byte, 4)
+	if _, err := io.ReadFull(rejected, buffer); err == nil {
+		t.Fatal("faulted checkout edge unexpectedly reached Redis")
+	}
+	_ = rejected.Close()
+
+	allowed, err := net.DialTimeout("tcp", ordersAddress, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer allowed.Close()
+	_ = allowed.SetDeadline(time.Now().Add(time.Second))
+	if _, err := allowed.Write([]byte("pong")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(allowed, buffer); err != nil || string(buffer) != "pong" {
+		t.Fatalf("unfaulted orders edge did not reach Redis: response=%q err=%v", buffer, err)
+	}
+}
+
+func TestTCPFaultAppliesOnlyToItsDirectedSourceEdge(t *testing.T) {
+	ctx := context.Background()
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		for {
+			connection, acceptErr := upstream.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				defer connection.Close()
+				_, _ = io.Copy(connection, connection)
+			}()
+		}
+	}()
+
+	manager := NewManager(controlStore, events.NewBroker())
+	defer manager.Close(ctx)
+	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
+	checkoutPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolRedis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordersPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "orders", Target: "redis", Protocol: model.ProtocolRedis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateFault(ctx, model.FaultRule{Project: "billing", Environment: "local", Name: "checkout-redis-down", Source: "checkout", Target: "redis", Abort: true, Probability: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	rejected, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(checkoutPort)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rejected.SetDeadline(time.Now().Add(time.Second))
+	_, _ = rejected.Write([]byte("ping"))
+	buffer := make([]byte, 4)
+	if _, err := io.ReadFull(rejected, buffer); err == nil {
+		t.Fatal("faulted checkout edge unexpectedly reached Redis")
+	}
+	_ = rejected.Close()
+
+	allowed, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ordersPort)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer allowed.Close()
+	_ = allowed.SetDeadline(time.Now().Add(time.Second))
+	if _, err := allowed.Write([]byte("pong")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(allowed, buffer); err != nil || string(buffer) != "pong" {
+		t.Fatalf("unfaulted orders edge did not reach Redis: response=%q err=%v", buffer, err)
 	}
 }
 

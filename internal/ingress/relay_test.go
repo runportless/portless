@@ -38,7 +38,7 @@ func TestRelayForwardsHTTPToPrivateUnixSocket(t *testing.T) {
 
 	request, _ := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/checkout", nil)
 	request.Host = "checkout.store.localhost"
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 2 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestRelayReturnsServiceUnavailableWhenDaemonSocketIsAbsent(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.sock")
 	go func() { _ = ServeRelay(ctx, listener, missingPath, 4) }()
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 2 * time.Second}
 	response, err := client.Get("http://" + listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)

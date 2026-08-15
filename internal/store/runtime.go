@@ -41,6 +41,8 @@ type ConnectionRuntime struct {
 	Target           string
 	Protocol         model.Protocol
 	SourceGeneration int64
+	ListenIP         string
+	DNSName          string
 	ListenPort       int
 	OwnerInstanceID  string
 	State            string
@@ -57,9 +59,9 @@ func (s *Store) ConnectionRuntime(ctx context.Context, selector, source, target 
 	var protocol string
 	var observed sql.NullString
 	err = s.db.QueryRowContext(ctx, `
-SELECT source_name, target_name, protocol, source_generation, listen_port, owner_instance_id, state, reason, observed_at
+SELECT source_name, target_name, protocol, source_generation, listen_ip, dns_name, listen_port, owner_instance_id, state, reason, observed_at
 FROM connection_runtime WHERE environment_key = ? AND source_name = ? COLLATE NOCASE AND target_name = ? COLLATE NOCASE`,
-		key, source, target).Scan(&result.Source, &result.Target, &protocol, &result.SourceGeneration, &result.ListenPort,
+		key, source, target).Scan(&result.Source, &result.Target, &protocol, &result.SourceGeneration, &result.ListenIP, &result.DNSName, &result.ListenPort,
 		&result.OwnerInstanceID, &result.State, &result.Reason, &observed)
 	if err != nil {
 		return ConnectionRuntime{}, mapSQLError(err)
@@ -75,7 +77,7 @@ func (s *Store) ConnectionRuntimes(ctx context.Context, selector string) ([]Conn
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT source_name, target_name, protocol, source_generation, listen_port, owner_instance_id, state, reason, observed_at
+SELECT source_name, target_name, protocol, source_generation, listen_ip, dns_name, listen_port, owner_instance_id, state, reason, observed_at
 FROM connection_runtime WHERE environment_key = ? ORDER BY source_name COLLATE NOCASE, target_name COLLATE NOCASE`, key)
 	if err != nil {
 		return nil, err
@@ -86,7 +88,7 @@ FROM connection_runtime WHERE environment_key = ? ORDER BY source_name COLLATE N
 		var item ConnectionRuntime
 		var protocol string
 		var observed sql.NullString
-		if err := rows.Scan(&item.Source, &item.Target, &protocol, &item.SourceGeneration, &item.ListenPort,
+		if err := rows.Scan(&item.Source, &item.Target, &protocol, &item.SourceGeneration, &item.ListenIP, &item.DNSName, &item.ListenPort,
 			&item.OwnerInstanceID, &item.State, &item.Reason, &observed); err != nil {
 			return nil, err
 		}
@@ -108,13 +110,14 @@ func (s *Store) SaveConnectionRuntime(ctx context.Context, selector string, runt
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO connection_runtime(environment_key, source_name, target_name, protocol, source_generation,
-  listen_port, owner_instance_id, state, reason, observed_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  listen_ip, dns_name, listen_port, owner_instance_id, state, reason, observed_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(environment_key, source_name, target_name) DO UPDATE SET protocol = excluded.protocol,
-  source_generation = excluded.source_generation, listen_port = excluded.listen_port,
+  source_generation = excluded.source_generation, listen_ip = excluded.listen_ip, dns_name = excluded.dns_name,
+  listen_port = excluded.listen_port,
   owner_instance_id = excluded.owner_instance_id, state = excluded.state, reason = excluded.reason,
   observed_at = excluded.observed_at`, key, runtime.Source, runtime.Target, runtime.Protocol,
-		runtime.SourceGeneration, runtime.ListenPort, runtime.OwnerInstanceID, runtime.State, runtime.Reason, observed)
+		runtime.SourceGeneration, runtime.ListenIP, runtime.DNSName, runtime.ListenPort, runtime.OwnerInstanceID, runtime.State, runtime.Reason, observed)
 	return err
 }
 

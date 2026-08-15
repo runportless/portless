@@ -23,7 +23,7 @@ func TestCobraRootHelpShowsCommandTree(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "project", "record", "relay", "reset", "runtime", "--env", "--json", "--no-color"} {
+	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "project", "record", "relay", "reset", "runtime", "uninstall", "--env", "--json", "--no-color"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q:\n%s", expected, output.String())
 		}
@@ -53,7 +53,7 @@ func TestCobraRootCommandsAreGroupedByTask(t *testing.T) {
 		"project": rootGroupConfigure, "env": rootGroupConfigure,
 		"record": rootGroupTest, "fault": rootGroupTest,
 		"runtime": rootGroupSystem, "setup": rootGroupSystem, "relay": rootGroupSystem, "daemon": rootGroupSystem,
-		"doctor": rootGroupSystem, "config": rootGroupSystem, "reset": rootGroupSystem,
+		"doctor": rootGroupSystem, "config": rootGroupSystem, "reset": rootGroupSystem, "uninstall": rootGroupSystem,
 		"completion": rootGroupOther, "help": rootGroupOther,
 	}
 
@@ -359,9 +359,27 @@ func TestResetCommandHelpExplainsConfirmationAndPreservedState(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"reset", "--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"--yes", "permanent deletion", "preserves CLI preferences", "localhost relay installation"} {
+	for _, expected := range []string{"--yes", "--force", "active or unknown", "permanent deletion", "preserves CLI preferences", "localhost relay installation"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("reset help does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestForcedResetPreviewExplainsRuntimeTerminationAndExactConfirmation(t *testing.T) {
+	application, output, _ := newTestCLI(t)
+	result := resetOutput{
+		Action: "reset", Forced: true, Projects: 1, Environments: 1,
+		ActiveEnvironments: []string{"store/local"},
+		WillRemove:         append([]string(nil), resetRemovalCategories...),
+		Preserved:          append([]string(nil), resetPreservedCategories...),
+	}
+	if err := application.printResetPreview(result); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Force reset will terminate verified Portless runtimes", "store/local", "portless reset --force --yes"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("forced reset preview does not contain %q:\n%s", expected, output.String())
 		}
 	}
 }
@@ -440,11 +458,11 @@ func TestPrintStatusShowsHTTPAndPublishedContainerEndpoints(t *testing.T) {
 	application.printStatus(model.Environment{
 		Project: "billing", Name: "local", DashboardURL: "http://portless.localhost/environments/billing/local",
 		Services: []model.Service{
-			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess}, Status: model.ServiceReady, IngressURL: "http://checkout.local.billing.localhost", UpstreamPort: 49100},
-			{ServiceDefinition: model.ServiceDefinition{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"}, Status: model.ServiceReady, UpstreamPort: 49101},
+			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess}, Status: model.ServiceReady, Endpoints: []model.Endpoint{{Kind: model.EndpointPublic, Protocol: model.ProtocolHTTP, URL: "http://checkout.local.billing.localhost"}}, UpstreamPort: 49100},
+			{ServiceDefinition: model.ServiceDefinition{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"}, Status: model.ServiceReady, Endpoints: []model.Endpoint{{Kind: model.EndpointPublic, Protocol: model.ProtocolPostgres, URL: "postgresql://postgres.local.billing.portless.test:5432/portless"}}, UpstreamPort: 49101},
 		},
 	})
-	for _, expected := range []string{"http://checkout.local.billing.localhost", "127.0.0.1:49101", "http://portless.localhost/environments/billing/local"} {
+	for _, expected := range []string{"http://checkout.local.billing.localhost", "postgresql://postgres.local.billing.portless.test:5432/portless", "http://portless.localhost/environments/billing/local"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("status does not contain %q:\n%s", expected, output.String())
 		}
@@ -459,7 +477,7 @@ func TestStatusUsesRestrainedPaletteWhenColorIsEnabled(t *testing.T) {
 		Project: "billing", Name: "local", Status: model.EnvironmentHealthy,
 		DashboardURL: "http://portless.localhost/environments/billing/local",
 		Services: []model.Service{
-			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess}, Status: model.ServiceReady, IngressURL: "http://checkout.local.billing.localhost"},
+			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess}, Status: model.ServiceReady, Endpoints: []model.Endpoint{{Kind: model.EndpointPublic, Protocol: model.ProtocolHTTP, URL: "http://checkout.local.billing.localhost"}}},
 		},
 	})
 	for _, expected := range []string{
@@ -869,7 +887,7 @@ func TestCobraSetupIsOnlyTheFirstRunShortcut(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"setup", "--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	if !strings.Contains(output.String(), "Configure clean localhost URLs for first use") {
+	if !strings.Contains(output.String(), "Configure clean HTTP URLs and TCP endpoint DNS") {
 		t.Fatalf("setup help does not describe first-run configuration:\n%s", output.String())
 	}
 	setup, _, err := application.rootCommand().Find([]string{"setup"})
@@ -886,7 +904,7 @@ func TestCobraRelayHelpShowsLifecycleCommands(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"relay", "--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"install", "status", "restart", "uninstall", "Manage the clean-URL relay"} {
+	for _, expected := range []string{"install", "status", "restart", "uninstall", "Manage clean local endpoint networking"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("relay help does not contain %q:\n%s", expected, output.String())
 		}
@@ -963,6 +981,7 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless daemon restart":  runAction,
 		"portless doctor":          runAction,
 		"portless reset":           runAction,
+		"portless uninstall":       runAction,
 		"portless up":              runAction,
 		"portless down":            runAction,
 		"portless status":          runAction,

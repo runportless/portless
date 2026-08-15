@@ -17,6 +17,7 @@ import (
 	"github.com/portless-run/portless/internal/auth"
 	"github.com/portless-run/portless/internal/daemon"
 	"github.com/portless-run/portless/internal/events"
+	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/runtime/logstore"
 	"github.com/portless-run/portless/internal/store"
@@ -52,6 +53,9 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.inspectRelay = func(context.Context) (ingress.InstallationStatus, error) {
+		return ingress.InstallationStatus{Platform: "launchd", Service: "dev.portless.ingress", Installed: true, Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, ResolverPresent: true, ResolverHealthy: true, EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0", DNSListenAddress: ingress.DefaultDNSAddress}, nil
+	}
 
 	unauthenticated := request(server, authManager, http.MethodGet, "/api/v1/projects", "", false)
 	if unauthenticated.Code != http.StatusUnauthorized {
@@ -64,7 +68,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	environment := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local", "", true)
 	if environment.Code != http.StatusOK || !strings.Contains(environment.Body.String(), `"project":"billing"`) || !strings.Contains(environment.Body.String(), `"name":"local"`) ||
 		!strings.Contains(environment.Body.String(), `"dashboardUrl":"http://portless.localhost/environments/billing/local"`) ||
-		!strings.Contains(environment.Body.String(), `"ingressUrl":"http://checkout.local.billing.localhost"`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
+		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
 		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
 
@@ -119,6 +123,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	daemonStatus := request(server, authManager, http.MethodGet, "/api/v1/daemon", "", true)
 	if daemonStatus.Code != http.StatusOK || !strings.Contains(daemonStatus.Body.String(), `"instanceId":"instance-current"`) || !strings.Contains(daemonStatus.Body.String(), `"protocolVersion":"2"`) || strings.Contains(daemonStatus.Body.String(), "installationId") {
 		t.Fatalf("daemon status response code=%d body=%s", daemonStatus.Code, daemonStatus.Body.String())
+	}
+	relayStatus := request(server, authManager, http.MethodGet, "/api/v1/relay", "", true)
+	if relayStatus.Code != http.StatusOK || !strings.Contains(relayStatus.Body.String(), `"httpHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"dnsHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"resolverHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"dnsListenAddress":"127.77.0.1:1053"`) {
+		t.Fatalf("relay status response code=%d body=%s", relayStatus.Code, relayStatus.Body.String())
 	}
 	daemonRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, true)
 	if daemonRestart.Code != http.StatusAccepted || !strings.Contains(daemonRestart.Body.String(), `"restarting":true`) || daemonControl.restartedInstance != "instance-current" {
@@ -179,6 +187,14 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	blockedReset := request(server, authManager, http.MethodPost, "/api/v1/runtime/reset", "", true)
 	if blockedReset.Code != http.StatusConflict || !strings.Contains(blockedReset.Body.String(), `"code":"ACTIVE_ENVIRONMENTS"`) {
 		t.Fatalf("active environment reset returned %d body=%s", blockedReset.Code, blockedReset.Body.String())
+	}
+	forcedReset := request(server, authManager, http.MethodPost, "/api/v1/runtime/reset", `{"force":true}`, true)
+	if forcedReset.Code != http.StatusOK || !strings.Contains(forcedReset.Body.String(), `"processes":0`) {
+		t.Fatalf("forced active-environment reset returned %d body=%s", forcedReset.Code, forcedReset.Body.String())
+	}
+	forcedResetCanceled := request(server, authManager, http.MethodPost, "/api/v1/runtime/reset/cancel", "", true)
+	if forcedResetCanceled.Code != http.StatusNoContent {
+		t.Fatalf("forced reset cancellation returned %d body=%s", forcedResetCanceled.Code, forcedResetCanceled.Body.String())
 	}
 	if err := controlStore.SetEnvironmentStatus(context.Background(), "billing", "local", model.EnvironmentStopped, ""); err != nil {
 		t.Fatal(err)

@@ -194,7 +194,20 @@ func (c *CLI) showService(ctx context.Context, name string) error {
 	}
 	fmt.Fprintf(c.Out, "  %-15s %d\n", "Generation:", service.Generation)
 	fmt.Fprintf(c.Out, "  %-15s %d\n", "Restarts:", service.RestartCount)
-	fmt.Fprintf(c.Out, "  %-15s %s\n", "Endpoint:", emptyAs(statusEndpoint(service), "none"))
+	if len(service.Endpoints) == 0 {
+		fmt.Fprintf(c.Out, "  %-15s %s\n", "Endpoint:", "none")
+	} else {
+		for index, endpoint := range service.Endpoints {
+			label := "Endpoint:"
+			if index > 0 {
+				label = ""
+			}
+			fmt.Fprintf(c.Out, "  %-15s %s\n", label, endpoint.URL)
+		}
+	}
+	if service.UpstreamPort > 0 {
+		fmt.Fprintf(c.Out, "  %-15s %s\n", "Runtime target:", fmt.Sprintf("127.0.0.1:%d", service.UpstreamPort))
+	}
 	if service.PID != 0 {
 		fmt.Fprintf(c.Out, "  %-15s %d\n", "PID:", service.PID)
 	}
@@ -294,9 +307,13 @@ func (c *CLI) listConnections(ctx context.Context, limit int) error {
 		fmt.Fprintln(c.Out, c.muted(c.Out, "No connections."))
 		return nil
 	}
-	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-30s %-10s %-11s %-12s %-22s %s", "CONNECTION", "PROTOCOL", "PROVIDER", "STATE", "PROXY", "INJECTED AS")))
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-30s %-10s %-11s %-12s %-52s %s", "CONNECTION", "PROTOCOL", "PROVIDER", "STATE", "ENDPOINT", "INJECTED AS")))
 	for _, connection := range response.Connections {
-		fmt.Fprintf(c.Out, "%-30s %-10s %-11s %s %-22s %s\n", connection.Source+":"+connection.Target, connection.Protocol, connection.TargetProvider, c.state(c.Out, fmt.Sprintf("%-12s", connection.TargetStatus)), emptyAs(connection.ProxyAddress, "inactive"), emptyAs(connection.InjectedEnvVar, "—"))
+		endpoint := "inactive"
+		if connection.Endpoint != nil {
+			endpoint = connection.Endpoint.URL
+		}
+		fmt.Fprintf(c.Out, "%-30s %-10s %-11s %s %-52s %s\n", connection.Source+":"+connection.Target, connection.Protocol, connection.TargetProvider, c.state(c.Out, fmt.Sprintf("%-12s", connection.TargetStatus)), endpoint, emptyAs(connection.InjectedEnvVar, "—"))
 	}
 	return nil
 }
@@ -322,10 +339,15 @@ func (c *CLI) showConnection(ctx context.Context, edge string) error {
 	fmt.Fprintf(c.Out, "  %-18s %t\n", "Required:", connection.Required)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Target provider:", connection.TargetProvider)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Target state:", c.state(c.Out, string(connection.TargetStatus)))
-	fmt.Fprintf(c.Out, "  %-18s %s\n", "Proxy address:", emptyAs(connection.ProxyAddress, "inactive"))
+	endpointURL, listener := "inactive", "inactive"
+	if connection.Endpoint != nil {
+		endpointURL, listener = connection.Endpoint.URL, emptyAs(connection.Endpoint.Address, "inactive")
+	}
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Endpoint:", endpointURL)
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Listener:", listener)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Injected as:", emptyAs(connection.InjectedEnvVar, "none"))
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Injected value:", emptyAs(connection.InjectedValue, "not active"))
-	fmt.Fprintf(c.Out, "  %-18s %s\n", "Effective target:", emptyAs(connection.TargetEndpoint, "not active"))
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Runtime target:", emptyAs(connection.RuntimeTarget, "not active"))
 	return nil
 }
 
@@ -456,13 +478,14 @@ func (c *CLI) printURL(ctx context.Context, requested string) error {
 	}
 	for _, service := range environment.Services {
 		if strings.EqualFold(service.Name, name) {
-			if service.IngressURL == "" {
-				return fmt.Errorf("service %s does not expose an HTTP endpoint", service.Name)
+			endpoint := primaryServiceEndpoint(service)
+			if endpoint == nil {
+				return fmt.Errorf("service %s does not expose a public endpoint", service.Name)
 			}
 			if c.jsonOutput {
-				return writeJSON(c.Out, map[string]string{"service": service.Name, "url": service.IngressURL})
+				return writeJSON(c.Out, map[string]string{"service": service.Name, "url": endpoint.URL})
 			}
-			fmt.Fprintln(c.Out, service.IngressURL)
+			fmt.Fprintln(c.Out, endpoint.URL)
 			return nil
 		}
 	}

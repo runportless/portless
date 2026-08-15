@@ -66,9 +66,11 @@ type dependencies struct {
 	checkDaemon        func(context.Context, bootstrap.Paths) (bootstrap.ControlRecord, error)
 	inspectRelay       func(context.Context) (ingress.InstallationStatus, error)
 	checkIngressSocket func(context.Context, string) error
+	checkDNSSocket     func(context.Context, string) error
 	processAlive       func(int) error
 	lookupIP           func(context.Context, string) ([]net.IPAddr, error)
 	portListening      func(context.Context) (bool, error)
+	dnsListening       func(context.Context) (bool, error)
 	probeRuntimes      func(context.Context) []container.ProbeResult
 }
 
@@ -137,6 +139,7 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 				skipped("daemon.api", "daemon", "Daemon API was not checked"),
 				skipped("daemon.authentication", "daemon", "CLI authentication was not checked"),
 				skipped("daemon.ingress_socket", "daemon", "Private ingress socket was not checked"),
+				skipped("daemon.dns_socket", "daemon", "Private DNS socket was not checked"),
 			)
 		}
 		checks = append(checks, failed("daemon.data_directory", "daemon", "Data directory ownership or permissions are unsafe", detailOrError(detail, err), remediation))
@@ -154,6 +157,7 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 			skipped("daemon.api", "daemon", "Daemon API was not checked"),
 			skipped("daemon.authentication", "daemon", "CLI authentication was not checked"),
 			skipped("daemon.ingress_socket", "daemon", "Private ingress socket was not checked"),
+			skipped("daemon.dns_socket", "daemon", "Private DNS socket was not checked"),
 		)
 	}
 	controlProblems := make([]string, 0, 2)
@@ -228,6 +232,17 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 	} else {
 		checks = append(checks, passed("daemon.ingress_socket", "daemon", "Private ingress socket is healthy", socketDetail))
 	}
+	dnsSocketDetail, dnsSocketPathErr := securePath(paths.DNS, uid, pathSocket)
+	var dnsSocketHealthErr error
+	if info, err := os.Lstat(paths.DNS); err == nil && info.Mode()&os.ModeSocket != 0 && dependencies.checkDNSSocket != nil {
+		dnsSocketHealthErr = dependencies.checkDNSSocket(ctx, paths.DNS)
+	}
+	if dnsSocketPathErr != nil || dnsSocketHealthErr != nil {
+		detail := joinDetails(detailOrError(dnsSocketDetail, dnsSocketPathErr), errorDetail("health check", dnsSocketHealthErr))
+		checks = append(checks, failed("daemon.dns_socket", "daemon", "Private DNS socket is not usable", detail, "Restart the Portless daemon by running `portless up` or `portless ui`."))
+	} else {
+		checks = append(checks, passed("daemon.dns_socket", "daemon", "Private DNS socket is healthy", dnsSocketDetail))
+	}
 	return checks
 }
 
@@ -240,7 +255,7 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 	if errors.Is(dnsErr, errUnsafeLocalhostResolution) {
 		checks = append(checks, failed("relay.localhost_dns", "relay", ".localhost names do not resolve exclusively to loopback", dnsErr.Error(), "Correct the local DNS or resolver configuration for the reserved .localhost domain."))
 	} else if dnsErr != nil {
-		if inspectErr == nil && status.Healthy {
+		if inspectErr == nil && status.HTTPHealthy {
 			checks = append(checks, informed("relay.localhost_dns", "relay", "System resolver defers .localhost mapping to clients", dnsErr.Error()+"; the clean-URL end-to-end check succeeded"))
 		} else {
 			checks = append(checks, warned("relay.localhost_dns", "relay", "System resolver does not expose .localhost addresses", dnsErr.Error(), "Browsers and curl normally map the reserved .localhost suffix themselves; if clean URLs fail there, inspect local resolver or security software."))
@@ -253,21 +268,27 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 		checks = append(checks, failed("relay.installation", "relay", "Relay installation could not be inspected", inspectErr.Error(), "Run `portless relay status`, then `portless relay install` to repair it."))
 		checks = append(checks, relaySkippedChecks()...)
 		checks = append(checks, portCheck(ctx, false, dependencies))
+		checks = append(checks, dnsPortCheck(ctx, false, dependencies))
 		checks = append(checks, skipped("relay.end_to_end", "relay", "End-to-end routing was not checked"))
+		checks = append(checks, skipped("relay.dns_end_to_end", "relay", "End-to-end DNS was not checked"))
 		return checks
 	}
 	if status.Platform == "unsupported" {
 		checks = append(checks, failed("relay.installation", "relay", "The privileged relay is unsupported on this platform", "Portless currently supports launchd on macOS and systemd on Linux.", "Use a supported macOS or systemd Linux host."))
 		checks = append(checks, relaySkippedChecks()...)
 		checks = append(checks, portCheck(ctx, false, dependencies))
+		checks = append(checks, dnsPortCheck(ctx, false, dependencies))
 		checks = append(checks, skipped("relay.end_to_end", "relay", "End-to-end routing was not checked"))
+		checks = append(checks, skipped("relay.dns_end_to_end", "relay", "End-to-end DNS was not checked"))
 		return checks
 	}
 	if !status.Installed {
 		checks = append(checks, failed("relay.installation", "relay", "Clean-URL relay is not installed", status.ConfigurationPath, "Run `portless relay install` or `portless setup`."))
 		checks = append(checks, relaySkippedChecks()...)
 		checks = append(checks, portCheck(ctx, false, dependencies))
+		checks = append(checks, dnsPortCheck(ctx, false, dependencies))
 		checks = append(checks, skipped("relay.end_to_end", "relay", "End-to-end routing was not checked"))
+		checks = append(checks, skipped("relay.dns_end_to_end", "relay", "End-to-end DNS was not checked"))
 		return checks
 	}
 
@@ -307,6 +328,28 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 	} else {
 		checks = append(checks, passed("relay.target", "relay", "Relay targets the current daemon socket", status.TargetSocket))
 	}
+	if status.DNSTargetSocket != paths.DNS {
+		checks = append(checks, failed("relay.dns_target", "relay", "Relay targets a different daemon DNS socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.DNSTargetSocket), paths.DNS), "Run `portless relay install` to repair the relay target."))
+	} else {
+		checks = append(checks, passed("relay.dns_target", "relay", "Relay targets the current daemon DNS socket", status.DNSTargetSocket))
+	}
+	if !status.EndpointPoolReady {
+		checks = append(checks, failed("relay.endpoint_pool", "relay", "TCP endpoint loopback address pool is not ready", emptyAsUnknown(status.EndpointPoolDetail), "Run `portless relay install` to provision or repair the Portless loopback addresses."))
+	} else {
+		checks = append(checks, passed("relay.endpoint_pool", "relay", "TCP endpoint loopback address pool is ready", status.EndpointPoolDetail))
+	}
+	if !status.ResolverPresent {
+		checks = append(checks, failed("relay.portless_dns", "relay", "Scoped portless.test resolver configuration is missing", emptyAsUnknown(status.ResolverPath), "Run `portless relay install` to repair the resolver configuration."))
+	} else {
+		resolverContext, cancelResolver := context.WithTimeout(ctx, 2*time.Second)
+		resolved, resolverErr := checkPortlessDNS(resolverContext, dependencies.lookupIP)
+		cancelResolver()
+		if resolverErr != nil {
+			checks = append(checks, failed("relay.portless_dns", "relay", "System resolver cannot resolve portless.test through Portless", resolverErr.Error(), "Run `portless relay install`, then inspect local resolver or security software."))
+		} else {
+			checks = append(checks, passed("relay.portless_dns", "relay", "System resolver routes portless.test to Portless", resolved))
+		}
+	}
 
 	if status.Running {
 		checks = append(checks, passed("relay.service", "relay", "Relay system service is running", status.Service))
@@ -314,10 +357,16 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 		checks = append(checks, failed("relay.service", "relay", "Relay system service is not running", status.Problem, "Run `portless relay restart`; use `portless relay install` if restart fails."))
 	}
 	checks = append(checks, portCheck(ctx, true, dependencies))
-	if status.Healthy {
+	checks = append(checks, dnsPortCheck(ctx, true, dependencies))
+	if status.HTTPHealthy {
 		checks = append(checks, passed("relay.end_to_end", "relay", "Clean URL reaches the Portless daemon", ingress.ControlOrigin))
 	} else {
 		checks = append(checks, failed("relay.end_to_end", "relay", "Clean URL cannot reach the Portless daemon", status.HealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
+	}
+	if status.DNSHealthy {
+		checks = append(checks, passed("relay.dns_end_to_end", "relay", "Portless DNS answers authoritative endpoint queries", ingress.DefaultDNSAddress))
+	} else {
+		checks = append(checks, failed("relay.dns_end_to_end", "relay", "Portless DNS cannot answer endpoint queries", status.DNSHealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
 	}
 	return checks
 }
@@ -352,8 +401,54 @@ func relaySkippedChecks() []Check {
 		skipped("relay.receipt", "relay", "Ownership receipt was not checked"),
 		skipped("relay.ownership", "relay", "Relay ownership was not checked"),
 		skipped("relay.target", "relay", "Relay target was not checked"),
+		skipped("relay.dns_target", "relay", "Relay DNS target was not checked"),
+		skipped("relay.endpoint_pool", "relay", "TCP endpoint loopback address pool was not checked"),
+		skipped("relay.portless_dns", "relay", "Scoped DNS resolver was not checked"),
 		skipped("relay.service", "relay", "Relay service was not checked"),
 	}
+}
+
+func dnsPortCheck(ctx context.Context, installed bool, dependencies dependencies) Check {
+	if dependencies.dnsListening == nil {
+		return skipped("relay.dns_listener", "relay", "Portless DNS listener was not checked")
+	}
+	probeContext, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	listening, err := dependencies.dnsListening(probeContext)
+	if err != nil {
+		return failed("relay.dns_listener", "relay", "Could not inspect "+ingress.DefaultDNSAddress, err.Error(), "Inspect local listeners on the Portless DNS address and retry.")
+	}
+	if installed && listening {
+		return passed("relay.dns_listener", "relay", "A listener is accepting DNS connections on "+ingress.DefaultDNSAddress, "UDP and TCP are owned by the relay")
+	}
+	if installed {
+		return failed("relay.dns_listener", "relay", "Nothing is listening on "+ingress.DefaultDNSAddress, "The relay is installed but DNS is unavailable.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
+	}
+	if listening {
+		return failed("relay.dns_listener", "relay", "The Portless DNS address is occupied by an unrecognized listener", ingress.DefaultDNSAddress, "Stop the conflicting listener, then run `portless relay install`.")
+	}
+	return passed("relay.dns_listener", "relay", "The Portless DNS address appears available", ingress.DefaultDNSAddress)
+}
+
+func checkPortlessDNS(ctx context.Context, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {
+	if lookup == nil {
+		return "", errors.New("system resolver lookup is unavailable")
+	}
+	addresses, err := lookup(ctx, "portless.test")
+	if err != nil {
+		return "", err
+	}
+	if len(addresses) == 0 {
+		return "", errors.New("portless.test returned no addresses")
+	}
+	values := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if !address.IP.IsLoopback() {
+			return "", fmt.Errorf("portless.test resolved to non-loopback address %s", address.IP)
+		}
+		values = append(values, address.IP.String())
+	}
+	return "portless.test → " + strings.Join(values, ", "), nil
 }
 
 func portCheck(ctx context.Context, installed bool, dependencies dependencies) Check {
@@ -463,6 +558,19 @@ func portListening(ctx context.Context) (bool, error) {
 	return false, err
 }
 
+func dnsListening(ctx context.Context) (bool, error) {
+	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
+	connection, err := dialer.DialContext(ctx, "tcp", ingress.DefaultDNSAddress)
+	if err == nil {
+		_ = connection.Close()
+		return true, nil
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return false, nil
+	}
+	return false, err
+}
+
 func probeRuntimes(ctx context.Context) []container.ProbeResult {
 	runtimes := []container.Runtime{podman.New("", ""), docker.New("", "")}
 	probes := make([]container.ProbeResult, 0, len(runtimes))
@@ -477,8 +585,8 @@ func probeRuntimes(ctx context.Context) []container.ProbeResult {
 func defaultDependencies() dependencies {
 	return dependencies{
 		checkDaemon: bootstrap.CheckDaemon, inspectRelay: ingress.Inspect,
-		checkIngressSocket: ingress.CheckSocket, processAlive: processAlive,
-		lookupIP: net.DefaultResolver.LookupIPAddr, portListening: portListening,
+		checkIngressSocket: ingress.CheckSocket, checkDNSSocket: ingress.CheckDNSSocket, processAlive: processAlive,
+		lookupIP: net.DefaultResolver.LookupIPAddr, portListening: portListening, dnsListening: dnsListening,
 		probeRuntimes: probeRuntimes,
 	}
 }

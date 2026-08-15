@@ -54,6 +54,7 @@ export function EnvironmentPage({ environment, tab, onNavigate, onChanged }: { e
   const ready = environment.services.filter((service) => service.status === 'ready').length
   const trafficCount = environment.services.reduce((sum, service) => sum + (service.recentRequests || 0), 0)
 	const primaryService = environment.services.find((service) => service.name === environment.primaryService)
+	const primaryHTTP = primaryService && publicEndpoint(primaryService, 'http')
 
   return (
     <div className="page project-page">
@@ -63,7 +64,7 @@ export function EnvironmentPage({ environment, tab, onNavigate, onChanged }: { e
           {activeRecording && <span className="recording-indicator"><i />REC {activeRecording.name}</span>}
           {activeFaults.length > 0 && <span className="fault-indicator">▲ {activeFaults.length} ACTIVE {activeFaults.length === 1 ? 'FAULT' : 'FAULTS'}</span>}
           {environment.status !== 'stopped' ? <button className="button" disabled={!!busy || environment.status === 'recovering'} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : environment.status === 'recovering' ? 'RECOVERING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}
-          {primaryService?.ingressUrl && <a className="button" href={primaryService.ingressUrl} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
+          {primaryHTTP && <a className="button" href={primaryHTTP.url} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
         </div>
       </div>
       {!!environment.issues?.length && <div className="alert alert--danger"><strong>Configuration needs attention</strong><span>{environment.issues.map((issue) => issue.message).join(' · ')}</span></div>}
@@ -146,9 +147,7 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
 
 export function overviewServiceEndpoint(environment: Environment, service: Service) {
   const binding = bindingFor(environment, service.name)
-  if (binding?.remote?.url) return binding.remote.url
-  if (service.ingressUrl) return service.ingressUrl
-  return serviceEndpoints(service, binding).find((endpoint) => endpoint.label === 'RUNTIME URL')?.value || ''
+  return publicEndpoint(service)?.url || binding?.remote?.url || ''
 }
 
 function CopyIcon({ copied }: { copied: boolean }) {
@@ -499,7 +498,7 @@ function Topology({ environment, faults, paused, onService, onEdge }: { environm
       if (item.kind === 'client') return <div key={item.key} className="topology__external topology__item" style={{ left: position.x, top: position.y }}><span>INGRESS</span><strong>browser / client</strong><small>localhost</small></div>
       const service = item.service
       return <button key={item.key} style={{ left: position.x, top: position.y }} className={`topology-node topology__item topology-node--${service.kind} ${service.name === environment.primaryService ? 'is-primary' : ''}`} onClick={() => selectService(service)}>
-        <span><StatusMark status={service.status} label={false} />{service.kind === 'container' ? service.template : service.framework}</span><strong>{service.name}</strong><small>{service.ingressUrl ? service.ingressUrl.replace(/^https?:\/\//, '') : service.status}</small>
+        <span><StatusMark status={service.status} label={false} />{service.kind === 'container' ? service.template : service.framework}</span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
       </button>
     })}
   </div></div></div>
@@ -561,10 +560,11 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
     try { await api<Operation>(`${base}/${name}`, { method: 'POST' }); onChanged() } finally { setBusy('') }
   }
   const endpoints = serviceEndpoints(service, bindingFor(environment, service.name))
+  const httpEndpoint = publicEndpoint(service, 'http')
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
     <aside className={`drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
-      <div className="drawer-actions"><button className="button button--primary" onClick={() => action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy || (service.status === 'ready' ? 'RESTART' : 'START')}</button><button className="button" onClick={() => action('stop')} disabled={!!busy || service.status === 'stopped'}>STOP</button>{service.ingressUrl && <a className="button" href={service.ingressUrl} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
+      <div className="drawer-actions"><button className="button button--primary" onClick={() => action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy || (service.status === 'ready' ? 'RESTART' : 'START')}</button><button className="button" onClick={() => action('stop')} disabled={!!busy || service.status === 'stopped'}>STOP</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
       <nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>
       <div className="drawer-content">
         {drawerTab === 'details' && <>
@@ -591,27 +591,22 @@ export function serviceEndpoints(service: Service, binding?: ComponentBinding): 
     endpoints.push(endpoint)
   }
 
-  if (service.ingressUrl) add({ label: 'CLEAN URL', value: service.ingressUrl, detail: 'Browser and host access through Portless', href: service.ingressUrl })
+  for (const endpoint of service.endpoints || []) {
+    if (endpoint.kind !== 'public') continue
+    add({
+      label: endpoint.protocol === 'http' ? 'CLEAN URL' : 'PUBLIC ENDPOINT',
+      value: endpoint.url,
+      detail: endpoint.protocol === 'http' ? 'Browser and host access through Portless' : `Stable ${endpoint.protocol} endpoint through Portless`,
+      ...(isWebURL(endpoint.url) ? { href: endpoint.url } : {}),
+    })
+  }
   if (binding?.remote?.url) add({ label: 'REMOTE PROVIDER', value: binding.remote.url, detail: `${binding.remote.classification} · ${binding.remote.writePolicy}`, ...(isWebURL(binding.remote.url) ? { href: binding.remote.url } : {}) })
-
-  const protocol = inferServiceProtocol(service)
-  const runtimeValue = service.upstreamPort ? endpointWithProtocol(`127.0.0.1:${service.upstreamPort}`, protocol) : ''
-  if (runtimeValue) add({ label: 'RUNTIME URL', value: runtimeValue, detail: 'Private endpoint owned by the current environment', ...(isWebURL(runtimeValue) ? { href: runtimeValue } : {}) })
 
   return endpoints
 }
 
-function inferServiceProtocol(service: Service): 'http' | 'tcp' | 'postgres' | 'redis' {
-  if (service.template === 'postgres') return 'postgres'
-  if (service.template === 'redis' || service.template === 'valkey') return 'redis'
-  return service.ingressUrl ? 'http' : 'tcp'
-}
-
-function endpointWithProtocol(value: string, protocol: string) {
-  if (value.includes('://')) return value
-  if (protocol === 'postgres') return `postgresql://${value}`
-  if (protocol === 'redis') return `redis://${value}`
-  return `${protocol === 'http' ? 'http' : 'tcp'}://${value}`
+function publicEndpoint(service: Service, protocol?: 'http' | 'tcp' | 'postgres' | 'redis') {
+  return (service.endpoints || []).find((endpoint) => endpoint.kind === 'public' && (!protocol || endpoint.protocol === protocol))
 }
 
 function isWebURL(value: string) { return /^https?:\/\//.test(value) }

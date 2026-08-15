@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,14 +53,23 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 	if err := os.Chmod(paths.Ingress, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	dnsListener, err := net.Listen("unix", paths.DNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dnsListener.Close()
+	if err := os.Chmod(paths.DNS, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	dependencies := dependencies{
 		checkDaemon:        func(context.Context, bootstrap.Paths) (bootstrap.ControlRecord, error) { return record, nil },
 		checkIngressSocket: func(context.Context, string) error { return nil },
+		checkDNSSocket:     func(context.Context, string) error { return nil },
 		processAlive:       func(int) error { return nil },
 	}
 	report := run(context.Background(), paths, ScopeDaemon, os.Getuid(), dependencies)
-	if !report.Healthy || report.Summary.Passed != 7 || report.Summary.Failed != 0 {
+	if !report.Healthy || report.Summary.Passed != 8 || report.Summary.Failed != 0 {
 		t.Fatalf("unexpected daemon report: %#v", report)
 	}
 	for _, check := range report.Checks {
@@ -76,7 +86,7 @@ func TestDaemonChecksDoNotCreateMissingDataDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := run(context.Background(), paths, ScopeDaemon, os.Getuid(), dependencies{})
-	if report.Healthy || report.Summary.Failed != 1 || report.Summary.Skipped != 5 {
+	if report.Healthy || report.Summary.Failed != 1 || report.Summary.Skipped != 6 {
 		t.Fatalf("unexpected missing-daemon report: %#v", report)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
@@ -96,9 +106,10 @@ func TestRelayChecksHealthyInstallation(t *testing.T) {
 			return healthyRelayStatus(paths, uid), nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
+		dnsListening:  func(context.Context) (bool, error) { return true, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, uid, dependencies)
-	if !report.Healthy || report.Summary.Passed != 8 || report.Summary.Failed != 0 {
+	if !report.Healthy || report.Summary.Passed != 13 || report.Summary.Failed != 0 {
 		t.Fatalf("unexpected healthy relay report: %#v", report)
 	}
 }
@@ -114,11 +125,15 @@ func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testi
 			return healthyRelayStatus(paths, uid), nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
+		dnsListening:  func(context.Context) (bool, error) { return true, nil },
 	}
 
 	unavailable := base
-	unavailable.lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
-		return nil, errors.New("resolver does not expose .localhost")
+	unavailable.lookupIP = func(_ context.Context, name string) ([]net.IPAddr, error) {
+		if strings.HasSuffix(name, ".localhost") {
+			return nil, errors.New("resolver does not expose .localhost")
+		}
+		return loopbackLookup(context.Background(), name)
 	}
 	report := run(context.Background(), paths, ScopeRelay, uid, unavailable)
 	if !report.Healthy || report.Summary.Informational != 1 || report.Summary.Warnings != 0 || report.Summary.Failed != 0 {
@@ -134,13 +149,16 @@ func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testi
 	}
 	unhealthy.portListening = func(context.Context) (bool, error) { return false, nil }
 	report = run(context.Background(), paths, ScopeRelay, uid, unhealthy)
-	if report.Summary.Informational != 0 || report.Summary.Warnings != 1 || report.Summary.Failed != 1 {
+	if report.Summary.Informational != 0 || report.Summary.Warnings != 1 || report.Summary.Failed != 2 {
 		t.Fatalf("resolver limitation should remain a warning while clean URLs are unavailable: %#v", report)
 	}
 
 	unsafe := base
-	unsafe.lookupIP = func(context.Context, string) ([]net.IPAddr, error) {
-		return []net.IPAddr{{IP: net.ParseIP("203.0.113.10")}}, nil
+	unsafe.lookupIP = func(_ context.Context, name string) ([]net.IPAddr, error) {
+		if strings.HasSuffix(name, ".localhost") {
+			return []net.IPAddr{{IP: net.ParseIP("203.0.113.10")}}, nil
+		}
+		return loopbackLookup(context.Background(), name)
 	}
 	report = run(context.Background(), paths, ScopeRelay, uid, unsafe)
 	if report.Healthy || report.Summary.Failed != 1 {
@@ -159,9 +177,10 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 			return ingress.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
+		dnsListening:  func(context.Context) (bool, error) { return false, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, os.Getuid(), dependencies)
-	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 5 {
+	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 9 {
 		t.Fatalf("unexpected missing relay report: %#v", report)
 	}
 	if checkByCode(t, report, "relay.installation").Remediation != "Run `portless relay install` or `portless setup`." {
@@ -198,9 +217,10 @@ func loopbackLookup(context.Context, string) ([]net.IPAddr, error) {
 func healthyRelayStatus(paths bootstrap.Paths, uid int) ingress.InstallationStatus {
 	return ingress.InstallationStatus{
 		Platform: "launchd", Service: "dev.portless.ingress", Installed: true,
-		Running: true, Healthy: true, HelperPresent: true, ConfigurationPresent: true,
-		ReceiptPresent: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.Ingress,
-		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt",
+		Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, HelperPresent: true, ConfigurationPresent: true,
+		ReceiptPresent: true, ResolverPresent: true, ResolverHealthy: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.Ingress, DNSTargetSocket: paths.DNS,
+		EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0",
+		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt", ResolverPath: "/fixed/resolver",
 	}
 }
 

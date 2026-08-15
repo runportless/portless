@@ -40,6 +40,28 @@ export interface DaemonRestart {
   activeEnvironments: string[]
 }
 
+export interface RelayStatus {
+  platform: string
+  service: string
+  installed: boolean
+  running: boolean
+  healthy: boolean
+  httpHealthy: boolean
+  dnsHealthy: boolean
+  resolverPresent: boolean
+  resolverHealthy: boolean
+  endpointPoolReady: boolean
+  endpointPoolDetail?: string
+  targetSocket?: string
+  dnsTargetSocket?: string
+  dnsListenAddress: string
+  resolverPath?: string
+  healthError?: string
+  dnsHealthError?: string
+  resolverHealthError?: string
+  problem?: string
+}
+
 export interface Evidence { file: string; explanation: string; confidence: string }
 export interface HealthCheck { kind: string; path?: string; timeout: number; interval: number }
 
@@ -52,10 +74,22 @@ export interface ServiceDefinition {
   command?: string[]
   workingDirectory?: string
   portEnvironment?: string
+  port?: number
   environment?: Record<string, string>
   required: boolean
   health: HealthCheck
   evidence?: Evidence[]
+}
+
+export type Protocol = 'http' | 'tcp' | 'postgres' | 'redis'
+export type EndpointKind = 'public' | 'connection'
+export interface Endpoint {
+  kind: EndpointKind
+  protocol: Protocol
+  host: string
+  port: number
+  url: string
+  address?: string
 }
 
 export interface Service extends ServiceDefinition {
@@ -64,7 +98,7 @@ export interface Service extends ServiceDefinition {
   generation: number
   pid?: number
   upstreamPort?: number
-  ingressUrl?: string
+  endpoints: Endpoint[]
   startedAt?: string
   restartCount: number
   recentRequests: number
@@ -74,9 +108,18 @@ export interface Service extends ServiceDefinition {
 export interface Connection {
   source: string
   target: string
-  protocol: 'http' | 'tcp' | 'postgres' | 'redis'
+  protocol: Protocol
   environment?: string
   required: boolean
+}
+
+export interface EffectiveConnection extends Connection {
+  targetProvider: ProviderKind
+  targetStatus: ServiceStatus
+  endpoint?: Endpoint
+  runtimeTarget?: string
+  injectedEnvVar?: string
+  injectedValue?: string
 }
 
 export interface ProjectSource { name: string; services?: string[] }

@@ -15,8 +15,18 @@ func restartPlatform(context.Context) error {
 	return errors.New("clean localhost ingress restart is currently supported on macOS and systemd Linux")
 }
 
-func uninstallPlatform(context.Context) error {
+func uninstallPlatform(context.Context, bool) error {
 	return errors.New("clean localhost ingress uninstall is currently supported on macOS and systemd Linux")
+}
+
+func prepareRelayLoopbackPool(context.Context, bool) error {
+	return errors.New("Portless loopback endpoint pools are unsupported on this platform")
+}
+
+func removeRelayLoopbackPool(context.Context) error { return nil }
+
+func relayLoopbackPoolStatus() (bool, string, error) {
+	return false, "unsupported platform", nil
 }
 
 func currentPlatformInstallation() platformInstallation {
@@ -27,6 +37,6 @@ func platformServiceRunning(context.Context) (bool, error) {
 	return false, nil
 }
 
-func platformConfigurationOwner(string) (int, int, string, error) {
-	return 0, 0, "", errors.New("unsupported platform")
+func platformConfigurationOwner(string) (int, int, string, string, error) {
+	return 0, 0, "", "", errors.New("unsupported platform")
 }

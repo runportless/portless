@@ -62,6 +62,7 @@ func runIngress(args []string) int {
 	set := flag.NewFlagSet("__ingress", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	targetSocket := set.String("socket", "", "private daemon socket")
+	dnsTargetSocket := set.String("dns-socket", "", "private daemon DNS socket")
 	uid := set.Int("uid", 0, "unprivileged user ID")
 	gid := set.Int("gid", 0, "unprivileged group ID")
 	if err := set.Parse(args); err != nil || set.NArg() != 0 {
@@ -70,7 +71,7 @@ func runIngress(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	err := ingress.RunRelay(ctx, ingress.RelayConfig{
-		TargetSocket: *targetSocket, UID: *uid, GID: *gid, DropPrivileges: true,
+		TargetSocket: *targetSocket, DNSTargetSocket: *dnsTargetSocket, UID: *uid, GID: *gid, DropPrivileges: true,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "portless ingress:", err)
@@ -83,6 +84,7 @@ func runIngressInstaller(args []string) int {
 	set := flag.NewFlagSet("__install-ingress", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	targetSocket := set.String("socket", "", "private daemon socket")
+	dnsTargetSocket := set.String("dns-socket", "", "private daemon DNS socket")
 	uid := set.Int("uid", 0, "unprivileged user ID")
 	gid := set.Int("gid", 0, "unprivileged group ID")
 	if err := set.Parse(args); err != nil || set.NArg() != 0 {
@@ -93,7 +95,7 @@ func runIngressInstaller(args []string) int {
 		executable, err = filepath.EvalSymlinks(executable)
 	}
 	if err == nil {
-		err = ingress.InstallPrivileged(context.Background(), executable, *targetSocket, *uid, *gid)
+		err = ingress.InstallPrivileged(context.Background(), executable, *targetSocket, *dnsTargetSocket, *uid, *gid)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "portless relay install:", err)

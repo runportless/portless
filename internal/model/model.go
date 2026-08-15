@@ -70,6 +70,25 @@ const (
 	ProtocolRedis    Protocol = "redis"
 )
 
+type EndpointKind string
+
+const (
+	EndpointPublic     EndpointKind = "public"
+	EndpointConnection EndpointKind = "connection"
+)
+
+// Endpoint is a stable, user-facing address owned by Portless. Address is the
+// concrete loopback listener used by the proxy; clients should use URL (or
+// Host and Port) so the listener identity can remain an implementation detail.
+type Endpoint struct {
+	Kind     EndpointKind `json:"kind"`
+	Protocol Protocol     `json:"protocol"`
+	Host     string       `json:"host"`
+	Port     int          `json:"port"`
+	URL      string       `json:"url"`
+	Address  string       `json:"address,omitempty"`
+}
+
 type HealthCheck struct {
 	Kind     string        `json:"kind"`
 	Path     string        `json:"path,omitempty"`
@@ -78,18 +97,22 @@ type HealthCheck struct {
 }
 
 type ServiceDefinition struct {
-	Name             string            `json:"name"`
-	Kind             ServiceKind       `json:"kind"`
-	Framework        string            `json:"framework,omitempty"`
-	Template         string            `json:"template,omitempty"`
-	Version          string            `json:"version,omitempty"`
-	Command          []string          `json:"command,omitempty"`
-	WorkingDirectory string            `json:"workingDirectory,omitempty"`
-	PortEnvironment  string            `json:"portEnvironment,omitempty"`
-	Environment      map[string]string `json:"environment,omitempty"`
-	Required         bool              `json:"required"`
-	Health           HealthCheck       `json:"health"`
-	Evidence         []Evidence        `json:"evidence,omitempty"`
+	Name             string      `json:"name"`
+	Kind             ServiceKind `json:"kind"`
+	Framework        string      `json:"framework,omitempty"`
+	Template         string      `json:"template,omitempty"`
+	Version          string      `json:"version,omitempty"`
+	Command          []string    `json:"command,omitempty"`
+	WorkingDirectory string      `json:"workingDirectory,omitempty"`
+	PortEnvironment  string      `json:"portEnvironment,omitempty"`
+	// Port is the stable client-facing port for a generic TCP service. Managed
+	// Postgres and Redis-compatible templates use their conventional ports when
+	// it is omitted.
+	Port        int               `json:"port,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+	Required    bool              `json:"required"`
+	Health      HealthCheck       `json:"health"`
+	Evidence    []Evidence        `json:"evidence,omitempty"`
 }
 
 type Evidence struct {
@@ -110,8 +133,8 @@ type EffectiveConnection struct {
 	Connection
 	TargetProvider ProviderKind  `json:"targetProvider"`
 	TargetStatus   ServiceStatus `json:"targetStatus"`
-	ProxyAddress   string        `json:"proxyAddress,omitempty"`
-	TargetEndpoint string        `json:"targetEndpoint,omitempty"`
+	Endpoint       *Endpoint     `json:"endpoint,omitempty"`
+	RuntimeTarget  string        `json:"runtimeTarget,omitempty"`
 	InjectedEnvVar string        `json:"injectedEnvVar,omitempty"`
 	InjectedValue  string        `json:"injectedValue,omitempty"`
 }
@@ -217,7 +240,7 @@ type Service struct {
 	Generation    int64         `json:"generation"`
 	PID           int           `json:"pid,omitempty"`
 	UpstreamPort  int           `json:"upstreamPort,omitempty"`
-	IngressURL    string        `json:"ingressUrl,omitempty"`
+	Endpoints     []Endpoint    `json:"endpoints"`
 	StartedAt     *time.Time    `json:"startedAt,omitempty"`
 	RestartCount  int64         `json:"restartCount"`
 	RecentRequest int64         `json:"recentRequests"`

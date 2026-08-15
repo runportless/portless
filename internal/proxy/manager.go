@@ -151,38 +151,62 @@ func (m *Manager) RemoveTarget(scope, service string) {
 }
 
 func (m *Manager) EnsureEdge(ctx context.Context, scope string, connection model.Connection) (int, error) {
-	return m.ensureEdge(ctx, scope, connection, 0)
+	address, err := m.ensureEdge(ctx, scope, connection, "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	return address.Port, nil
 }
 
 func (m *Manager) EnsureEdgeAtPort(ctx context.Context, scope string, connection model.Connection, port int) (int, error) {
 	if port < 1 || port > 65535 {
 		return 0, errors.New("persisted proxy port is invalid")
 	}
-	return m.ensureEdge(ctx, scope, connection, port)
+	address, err := m.ensureEdge(ctx, scope, connection, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return 0, err
+	}
+	return address.Port, nil
 }
 
-func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model.Connection, requestedPort int) (int, error) {
+// EnsureEdgeAtAddress binds a directed edge to an exact loopback address. A
+// distinct address lets multiple Postgres or Redis edges use their conventional
+// port while preserving source identity for traffic controls.
+func (m *Manager) EnsureEdgeAtAddress(ctx context.Context, scope string, connection model.Connection, requestedAddress string) (string, error) {
+	parsed, err := net.ResolveTCPAddr("tcp", requestedAddress)
+	if err != nil || parsed.IP == nil || !parsed.IP.IsLoopback() || parsed.Port < 1 || parsed.Port > 65535 {
+		return "", errors.New("proxy edge address must be an explicit loopback IP and valid port")
+	}
+	address, err := m.ensureEdge(ctx, scope, connection, parsed.String())
+	if err != nil {
+		return "", err
+	}
+	return address.String(), nil
+}
+
+func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model.Connection, requestedAddress string) (*net.TCPAddr, error) {
 	key := edgeKey(scope, connection.Source, connection.Target)
 	m.mu.RLock()
 	current := m.edges[key]
 	m.mu.RUnlock()
 	if current != nil {
-		currentPort := current.listener.Addr().(*net.TCPAddr).Port
-		if requestedPort != 0 && currentPort != requestedPort {
-			return 0, fmt.Errorf("proxy edge is already bound to port %d, expected %d", currentPort, requestedPort)
+		currentAddress := current.listener.Addr().(*net.TCPAddr)
+		requested, err := net.ResolveTCPAddr("tcp", requestedAddress)
+		if err != nil {
+			return nil, err
 		}
-		return currentPort, nil
+		if requested.Port != 0 && currentAddress.String() != requested.String() {
+			return nil, fmt.Errorf("proxy edge is already bound to %s, expected %s", currentAddress, requested)
+		}
+		return currentAddress, nil
 	}
-	address := "127.0.0.1:0"
-	if requestedPort != 0 {
-		address = net.JoinHostPort("127.0.0.1", strconv.Itoa(requestedPort))
-	}
-	listener, err := net.Listen("tcp", address)
+	listener, err := net.Listen("tcp", requestedAddress)
 	if err != nil {
-		if requestedPort != 0 {
-			return 0, fmt.Errorf("restore proxy edge on %s: %w", address, err)
+		requested, _ := net.ResolveTCPAddr("tcp", requestedAddress)
+		if requested != nil && requested.Port != 0 {
+			return nil, fmt.Errorf("bind proxy edge on %s: %w", requestedAddress, err)
 		}
-		return 0, err
+		return nil, err
 	}
 	edgeContext, cancel := context.WithCancel(context.Background())
 	created := &edge{scope: scope, source: connection.Source, target: connection.Target, protocol: connection.Protocol, listener: listener, cancel: cancel}
@@ -191,7 +215,7 @@ func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model
 		m.mu.Unlock()
 		cancel()
 		_ = listener.Close()
-		return existing.listener.Addr().(*net.TCPAddr).Port, nil
+		return existing.listener.Addr().(*net.TCPAddr), nil
 	}
 	m.edges[key] = created
 	m.mu.Unlock()
@@ -207,7 +231,7 @@ func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model
 	} else {
 		go m.serveTCP(edgeContext, created)
 	}
-	return listener.Addr().(*net.TCPAddr).Port, nil
+	return listener.Addr().(*net.TCPAddr), nil
 }
 
 func (m *Manager) HasTarget(scope, service string) bool {
@@ -222,6 +246,13 @@ func (m *Manager) HasEdge(scope, source, targetName string, port int) bool {
 	defer m.mu.RUnlock()
 	current := m.edges[edgeKey(scope, source, targetName)]
 	return current != nil && current.listener != nil && (port == 0 || current.listener.Addr().(*net.TCPAddr).Port == port)
+}
+
+func (m *Manager) HasEdgeAtAddress(scope, source, targetName, address string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	current := m.edges[edgeKey(scope, source, targetName)]
+	return current != nil && current.listener != nil && current.listener.Addr().String() == address
 }
 
 func (m *Manager) ServeIngress(w http.ResponseWriter, request *http.Request, scope, service string) {

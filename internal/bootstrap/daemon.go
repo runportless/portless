@@ -21,6 +21,7 @@ import (
 	"github.com/portless-run/portless/internal/application"
 	"github.com/portless-run/portless/internal/auth"
 	"github.com/portless-run/portless/internal/daemon"
+	portlessdns "github.com/portless-run/portless/internal/dns"
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/store"
@@ -117,6 +118,12 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	}
 	defer ingressListener.Close()
 	defer removeIngressSocket(paths.Ingress)
+	dnsListener, err := listenPrivateSocket(paths.DNS, "DNS")
+	if err != nil {
+		return err
+	}
+	defer dnsListener.Close()
+	defer removeIngressSocket(paths.DNS)
 	port := listener.Addr().(*net.TCPAddr).Port
 	shutdownRequested := make(chan struct{})
 	restartRequested := make(chan struct{}, 1)
@@ -173,13 +180,18 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 		return fmt.Errorf("publish daemon discovery record: %w", err)
 	}
 	defer removeOwnControl(paths, identity.InstanceID)
-	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.Ingress, "pid", os.Getpid(), "instance", identity.InstanceID, "build", identity.BuildID[:12])
-	errChannel := make(chan error, 2)
+	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.Ingress, "dnsSocket", paths.DNS, "pid", os.Getpid(), "instance", identity.InstanceID, "build", identity.BuildID[:12])
+	errChannel := make(chan error, 3)
 	go func() {
 		errChannel <- controlServer.Serve(listener)
 	}()
 	go func() {
 		errChannel <- ingressServer.Serve(ingressListener)
+	}()
+	dnsContext, stopDNS := context.WithCancel(ctx)
+	defer stopDNS()
+	go func() {
+		errChannel <- portlessdns.Serve(dnsContext, dnsListener, controlStore)
 	}()
 	watchContext, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
@@ -188,26 +200,31 @@ func RunDaemon(ctx context.Context, paths Paths, preferredPort int) error {
 	defer cancel()
 	select {
 	case <-signalContext.Done():
+		stopDNS()
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
 	case <-shutdownRequested:
+		stopDNS()
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
 	case <-replacementRequested:
+		stopDNS()
 		_ = controlStore.SetDaemonInstanceState(context.Background(), instanceID, "draining", false)
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		shutdownErr := errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
 		return errors.Join(ErrExecutableChanged, shutdownErr)
 	case <-restartRequested:
+		stopDNS()
 		_ = controlStore.SetDaemonInstanceState(context.Background(), instanceID, "draining", false)
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		shutdownErr := errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
 		return errors.Join(ErrRestartRequested, shutdownErr)
 	case err := <-errChannel:
+		stopDNS()
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		_ = controlServer.Shutdown(shutdownContext)
@@ -277,24 +294,28 @@ func sameExecutableFile(left, right os.FileInfo) bool {
 }
 
 func listenIngress(path string) (net.Listener, error) {
+	return listenPrivateSocket(path, "ingress")
+}
+
+func listenPrivateSocket(path, purpose string) (net.Listener, error) {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
-			return nil, fmt.Errorf("refusing to replace non-socket ingress path %s", path)
+			return nil, fmt.Errorf("refusing to replace non-socket %s path %s", purpose, path)
 		}
 		if err := os.Remove(path); err != nil {
-			return nil, fmt.Errorf("remove stale ingress socket: %w", err)
+			return nil, fmt.Errorf("remove stale %s socket: %w", purpose, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("inspect ingress socket: %w", err)
+		return nil, fmt.Errorf("inspect %s socket: %w", purpose, err)
 	}
 	listener, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("listen on private ingress socket: %w", err)
+		return nil, fmt.Errorf("listen on private %s socket: %w", purpose, err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		listener.Close()
 		removeIngressSocket(path)
-		return nil, fmt.Errorf("protect private ingress socket: %w", err)
+		return nil, fmt.Errorf("protect private %s socket: %w", purpose, err)
 	}
 	return listener, nil
 }

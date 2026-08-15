@@ -72,7 +72,13 @@ type downOptions struct {
 }
 
 type resetOptions struct {
-	yes bool
+	yes   bool
+	force bool
+}
+
+type uninstallOptions struct {
+	yes   bool
+	force bool
 }
 
 type logsOptions struct {
@@ -267,6 +273,7 @@ func (c *CLI) rootCommand() *cobra.Command {
 		inRootGroup(rootGroupSystem, c.doctorCommand()),
 		inRootGroup(rootGroupSystem, c.configCommand()),
 		inRootGroup(rootGroupSystem, c.resetCommand()),
+		inRootGroup(rootGroupSystem, c.uninstallCommand()),
 	)
 	return root
 }
@@ -372,7 +379,7 @@ func (c *CLI) doctorCommand() *cobra.Command {
 func (c *CLI) setupCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Configure clean localhost URLs for first use",
+		Short: "Configure clean HTTP URLs and TCP endpoint DNS",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return c.installRelay(cmd.Context(), c.jsonOutput)
@@ -381,10 +388,10 @@ func (c *CLI) setupCommand() *cobra.Command {
 }
 
 func (c *CLI) relayCommand() *cobra.Command {
-	command := commandGroup("relay", "Manage the clean-URL relay")
+	command := commandGroup("relay", "Manage clean local endpoint networking")
 	install := &cobra.Command{
 		Use:   "install",
-		Short: "Install or repair the localhost port-80 relay",
+		Short: "Install or repair HTTP ingress and TCP endpoint DNS",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return c.installRelay(cmd.Context(), c.jsonOutput)
@@ -394,7 +401,7 @@ func (c *CLI) relayCommand() *cobra.Command {
 
 	status := &cobra.Command{
 		Use:   "status",
-		Short: "Show clean-URL relay installation and health",
+		Short: "Show local HTTP and DNS relay health",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return c.relayStatus(cmd.Context(), c.jsonOutput)
@@ -404,7 +411,7 @@ func (c *CLI) relayCommand() *cobra.Command {
 
 	restart := &cobra.Command{
 		Use:   "restart",
-		Short: "Restart the installed clean-URL relay",
+		Short: "Restart the installed HTTP and DNS relay",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return c.restartRelay(cmd.Context(), c.jsonOutput)
@@ -416,7 +423,7 @@ func (c *CLI) relayCommand() *cobra.Command {
 	uninstall := &cobra.Command{
 		Use:     "uninstall",
 		Aliases: []string{"remove"},
-		Short:   "Remove only the privileged clean-URL relay",
+		Short:   "Remove only the privileged HTTP and DNS relay",
 		Args:    usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return c.uninstallRelay(cmd.Context(), force, c.jsonOutput)
@@ -492,6 +499,23 @@ func (c *CLI) resetCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&options.yes, "yes", false, "confirm permanent deletion")
+	command.Flags().BoolVar(&options.force, "force", false, "terminate verified Portless runtimes even when environments are active or unknown")
+	return command
+}
+
+func (c *CLI) uninstallCommand() *cobra.Command {
+	options := uninstallOptions{}
+	command := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove Portless and all locally managed resources",
+		Long:  "Uninstall Portless completely. Without --yes, the command only previews the daemon, relay, resolver, managed runtimes, data, and CLI launcher that would be removed.",
+		Args:  usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.uninstall(cmd.Context(), options)
+		},
+	}
+	command.Flags().BoolVar(&options.yes, "yes", false, "confirm permanent removal")
+	command.Flags().BoolVar(&options.force, "force", false, "terminate verified Portless runtimes even when environments are active or unknown")
 	return command
 }
 

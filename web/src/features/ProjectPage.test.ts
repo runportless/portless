@@ -76,23 +76,22 @@ describe('environment topology', () => {
     expect(markup).toContain('>topology<')
   })
 
-  it('describes clean, remote, and protocol-specific runtime service endpoints', () => {
-    const localService = { name: 'orders', kind: 'process', ingressUrl: 'http://orders.local.billing.localhost', upstreamPort: 43101 } as Service
+  it('describes clean, remote, and protocol-specific public service endpoints', () => {
+    const localService = { name: 'orders', kind: 'process', endpoints: [{ kind: 'public', protocol: 'http', host: 'orders.local.billing.localhost', port: 80, url: 'http://orders.local.billing.localhost' }], upstreamPort: 43101 } as Service
     expect(serviceEndpoints(localService)).toEqual([
       { label: 'CLEAN URL', value: 'http://orders.local.billing.localhost', detail: 'Browser and host access through Portless', href: 'http://orders.local.billing.localhost' },
-      { label: 'RUNTIME URL', value: 'http://127.0.0.1:43101', detail: 'Private endpoint owned by the current environment', href: 'http://127.0.0.1:43101' },
     ])
 
     const remoteBinding = { service: 'orders', provider: 'remote', remote: { url: 'https://orders.qa.example.com', classification: 'qa', writePolicy: 'read-only' } } as ComponentBinding
     expect(serviceEndpoints({ name: 'orders', kind: 'process' } as Service, remoteBinding)).toEqual([
       { label: 'REMOTE PROVIDER', value: 'https://orders.qa.example.com', detail: 'qa · read-only', href: 'https://orders.qa.example.com' },
     ])
-    expect(serviceEndpoints({ name: 'postgres', kind: 'container', template: 'postgres', upstreamPort: 5432 } as Service)[0].value).toBe('postgresql://127.0.0.1:5432')
-    expect(serviceEndpoints({ name: 'redis', kind: 'container', template: 'valkey', upstreamPort: 6379 } as Service)[0].value).toBe('redis://127.0.0.1:6379')
+    expect(serviceEndpoints({ name: 'postgres', kind: 'container', template: 'postgres', endpoints: [{ kind: 'public', protocol: 'postgres', host: 'postgres.local.store.portless.test', port: 5432, url: 'postgresql://postgres.local.store.portless.test:5432/portless' }] } as Service)[0].value).toBe('postgresql://postgres.local.store.portless.test:5432/portless')
+    expect(serviceEndpoints({ name: 'redis', kind: 'container', template: 'valkey', endpoints: [{ kind: 'public', protocol: 'redis', host: 'redis.local.store.portless.test', port: 6379, url: 'redis://redis.local.store.portless.test:6379' }] } as Service)[0].value).toBe('redis://redis.local.store.portless.test:6379')
   })
 
   it('renders copyable service endpoints on the overview', () => {
-    const checkout = { name: 'checkout', kind: 'process', framework: 'nestjs', status: 'ready', ingressUrl: 'http://checkout.local.billing.localhost', upstreamPort: 43100, restartCount: 0, recentRequests: 0, health: { kind: 'tcp' } } as Service
+    const checkout = { name: 'checkout', kind: 'process', framework: 'nestjs', status: 'ready', endpoints: [{ kind: 'public', protocol: 'http', host: 'checkout.local.billing.localhost', port: 80, url: 'http://checkout.local.billing.localhost' }], upstreamPort: 43100, restartCount: 0, recentRequests: 0, health: { kind: 'tcp' } } as Service
     const environment = {
       project: 'billing', name: 'local', status: 'healthy', revision: 1,
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),

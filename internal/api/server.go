@@ -17,12 +17,13 @@ import (
 	"github.com/portless-run/portless/internal/application"
 	"github.com/portless-run/portless/internal/auth"
 	"github.com/portless-run/portless/internal/daemon"
+	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/store"
 )
 
-const APIVersion = "3"
+const APIVersion = "4"
 
 type Server struct {
 	app           *application.Service
@@ -31,6 +32,7 @@ type Server struct {
 	assets        fs.FS
 	files         http.Handler
 	indexHTML     []byte
+	inspectRelay  func(context.Context) (ingress.InstallationStatus, error)
 }
 
 type DaemonControl interface {
@@ -81,7 +83,7 @@ func New(app *application.Service, authManager *auth.Manager, assets fs.FS, daem
 	if err != nil {
 		return nil, fmt.Errorf("read embedded UI: %w", err)
 	}
-	return &Server{app: app, auth: authManager, daemonControl: daemonControl, assets: assets, files: http.FileServer(http.FS(assets)), indexHTML: index}, nil
+	return &Server{app: app, auth: authManager, daemonControl: daemonControl, assets: assets, files: http.FileServer(http.FS(assets)), indexHTML: index, inspectRelay: ingress.Inspect}, nil
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -159,6 +161,8 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 		s.handleSystem(writer, request)
 	case "daemon":
 		s.handleDaemon(writer, request, segments)
+	case "relay":
+		s.handleRelay(writer, request, segments)
 	case "runtime":
 		s.handleRuntime(writer, request, segments, principal)
 	case "session":
@@ -172,6 +176,27 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	default:
 		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "API route not found"})
 	}
+}
+
+func (s *Server) handleRelay(writer http.ResponseWriter, request *http.Request, segments []string) {
+	if len(segments) != 1 {
+		writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "relay route not found"})
+		return
+	}
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	if s.inspectRelay == nil {
+		writeAPIError(writer, http.StatusServiceUnavailable, APIError{Code: "RELAY_STATE_UNAVAILABLE", Message: "relay inspection is unavailable", Remediation: []Remediation{{Label: "Diagnose the relay", Command: "portless doctor relay"}}})
+		return
+	}
+	status, err := s.inspectRelay(request.Context())
+	if err != nil {
+		writeAPIError(writer, http.StatusServiceUnavailable, APIError{Code: "RELAY_STATE_UNAVAILABLE", Message: err.Error(), Remediation: []Remediation{{Label: "Diagnose the relay", Command: "portless doctor relay"}}})
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
 }
 
 func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request, segments []string) {
@@ -281,7 +306,16 @@ func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request
 			writeAPIError(writer, http.StatusForbidden, APIError{Code: "CLI_AUTH_REQUIRED", Message: "runtime reset preparation may only be requested by the local CLI"})
 			return
 		}
-		result, err := s.app.PrepareReset(request.Context())
+		var input struct {
+			Force bool `json:"force"`
+		}
+		if request.ContentLength != 0 {
+			if err := decodeJSON(request, &input); err != nil {
+				writeDecodeError(writer, err)
+				return
+			}
+		}
+		result, err := s.app.PrepareReset(request.Context(), input.Force)
 		if err != nil {
 			var active application.ResetActiveEnvironmentsError
 			if errors.As(err, &active) {

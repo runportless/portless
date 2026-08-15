@@ -20,7 +20,14 @@ http://checkout.local.billing.localhost
 http://orders.local.billing.localhost
 ```
 
-Processes, Postgres, and Valkey receive dynamically allocated loopback ports. Two checkouts can both have a service named `postgres`, both listen on their framework's usual port internally, and still run at once.
+TCP services also have stable DNS endpoints on their conventional ports:
+
+```text
+postgres.local.billing.portless.test:5432
+redis.local.billing.portless.test:6379
+```
+
+Processes and containers still receive private dynamic runtime ports. Portless allocates a distinct loopback IP to each public TCP endpoint and each directed service connection, so multiple projects can all expose Postgres on `5432` and Redis-compatible storage on `6379` without conflicts. A process receives a source-aware name such as `postgres.via-orders.local.billing.portless.test`; this preserves the exact caller for traffic, recordings, and faults. The first release reserves 64 such endpoint addresses across the installation and rejects a configuration atomically if that pool is exhausted.
 
 ## What is implemented
 
@@ -31,10 +38,10 @@ Processes, Postgres, and Valkey receive dynamically allocated loopback ports. Tw
 - Readable project and service names throughout the CLI, API, URLs, and UI; immutable ownership keys remain private.
 - Persistent per-service supervisors, dynamic ports, HTTP/TCP readiness, bounded structured process/container logs, dependency-aware environment and individual-service lifecycle, daemon-crash reconciliation, and durable operations.
 - Direct Docker Engine or Podman networks, volumes, Postgres 17, and Valkey 8 with generated local credentials. Docker Compose is not used.
-- Stable `.localhost` application ingress and per-edge HTTP/TCP proxies.
+- Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
 - Unified, filtered HTTP/TCP traffic inspection with redacted request/response headers and durable detail lookup through recordings.
 - Named, bounded local recordings and JSON export.
-- Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and automatic expiry.
+- Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and optional expiry.
 - SQLite WAL state, project timeline, CLI bearer auth, one-use browser claims, session cookies, CSRF, Origin checks, and strict control/application Host separation.
 - An embedded React/TypeScript control plane styled as a dense local operations console.
 
@@ -64,7 +71,7 @@ The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin
 
 ## First run
 
-1. Run `portless setup` once. It asks for administrator approval to install a minimal localhost-only port-80 relay, then immediately drops to your user account. `portless relay install` is the explicit equivalent.
+1. Run `portless setup` once. It asks for administrator approval to install the narrow loopback relay used by clean HTTP URLs and TCP endpoint DNS, then immediately drops to your user account. `portless relay install` is the explicit equivalent.
 2. Install and start Docker Engine or Podman if the project needs Postgres or Redis-compatible storage.
 3. Enter a Spring Boot or NestJS repository.
 4. Run `portless up` to discover and start its `local` environment.
@@ -72,7 +79,7 @@ The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin
 
 `portless env rescan` refreshes every source in the selected environment while it is stopped. The next `portless up` uses the refreshed model immediately.
 
-`portless setup` and `portless relay install` are idempotent. On macOS they install a root-owned launchd job; on systemd Linux they install an equivalent unit. The helper owns only `127.0.0.1:80`, drops privileges before accepting traffic, and cannot inspect or control projects independently of the user daemon. If another program already owns local port 80, installation stops with that conflict instead of replacing it. A root-owned receipt records which local user and private socket own the machine-wide relay.
+`portless setup` and `portless relay install` are idempotent. On macOS they install a root-owned launchd job and an `/etc/resolver/portless.test` route; on systemd Linux they install an equivalent unit and a routing domain for `systemd-resolved`. The helper binds only `127.0.0.1:80` and UDP/TCP `127.77.0.1:1053`, then drops to the installing user before accepting traffic. The scoped resolver explicitly uses port 1053, avoiding macOS's system-owned wildcard DNS listener on port 53. macOS setup also reserves a bounded `127.77.0.x` loopback pool because Darwin does not make the full `127/8` range bindable by default; Linux already does. Its DNS server is authoritative only for `portless.test` and never forwards unrelated queries, so the machine's normal DNS remains untouched. If an owned address is already in use, installation reports the conflict instead of replacing it. A root-owned receipt records which local user and private HTTP/DNS sockets own the machine-wide relay.
 
 The daemon creates `~/.portless` and its private runtime directories with mode `0700`. When opening an existing data directory, it rejects files and symlinks, verifies ownership, and restores mode `0700` before reading daemon state.
 
@@ -93,6 +100,10 @@ portless config color never
 portless config reset
 portless reset
 portless reset --yes
+portless reset --force --yes
+portless uninstall
+portless uninstall --yes
+portless uninstall --force --yes
 portless env list
 portless env select billing/local
 portless env current
@@ -149,7 +160,17 @@ CLI color defaults to `auto`, which uses a restrained status palette only when o
 
 Ordinary `down` preserves managed volumes, history, logs, and recordings. Volume removal requires the separate destructive flag and confirmation.
 
-`portless reset` previews a machine-wide application-state reset and does not change anything. `portless reset --yes` requires every environment to be stopped, removes all projects, environments, traffic, recordings, faults, timelines, service logs, generated credentials, and every Portless-owned container, network, database volume, and cache volume from each container runtime Portless has used. It then restarts the daemon with an empty database. If a previously used runtime is unavailable, reset stops before erasing the ownership records so it can be retried safely. CLI preferences, the selected runtime, installation identity, authentication, and the privileged localhost relay installation are preserved. Use `portless config reset` instead when only CLI preferences should return to their defaults.
+`portless reset` previews a machine-wide application-state reset and does not change anything. `portless reset --yes` requires every environment to be stopped. `portless reset --force --yes` is the explicit recovery path for active, recovering, or unknown environments: it can first replace an authenticated outdated daemon while leaving runtimes in place, then stops every process supervisor whose private ownership record can be authenticated and removes installation-labeled runtime resources before erasing state. Both confirmed forms remove all projects, environments, traffic, recordings, faults, timelines, service logs, generated credentials, and every Portless-owned container, network, database volume, and cache volume from each container runtime Portless has used, then restart the daemon with an empty database. Force never authorizes killing an unverified process. If a previously used runtime is unavailable or runtime ownership cannot be proven, reset stops before erasing the ownership records so it can be retried safely. CLI preferences, the selected runtime, installation identity, authentication, and the privileged localhost relay installation are preserved. Use `portless config reset` instead when only CLI preferences should return to their defaults.
+
+## Uninstall Portless completely
+
+`portless uninstall` is preview-only. It inventories the daemon, projects and environments when the current daemon is available, privileged relay and resolver, complete data directory, managed runtime cleanup, and the CLI launcher. It never requests administrator approval or changes the machine. The preview prints the exact confirmed command required for the observed state.
+
+`portless uninstall --yes` proceeds only when Portless can verify that every environment is stopped. `portless uninstall --force --yes` is the explicit recovery path for active, recovering, stopped-daemon, or otherwise unavailable inventory. Force still removes only authenticated process supervisors, installation-labeled containers/networks/volumes, and a guarded Portless daemon; it never authorizes an unverified process kill.
+
+Confirmed uninstall is deliberately ordered so cleanup ownership cannot be lost: it purges managed runtimes, removes the privileged HTTP/DNS relay and its `portless.test` resolver/loopback pool, stops the daemon without restarting it, removes the entire configured Portless data directory, and removes the CLI launcher last. A verified launcher symlink is unlinked without deleting its target, so a source-tree `bin/portless` build remains. A regular executable is removed automatically only when it is the running `portless` binary in a recognized CLI install directory; uncertain or source-tree paths are preserved and reported.
+
+The full command will not use `--force` to override relay ownership or remove a relay targeting another Portless data directory. Resolve that exceptional machine-wide ownership case separately with `portless relay status` and, only when intentional, `portless relay uninstall --force`. If runtime cleanup, relay removal, or daemon/data removal fails, later destructive steps are skipped and the remaining ownership state is retained for a safe retry. `--json` provides the same preview and completion result as structured output.
 
 Logs from both host processes and managed containers are stored as structured entries. Portless retains the newest 10 generations for each service and caps each generation's stdout and stderr stream at 16 MiB, so a noisy local service cannot grow storage without bound.
 
@@ -166,15 +187,15 @@ portless relay restart --json
 portless relay uninstall
 ```
 
-Restart verifies that the relay belongs to the current user before requesting administrator approval. It restarts only the fixed Portless launchd or systemd service, starts the user daemon when needed, and waits for the clean URL to pass an end-to-end health check.
+Restart verifies that the relay belongs to the current user before requesting administrator approval. It restarts only the fixed Portless launchd or systemd service, starts the user daemon when needed, and waits for both HTTP ingress and authoritative TCP endpoint DNS to pass end-to-end health checks.
 
-Uninstall is idempotent and avoids requesting administrator approval when the relay is already absent. It unloads the launchd or systemd service and removes only its fixed service configuration, copied helper executable, and installation receipt. Projects, environments, running processes, containers, volumes, recordings, and `~/.portless` remain untouched. Their clean localhost URLs are unavailable until `portless relay install` or `portless setup` is run again.
+Uninstall is idempotent and avoids requesting administrator approval when the relay is already absent. It unloads the launchd or systemd service and removes only its fixed service configuration, scoped `portless.test` resolver entry, copied helper executable, and installation receipt. Projects, environments, running processes, containers, volumes, recordings, and `~/.portless` remain untouched. Clean HTTP URLs and TCP DNS names are unavailable until `portless relay install` or `portless setup` is run again.
 
 The relay is machine-wide. Portless refuses to restart or remove an installation owned by another user—or one whose ownership cannot be established. Removal can be forced with `portless relay uninstall --force`; restart deliberately has no force option. The privileged subprocess accepts no user-controlled service names or filesystem paths.
 
 ## Diagnose the local installation
 
-`portless doctor` performs read-only checks across the daemon, clean-URL relay, `.localhost` resolution, port 80, and the available Docker/Podman runtimes. It does not start services, invoke `sudo`, change runtime selection, or repair anything.
+`portless doctor` performs read-only checks across the daemon, private HTTP/DNS sockets, `.localhost` resolution, the scoped `portless.test` resolver, HTTP port 80, the dedicated DNS port 1053, and the available Docker/Podman runtimes. It does not start services, invoke `sudo`, change runtime selection, or repair anything.
 
 ```bash
 portless doctor
@@ -283,10 +304,13 @@ flowchart LR
   APP --> DB["SQLite WAL"]
   APP --> PROC["Host process groups"]
   APP --> CR["Docker Engine or Podman"]
-  PROC --> PROXY["HTTP/TCP edge proxies"]
+  PROC --> PROXY["Source-aware HTTP/TCP edge proxies"]
   CR --> PROXY
-  INGRESS["service.environment.project.localhost · port 80"] --> RELAY["Privileged bind · unprivileged relay"]
-  RELAY -->|"private Unix socket"| API
+  HTTP["service.environment.project.localhost · port 80"] --> RELAY["Privileged loopback bind · drops privileges"]
+  DNS["service.environment.project.portless.test · conventional TCP port"] --> RELAY
+  RELAY -->|"private HTTP Unix socket"| API
+  RELAY -->|"private DNS Unix socket"| DNSD["Authoritative portless.test DNS"]
+  DNSD --> DB
   API --> PROXY
   PROXY --> BUS["Bounded live event bus"]
   BUS --> UI

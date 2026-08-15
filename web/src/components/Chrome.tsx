@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { DaemonRestart, DaemonStatus, Environment, Project, RuntimeStatus } from '../types'
+import type { DaemonRestart, DaemonStatus, Environment, Project, RelayStatus, RuntimeStatus } from '../types'
 import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
@@ -8,7 +8,7 @@ export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' |
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, runtime, daemon, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, runtime, daemon, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
@@ -17,6 +17,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   settingsActive?: boolean
   runtime?: RuntimeStatus | null
   daemon: DaemonStatus | null
+  relay?: RelayStatus | null
   children: ReactNode
   onNavigate: (path: string) => void
   commands: Command[]
@@ -57,7 +58,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     ...projects.map((project) => ({ group: 'Projects', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onNavigate(`/projects/${encodeURIComponent(project.name)}`) })),
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
-    { group: 'System', label: 'Settings', detail: 'Appearance', run: () => onNavigate('/settings') },
+    { group: 'System', label: 'Settings', detail: 'Appearance and runtime', run: () => onNavigate('/settings') },
   ], [commands, environments, onNavigate, projects])
 
   const expandProject = (name: string) => {
@@ -125,12 +126,34 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
       <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
-      <header className="topbar"><div className="crumbs">{settingsActive ? <><span>portless</span><b>/</b><strong>settings</strong></> : activeEnvironment ? <><span>{activeEnvironment.project}</span><b>/</b><strong>{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></> : activeProject ? <><span>projects</span><b>/</b><strong>{activeProject.name}</strong></> : <><span>projects</span><b>/</b><strong>all</strong></>}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
+      <header className="topbar"><TopbarBreadcrumbs settingsActive={settingsActive} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} /><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
-    {daemonOpen && <DaemonDrawer status={daemon} runtime={runtime ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
+    {daemonOpen && <DaemonDrawer status={daemon} runtime={runtime ?? null} relay={relay ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
   </div>
+}
+
+function TopbarBreadcrumbs({ settingsActive, activeProject, activeEnvironment, onNavigate }: {
+  settingsActive: boolean
+  activeProject?: Project
+  activeEnvironment?: Environment
+  onNavigate: (path: string) => void
+}) {
+  return <nav className="crumbs" aria-label="Breadcrumb">
+    {settingsActive ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><strong aria-current="page">settings</strong></>
+      : activeEnvironment ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><BreadcrumbLink path={`/projects/${encodeURIComponent(activeEnvironment.project)}`} onNavigate={onNavigate}>{activeEnvironment.project}</BreadcrumbLink><b>/</b><strong aria-current="page">{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></>
+        : activeProject ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><strong aria-current="page">{activeProject.name}</strong></>
+          : <strong aria-current="page">projects</strong>}
+  </nav>
+}
+
+function BreadcrumbLink({ path, onNavigate, children }: { path: string; onNavigate: (path: string) => void; children: ReactNode }) {
+  return <a href={path} onClick={(event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    onNavigate(path)
+  }}>{children}</a>
 }
 
 function ViewButton({ label, view, activeView, environment, icon, onNavigate }: {

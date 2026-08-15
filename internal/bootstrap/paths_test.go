@@ -240,3 +240,154 @@ func TestResetRefusesMissingControlRecordWhileDaemonInstanceLockIsHeld(t *testin
 		t.Fatalf("unexpected missing-control reset error: %v", err)
 	}
 }
+
+func TestInspectInstallationStateDoesNotTreatAnEmptyDirectoryAsPortlessState(t *testing.T) {
+	root := t.TempDir()
+	paths, err := ResolvePaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := InspectInstallationState(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Present {
+		t.Fatalf("empty directory was classified as Portless state: %#v", status)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("inspection changed the directory: %v", err)
+	}
+}
+
+func TestRemoveInstallationStateDeletesCompleteRootWithoutRestartingDaemon(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".portless-test")
+	paths, err := ResolvePaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "logs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		paths.Token:                             "token",
+		paths.OwnershipKey:                      "ownership",
+		filepath.Join(root, "preferences.json"): `{"color":"never"}`,
+		filepath.Join(root, "logs", "app.log"):  "log",
+		filepath.Join(root, "future-state"):     "also-owned-by-the-dedicated-root",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := RemoveInstallationState(context.Background(), paths, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Removed || result.Path != root {
+		t.Fatalf("unexpected uninstall result: %#v", result)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("installation root still exists: %v", err)
+	}
+	if _, err := os.Lstat(paths.Control); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uninstall started a replacement daemon: %v", err)
+	}
+}
+
+func TestRemoveInstallationStateIsIdempotentWhenRootIsAbsent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-created")
+	paths, err := ResolvePaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := RemoveInstallationState(context.Background(), paths, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Removed || result.Path != root {
+		t.Fatalf("unexpected absent uninstall result: %#v", result)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("absent uninstall created state: %v", err)
+	}
+}
+
+func TestInspectInstallationStateRejectsSymlinkAndMismatchedPaths(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, ".portless")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := ResolvePaths(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectInstallationState(paths); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("unexpected symlink error: %v", err)
+	}
+
+	paths, err = ResolvePaths(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths.Database = filepath.Join(t.TempDir(), "outside.db")
+	if _, err := InspectInstallationState(paths); err == nil || !strings.Contains(err.Error(), "do not share") {
+		t.Fatalf("unexpected mismatched path error: %v", err)
+	}
+}
+
+func TestInspectInstallationStateRejectsHomeDirectory(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	paths, err := ResolvePaths(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectInstallationState(paths); err == nil || !strings.Contains(err.Error(), "home directory") {
+		t.Fatalf("unexpected home-directory safety error: %v", err)
+	}
+}
+
+func TestRemoveInstallationStateRejectsAmbiguousCustomRootAndGitCheckout(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		rootName string
+		git      bool
+		want     string
+	}{
+		{name: "ambiguous", rootName: "application-data", want: "must have portless"},
+		{name: "git checkout", rootName: "portless-source", git: true, want: "Git checkout"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), test.rootName)
+			paths, err := ResolvePaths(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.Token, []byte("marker"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if test.git {
+				if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := RemoveInstallationState(context.Background(), paths, true); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected destructive-root safety error: %v", err)
+			}
+			if content, err := os.ReadFile(paths.Token); err != nil || string(content) != "marker" {
+				t.Fatalf("state changed before destructive-root rejection: content=%q err=%v", content, err)
+			}
+		})
+	}
+}

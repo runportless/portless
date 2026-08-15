@@ -48,6 +48,7 @@ type resetDaemonOutput struct {
 type resetOutput struct {
 	Action                    string                  `json:"action"`
 	Confirmed                 bool                    `json:"confirmed"`
+	Forced                    bool                    `json:"forced"`
 	Changed                   bool                    `json:"changed"`
 	Projects                  int                     `json:"projects"`
 	Environments              int                     `json:"environments"`
@@ -71,7 +72,7 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 		return err
 	}
 	preview := resetOutput{
-		Action: "reset", Confirmed: options.yes, Changed: false,
+		Action: "reset", Confirmed: options.yes, Forced: options.force, Changed: false,
 		Projects: len(plan.Projects), Environments: len(plan.Environments),
 		ManagedVolumeEnvironments: len(plan.ContainerEnvironments),
 		ActiveEnvironments:        append([]string{}, plan.ActiveEnvironments...),
@@ -81,8 +82,14 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	if !options.yes {
 		return c.printResetPreview(preview)
 	}
-	if len(plan.ActiveEnvironments) > 0 {
+	if len(plan.ActiveEnvironments) > 0 && !options.force {
 		return activeResetError(plan.ActiveEnvironments)
+	}
+	if options.force {
+		client, err = c.connectCurrentDaemonForForcedReset(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if !c.jsonOutput && len(plan.ContainerEnvironments) > 0 {
 		fmt.Fprintln(c.Out, "Removing Portless-managed container resources...")
@@ -91,7 +98,7 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 		Processes int                     `json:"processes"`
 		Runtimes  []container.ResetResult `json:"runtimes"`
 	}
-	if err := client.Do(ctx, http.MethodPost, "/api/v1/runtime/reset", nil, &prepared); err != nil {
+	if err := client.Do(ctx, http.MethodPost, "/api/v1/runtime/reset", map[string]bool{"force": options.force}, &prepared); err != nil {
 		return err
 	}
 	resetLifecycleComplete := false
@@ -104,7 +111,7 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 		_ = client.Do(cancelContext, http.MethodPost, "/api/v1/runtime/reset/cancel", nil, nil)
 	}()
 
-	_, record, err := bootstrap.ResetDaemonApplicationState(ctx, c.paths)
+	_, record, err := bootstrap.ResetDaemonApplicationState(ctx, c.paths, options.force)
 	if err != nil {
 		return err
 	}
@@ -124,6 +131,22 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	}
 	c.printResetComplete(result)
 	return nil
+}
+
+func (c *CLI) connectCurrentDaemonForForcedReset(ctx context.Context) (*bootstrap.Client, error) {
+	inspection, inspectErr := bootstrap.InspectDaemon(ctx, c.paths)
+	if inspectErr == nil && inspection.Compatible && inspection.CurrentBuild {
+		client, _, err := bootstrap.Connect(ctx, c.paths)
+		return client, err
+	}
+	if _, err := bootstrap.StopDaemon(ctx, c.paths, bootstrap.StopOptions{Force: true, Timeout: 15 * time.Second}); err != nil {
+		return nil, fmt.Errorf("replace daemon before forced reset: %w", err)
+	}
+	client, _, err := bootstrap.Connect(ctx, c.paths)
+	if err != nil {
+		return nil, fmt.Errorf("start current daemon before forced reset: %w", err)
+	}
+	return client, nil
 }
 
 func loadResetPlan(ctx context.Context, client *bootstrap.Client) (resetPlan, error) {
@@ -204,13 +227,21 @@ func (c *CLI) printResetPreview(result resetOutput) error {
 	printResetPreserved(c, result.Preserved)
 	if len(result.ActiveEnvironments) > 0 {
 		fmt.Fprintln(c.Out)
-		fmt.Fprintln(c.Out, c.warning(c.Out, "Reset is currently blocked by active environments:"))
+		if result.Forced {
+			fmt.Fprintln(c.Out, c.warning(c.Out, "Force reset will terminate verified Portless runtimes in these environments:"))
+		} else {
+			fmt.Fprintln(c.Out, c.warning(c.Out, "Reset is currently blocked by active environments:"))
+		}
 		for _, environment := range result.ActiveEnvironments {
 			fmt.Fprintln(c.Out, "  "+environment)
 		}
 	}
 	fmt.Fprintln(c.Out)
-	fmt.Fprintln(c.Out, "No changes were made. Run `portless reset --yes` to continue.")
+	command := "portless reset --yes"
+	if result.Forced {
+		command = "portless reset --force --yes"
+	}
+	fmt.Fprintf(c.Out, "No changes were made. Run `%s` to continue.\n", command)
 	return nil
 }
 

@@ -16,16 +16,19 @@ import (
 
 const (
 	DefaultListenAddress = "127.0.0.1:80"
+	DefaultDNSAddress    = "127.77.0.1:1053"
 	defaultConnections   = 256
 )
 
 type RelayConfig struct {
-	ListenAddress  string
-	TargetSocket   string
-	UID            int
-	GID            int
-	DropPrivileges bool
-	MaxConnections int
+	ListenAddress    string
+	TargetSocket     string
+	DNSListenAddress string
+	DNSTargetSocket  string
+	UID              int
+	GID              int
+	DropPrivileges   bool
+	MaxConnections   int
 }
 
 func RunRelay(ctx context.Context, config RelayConfig) error {
@@ -35,17 +38,53 @@ func RunRelay(ctx context.Context, config RelayConfig) error {
 	if !filepath.IsAbs(config.TargetSocket) {
 		return errors.New("ingress target socket must be an absolute path")
 	}
+	if config.DNSListenAddress == "" {
+		config.DNSListenAddress = DefaultDNSAddress
+	}
+	if !filepath.IsAbs(config.DNSTargetSocket) {
+		return errors.New("DNS target socket must be an absolute path")
+	}
+	if config.DropPrivileges {
+		if err := prepareRelayLoopbackPool(ctx, false); err != nil {
+			return err
+		}
+	}
 	listener, err := net.Listen("tcp", config.ListenAddress)
 	if err != nil {
 		return fmt.Errorf("listen for clean localhost ingress on %s: %w", config.ListenAddress, err)
 	}
 	defer listener.Close()
+	dnsTCP, err := net.Listen("tcp", config.DNSListenAddress)
+	if err != nil {
+		return fmt.Errorf("listen for Portless TCP DNS on %s: %w", config.DNSListenAddress, err)
+	}
+	defer dnsTCP.Close()
+	dnsUDP, err := net.ListenPacket("udp", config.DNSListenAddress)
+	if err != nil {
+		return fmt.Errorf("listen for Portless UDP DNS on %s: %w", config.DNSListenAddress, err)
+	}
+	defer dnsUDP.Close()
 	if config.DropPrivileges {
 		if err := dropPrivileges(config.UID, config.GID); err != nil {
 			return err
 		}
 	}
-	return ServeRelay(ctx, listener, config.TargetSocket, config.MaxConnections)
+	relayContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errChannel := make(chan error, 3)
+	go func() { errChannel <- ServeRelay(relayContext, listener, config.TargetSocket, config.MaxConnections) }()
+	go func() {
+		errChannel <- ServeDNSStreamRelay(relayContext, dnsTCP, config.DNSTargetSocket, config.MaxConnections)
+	}()
+	go func() {
+		errChannel <- ServeDNSPacketRelay(relayContext, dnsUDP, config.DNSTargetSocket, config.MaxConnections)
+	}()
+	err = <-errChannel
+	cancel()
+	_ = listener.Close()
+	_ = dnsTCP.Close()
+	_ = dnsUDP.Close()
+	return err
 }
 
 func ServeRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {

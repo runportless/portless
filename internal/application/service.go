@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	pathmatch "path"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/networking"
 	"github.com/portless-run/portless/internal/project/compiler"
 	"github.com/portless-run/portless/internal/project/discovery"
 	"github.com/portless-run/portless/internal/proxy"
@@ -555,7 +557,7 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 	scope := model.EnvironmentSelector(projectName, environmentName)
 	result := make([]model.EffectiveConnection, 0, len(environment.Connections))
 	for _, connection := range environment.Connections {
-		proxyAddress, provider, endpoint := s.proxy.ConnectionRuntime(scope, connection.Source, connection.Target)
+		proxyAddress, provider, runtimeTarget := s.proxy.ConnectionRuntime(scope, connection.Source, connection.Target)
 		target := runtimeFor(environment, connection.Target)
 		if provider == "" {
 			provider = bindingForEnvironment(environment, connection.Target).Provider
@@ -563,16 +565,33 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 				provider = model.ProviderLocal
 			}
 		}
-		if endpoint == "" && provider == model.ProviderRemote {
+		if runtimeTarget == "" && provider == model.ProviderRemote {
 			binding := bindingForEnvironment(environment, connection.Target)
 			if binding.Remote != nil {
-				endpoint = binding.Remote.URL
+				runtimeTarget = binding.Remote.URL
 			}
 		}
-		injected := safeInjectedValue(connection, proxyAddress)
+		var endpoint *model.Endpoint
+		if connection.Protocol == model.ProtocolHTTP {
+			if proxyAddress != "" {
+				host, encodedPort, splitErr := net.SplitHostPort(proxyAddress)
+				port, portErr := strconv.Atoi(encodedPort)
+				if splitErr == nil && portErr == nil {
+					value := model.Endpoint{Kind: model.EndpointConnection, Protocol: connection.Protocol, Host: host, Port: port, URL: networking.EndpointURL(connection.Protocol, host, port), Address: proxyAddress}
+					endpoint = &value
+				}
+			}
+		} else if allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol); allocationErr == nil {
+			value := allocation.Endpoint(model.EndpointConnection)
+			endpoint = &value
+		}
+		injected := "not active"
+		if proxyAddress != "" {
+			injected = safeInjectedValue(connection, endpoint)
+		}
 		result = append(result, model.EffectiveConnection{
 			Connection: connection, TargetProvider: provider, TargetStatus: target.Status,
-			ProxyAddress: proxyAddress, TargetEndpoint: endpoint,
+			Endpoint: endpoint, RuntimeTarget: runtimeTarget,
 			InjectedEnvVar: connection.Environment, InjectedValue: injected,
 		})
 	}
@@ -732,6 +751,12 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			s.releaseSourceLeasesIfIdle(scope)
 			return
 		}
+		if latest, latestErr := s.store.Environment(context.Background(), projectName, environmentName); latestErr == nil {
+			if currentErr = s.ensurePublicTCPProxies(context.Background(), latest); currentErr != nil {
+				s.failOperation(scope, operation, currentErr)
+				return
+			}
+		}
 		_ = s.serviceEvent(scope, operation, serviceName, "ready", serviceName+" is ready")
 		s.reconcileEnvironmentStatus(context.Background(), scope)
 		verb := "started"
@@ -849,7 +874,7 @@ func (s *Service) UseRuntime(ctx context.Context, value string) (container.Statu
 	return s.containers.Status(ctx), nil
 }
 
-func (s *Service) PrepareReset(ctx context.Context) (result ResetRuntimeResult, err error) {
+func (s *Service) PrepareReset(ctx context.Context, force bool) (result ResetRuntimeResult, err error) {
 	s.resetGate.Lock()
 	defer s.resetGate.Unlock()
 	if s.resetting {
@@ -871,7 +896,7 @@ func (s *Service) PrepareReset(ctx context.Context) (result ResetRuntimeResult, 
 			active = append(active, model.EnvironmentSelector(environment.Project, environment.Name))
 		}
 	}
-	if len(active) > 0 {
+	if len(active) > 0 && !force {
 		sort.Strings(active)
 		return result, ResetActiveEnvironmentsError{Environments: active}
 	}
@@ -1313,6 +1338,10 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		_ = s.serviceEvent(scope, operation, serviceName, "ready", serviceName+" is ready")
 		environment, _ = s.store.Environment(ctx, environment.Project, environment.Name)
 	}
+	if err := s.ensurePublicTCPProxies(ctx, environment); err != nil {
+		s.failOperation(scope, operation, err)
+		return
+	}
 	_ = s.store.SetEnvironmentStatus(ctx, environment.Project, environment.Name, model.EnvironmentHealthy, "")
 	_, _ = s.timeline(ctx, scope, operation.Actor, "environment.healthy", scope, "info", "All required local and remote services are ready", nil)
 	s.completeOperation(scope, operation, "Environment is healthy")
@@ -1432,6 +1461,26 @@ func (s *Service) startContainer(ctx context.Context, environment model.Environm
 	})
 }
 
+func (s *Service) ensurePublicTCPProxies(ctx context.Context, environment model.Environment) error {
+	scope := model.EnvironmentSelector(environment.Project, environment.Name)
+	allocations, err := s.store.NetworkAllocations(ctx, scope)
+	if err != nil {
+		return err
+	}
+	for _, allocation := range allocations {
+		if allocation.Kind != networking.AllocationPublic || !s.proxy.HasTarget(scope, allocation.Target) {
+			continue
+		}
+		connection := model.Connection{
+			Source: "external", Target: allocation.Target, Protocol: allocation.Protocol, Required: false,
+		}
+		if _, err := s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, allocation.Address()); err != nil {
+			return fmt.Errorf("publish %s at %s: %w", allocation.Target, allocation.Address(), err)
+		}
+	}
+	return nil
+}
+
 func (s *Service) startProcess(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, operation model.Operation, restartIncrement int64) error {
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	processEnvironment := make(map[string]string)
@@ -1445,12 +1494,19 @@ func (s *Service) startProcess(ctx context.Context, environment model.Environmen
 		if connection.Source != definition.Name {
 			continue
 		}
-		port := 0
+		listenIP, dnsName, port := "127.0.0.1", "", 0
 		persisted, persistedErr := s.store.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
 		if persistedErr != nil && !errors.Is(persistedErr, store.ErrNotFound) {
 			return persistedErr
 		}
-		if persistedErr == nil && persisted.SourceGeneration == nextGeneration {
+		if connection.Protocol != model.ProtocolHTTP {
+			allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
+			if allocationErr != nil {
+				return fmt.Errorf("load stable endpoint for %s:%s: %w", connection.Source, connection.Target, allocationErr)
+			}
+			listenIP, dnsName, port = allocation.ListenIP, allocation.DNSName, allocation.ListenPort
+			_, err = s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, allocation.Address())
+		} else if persistedErr == nil && persisted.SourceGeneration == nextGeneration {
 			port, err = s.proxy.EnsureEdgeAtPort(ctx, scope, connection, persisted.ListenPort)
 		} else {
 			port, err = s.proxy.EnsureEdge(ctx, scope, connection)
@@ -1461,12 +1517,16 @@ func (s *Service) startProcess(ctx context.Context, environment model.Environmen
 		now := time.Now().UTC()
 		if err := s.store.SaveConnectionRuntime(ctx, scope, store.ConnectionRuntime{
 			Source: connection.Source, Target: connection.Target, Protocol: connection.Protocol,
-			SourceGeneration: nextGeneration, ListenPort: port, OwnerInstanceID: s.daemonInstanceID,
+			SourceGeneration: nextGeneration, ListenIP: listenIP, DNSName: dnsName, ListenPort: port, OwnerInstanceID: s.daemonInstanceID,
 			State: "ready", ObservedAt: &now,
 		}); err != nil {
 			return err
 		}
-		applyBinding(processEnvironment, connection, port, s.containerEnvironmentFor(scope, connection.Target))
+		host := listenIP
+		if dnsName != "" {
+			host = dnsName
+		}
+		applyBinding(processEnvironment, connection, host, port, s.containerEnvironmentFor(scope, connection.Target))
 	}
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
@@ -1654,6 +1714,14 @@ func (s *Service) decorateProject(project model.Project) model.Project {
 
 func (s *Service) decorateEnvironment(environment model.Environment) model.Environment {
 	environment.DashboardURL = fmt.Sprintf("http://portless.localhost/environments/%s/%s", environment.Project, environment.Name)
+	scope := model.EnvironmentSelector(environment.Project, environment.Name)
+	allocations, _ := s.store.NetworkAllocations(context.Background(), scope)
+	publicEndpoints := make(map[string][]model.Endpoint)
+	for _, allocation := range allocations {
+		if allocation.Kind == networking.AllocationPublic {
+			publicEndpoints[strings.ToLower(allocation.Target)] = append(publicEndpoints[strings.ToLower(allocation.Target)], allocation.Endpoint(model.EndpointPublic))
+		}
+	}
 	recentTraffic := s.broker.RecentTraffic(model.EnvironmentSelector(environment.Project, environment.Name), 1000)
 	cutoff := time.Now().UTC().Add(-30 * time.Second)
 	requestDurations := make(map[string][]int64)
@@ -1664,9 +1732,15 @@ func (s *Service) decorateEnvironment(environment model.Environment) model.Envir
 		requestDurations[event.Target] = append(requestDurations[event.Target], event.DurationMS)
 	}
 	for index := range environment.Services {
+		environment.Services[index].Endpoints = []model.Endpoint{}
 		if environment.Services[index].Kind == model.ServiceProcess {
-			environment.Services[index].IngressURL = fmt.Sprintf("http://%s.%s.%s.localhost", environment.Services[index].Name, environment.Name, environment.Project)
+			host := fmt.Sprintf("%s.%s.%s.localhost", environment.Services[index].Name, environment.Name, environment.Project)
+			environment.Services[index].Endpoints = append(environment.Services[index].Endpoints, model.Endpoint{
+				Kind: model.EndpointPublic, Protocol: model.ProtocolHTTP, Host: host, Port: 80,
+				URL: networking.HTTPURL(environment.Services[index].Name, environment.Name, environment.Project),
+			})
 		}
+		environment.Services[index].Endpoints = append(environment.Services[index].Endpoints, publicEndpoints[strings.ToLower(environment.Services[index].Name)]...)
 		durations := requestDurations[environment.Services[index].Name]
 		environment.Services[index].RecentRequest = int64(len(durations))
 		if len(durations) > 0 {
@@ -1757,8 +1831,8 @@ func (s *Service) releaseSourceLeasesIfIdle(scope string) {
 	s.releaseSourceLeases(scope)
 }
 
-func applyBinding(environment map[string]string, connection model.Connection, port int, targetEnvironment map[string]string) {
-	address := "127.0.0.1:" + strconv.Itoa(port)
+func applyBinding(environment map[string]string, connection model.Connection, host string, port int, targetEnvironment map[string]string) {
+	address := net.JoinHostPort(host, strconv.Itoa(port))
 	switch connection.Protocol {
 	case model.ProtocolHTTP:
 		environment[connection.Environment] = "http://" + address
@@ -1778,13 +1852,16 @@ func applyBinding(environment map[string]string, connection model.Connection, po
 		}
 	case model.ProtocolRedis:
 		environment[connection.Environment] = "redis://" + address
+	case model.ProtocolTCP:
+		environment[connection.Environment] = address
 	}
 }
 
-func safeInjectedValue(connection model.Connection, address string) string {
-	if address == "" {
+func safeInjectedValue(connection model.Connection, endpoint *model.Endpoint) string {
+	if endpoint == nil || endpoint.Host == "" || endpoint.Port == 0 {
 		return "not active"
 	}
+	address := net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port))
 	switch connection.Protocol {
 	case model.ProtocolHTTP:
 		return "http://" + address

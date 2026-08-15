@@ -13,7 +13,7 @@ import (
 // stops the current daemon, removes application state, and starts an empty
 // daemon. Callers must stop authenticated process supervisors and remove
 // installation-owned container resources through the daemon API first.
-func ResetDaemonApplicationState(ctx context.Context, paths Paths) (ResetStateResult, ControlRecord, error) {
+func ResetDaemonApplicationState(ctx context.Context, paths Paths, force bool) (ResetStateResult, ControlRecord, error) {
 	if err := ensurePrivateDirectory(paths.Root); err != nil {
 		return ResetStateResult{}, ControlRecord{}, err
 	}
@@ -29,7 +29,7 @@ func ResetDaemonApplicationState(ctx context.Context, paths Paths) (ResetStateRe
 
 	inspection, inspectErr := InspectDaemon(ctx, paths)
 	if inspectErr == nil {
-		if len(inspection.Identity.ActiveEnvironments) > 0 {
+		if len(inspection.Identity.ActiveEnvironments) > 0 && !force {
 			return ResetStateResult{}, ControlRecord{}, &ActiveEnvironmentsError{Environments: append([]string(nil), inspection.Identity.ActiveEnvironments...)}
 		}
 		if _, err := stopVerifiedDaemon(ctx, paths, inspection, StopOptions{Timeout: 15 * time.Second}, true, "reset application state"); err != nil {

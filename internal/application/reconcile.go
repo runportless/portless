@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/networking"
 	"github.com/portless-run/portless/internal/runtime/health"
 	"github.com/portless-run/portless/internal/runtime/supervisor"
 	"github.com/portless-run/portless/internal/store"
@@ -36,7 +39,16 @@ func (s *Service) environmentRuntimeVerified(ctx context.Context, environment mo
 	for _, connection := range environment.Connections {
 		runtime, err := s.store.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
 		if err != nil || runtime.OwnerInstanceID != s.daemonInstanceID || runtime.State != "ready" ||
-			!s.proxy.HasEdge(scope, connection.Source, connection.Target, runtime.ListenPort) {
+			!s.proxy.HasEdgeAtAddress(scope, connection.Source, connection.Target, connectionRuntimeAddress(runtime)) {
+			return false
+		}
+	}
+	allocations, err := s.store.NetworkAllocations(ctx, scope)
+	if err != nil {
+		return false
+	}
+	for _, allocation := range allocations {
+		if allocation.Kind == networking.AllocationPublic && !s.proxy.HasEdgeAtAddress(scope, "external", allocation.Target, allocation.Address()) {
 			return false
 		}
 	}
@@ -57,6 +69,17 @@ func (s *Service) Reconcile(ctx context.Context) (ReconciliationReport, error) {
 	}
 	active := make([]model.Environment, 0, len(environments))
 	for _, environment := range environments {
+		definition, definitionErr := s.store.EnvironmentModel(ctx, environment.Project, environment.Name)
+		if definitionErr != nil {
+			return report, definitionErr
+		}
+		specs, specErr := networking.AllocationSpecs(environment.Project, environment.Name, definition)
+		if specErr != nil {
+			return report, specErr
+		}
+		if syncErr := s.store.SyncNetworkAllocations(ctx, model.EnvironmentSelector(environment.Project, environment.Name), specs); syncErr != nil {
+			return report, syncErr
+		}
 		if environment.Status == model.EnvironmentStopped {
 			continue
 		}
@@ -154,6 +177,9 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	if err != nil {
 		return err
 	}
+	if err := s.ensurePublicTCPProxies(ctx, current); err != nil {
+		return err
+	}
 	for _, connection := range current.Connections {
 		source := runtimeFor(current, connection.Source)
 		if source.Status != model.ServiceReady {
@@ -175,13 +201,28 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 			s.markConnectionRecoveryFailure(ctx, scope, connection, "saved proxy generation does not match the running service")
 			continue
 		}
-		port, edgeErr := s.proxy.EnsureEdgeAtPort(ctx, scope, connection, persisted.ListenPort)
+		listenAddress := net.JoinHostPort(persisted.ListenIP, strconv.Itoa(persisted.ListenPort))
+		if persisted.ListenIP == "" {
+			listenAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(persisted.ListenPort))
+		}
+		if connection.Protocol != model.ProtocolHTTP {
+			allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
+			if allocationErr != nil {
+				s.markConnectionRecoveryFailure(ctx, scope, connection, allocationErr.Error())
+				continue
+			}
+			if persisted.ListenIP != allocation.ListenIP || persisted.ListenPort != allocation.ListenPort || persisted.DNSName != allocation.DNSName {
+				s.markConnectionRecoveryFailure(ctx, scope, connection, "saved proxy endpoint does not match its stable allocation")
+				continue
+			}
+			listenAddress = allocation.Address()
+		}
+		_, edgeErr := s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, listenAddress)
 		if edgeErr != nil {
 			s.markConnectionRecoveryFailure(ctx, scope, connection, edgeErr.Error())
 			continue
 		}
 		now := time.Now().UTC()
-		persisted.ListenPort = port
 		persisted.OwnerInstanceID = s.daemonInstanceID
 		persisted.State = "ready"
 		persisted.Reason = ""
@@ -471,12 +512,30 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 				reasons = append(reasons, scope+"/"+connection.Source+":"+connection.Target+": saved proxy ownership is stale")
 				continue
 			}
-			if !s.proxy.HasEdge(scope, connection.Source, connection.Target, persisted.ListenPort) {
-				reasons = append(reasons, scope+"/"+connection.Source+":"+connection.Target+": dependency proxy is not listening on its saved port")
+			if !s.proxy.HasEdgeAtAddress(scope, connection.Source, connection.Target, connectionRuntimeAddress(persisted)) {
+				reasons = append(reasons, scope+"/"+connection.Source+":"+connection.Target+": dependency proxy is not listening on its saved endpoint")
+			}
+		}
+		allocations, allocationErr := s.store.NetworkAllocations(ctx, scope)
+		if allocationErr != nil {
+			reasons = append(reasons, scope+": stable endpoint allocations are unavailable")
+		} else {
+			for _, allocation := range allocations {
+				if allocation.Kind == networking.AllocationPublic && !s.proxy.HasEdgeAtAddress(scope, "external", allocation.Target, allocation.Address()) {
+					reasons = append(reasons, scope+"/external:"+allocation.Target+": public TCP endpoint is not listening")
+				}
 			}
 		}
 	}
 	return len(reasons) == 0, uniqueStrings(reasons)
+}
+
+func connectionRuntimeAddress(runtime store.ConnectionRuntime) string {
+	host := runtime.ListenIP
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(runtime.ListenPort))
 }
 
 func supervisorTerminalState(state string) bool {

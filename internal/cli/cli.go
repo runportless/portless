@@ -127,12 +127,13 @@ func (c *CLI) installRelay(ctx context.Context, jsonOutput bool) error {
 	if status.Installed && status.OwnerUID != uid {
 		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless relay uninstall --force` before installing it for this user", status.OwnerUID)
 	}
-	if status.Healthy && status.TargetSocket == c.paths.Ingress && status.ReceiptPresent {
+	if status.Healthy && status.TargetSocket == c.paths.Ingress && status.DNSTargetSocket == c.paths.DNS && status.ReceiptPresent && status.ResolverPresent {
 		if jsonOutput {
 			return writeRelayStatusJSON(c.Out, status)
 		}
-		fmt.Fprintln(c.Out, "Clean localhost URLs are already configured.")
+		fmt.Fprintln(c.Out, "Clean local endpoints are already configured.")
 		fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
+		fmt.Fprintln(c.Out, c.accent(c.Out, "*.portless.test"))
 		return nil
 	}
 	executable, err := resolvedExecutable()
@@ -141,9 +142,9 @@ func (c *CLI) installRelay(ctx context.Context, jsonOutput bool) error {
 	}
 	if !jsonOutput {
 		if status.Installed {
-			fmt.Fprintln(c.Out, "Repairing the Portless localhost port-80 relay requires administrator approval.")
+			fmt.Fprintln(c.Out, "Repairing Portless HTTP ingress and TCP endpoint DNS requires administrator approval.")
 		} else {
-			fmt.Fprintln(c.Out, "Portless needs administrator approval once to install its localhost port-80 relay.")
+			fmt.Fprintln(c.Out, "Portless needs administrator approval once to install HTTP ingress and scoped TCP endpoint DNS.")
 		}
 	}
 	installOutput := c.Out
@@ -151,7 +152,7 @@ func (c *CLI) installRelay(ctx context.Context, jsonOutput bool) error {
 		installOutput = c.Err
 	}
 	if err := ingress.Install(ctx, ingress.SetupRequest{
-		Executable: executable, TargetSocket: c.paths.Ingress,
+		Executable: executable, TargetSocket: c.paths.Ingress, DNSTargetSocket: c.paths.DNS,
 		UID: uid, GID: gid, Stdin: os.Stdin, Stdout: installOutput, Stderr: c.Err,
 	}); err != nil {
 		return err
@@ -166,8 +167,9 @@ func (c *CLI) installRelay(ctx context.Context, jsonOutput bool) error {
 		}
 		return writeRelayStatusJSON(c.Out, ready)
 	}
-	fmt.Fprintln(c.Out, "Clean localhost URLs are", c.success(c.Out, "ready")+".")
+	fmt.Fprintln(c.Out, "Clean local endpoints are", c.success(c.Out, "ready")+".")
 	fmt.Fprintln(c.Out, c.accent(c.Out, ingress.ControlOrigin))
+	fmt.Fprintln(c.Out, c.accent(c.Out, "*.portless.test"))
 	return nil
 }
 
@@ -181,8 +183,10 @@ func (c *CLI) relayStatus(ctx context.Context, jsonOutput bool) error {
 	}
 	fmt.Fprintln(c.Out, c.heading(c.Out, "Portless relay:"), c.state(c.Out, status.State()))
 	fmt.Fprintln(c.Out, "Platform:", status.Platform)
-	fmt.Fprintln(c.Out, "Listener:", ingress.DefaultListenAddress)
+	fmt.Fprintln(c.Out, "HTTP listener:", ingress.DefaultListenAddress)
 	fmt.Fprintln(c.Out, "Control URL:", ingress.ControlOrigin)
+	fmt.Fprintln(c.Out, "DNS domain:", "portless.test")
+	fmt.Fprintln(c.Out, "DNS listener:", ingress.DefaultDNSAddress, "(UDP and TCP)")
 	if !status.Installed {
 		fmt.Fprintln(c.Out, "Run `portless relay install` or `portless setup` to install it.")
 		return nil
@@ -194,7 +198,21 @@ func (c *CLI) relayStatus(ctx context.Context, jsonOutput bool) error {
 		fmt.Fprintln(c.Out, "Owner: unknown")
 	}
 	if status.TargetSocket != "" {
-		fmt.Fprintln(c.Out, "Forwards to:", status.TargetSocket)
+		fmt.Fprintln(c.Out, "HTTP forwards to:", status.TargetSocket)
+	}
+	if status.DNSTargetSocket != "" {
+		fmt.Fprintln(c.Out, "DNS forwards to:", status.DNSTargetSocket)
+	}
+	if status.ResolverPath != "" {
+		fmt.Fprintln(c.Out, "Resolver:", status.ResolverPath)
+	}
+	poolState := "not ready"
+	if status.EndpointPoolReady {
+		poolState = "ready"
+	}
+	fmt.Fprintln(c.Out, "TCP endpoint pool:", poolState)
+	if status.EndpointPoolDetail != "" {
+		fmt.Fprintln(c.Out, "  "+status.EndpointPoolDetail)
 	}
 	if status.InstalledAt != nil {
 		fmt.Fprintln(c.Out, "Installed:", status.InstalledAt.Local().Format(time.RFC3339))
@@ -203,7 +221,13 @@ func (c *CLI) relayStatus(ctx context.Context, jsonOutput bool) error {
 	fmt.Fprintln(c.Out, "Configuration:", status.ConfigurationPath)
 	fmt.Fprintln(c.Out, "Receipt:", status.ReceiptPath)
 	if status.HealthError != "" {
-		fmt.Fprintln(c.Out, c.failure(c.Out, "End-to-end check:"), status.HealthError)
+		fmt.Fprintln(c.Out, c.failure(c.Out, "HTTP check:"), status.HealthError)
+	}
+	if status.DNSHealthError != "" {
+		fmt.Fprintln(c.Out, c.failure(c.Out, "DNS check:"), status.DNSHealthError)
+	}
+	if status.ResolverHealthError != "" {
+		fmt.Fprintln(c.Out, c.failure(c.Out, "Resolver check:"), status.ResolverHealthError)
 	}
 	if status.Problem != "" {
 		fmt.Fprintln(c.Out, c.failure(c.Out, "Problem:"), status.Problem)
@@ -225,6 +249,9 @@ func (c *CLI) restartRelay(ctx context.Context, jsonOutput bool) error {
 	}
 	if status.TargetSocket != "" && status.TargetSocket != c.paths.Ingress {
 		return fmt.Errorf("the relay targets %s, but this Portless installation uses %s; run `portless relay install` to repair it", status.TargetSocket, c.paths.Ingress)
+	}
+	if status.DNSTargetSocket != c.paths.DNS || !status.ResolverPresent {
+		return errors.New("the relay DNS configuration is stale; run `portless relay install` to repair it")
 	}
 	if _, err := bootstrap.EnsureDaemon(ctx, c.paths); err != nil {
 		return err
@@ -310,7 +337,7 @@ func (c *CLI) uninstallRelay(ctx context.Context, force, jsonOutput bool) error 
 	if jsonOutput {
 		return writeJSON(c.Out, actionOutput{Action: "uninstall", Name: status.Service, Status: "removed"})
 	}
-	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80.")
+	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80, "+ingress.DefaultDNSAddress+", its reserved loopback endpoint pool, or the portless.test resolver entry.")
 	fmt.Fprintln(c.Out, "Running environments were not stopped, but their clean localhost URLs are unavailable until `portless relay install` or `portless setup` is run.")
 	return nil
 }
@@ -346,7 +373,7 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 	if err != nil {
 		return err
 	}
-	if err := requireIngress(ctx); err != nil {
+	if err := c.requireIngress(ctx); err != nil {
 		return err
 	}
 	var environment model.Environment
@@ -505,7 +532,7 @@ func (c *CLI) ui(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := requireIngress(ctx); err != nil {
+	if err := c.requireIngress(ctx); err != nil {
 		return err
 	}
 	next := "/projects"
@@ -536,7 +563,7 @@ func (c *CLI) open(ctx context.Context, requestedService string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireIngress(ctx); err != nil {
+	if err := c.requireIngress(ctx); err != nil {
 		return err
 	}
 	serviceName := environment.PrimaryService
@@ -546,14 +573,14 @@ func (c *CLI) open(ctx context.Context, requestedService string) error {
 	if serviceName != "" {
 		for _, service := range environment.Services {
 			if strings.EqualFold(service.Name, serviceName) {
-				if service.IngressURL != "" {
-					launchErr := launchBrowser(service.IngressURL)
+				if endpoint := serviceEndpointForProtocol(service, model.ProtocolHTTP); endpoint != nil {
+					launchErr := launchBrowser(endpoint.URL)
 					if c.jsonOutput {
-						if err := writeJSON(c.Out, browserOutput{URL: service.IngressURL, Service: service.Name, Opened: launchErr == nil, Error: errorString(launchErr)}); err != nil {
+						if err := writeJSON(c.Out, browserOutput{URL: endpoint.URL, Service: service.Name, Opened: launchErr == nil, Error: errorString(launchErr)}); err != nil {
 							return err
 						}
 					} else {
-						fmt.Fprintf(c.Out, "%s: %s\n", service.Name, c.accent(c.Out, service.IngressURL))
+						fmt.Fprintf(c.Out, "%s: %s\n", service.Name, c.accent(c.Out, endpoint.URL))
 					}
 					return launchErr
 				}
@@ -1635,11 +1662,40 @@ func (c *CLI) browserURL(ctx context.Context, client *bootstrap.Client, next str
 	return result.URL, nil
 }
 
-func requireIngress(ctx context.Context) error {
-	if err := ingress.Check(ctx); err != nil {
-		return fmt.Errorf("clean localhost URLs are not configured; run `portless relay install` or `portless setup`, then retry: %w", err)
+func (c *CLI) requireIngress(ctx context.Context) error {
+	status, err := ingress.Inspect(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect local endpoint networking: %w", err)
 	}
-	return nil
+	uid, _ := requestingUserIDs()
+	ready := status.Installed && status.Healthy && status.OwnerUID == uid && status.TargetSocket == c.paths.Ingress && status.DNSTargetSocket == c.paths.DNS
+	if ready {
+		return nil
+	}
+	detail := "HTTP ingress, TCP DNS, or the loopback endpoint pool is incomplete"
+	switch {
+	case !status.Installed:
+		detail = "the Portless relay is not installed"
+	case status.OwnerUID != uid:
+		detail = fmt.Sprintf("the Portless relay belongs to user ID %d instead of %d", status.OwnerUID, uid)
+	case status.TargetSocket != c.paths.Ingress:
+		detail = fmt.Sprintf("the HTTP relay targets %s instead of %s", emptyAs(status.TargetSocket, "an unknown socket"), c.paths.Ingress)
+	case status.DNSTargetSocket != c.paths.DNS:
+		detail = fmt.Sprintf("the DNS relay targets %s instead of %s", emptyAs(status.DNSTargetSocket, "an unknown socket"), c.paths.DNS)
+	case !status.EndpointPoolReady:
+		detail = emptyAs(status.EndpointPoolDetail, "the loopback endpoint pool is not ready")
+	case !status.ResolverPresent:
+		detail = "the scoped portless.test resolver configuration is missing"
+	case !status.ResolverHealthy:
+		detail = emptyAs(status.ResolverHealthError, "the system resolver cannot resolve portless.test")
+	case !status.DNSHealthy:
+		detail = emptyAs(status.DNSHealthError, "the authoritative DNS relay is not healthy")
+	case !status.HTTPHealthy:
+		detail = emptyAs(status.HealthError, "the clean HTTP ingress is not healthy")
+	case status.Problem != "":
+		detail = status.Problem
+	}
+	return fmt.Errorf("clean local endpoints are not configured for this Portless installation; run `portless relay install` or `portless setup`, then retry: %s", detail)
 }
 
 func (c *CLI) waitOperation(ctx context.Context, client *bootstrap.Client, operation model.Operation, jsonOutput bool) (model.Operation, error) {
@@ -1774,13 +1830,28 @@ func (c *CLI) printStatus(environment model.Environment) {
 }
 
 func statusEndpoint(service model.Service) string {
-	if service.IngressURL != "" {
-		return service.IngressURL
-	}
-	if service.UpstreamPort > 0 {
-		return fmt.Sprintf("127.0.0.1:%d", service.UpstreamPort)
+	if endpoint := primaryServiceEndpoint(service); endpoint != nil {
+		return endpoint.URL
 	}
 	return ""
+}
+
+func primaryServiceEndpoint(service model.Service) *model.Endpoint {
+	for index := range service.Endpoints {
+		if service.Endpoints[index].Kind == model.EndpointPublic {
+			return &service.Endpoints[index]
+		}
+	}
+	return nil
+}
+
+func serviceEndpointForProtocol(service model.Service, protocol model.Protocol) *model.Endpoint {
+	for index := range service.Endpoints {
+		if service.Endpoints[index].Kind == model.EndpointPublic && service.Endpoints[index].Protocol == protocol {
+			return &service.Endpoints[index]
+		}
+	}
+	return nil
 }
 
 func (c *CLI) printOperation(operation model.Operation) {

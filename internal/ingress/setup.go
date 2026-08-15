@@ -6,26 +6,32 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	portlessdns "github.com/portless-run/portless/internal/dns"
+	"github.com/portless-run/portless/internal/networking"
 )
 
 const ControlOrigin = "http://portless.localhost"
 
 type SetupRequest struct {
-	Executable   string
-	TargetSocket string
-	UID          int
-	GID          int
-	Stdin        io.Reader
-	Stdout       io.Writer
-	Stderr       io.Writer
+	Executable      string
+	TargetSocket    string
+	DNSTargetSocket string
+	UID             int
+	GID             int
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
 }
 
 type UninstallRequest struct {
@@ -51,17 +57,28 @@ type InstallationStatus struct {
 	Installed            bool       `json:"installed"`
 	Running              bool       `json:"running"`
 	Healthy              bool       `json:"healthy"`
+	HTTPHealthy          bool       `json:"httpHealthy"`
 	HelperPresent        bool       `json:"helperPresent"`
 	ConfigurationPresent bool       `json:"configurationPresent"`
 	ReceiptPresent       bool       `json:"receiptPresent"`
+	ResolverPresent      bool       `json:"resolverPresent"`
+	ResolverHealthy      bool       `json:"resolverHealthy"`
 	OwnerUID             int        `json:"ownerUid,omitempty"`
 	OwnerGID             int        `json:"ownerGid,omitempty"`
 	TargetSocket         string     `json:"targetSocket,omitempty"`
+	DNSTargetSocket      string     `json:"dnsTargetSocket,omitempty"`
+	DNSListenAddress     string     `json:"dnsListenAddress"`
 	HelperPath           string     `json:"helperPath"`
 	ConfigurationPath    string     `json:"configurationPath"`
 	ReceiptPath          string     `json:"receiptPath"`
+	ResolverPath         string     `json:"resolverPath,omitempty"`
 	InstalledAt          *time.Time `json:"installedAt,omitempty"`
 	HealthError          string     `json:"healthError,omitempty"`
+	DNSHealthy           bool       `json:"dnsHealthy"`
+	DNSHealthError       string     `json:"dnsHealthError,omitempty"`
+	ResolverHealthError  string     `json:"resolverHealthError,omitempty"`
+	EndpointPoolReady    bool       `json:"endpointPoolReady"`
+	EndpointPoolDetail   string     `json:"endpointPoolDetail,omitempty"`
 	Problem              string     `json:"problem,omitempty"`
 }
 
@@ -72,7 +89,7 @@ func (status InstallationStatus) State() string {
 	case status.Healthy:
 		return "ready"
 	case status.Running:
-		return "running; daemon unavailable"
+		return "running; not ready"
 	default:
 		return "installed; service stopped"
 	}
@@ -84,6 +101,7 @@ type platformInstallation struct {
 	HelperPath        string
 	ConfigurationPath string
 	ReceiptPath       string
+	ResolverPath      string
 }
 
 type installationReceipt struct {
@@ -93,12 +111,14 @@ type installationReceipt struct {
 	OwnerUID          int       `json:"ownerUid"`
 	OwnerGID          int       `json:"ownerGid"`
 	TargetSocket      string    `json:"targetSocket"`
+	DNSTargetSocket   string    `json:"dnsTargetSocket,omitempty"`
+	LoopbackAddresses []string  `json:"loopbackAddresses,omitempty"`
 	HelperPath        string    `json:"helperPath"`
 	ConfigurationPath string    `json:"configurationPath"`
 	InstalledAt       time.Time `json:"installedAt"`
 }
 
-const installationReceiptSchema = 1
+const installationReceiptSchema = 3
 
 func Check(ctx context.Context) error {
 	return checkAt(ctx, DefaultListenAddress, ControlOrigin)
@@ -120,11 +140,13 @@ func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastError error
 	for {
-		if err := Check(ctx); err == nil {
+		httpErr := Check(ctx)
+		dnsErr := CheckDNS(ctx)
+		resolverErr := CheckResolver(ctx)
+		if httpErr == nil && dnsErr == nil && resolverErr == nil {
 			return nil
-		} else {
-			lastError = err
 		}
+		lastError = errors.Join(httpErr, dnsErr, resolverErr)
 		if time.Now().After(deadline) {
 			return fmt.Errorf("clean localhost ingress did not become ready: %w", lastError)
 		}
@@ -134,6 +156,61 @@ func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func CheckDNS(ctx context.Context) error {
+	queryID := uint16(rand.Uint32())
+	query, err := portlessdns.Query(networking.DNSZone, portlessdns.TypeA, queryID)
+	if err != nil {
+		return err
+	}
+	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
+	connection, err := dialer.DialContext(ctx, "udp", DefaultDNSAddress)
+	if err != nil {
+		return fmt.Errorf("connect to Portless DNS at %s: %w", DefaultDNSAddress, err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	if _, err := connection.Write(query); err != nil {
+		return err
+	}
+	response := make([]byte, portlessdns.MaxMessage)
+	count, err := connection.Read(response)
+	if err != nil {
+		return fmt.Errorf("read Portless DNS response: %w", err)
+	}
+	address, rcode, err := portlessdns.ParseAResponse(response[:count], queryID)
+	if err != nil {
+		return err
+	}
+	if rcode != portlessdns.ResponseSuccess || address != portlessdns.HealthAddress {
+		return fmt.Errorf("Portless DNS returned code %d and address %s", rcode, address)
+	}
+	return nil
+}
+
+// CheckResolver verifies the OS-level scoped resolver route used by normal
+// applications. Directly reaching the DNS relay is insufficient if the host
+// resolver never sends portless.test queries to it.
+func CheckResolver(ctx context.Context) error {
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, networking.DNSZone)
+	if err != nil {
+		return fmt.Errorf("resolve %s through the system resolver: %w", networking.DNSZone, err)
+	}
+	return validateResolverAddresses(addresses)
+}
+
+func validateResolverAddresses(addresses []net.IPAddr) error {
+	if len(addresses) == 0 {
+		return fmt.Errorf("resolve %s through the system resolver: no addresses returned", networking.DNSZone)
+	}
+	for _, address := range addresses {
+		parsed, ok := netip.AddrFromSlice(address.IP)
+		if !ok || parsed.Unmap() != portlessdns.HealthAddress {
+			return fmt.Errorf("resolve %s through the system resolver: unexpected address %s", networking.DNSZone, address.IP)
+		}
+	}
+	return nil
 }
 
 func checkAt(ctx context.Context, address, origin string) error {
@@ -176,7 +253,7 @@ func Install(ctx context.Context, request SetupRequest) error {
 		return err
 	}
 	if os.Geteuid() == 0 {
-		return InstallPrivileged(ctx, request.Executable, request.TargetSocket, request.UID, request.GID)
+		return InstallPrivileged(ctx, request.Executable, request.TargetSocket, request.DNSTargetSocket, request.UID, request.GID)
 	}
 	sudo, err := exec.LookPath("sudo")
 	if err != nil {
@@ -186,6 +263,7 @@ func Install(ctx context.Context, request SetupRequest) error {
 		request.Executable,
 		"__install-ingress",
 		"--socket", request.TargetSocket,
+		"--dns-socket", request.DNSTargetSocket,
 		"--uid", strconv.Itoa(request.UID),
 		"--gid", strconv.Itoa(request.GID),
 	)
@@ -198,11 +276,11 @@ func Install(ctx context.Context, request SetupRequest) error {
 	return nil
 }
 
-func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket string, uid, gid int) error {
+func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket, dnsTargetSocket string, uid, gid int) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal ingress installer must run as root")
 	}
-	request := SetupRequest{Executable: sourceExecutable, TargetSocket: targetSocket, UID: uid, GID: gid}
+	request := SetupRequest{Executable: sourceExecutable, TargetSocket: targetSocket, DNSTargetSocket: dnsTargetSocket, UID: uid, GID: gid}
 	if err := validateSetupRequest(request); err != nil {
 		return err
 	}
@@ -269,6 +347,7 @@ func Inspect(ctx context.Context) (InstallationStatus, error) {
 	status := InstallationStatus{
 		Platform: details.Name, Service: details.Service, HelperPath: details.HelperPath,
 		ConfigurationPath: details.ConfigurationPath, ReceiptPath: details.ReceiptPath,
+		ResolverPath: details.ResolverPath, DNSListenAddress: DefaultDNSAddress,
 	}
 	helperPresent, err := pathExists(details.HelperPath)
 	if err != nil {
@@ -282,26 +361,31 @@ func Inspect(ctx context.Context) (InstallationStatus, error) {
 	if err != nil {
 		return status, fmt.Errorf("inspect ingress installation receipt: %w", err)
 	}
+	resolverPresent, err := pathExists(details.ResolverPath)
+	if err != nil {
+		return status, fmt.Errorf("inspect Portless resolver configuration: %w", err)
+	}
 	status.HelperPresent = helperPresent
 	status.ConfigurationPresent = configurationPresent
 	status.ReceiptPresent = receiptPresent
-	status.Installed = helperPresent || configurationPresent || receiptPresent
+	status.ResolverPresent = resolverPresent
+	status.Installed = helperPresent || configurationPresent || receiptPresent || resolverPresent
 	if receiptPresent {
 		receipt, receiptErr := readInstallationReceipt(details)
 		if receiptErr != nil {
 			status.Problem = receiptErr.Error()
 		} else {
 			status.OwnerUID, status.OwnerGID = receipt.OwnerUID, receipt.OwnerGID
-			status.TargetSocket = receipt.TargetSocket
+			status.TargetSocket, status.DNSTargetSocket = receipt.TargetSocket, receipt.DNSTargetSocket
 			installedAt := receipt.InstalledAt
 			status.InstalledAt = &installedAt
 		}
 	} else if configurationPresent {
-		uid, gid, socket, fallbackErr := platformConfigurationOwner(details.ConfigurationPath)
+		uid, gid, socket, dnsSocket, fallbackErr := platformConfigurationOwner(details.ConfigurationPath)
 		if fallbackErr != nil {
 			status.Problem = "installation receipt is missing and the service owner could not be determined: " + fallbackErr.Error()
 		} else {
-			status.OwnerUID, status.OwnerGID, status.TargetSocket = uid, gid, socket
+			status.OwnerUID, status.OwnerGID, status.TargetSocket, status.DNSTargetSocket = uid, gid, socket, dnsSocket
 		}
 	}
 	running, runningErr := platformServiceRunning(ctx)
@@ -310,12 +394,34 @@ func Inspect(ctx context.Context) (InstallationStatus, error) {
 	}
 	status.Running = running
 	status.Installed = status.Installed || running
+	poolReady, poolDetail, poolErr := relayLoopbackPoolStatus()
+	status.EndpointPoolReady = poolReady
+	status.EndpointPoolDetail = poolDetail
+	if poolErr != nil {
+		status.Problem = appendProblem(status.Problem, "inspect TCP endpoint address pool: "+poolErr.Error())
+	}
 	if status.Installed {
-		if healthErr := Check(ctx); healthErr == nil {
-			status.Healthy = true
+		httpErr := Check(ctx)
+		dnsErr := CheckDNS(ctx)
+		resolverContext, cancelResolver := context.WithTimeout(ctx, 1500*time.Millisecond)
+		resolverErr := CheckResolver(resolverContext)
+		cancelResolver()
+		if httpErr != nil {
+			status.HealthError = httpErr.Error()
 		} else {
-			status.HealthError = healthErr.Error()
+			status.HTTPHealthy = true
 		}
+		if dnsErr == nil {
+			status.DNSHealthy = true
+		} else {
+			status.DNSHealthError = dnsErr.Error()
+		}
+		if resolverErr == nil {
+			status.ResolverHealthy = true
+		} else {
+			status.ResolverHealthError = resolverErr.Error()
+		}
+		status.Healthy = httpErr == nil && dnsErr == nil && resolverErr == nil && resolverPresent && poolReady && poolErr == nil
 	}
 	return status, nil
 }
@@ -372,7 +478,11 @@ func UninstallPrivileged(ctx context.Context, requestingUID int, force bool) err
 	if err := validateUninstallOwnership(status, requestingUID, force); err != nil {
 		return err
 	}
-	if err := uninstallPlatform(ctx); err != nil {
+	removeLoopbackPool := false
+	if receipt, receiptErr := readInstallationReceipt(currentPlatformInstallation()); receiptErr == nil {
+		removeLoopbackPool = receipt.SchemaVersion >= 3
+	}
+	if err := uninstallPlatform(ctx, removeLoopbackPool); err != nil {
 		return err
 	}
 	remaining, err := Inspect(ctx)
@@ -420,8 +530,9 @@ func writeInstallationReceipt(request SetupRequest) error {
 	details := currentPlatformInstallation()
 	receipt := installationReceipt{
 		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
-		OwnerUID: request.UID, OwnerGID: request.GID, TargetSocket: request.TargetSocket,
-		HelperPath: details.HelperPath, ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
+		OwnerUID: request.UID, OwnerGID: request.GID, TargetSocket: request.TargetSocket, DNSTargetSocket: request.DNSTargetSocket,
+		LoopbackAddresses: managedRelayLoopbackAddresses(),
+		HelperPath:        details.HelperPath, ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
 	}
 	content, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
@@ -446,7 +557,7 @@ func readInstallationReceipt(details platformInstallation) (installationReceipt,
 	if err := decoder.Decode(&receipt); err != nil {
 		return installationReceipt{}, fmt.Errorf("read ingress installation receipt: %w", err)
 	}
-	if receipt.SchemaVersion != installationReceiptSchema {
+	if receipt.SchemaVersion < 1 || receipt.SchemaVersion > installationReceiptSchema {
 		return installationReceipt{}, fmt.Errorf("unsupported ingress installation receipt schema %d", receipt.SchemaVersion)
 	}
 	if receipt.Platform != details.Name || receipt.Service != details.Service || receipt.HelperPath != details.HelperPath || receipt.ConfigurationPath != details.ConfigurationPath {
@@ -455,7 +566,26 @@ func readInstallationReceipt(details platformInstallation) (installationReceipt,
 	if receipt.OwnerUID <= 0 || receipt.OwnerGID <= 0 || !filepath.IsAbs(receipt.TargetSocket) || filepath.Base(filepath.Clean(receipt.TargetSocket)) != "ingress.sock" {
 		return installationReceipt{}, errors.New("ingress installation receipt contains invalid ownership or socket information")
 	}
+	if receipt.SchemaVersion >= 2 && (!filepath.IsAbs(receipt.DNSTargetSocket) || filepath.Base(filepath.Clean(receipt.DNSTargetSocket)) != "dns.sock") {
+		return installationReceipt{}, errors.New("ingress installation receipt contains invalid DNS socket information")
+	}
+	if receipt.SchemaVersion >= 3 {
+		expected := managedRelayLoopbackAddresses()
+		if len(receipt.LoopbackAddresses) != len(expected) {
+			return installationReceipt{}, errors.New("ingress installation receipt contains an invalid loopback address pool")
+		}
+		for index := range expected {
+			if receipt.LoopbackAddresses[index] != expected[index] {
+				return installationReceipt{}, errors.New("ingress installation receipt contains an invalid loopback address pool")
+			}
+		}
+	}
 	return receipt, nil
+}
+
+func managedRelayLoopbackAddresses() []string {
+	dnsHost, _, _ := net.SplitHostPort(DefaultDNSAddress)
+	return append([]string{dnsHost}, networking.EndpointLoopbackAddresses()...)
 }
 
 func pathExists(path string) (bool, error) {
@@ -499,11 +629,11 @@ func appendProblem(current, next string) string {
 	return current + "; " + next
 }
 
-func relayArgumentValues(arguments []string) (int, int, string, error) {
+func relayArgumentValues(arguments []string) (int, int, string, string, error) {
 	values := map[string]string{}
 	for index := 0; index+1 < len(arguments); index++ {
 		switch arguments[index] {
-		case "--socket", "--uid", "--gid":
+		case "--socket", "--dns-socket", "--uid", "--gid":
 			values[arguments[index]] = arguments[index+1]
 			index++
 		}
@@ -511,10 +641,14 @@ func relayArgumentValues(arguments []string) (int, int, string, error) {
 	uid, uidErr := strconv.Atoi(values["--uid"])
 	gid, gidErr := strconv.Atoi(values["--gid"])
 	socket := values["--socket"]
+	dnsSocket := values["--dns-socket"]
 	if uidErr != nil || gidErr != nil || uid <= 0 || gid <= 0 || !filepath.IsAbs(socket) || filepath.Base(filepath.Clean(socket)) != "ingress.sock" {
-		return 0, 0, "", errors.New("service configuration does not contain valid relay ownership arguments")
+		return 0, 0, "", "", errors.New("service configuration does not contain valid relay ownership arguments")
 	}
-	return uid, gid, socket, nil
+	if !filepath.IsAbs(dnsSocket) || filepath.Base(filepath.Clean(dnsSocket)) != "dns.sock" {
+		return 0, 0, "", "", errors.New("service configuration does not contain a valid DNS relay target")
+	}
+	return uid, gid, socket, dnsSocket, nil
 }
 
 func validateSetupRequest(request SetupRequest) error {
@@ -533,6 +667,9 @@ func validateSetupRequest(request SetupRequest) error {
 	}
 	if strings.ContainsRune(request.TargetSocket, '\x00') {
 		return errors.New("ingress target socket contains an invalid character")
+	}
+	if !filepath.IsAbs(request.DNSTargetSocket) || filepath.Base(filepath.Clean(request.DNSTargetSocket)) != "dns.sock" || strings.ContainsRune(request.DNSTargetSocket, '\x00') {
+		return errors.New("DNS target must be a private dns.sock path")
 	}
 	return nil
 }
@@ -644,11 +781,28 @@ func runCommand(ctx context.Context, executable string, arguments ...string) err
 }
 
 func portAvailable() error {
-	listener, err := net.Listen("tcp", DefaultListenAddress)
+	return addressAvailable(DefaultListenAddress, "port 80 on 127.0.0.1")
+}
+
+func addressAvailable(address, label string) error {
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return fmt.Errorf("port 80 on 127.0.0.1 is already in use: %w", err)
+		return fmt.Errorf("%s is already in use: %w", label, err)
 	}
 	return listener.Close()
+}
+
+func dnsAddressAvailable(address string) error {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("TCP DNS address %s is already in use: %w", address, err)
+	}
+	defer listener.Close()
+	packet, err := net.ListenPacket("udp", address)
+	if err != nil {
+		return fmt.Errorf("UDP DNS address %s is already in use: %w", address, err)
+	}
+	return packet.Close()
 }
 
 func waitForPortAvailable(ctx context.Context, timeout time.Duration) error {
@@ -656,6 +810,29 @@ func waitForPortAvailable(ctx context.Context, timeout time.Duration) error {
 	var lastError error
 	for {
 		if err := portAvailable(); err == nil {
+			return nil
+		} else {
+			lastError = err
+		}
+		if time.Now().After(deadline) {
+			return lastError
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func waitForRelayAddressesAvailable(ctx context.Context, timeout time.Duration) error {
+	if err := waitForPortAvailable(ctx, timeout); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	var lastError error
+	for {
+		if err := dnsAddressAvailable(DefaultDNSAddress); err == nil {
 			return nil
 		} else {
 			lastError = err

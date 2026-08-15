@@ -74,8 +74,14 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"supervisor_pid", "INTEGER NOT NULL DEFAULT 0"},
 		{"container_name", "TEXT NOT NULL DEFAULT ''"},
 		{"observed_at", "TEXT"},
+		{"listen_ip", "TEXT NOT NULL DEFAULT '127.0.0.1'"},
+		{"dns_name", "TEXT NOT NULL DEFAULT ''"},
 	} {
-		if err := s.ensureColumn(ctx, "service_runtime", column.name, column.definition); err != nil {
+		table := "service_runtime"
+		if column.name == "listen_ip" || column.name == "dns_name" {
+			table = "connection_runtime"
+		}
+		if err := s.ensureColumn(ctx, table, column.name, column.definition); err != nil {
 			return err
 		}
 	}
@@ -83,6 +89,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -215,6 +224,8 @@ CREATE TABLE IF NOT EXISTS connection_runtime (
   target_name TEXT NOT NULL COLLATE NOCASE,
   protocol TEXT NOT NULL,
   source_generation INTEGER NOT NULL DEFAULT 0,
+	listen_ip TEXT NOT NULL DEFAULT '127.0.0.1',
+	dns_name TEXT NOT NULL DEFAULT '',
   listen_port INTEGER NOT NULL,
   owner_instance_id TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT 'planned',
@@ -222,6 +233,22 @@ CREATE TABLE IF NOT EXISTS connection_runtime (
   observed_at TEXT,
   PRIMARY KEY(environment_key, source_name, target_name)
 );
+
+CREATE TABLE IF NOT EXISTS network_allocations (
+  environment_key TEXT NOT NULL REFERENCES environments(private_key) ON DELETE CASCADE,
+  endpoint_kind TEXT NOT NULL,
+  source_name TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+  target_name TEXT NOT NULL COLLATE NOCASE,
+  protocol TEXT NOT NULL,
+  dns_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  listen_ip TEXT NOT NULL UNIQUE,
+  listen_port INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(environment_key, endpoint_kind, source_name, target_name, protocol)
+);
+
+CREATE INDEX IF NOT EXISTS network_allocations_by_environment
+ON network_allocations(environment_key, endpoint_kind, target_name, source_name);
 
 CREATE TABLE IF NOT EXISTS operations (
   environment_key TEXT NOT NULL REFERENCES environments(private_key) ON DELETE CASCADE,

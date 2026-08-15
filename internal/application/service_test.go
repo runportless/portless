@@ -96,7 +96,7 @@ func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testin
 	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentHealthy, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.PrepareReset(ctx); err == nil || !strings.Contains(err.Error(), "billing/local") {
+	if _, err := app.PrepareReset(ctx, false); err == nil || !strings.Contains(err.Error(), "billing/local") {
 		t.Fatalf("active environment did not block reset: %v", err)
 	}
 	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentStopped, ""); err != nil {
@@ -106,13 +106,13 @@ func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.PrepareReset(ctx); err == nil || !strings.Contains(err.Error(), "operations are still running") {
+	if _, err := app.PrepareReset(ctx, false); err == nil || !strings.Contains(err.Error(), "operations are still running") {
 		t.Fatalf("running operation did not block reset: %v", err)
 	}
 	if err := controlStore.CompleteOperation(ctx, "billing/local", operation.Number, "failed", "test cleanup"); err != nil {
 		t.Fatal(err)
 	}
-	result, err := app.PrepareReset(ctx)
+	result, err := app.PrepareReset(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,10 +160,13 @@ func TestPrepareResetStopsAuthenticatedLingeringSupervisor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentStopped, "simulated stale status"); err != nil {
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentUnknown, "simulated failed recovery"); err != nil {
 		t.Fatal(err)
 	}
-	result, err := app.PrepareReset(ctx)
+	if _, err := app.PrepareReset(ctx, false); err == nil || !strings.Contains(err.Error(), "billing/local") {
+		t.Fatalf("ordinary reset accepted unknown environment: %v", err)
+	}
+	result, err := app.PrepareReset(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +223,7 @@ func TestEnvironmentsForPathDecoratesResolvedEnvironmentURLs(t *testing.T) {
 	if resolved.DashboardURL != "http://portless.localhost/environments/billing/local" {
 		t.Fatalf("dashboard URL = %q", resolved.DashboardURL)
 	}
-	if len(resolved.Services) != 1 || resolved.Services[0].IngressURL != "http://checkout.local.billing.localhost" {
+	if len(resolved.Services) != 1 || len(resolved.Services[0].Endpoints) != 1 || resolved.Services[0].Endpoints[0].URL != "http://checkout.local.billing.localhost" {
 		t.Fatalf("resolved services were not decorated: %#v", resolved.Services)
 	}
 }
@@ -478,7 +481,7 @@ func TestEffectiveConnectionsAndConfigurationExplainRemoteTargetsAndMaskCredenti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(connections) != 1 || connections[0].TargetProvider != model.ProviderRemote || connections[0].TargetEndpoint != remoteURL || connections[0].InjectedEnvVar != "PAYMENTS_URL" {
+	if len(connections) != 1 || connections[0].TargetProvider != model.ProviderRemote || connections[0].RuntimeTarget != remoteURL || connections[0].InjectedEnvVar != "PAYMENTS_URL" {
 		t.Fatalf("effective connections = %#v", connections)
 	}
 	configuration, err := app.ServiceConfiguration(ctx, "billing", "hybrid", "checkout")
@@ -500,6 +503,57 @@ func TestEffectiveConnectionsAndConfigurationExplainRemoteTargetsAndMaskCredenti
 	}
 	if values["PAYMENTS_URL"].Classification != "generated" {
 		t.Fatalf("generated connection value was not explained: %#v", values["PAYMENTS_URL"])
+	}
+}
+
+func TestStableTCPServiceAndConnectionEndpointsAreExposedBeforeStartup(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "store", PrimaryService: "orders",
+		Services: []model.ServiceDefinition{
+			{Name: "orders", Kind: model.ServiceProcess},
+			{Name: "postgres", Kind: model.ServiceContainer, Template: "postgres"},
+		},
+		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolPostgres, Environment: "DATABASE_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "store", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "store", "local", definition, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	environment, err := app.Environment(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var postgres model.Service
+	for _, service := range environment.Services {
+		if service.Name == "postgres" {
+			postgres = service
+			break
+		}
+	}
+	if len(postgres.Endpoints) != 1 || postgres.Endpoints[0].Host != "postgres.local.store.portless.test" || postgres.Endpoints[0].Port != 5432 {
+		t.Fatalf("public Postgres endpoint = %#v", postgres.Endpoints)
+	}
+	connections, err := app.Connections(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connections) != 1 || connections[0].Endpoint == nil || connections[0].Endpoint.Host != "postgres.via-orders.local.store.portless.test" || connections[0].Endpoint.Port != 5432 {
+		t.Fatalf("directed Postgres endpoint = %#v", connections)
+	}
+	if connections[0].InjectedValue != "not active" {
+		t.Fatalf("stopped connection was reported as injected: %#v", connections[0])
 	}
 }
 
@@ -956,6 +1010,14 @@ func TestValidateExperimentScopeUsesConfiguredDirectedConnections(t *testing.T) 
 	err = validateExperimentScope(definition, "external", "orders", false)
 	if err == nil || !strings.Contains(err.Error(), "external → orders is not a configured connection") {
 		t.Fatalf("non-primary external connection error = %v", err)
+	}
+}
+
+func TestApplyBindingUsesDNSHostForGenericTCP(t *testing.T) {
+	environment := map[string]string{}
+	applyBinding(environment, model.Connection{Protocol: model.ProtocolTCP, Environment: "BROKER_ADDRESS"}, "broker.via-orders.local.store.portless.test", 4222, nil)
+	if environment["BROKER_ADDRESS"] != "broker.via-orders.local.store.portless.test:4222" {
+		t.Fatalf("generic TCP binding = %q", environment["BROKER_ADDRESS"])
 	}
 }
 

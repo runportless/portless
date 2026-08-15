@@ -5,7 +5,7 @@ import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
 import { SettingsPage } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
-import type { DaemonRestart, DaemonStatus, Environment, Operation, Project, RuntimeStatus } from './types'
+import type { DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
 
 interface Session { actor: string; browser: boolean; csrf: string }
 type Tab = EnvironmentView
@@ -16,6 +16,7 @@ export function App() {
   const [environments, setEnvironments] = useState<Environment[]>([])
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
+  const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null)
   const [route, setRoute] = useState(() => `${location.pathname}${location.search}`)
   const [loading, setLoading] = useState(true)
   const [authRequired, setAuthRequired] = useState(false)
@@ -60,6 +61,10 @@ export function App() {
     }
   }, [])
 
+  const refreshRelay = useCallback(async () => {
+    setRelayStatus(await api<RelayStatus>('/relay').catch(() => null))
+  }, [])
+
   const refreshDaemon = useCallback(async () => {
     const status = await api<DaemonStatus>('/daemon')
     setDaemonStatus(status)
@@ -71,7 +76,7 @@ export function App() {
       try {
         const value = await api<Session>('/session')
         setSession(value); setCSRF(value.csrf)
-        await refresh()
+        await Promise.all([refresh(), refreshRelay()])
       } catch (error) {
         if (error instanceof APIError && error.status === 401) setAuthRequired(true)
       } finally { setLoading(false) }
@@ -80,13 +85,19 @@ export function App() {
     const popstate = () => setRoute(`${location.pathname}${location.search}`)
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
-  }, [refresh])
+  }, [refresh, refreshRelay])
 
   useEffect(() => {
     if (!session) return
     const timer = window.setInterval(refresh, 2500)
     return () => window.clearInterval(timer)
   }, [refresh, session])
+
+  useEffect(() => {
+    if (!session) return
+    const timer = window.setInterval(refreshRelay, 15000)
+    return () => window.clearInterval(timer)
+  }, [refreshRelay, session])
 
   const navigate = useCallback((path: string) => {
     if (`${location.pathname}${location.search}` !== path) history.pushState({}, '', path)
@@ -129,7 +140,7 @@ export function App() {
 
   let content
   if (parsed.settings) {
-    content = <SettingsPage preference={themePreference} resolvedTheme={resolvedTheme} onPreferenceChange={changeThemePreference} />
+    content = <SettingsPage preference={themePreference} resolvedTheme={resolvedTheme} runtime={runtimeStatus} onPreferenceChange={changeThemePreference} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} />
   } else if (parsed.environment) {
     content = activeEnvironment
       ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} tab={parsed.tab} onNavigate={navigate} onChanged={refresh} />
@@ -137,9 +148,9 @@ export function App() {
   } else if (parsed.project && !activeProject) {
     content = <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
   } else {
-    content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} runtime={runtimeStatus} onNavigate={navigate} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} onChanged={refresh} />
+    content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} runtime={runtimeStatus} daemon={daemonStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} runtime={runtimeStatus} daemon={daemonStatus} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

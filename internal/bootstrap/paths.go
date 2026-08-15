@@ -19,6 +19,7 @@ type Paths struct {
 	Lock         string
 	InstanceLock string
 	Ingress      string
+	DNS          string
 	Logs         string
 	Temporary    string
 }
@@ -97,7 +98,8 @@ func ResolvePaths(override string) (Paths, error) {
 		DaemonLog: filepath.Join(root, "daemon.log"), Token: filepath.Join(root, "install.key"),
 		OwnershipKey: filepath.Join(root, "ownership.key"), Lock: filepath.Join(root, "daemon.lock"),
 		InstanceLock: filepath.Join(root, "daemon.instance.lock"),
-		Ingress:      filepath.Join(root, "ingress.sock"), Logs: filepath.Join(root, "logs"), Temporary: filepath.Join(root, "tmp"),
+		Ingress:      filepath.Join(root, "ingress.sock"), DNS: filepath.Join(root, "dns.sock"),
+		Logs: filepath.Join(root, "logs"), Temporary: filepath.Join(root, "tmp"),
 	}, nil
 }
 

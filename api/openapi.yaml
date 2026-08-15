@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 0.4.0
+  version: 0.5.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -68,6 +68,17 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DaemonRestart' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /relay:
+    get:
+      operationId: relayStatus
+      description: Installation and end-to-end health of clean HTTP ingress and scoped TCP endpoint DNS.
+      responses:
+        '200':
+          description: Current privileged relay status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RelayStatus' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /runtime:
     get:
       operationId: runtimeStatus
@@ -101,6 +112,27 @@ paths:
       responses:
         '200': { description: Selected container runtime is ready }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /runtime/reset:
+    post:
+      operationId: prepareRuntimeReset
+      description: CLI-only runtime cleanup performed before application state is erased. Force permits active or unknown environments but never bypasses runtime ownership verification.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Verified supervisors and installation-owned container resources were stopped or removed.
+        '403':
+          description: Browser sessions cannot prepare a destructive runtime reset.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /browser-claims:
     post:
       operationId: createBrowserClaim
@@ -894,6 +926,29 @@ components:
         previousInstanceId: { type: string }
         handoff: { type: boolean, const: true }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    RelayStatus:
+      type: object
+      required: [platform, service, installed, running, healthy, httpHealthy, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress]
+      properties:
+        platform: { type: string, enum: [launchd, systemd, unsupported] }
+        service: { type: string }
+        installed: { type: boolean }
+        running: { type: boolean }
+        healthy: { type: boolean }
+        httpHealthy: { type: boolean }
+        dnsHealthy: { type: boolean }
+        resolverPresent: { type: boolean }
+        resolverHealthy: { type: boolean }
+        endpointPoolReady: { type: boolean }
+        endpointPoolDetail: { type: string }
+        targetSocket: { type: string }
+        dnsTargetSocket: { type: string }
+        dnsListenAddress: { type: string, example: '127.77.0.1:1053' }
+        resolverPath: { type: string }
+        healthError: { type: string }
+        dnsHealthError: { type: string }
+        resolverHealthError: { type: string }
+        problem: { type: string }
     SourceInput:
       type: object
       required: [name, path]
@@ -954,6 +1009,7 @@ components:
         command: { type: array, items: { type: string } }
         workingDirectory: { type: string }
         portEnvironment: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535, description: Client-facing port for a generic TCP service. }
         environment: { type: object, additionalProperties: { type: string } }
         required: { type: boolean }
         health: { $ref: '#/components/schemas/HealthCheck' }
@@ -961,14 +1017,14 @@ components:
       allOf:
         - { $ref: '#/components/schemas/ServiceDefinition' }
         - type: object
-          required: [status, generation, restartCount, recentRequests]
+          required: [status, generation, endpoints, restartCount, recentRequests]
           properties:
             status: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
             reason: { type: string }
             generation: { type: integer, format: int64 }
             pid: { type: integer }
             upstreamPort: { type: integer }
-            ingressUrl: { type: string, format: uri }
+            endpoints: { type: array, items: { $ref: '#/components/schemas/Endpoint' } }
             startedAt: { type: string, format: date-time }
             restartCount: { type: integer, format: int64 }
             recentRequests: { type: integer, format: int64 }
@@ -982,6 +1038,16 @@ components:
         protocol: { type: string, enum: [http, tcp, postgres, redis] }
         environment: { type: string }
         required: { type: boolean }
+    Endpoint:
+      type: object
+      required: [kind, protocol, host, port, url]
+      properties:
+        kind: { type: string, enum: [public, connection] }
+        protocol: { type: string, enum: [http, tcp, postgres, redis] }
+        host: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        url: { type: string, format: uri, example: 'postgresql://postgres.local.store.portless.test:5432/portless' }
+        address: { type: string, description: Internal listener address when needed for diagnostics. }
     EffectiveConnection:
       allOf:
         - { $ref: '#/components/schemas/Connection' }
@@ -990,8 +1056,8 @@ components:
           properties:
             targetProvider: { type: string, enum: [local, container, remote] }
             targetStatus: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
-            proxyAddress: { type: string, example: '127.0.0.1:49152' }
-            targetEndpoint: { type: string, description: Effective local address or configured remote URL. }
+            endpoint: { $ref: '#/components/schemas/Endpoint' }
+            runtimeTarget: { type: string, description: Raw process, container, or remote target retained only for diagnostics. }
             injectedEnvVar: { type: string }
             injectedValue: { type: string, description: Redacted value injected into the source service. }
     ConfigurationValue:

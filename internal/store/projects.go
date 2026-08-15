@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/networking"
 )
 
 type environmentRow struct {
@@ -187,7 +188,28 @@ func (s *Store) RenameProject(ctx context.Context, oldName, newName string, expe
 			return model.Project{}, errors.New("all environments must be stopped before the project is renamed")
 		}
 	}
-	result, err := s.db.ExecContext(ctx, `
+	type allocationPlan struct {
+		environment string
+		specs       []networking.AllocationSpec
+	}
+	plans := make([]allocationPlan, 0, len(project.Environments))
+	for _, environment := range project.Environments {
+		definition, definitionErr := s.EnvironmentModel(ctx, oldName, environment.Name)
+		if definitionErr != nil {
+			return model.Project{}, definitionErr
+		}
+		specs, specErr := networking.AllocationSpecs(newName, environment.Name, definition)
+		if specErr != nil {
+			return model.Project{}, specErr
+		}
+		plans = append(plans, allocationPlan{environment: environment.Name, specs: specs})
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Project{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 UPDATE projects SET name = ?, revision = revision + 1, updated_at = ?
 WHERE name = ? COLLATE NOCASE AND (? = 0 OR revision = ?)`, newName, nowText(), oldName, expectedRevision, expectedRevision)
 	if err != nil {
@@ -199,6 +221,21 @@ WHERE name = ? COLLATE NOCASE AND (? = 0 OR revision = ?)`, newName, nowText(), 
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
 		return model.Project{}, ErrConflict
+	}
+	for _, plan := range plans {
+		var environmentKey string
+		if queryErr := tx.QueryRowContext(ctx, `
+SELECT e.private_key FROM environments e
+JOIN projects p ON p.private_key = e.project_key
+WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, newName, plan.environment).Scan(&environmentKey); queryErr != nil {
+			return model.Project{}, mapSQLError(queryErr)
+		}
+		if syncErr := syncNetworkAllocationsTx(ctx, tx, environmentKey, plan.specs); syncErr != nil {
+			return model.Project{}, syncErr
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Project{}, err
 	}
 	return s.Project(ctx, newName)
 }
@@ -240,6 +277,10 @@ func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentN
 	if err != nil {
 		return model.Environment{}, err
 	}
+	specs, err := networking.AllocationSpecs(projectName, environmentName, definition)
+	if err != nil {
+		return model.Environment{}, err
+	}
 	now := nowText()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -256,6 +297,9 @@ VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?)`, key, projectKey, environmentName, model.
 		return model.Environment{}, err
 	}
 	if err := replaceEnvironmentChildren(ctx, tx, key, definition, sources, bindings); err != nil {
+		return model.Environment{}, err
+	}
+	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
 		return model.Environment{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -388,6 +432,10 @@ func (s *Store) ReplaceEnvironmentConfiguration(ctx context.Context, projectName
 	if err != nil {
 		return model.Environment{}, err
 	}
+	specs, err := networking.AllocationSpecs(projectName, environmentName, definition)
+	if err != nil {
+		return model.Environment{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Environment{}, err
@@ -423,6 +471,9 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	if err := replaceEnvironmentChildren(ctx, tx, key, definition, sources, bindings); err != nil {
 		return model.Environment{}, err
 	}
+	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
+		return model.Environment{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return model.Environment{}, err
 	}
@@ -440,6 +491,10 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 		return model.Environment{}, err
 	}
 	environmentJSON, err := json.Marshal(environmentDefinition)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	specs, err := networking.AllocationSpecs(projectName, environmentName, environmentDefinition)
 	if err != nil {
 		return model.Environment{}, err
 	}
@@ -481,6 +536,9 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 		}
 	}
 	if err := replaceEnvironmentChildren(ctx, tx, environmentKey, environmentDefinition, sources, bindings); err != nil {
+		return model.Environment{}, err
+	}
+	if err := syncNetworkAllocationsTx(ctx, tx, environmentKey, specs); err != nil {
 		return model.Environment{}, err
 	}
 	if err := tx.Commit(); err != nil {
