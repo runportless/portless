@@ -1,0 +1,269 @@
+package application
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	pathmatch "path"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/portless-run/portless/internal/events"
+	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/runtime/logstore"
+	"github.com/portless-run/portless/internal/store"
+)
+
+func (s *Service) Traffic(project, environment string, limit int) []model.TrafficEvent {
+	return s.broker.RecentTraffic(model.EnvironmentSelector(project, environment), limit)
+}
+
+func (s *Service) TrafficEvent(ctx context.Context, project, environment string, sequence int64) (model.TrafficEvent, error) {
+	for _, event := range s.Traffic(project, environment, 1000) {
+		if event.Sequence == sequence {
+			return event, nil
+		}
+	}
+	recorded, err := s.store.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), "", 10_000)
+	if err != nil {
+		return model.TrafficEvent{}, err
+	}
+	for _, event := range recorded {
+		if event.Sequence == sequence {
+			return event, nil
+		}
+	}
+	return model.TrafficEvent{}, store.ErrNotFound
+}
+
+func (s *Service) RecordedTraffic(ctx context.Context, project, environment, recording string, limit int) ([]model.TrafficEvent, error) {
+	return s.store.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), recording, limit)
+}
+
+func (s *Service) Timeline(ctx context.Context, project, environment string, limit int) ([]model.TimelineEvent, error) {
+	return s.store.Timeline(ctx, model.EnvironmentSelector(project, environment), limit)
+}
+
+func (s *Service) StartRecording(ctx context.Context, recording model.Recording, actor string) (model.Recording, error) {
+	if err := model.ValidateArtifactName(recording.Name); err != nil {
+		return model.Recording{}, err
+	}
+	if recording.Project == "" || recording.Environment == "" {
+		return model.Recording{}, errors.New("project and environment are required")
+	}
+	if recording.CaptureBodies {
+		return model.Recording{}, errors.New("request and response body capture is not enabled in this build; start a metadata-only recording")
+	}
+	definition, err := s.store.EnvironmentModel(ctx, recording.Project, recording.Environment)
+	if err != nil {
+		return model.Recording{}, err
+	}
+	if err := validateExperimentScope(definition, recording.Source, recording.Target, true); err != nil {
+		return model.Recording{}, err
+	}
+	if recording.MaxEvents < 0 || recording.MaxEvents > 100_000 {
+		return model.Recording{}, errors.New("maxEvents must be between 1 and 100000")
+	}
+	if recording.MaxBodyBytes < 0 || recording.MaxBodyBytes > 1<<20 {
+		return model.Recording{}, errors.New("maxBodyBytes must not exceed 1048576")
+	}
+	if recording.ExpiresAt == nil {
+		expires := time.Now().UTC().Add(15 * time.Minute)
+		recording.ExpiresAt = &expires
+	}
+	if !recording.ExpiresAt.After(time.Now()) || recording.ExpiresAt.After(time.Now().Add(time.Hour)) {
+		return model.Recording{}, errors.New("recording expiry must be in the future and no more than one hour away")
+	}
+	created, err := s.store.CreateRecording(ctx, recording)
+	if err != nil {
+		return model.Recording{}, err
+	}
+	scope := model.EnvironmentSelector(recording.Project, recording.Environment)
+	_, _ = s.timeline(ctx, scope, actor, "recording.started", recording.Name, "info", "Recording "+recording.Name+" started", nil)
+	s.broker.Publish(events.Event{Type: "recording.state", Project: recording.Project, Environment: recording.Environment, Data: created})
+	return created, nil
+}
+
+func (s *Service) StopRecording(ctx context.Context, project, environment, name, actor string) error {
+	scope := model.EnvironmentSelector(project, environment)
+	if err := s.store.StopRecording(ctx, scope, name, "stopped"); err != nil {
+		return err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "recording.stopped", name, "info", "Recording "+name+" stopped", nil)
+	s.broker.Publish(events.Event{Type: "recording.state", Project: project, Environment: environment, Data: map[string]any{"name": name, "status": "completed"}})
+	return nil
+}
+
+func (s *Service) Recordings(ctx context.Context, project, environment string) ([]model.Recording, error) {
+	return s.store.Recordings(ctx, model.EnvironmentSelector(project, environment))
+}
+
+func (s *Service) Recording(ctx context.Context, project, environment, name string) (model.Recording, error) {
+	return s.store.Recording(ctx, model.EnvironmentSelector(project, environment), name)
+}
+
+func (s *Service) DeleteRecording(ctx context.Context, project, environment, name, actor string) error {
+	scope := model.EnvironmentSelector(project, environment)
+	if err := s.store.DeleteRecording(ctx, scope, name); err != nil {
+		return err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "recording.deleted", name, "warning", "Recording "+name+" deleted", nil)
+	return nil
+}
+
+func (s *Service) CreateFault(ctx context.Context, fault model.FaultRule, actor string) (model.FaultRule, error) {
+	if err := model.ValidateArtifactName(fault.Name); err != nil {
+		return model.FaultRule{}, err
+	}
+	if fault.Probability == 0 {
+		fault.Probability = 1
+	}
+	if fault.Probability < 0 || fault.Probability > 1 {
+		return model.FaultRule{}, errors.New("probability must be between 0 and 1")
+	}
+	if fault.Project == "" || fault.Environment == "" {
+		return model.FaultRule{}, errors.New("project and environment are required")
+	}
+	definition, err := s.store.EnvironmentModel(ctx, fault.Project, fault.Environment)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	if err := validateExperimentScope(definition, fault.Source, fault.Target, false); err != nil {
+		return model.FaultRule{}, err
+	}
+	if fault.LatencyMS < 0 || fault.JitterMS < 0 || fault.LatencyMS+fault.JitterMS > 60_000 {
+		return model.FaultRule{}, errors.New("latency plus jitter must be between 0 and 60000 milliseconds")
+	}
+	if fault.StatusCode != 0 && (fault.StatusCode < 400 || fault.StatusCode > 599) {
+		return model.FaultRule{}, errors.New("synthetic status must be between 400 and 599")
+	}
+	if fault.LatencyMS == 0 && fault.JitterMS == 0 && fault.StatusCode == 0 && !fault.Abort {
+		return model.FaultRule{}, errors.New("fault must define latency, jitter, a synthetic status, or an abort")
+	}
+	if strings.ContainsAny(fault.Method, " \t\r\n") {
+		return model.FaultRule{}, errors.New("HTTP method filter must be a single token")
+	}
+	fault.Method = strings.ToUpper(fault.Method)
+	if fault.Path != "" {
+		if _, err := pathmatch.Match(fault.Path, "/validation"); err != nil {
+			return model.FaultRule{}, fmt.Errorf("invalid path glob: %w", err)
+		}
+	}
+	if fault.ExpiresAt != nil && !fault.ExpiresAt.After(time.Now()) {
+		return model.FaultRule{}, errors.New("fault expiry must be in the future")
+	}
+	created, err := s.store.CreateFault(ctx, fault)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	scope := model.EnvironmentSelector(fault.Project, fault.Environment)
+	_, _ = s.timeline(ctx, scope, actor, "fault.enabled", fault.Name, "warning", created.ScopeSummary, nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: fault.Project, Environment: fault.Environment, Data: created})
+	return created, nil
+}
+
+func (s *Service) Faults(ctx context.Context, project, environment string) ([]model.FaultRule, error) {
+	return s.store.Faults(ctx, model.EnvironmentSelector(project, environment), false)
+}
+
+func (s *Service) Fault(ctx context.Context, project, environment, name string) (model.FaultRule, error) {
+	return s.store.Fault(ctx, model.EnvironmentSelector(project, environment), name)
+}
+
+func (s *Service) EnableFault(ctx context.Context, project, environment, name, actor string) (model.FaultRule, error) {
+	scope := model.EnvironmentSelector(project, environment)
+	fault, err := s.store.Fault(ctx, scope, name)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	if fault.ExpiresAt != nil && !fault.ExpiresAt.After(time.Now()) {
+		return model.FaultRule{}, fmt.Errorf("fault %s has expired; delete it and create a new rule", name)
+	}
+	if fault.Enabled {
+		return fault, nil
+	}
+	definition, err := s.store.EnvironmentModel(ctx, project, environment)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	if err := validateExperimentScope(definition, fault.Source, fault.Target, false); err != nil {
+		return model.FaultRule{}, err
+	}
+	if err := s.store.EnableFault(ctx, scope, name); err != nil {
+		return model.FaultRule{}, err
+	}
+	fault, err = s.store.Fault(ctx, scope, name)
+	if err != nil {
+		return model.FaultRule{}, err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "fault.enabled", name, "warning", "Fault "+name+" enabled", nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: fault})
+	return fault, nil
+}
+
+func (s *Service) DisableFault(ctx context.Context, project, environment, name, actor string) error {
+	scope := model.EnvironmentSelector(project, environment)
+	if err := s.store.DisableFault(ctx, scope, name); err != nil {
+		return err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "fault.disabled", name, "info", "Fault "+name+" disabled", nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: map[string]any{"name": name, "enabled": false}})
+	return nil
+}
+
+func (s *Service) DeleteFault(ctx context.Context, project, environment, name, actor string) error {
+	scope := model.EnvironmentSelector(project, environment)
+	if err := s.store.DeleteFault(ctx, scope, name); err != nil {
+		return err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "fault.deleted", name, "warning", "Fault "+name+" deleted", nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: map[string]any{"name": name, "enabled": false, "deleted": true}})
+	return nil
+}
+
+func (s *Service) DisableAllFaults(ctx context.Context, project, environment, actor string) (int64, error) {
+	scope := model.EnvironmentSelector(project, environment)
+	count, err := s.store.DisableAllFaults(ctx, scope)
+	if err != nil {
+		return 0, err
+	}
+	_, _ = s.timeline(ctx, scope, actor, "faults.disabled_all", scope, "info", fmt.Sprintf("Disabled %d active faults", count), nil)
+	s.broker.Publish(events.Event{Type: "fault.state", Project: project, Environment: environment, Data: map[string]any{"enabled": false, "count": count}})
+	return count, nil
+}
+
+func (s *Service) Logs(ctx context.Context, project, environment, service string, limit int, since time.Time) ([]model.LogEntry, error) {
+	current, err := s.store.Environment(ctx, project, environment)
+	if err != nil {
+		return nil, err
+	}
+	services := make([]string, 0, len(current.Services))
+	for _, candidate := range current.Services {
+		if service == "" || strings.EqualFold(candidate.Name, service) {
+			services = append(services, candidate.Name)
+		}
+	}
+	if service != "" && len(services) == 0 {
+		return nil, store.ErrNotFound
+	}
+	privateKey, err := s.store.PrivateEnvironmentKey(ctx, project, environment)
+	if err != nil {
+		return nil, err
+	}
+	root := filepath.Join(s.dataDirectory, "environments", privateKey, "logs")
+	return logstore.Read(root, services, limit, since)
+}
+
+func (s *Service) ExportProject(ctx context.Context, project string) ([]byte, error) {
+	definition, err := s.store.ProjectModel(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	definition.SuggestedName = project
+	return json.MarshalIndent(struct {
+		SchemaVersion int `json:"schemaVersion"`
+		model.ProjectModel
+	}{SchemaVersion: 1, ProjectModel: definition}, "", "  ")
+}

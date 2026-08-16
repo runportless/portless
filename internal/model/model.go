@@ -5,15 +5,14 @@ import "time"
 type EnvironmentStatus string
 
 const (
-	EnvironmentStarting    EnvironmentStatus = "starting"
-	EnvironmentRecovering  EnvironmentStatus = "recovering"
-	EnvironmentDevelopment EnvironmentStatus = "development"
-	EnvironmentHealthy     EnvironmentStatus = "healthy"
-	EnvironmentDegraded    EnvironmentStatus = "degraded"
-	EnvironmentFailed      EnvironmentStatus = "failed"
-	EnvironmentStopping    EnvironmentStatus = "stopping"
-	EnvironmentStopped     EnvironmentStatus = "stopped"
-	EnvironmentUnknown     EnvironmentStatus = "unknown"
+	EnvironmentStarting   EnvironmentStatus = "starting"
+	EnvironmentRecovering EnvironmentStatus = "recovering"
+	EnvironmentHealthy    EnvironmentStatus = "healthy"
+	EnvironmentDegraded   EnvironmentStatus = "degraded"
+	EnvironmentFailed     EnvironmentStatus = "failed"
+	EnvironmentStopping   EnvironmentStatus = "stopping"
+	EnvironmentStopped    EnvironmentStatus = "stopped"
+	EnvironmentUnknown    EnvironmentStatus = "unknown"
 )
 
 type ServiceStatus string

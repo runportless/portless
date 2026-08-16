@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
-	"strconv"
 	"time"
 
-	"github.com/portless-run/portless/internal/bootstrap"
+	apiclient "github.com/portless-run/portless/internal/api/client"
 	"github.com/portless-run/portless/internal/model"
 )
 
@@ -36,9 +34,9 @@ type pendingDown struct {
 	operation   model.Operation
 }
 
-func (c *CLI) startDown(ctx context.Context, client *bootstrap.Client, environment model.Environment, removeVolumes bool) (model.Operation, error) {
-	var operation model.Operation
-	if err := client.Do(ctx, http.MethodPost, environmentAPI(environment)+"/down", map[string]any{"removeVolumes": removeVolumes}, &operation); err != nil {
+func (c *CLI) startDown(ctx context.Context, client *apiclient.Client, environment model.Environment, removeVolumes bool) (model.Operation, error) {
+	operation, err := client.DownEnvironment(ctx, environment.Project, environment.Name, removeVolumes)
+	if err != nil {
 		return model.Operation{}, err
 	}
 	if operation.Project == "" {
@@ -50,7 +48,7 @@ func (c *CLI) startDown(ctx context.Context, client *bootstrap.Client, environme
 	return operation, nil
 }
 
-func (c *CLI) waitDown(ctx context.Context, client *bootstrap.Client, operation model.Operation, timeout time.Duration, suppressEvents bool) (model.Operation, error) {
+func (c *CLI) waitDown(ctx context.Context, client *apiclient.Client, operation model.Operation, timeout time.Duration, suppressEvents bool) (model.Operation, error) {
 	waitContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -68,7 +66,7 @@ func (c *CLI) waitDown(ctx context.Context, client *bootstrap.Client, operation 
 	return completed, nil
 }
 
-func (c *CLI) downAll(ctx context.Context, client *bootstrap.Client, options downOptions) error {
+func (c *CLI) downAll(ctx context.Context, client *apiclient.Client, options downOptions) error {
 	targets, err := loadDownAllTargets(ctx, client, options.volumes)
 	if err != nil {
 		return err
@@ -113,13 +111,9 @@ func (c *CLI) downAll(ctx context.Context, client *bootstrap.Client, options dow
 	return nil
 }
 
-func loadDownAllTargets(ctx context.Context, client *bootstrap.Client, includeStopped bool) ([]model.Environment, error) {
-	var response struct {
-		Environments []model.Environment `json:"environments"`
-		Total        int                 `json:"total"`
-	}
-	path := "/api/v1/environments?limit=" + strconv.Itoa(downAllInventoryLimit)
-	if err := client.Do(ctx, http.MethodGet, path, nil, &response); err != nil {
+func loadDownAllTargets(ctx context.Context, client *apiclient.Client, includeStopped bool) ([]model.Environment, error) {
+	response, err := client.ListEnvironments(ctx, "", downAllInventoryLimit)
+	if err != nil {
 		return nil, err
 	}
 	if response.Total > len(response.Environments) {

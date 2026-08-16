@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/internal/bootstrap"
-	"github.com/portless-run/portless/internal/ingress"
-	"github.com/portless-run/portless/internal/runtime/container"
+	"github.com/portless-run/portless/internal/api/contract"
+	"github.com/portless-run/portless/internal/installation"
+	relayinstall "github.com/portless-run/portless/internal/relay/install"
 )
 
 func TestUninstallCommandHelpDocumentsPreviewConfirmationAndForce(t *testing.T) {
@@ -32,7 +32,7 @@ func TestUninstallPreviewExplainsExactScopeAndConfirmation(t *testing.T) {
 	result := uninstallOutput{
 		Action: "uninstall", Forced: true, Projects: 1, Environments: 2, ManagedVolumeEnvironments: 1,
 		Daemon:     uninstallDaemonOutput{State: "running", PID: 123, InventoryAvailable: true, ActiveEnvironments: []string{"store/local"}},
-		Relay:      uninstallRelayOutput{Installed: true, State: "ready", Service: "dev.portless.ingress", ResolverPath: "/etc/resolver/portless.test", EndpointPoolReady: true, AdministratorPrompt: true},
+		Relay:      uninstallRelayOutput{Installed: true, State: "ready", Service: "dev.portless.relay", ResolverPath: "/etc/resolver/portless.test", EndpointPoolReady: true, AdministratorPrompt: true},
 		Data:       uninstallDataOutput{Path: "/Users/test/.portless", Present: true},
 		Launcher:   launcherPlan{Path: "/Users/test/bin/portless", Target: "/src/portless/bin/portless", Kind: "symlink", Action: "remove"},
 		WillRemove: append([]string(nil), uninstallRemovalCategories...),
@@ -41,7 +41,7 @@ func TestUninstallPreviewExplainsExactScopeAndConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"Portless uninstall preview", "Daemon: running (PID 123)", "1 project, 2 environments", "dev.portless.ingress",
+		"Portless uninstall preview", "Daemon: running (PID 123)", "1 project, 2 environments", "dev.portless.relay",
 		"/etc/resolver/portless.test", "Administrator approval", "remove /Users/test/bin/portless", "preserve /src/portless/bin/portless",
 		"store/local", "No changes were made", "portless uninstall --force --yes",
 	} {
@@ -166,7 +166,7 @@ func TestExecuteUninstallStepsUsesSafeOrderAndDoesNotCancelAfterStateRemoval(t *
 			calls = append(calls, "runtime")
 			return uninstallRuntimePreparation{
 				Prepared: true, Projects: 1, Environments: 2, ManagedVolumeEnvironments: 1, Processes: 3,
-				Runtimes: []container.ResetResult{{Runtime: container.RuntimeDocker, Containers: 2, Volumes: 1, Networks: 1}},
+				Runtimes: []contract.RuntimeResetResult{{Runtime: contract.RuntimeDocker, Containers: 2, Volumes: 1, Networks: 1}},
 				Cancel:   func() { calls = append(calls, "cancel") },
 			}, nil
 		},
@@ -174,9 +174,9 @@ func TestExecuteUninstallStepsUsesSafeOrderAndDoesNotCancelAfterStateRemoval(t *
 			calls = append(calls, "relay")
 			return true, nil
 		},
-		removeState: func(context.Context, bool) (bootstrap.InstallationStateRemoval, error) {
+		removeState: func(context.Context, bool) (installation.StateRemoval, error) {
 			calls = append(calls, "state")
-			return bootstrap.InstallationStateRemoval{Path: "/tmp/state", Removed: true}, nil
+			return installation.StateRemoval{Path: "/tmp/state", Removed: true}, nil
 		},
 		removeLauncher: func(launcherPlan) (bool, error) {
 			calls = append(calls, "launcher")
@@ -206,9 +206,9 @@ func TestExecuteUninstallStepsKeepsStateAndLauncherWhenRelayRemovalFails(t *test
 			calls = append(calls, "relay")
 			return false, errors.New("sudo denied")
 		},
-		removeState: func(context.Context, bool) (bootstrap.InstallationStateRemoval, error) {
+		removeState: func(context.Context, bool) (installation.StateRemoval, error) {
 			calls = append(calls, "state")
-			return bootstrap.InstallationStateRemoval{}, nil
+			return installation.StateRemoval{}, nil
 		},
 		removeLauncher: func(launcherPlan) (bool, error) {
 			calls = append(calls, "launcher")
@@ -247,8 +247,8 @@ func TestExecuteUninstallStepsReportsLauncherAsOnlyPartialFailure(t *testing.T) 
 			return uninstallRuntimePreparation{Prepared: true, Cancel: func() { cancelled = true }}, nil
 		},
 		removeRelay: func(context.Context) (bool, error) { return true, nil },
-		removeState: func(context.Context, bool) (bootstrap.InstallationStateRemoval, error) {
-			return bootstrap.InstallationStateRemoval{Removed: true}, nil
+		removeState: func(context.Context, bool) (installation.StateRemoval, error) {
+			return installation.StateRemoval{Removed: true}, nil
 		},
 		removeLauncher: func(launcherPlan) (bool, error) { return false, errors.New("permission denied") },
 	}
@@ -281,11 +281,11 @@ func TestIncompatibleActiveUninstallRequiresForcedRecovery(t *testing.T) {
 }
 
 func TestFullUninstallNeverOverridesRelayOwnershipOrAnotherDataDirectory(t *testing.T) {
-	paths, err := bootstrap.ResolvePaths(t.TempDir())
+	paths, err := installation.ResolveLayout(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned := ingress.InstallationStatus{Installed: true, OwnerUID: 501, TargetSocket: paths.Ingress, DNSTargetSocket: paths.DNS}
+	owned := relayinstall.InstallationStatus{Installed: true, OwnerUID: 501, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket}
 	if blockers := relayUninstallBlockers(owned, paths, 501); len(blockers) != 0 {
 		t.Fatalf("current installation was blocked: %#v", blockers)
 	}

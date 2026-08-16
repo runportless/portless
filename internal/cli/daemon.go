@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/portless-run/portless/internal/bootstrap"
+	"github.com/portless-run/portless/internal/daemon/control"
 )
 
 type daemonStatusOutput struct {
@@ -30,7 +30,7 @@ type daemonStatusOutput struct {
 }
 
 func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
-	inspection, err := bootstrap.InspectDaemon(ctx, c.paths)
+	inspection, err := c.daemon.Inspect(ctx)
 	if errors.Is(err, os.ErrNotExist) {
 		result := daemonStatusOutput{State: "stopped", ActiveEnvironments: []string{}, Problems: []string{}}
 		if jsonOutput {
@@ -40,7 +40,7 @@ func (c *CLI) daemonStatus(ctx context.Context, jsonOutput bool) error {
 		return nil
 	}
 	if err != nil {
-		if errors.Is(err, bootstrap.ErrLegacyDaemon) {
+		if errors.Is(err, control.ErrLegacyDaemon) {
 			return fmt.Errorf("daemon identity could not be verified: %w; replace it once with `portless daemon restart --force`", err)
 		}
 		return fmt.Errorf("daemon identity could not be verified: %w", err)
@@ -109,8 +109,8 @@ func (c *CLI) printDaemonStatus(result daemonStatusOutput) {
 	}
 }
 
-func (c *CLI) stopDaemon(ctx context.Context, options bootstrap.StopOptions, jsonOutput bool) error {
-	result, err := bootstrap.StopDaemon(ctx, c.paths, options)
+func (c *CLI) stopDaemon(ctx context.Context, options control.StopOptions, jsonOutput bool) error {
+	result, err := c.daemon.Stop(ctx, options)
 	if err != nil {
 		return err
 	}
@@ -126,17 +126,17 @@ func (c *CLI) stopDaemon(ctx context.Context, options bootstrap.StopOptions, jso
 	return nil
 }
 
-func (c *CLI) restartDaemon(ctx context.Context, options bootstrap.StopOptions, jsonOutput bool) error {
+func (c *CLI) restartDaemon(ctx context.Context, options control.StopOptions, jsonOutput bool) error {
 	options.Handoff = true
-	stopped, err := bootstrap.StopDaemon(ctx, c.paths, options)
+	stopped, err := c.daemon.Stop(ctx, options)
 	if err != nil {
 		return err
 	}
-	record, err := bootstrap.EnsureDaemon(ctx, c.paths)
+	record, err := c.daemon.Ensure(ctx)
 	if err != nil {
 		return err
 	}
-	inspection, err := bootstrap.InspectDaemon(ctx, c.paths)
+	inspection, err := c.daemon.Inspect(ctx)
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func (c *CLI) restartDaemon(ctx context.Context, options bootstrap.StopOptions, 
 	return nil
 }
 
-func printForcedDaemonWarning(c *CLI, result bootstrap.StopResult) {
+func printForcedDaemonWarning(c *CLI, result control.StopResult) {
 	if !result.Forced || len(result.ActiveEnvironments) == 0 {
 		return
 	}

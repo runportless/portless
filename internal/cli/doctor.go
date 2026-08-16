@@ -9,8 +9,8 @@ import (
 )
 
 func (c *CLI) doctor(ctx context.Context, scope diagnostics.Scope, jsonOutput bool) error {
-	uid, _ := requestingUserIDs()
-	report, err := diagnostics.Run(ctx, c.paths, scope, uid)
+	uid, _ := c.local.userIDs()
+	report, err := c.local.diagnose(ctx, c.paths, scope, uid)
 	if err != nil {
 		return err
 	}

@@ -1246,7 +1246,7 @@ components:
         environments: { type: array, items: { $ref: '#/components/schemas/EnvironmentSummary' } }
     EnvironmentStatus:
       type: string
-      enum: [starting, recovering, development, healthy, degraded, failed, stopping, stopped, unknown]
+      enum: [starting, recovering, healthy, degraded, failed, stopping, stopped, unknown]
     ConfigurationIssue:
       type: object
       required: [code, message]

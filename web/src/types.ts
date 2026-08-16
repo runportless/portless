@@ -1,4 +1,4 @@
-export type EnvironmentStatus = 'starting' | 'recovering' | 'development' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
+export type EnvironmentStatus = 'starting' | 'recovering' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
 export type ServiceStatus = 'planned' | 'starting' | 'recovering' | 'ready' | 'unhealthy' | 'exited' | 'failed' | 'stopping' | 'stopped' | 'unknown'
 export type ProviderKind = 'local' | 'container' | 'remote'
 export type LaunchMode = 'managed' | 'debug'

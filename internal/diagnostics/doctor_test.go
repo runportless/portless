@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/internal/api"
-	"github.com/portless-run/portless/internal/bootstrap"
-	"github.com/portless-run/portless/internal/daemon"
-	"github.com/portless-run/portless/internal/ingress"
+	"github.com/portless-run/portless/internal/api/contract"
+	"github.com/portless-run/portless/internal/daemon/instance"
+	"github.com/portless-run/portless/internal/daemon/lifecycle"
+	"github.com/portless-run/portless/internal/installation"
+	relayinstall "github.com/portless-run/portless/internal/relay/install"
 	"github.com/portless-run/portless/internal/runtime/container"
 )
 
@@ -24,20 +25,20 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	paths, err := bootstrap.ResolvePaths(root)
+	paths, err := installation.ResolveLayout(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(paths.Root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.Token, []byte("test-token\n"), 0o600); err != nil {
+	if err := os.WriteFile(paths.AuthToken, []byte("test-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	record := bootstrap.ControlRecord{
-		PID: os.Getpid(), Port: 7331, ProtocolVersion: daemon.ProtocolVersion, APIVersion: api.APIVersion,
+	record := instance.Record{
+		PID: os.Getpid(), Port: 7331, ProtocolVersion: lifecycle.ProtocolVersion, APIVersion: contract.APIVersion,
 		InstallationID: "installation", InstanceID: "instance", BuildID: "build", State: "ready", HandoffReady: true,
-		TokenPath: paths.Token, StartedAt: time.Now().UTC(), ProcessHint: "portless-test",
+		TokenPath: paths.AuthToken, StartedAt: time.Now().UTC(), ProcessHint: "portless-test",
 	}
 	content, err := json.Marshal(record)
 	if err != nil {
@@ -46,25 +47,25 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 	if err := os.WriteFile(paths.Control, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("unix", paths.Ingress)
+	listener, err := net.Listen("unix", paths.IngressSocket)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	if err := os.Chmod(paths.Ingress, 0o600); err != nil {
+	if err := os.Chmod(paths.IngressSocket, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dnsListener, err := net.Listen("unix", paths.DNS)
+	dnsListener, err := net.Listen("unix", paths.DNSSocket)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer dnsListener.Close()
-	if err := os.Chmod(paths.DNS, 0o600); err != nil {
+	if err := os.Chmod(paths.DNSSocket, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	dependencies := dependencies{
-		checkDaemon:        func(context.Context, bootstrap.Paths) (bootstrap.ControlRecord, error) { return record, nil },
+		checkDaemon:        func(context.Context) (instance.Record, error) { return record, nil },
 		checkIngressSocket: func(context.Context, string) error { return nil },
 		checkDNSSocket:     func(context.Context, string) error { return nil },
 		processAlive:       func(int) error { return nil },
@@ -82,7 +83,7 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 
 func TestDaemonChecksDoNotCreateMissingDataDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing")
-	paths, err := bootstrap.ResolvePaths(root)
+	paths, err := installation.ResolveLayout(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,14 +97,14 @@ func TestDaemonChecksDoNotCreateMissingDataDirectory(t *testing.T) {
 }
 
 func TestRelayChecksHealthyInstallation(t *testing.T) {
-	paths, err := bootstrap.ResolvePaths(t.TempDir())
+	paths, err := installation.ResolveLayout(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	uid := 501
 	dependencies := dependencies{
 		lookupIP: loopbackLookup,
-		inspectRelay: func(context.Context) (ingress.InstallationStatus, error) {
+		inspectRelay: func(context.Context) (relayinstall.InstallationStatus, error) {
 			return healthyRelayStatus(paths, uid), nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
@@ -116,13 +117,13 @@ func TestRelayChecksHealthyInstallation(t *testing.T) {
 }
 
 func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testing.T) {
-	paths, err := bootstrap.ResolvePaths(t.TempDir())
+	paths, err := installation.ResolveLayout(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	uid := 501
 	base := dependencies{
-		inspectRelay: func(context.Context) (ingress.InstallationStatus, error) {
+		inspectRelay: func(context.Context) (relayinstall.InstallationStatus, error) {
 			return healthyRelayStatus(paths, uid), nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
@@ -145,8 +146,8 @@ func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testi
 	}
 
 	unhealthy := unavailable
-	unhealthy.inspectRelay = func(context.Context) (ingress.InstallationStatus, error) {
-		return ingress.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
+	unhealthy.inspectRelay = func(context.Context) (relayinstall.InstallationStatus, error) {
+		return relayinstall.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
 	}
 	unhealthy.portListening = func(context.Context) (bool, error) { return false, nil }
 	report = run(context.Background(), paths, ScopeRelay, uid, unhealthy)
@@ -168,14 +169,14 @@ func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testi
 }
 
 func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
-	paths, err := bootstrap.ResolvePaths(t.TempDir())
+	paths, err := installation.ResolveLayout(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	dependencies := dependencies{
 		lookupIP: loopbackLookup,
-		inspectRelay: func(context.Context) (ingress.InstallationStatus, error) {
-			return ingress.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
+		inspectRelay: func(context.Context) (relayinstall.InstallationStatus, error) {
+			return relayinstall.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
 		dnsListening:  func(context.Context) (bool, error) { return false, nil },
@@ -199,7 +200,7 @@ func TestRuntimeUnavailableIsWarningBecauseContainersAreOptional(t *testing.T) {
 			{Name: container.RuntimeDocker, State: "failed", Reason: "engine stopped"},
 		}
 	}}
-	report := run(context.Background(), bootstrap.Paths{}, ScopeRuntime, os.Getuid(), dependencies)
+	report := run(context.Background(), installation.Layout{}, ScopeRuntime, os.Getuid(), dependencies)
 	if !report.Healthy || report.Summary.Warnings != 1 || report.Summary.Failed != 0 {
 		t.Fatalf("unexpected runtime report: %#v", report)
 	}
@@ -215,11 +216,11 @@ func loopbackLookup(context.Context, string) ([]net.IPAddr, error) {
 	return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}, {IP: net.ParseIP("::1")}}, nil
 }
 
-func healthyRelayStatus(paths bootstrap.Paths, uid int) ingress.InstallationStatus {
-	return ingress.InstallationStatus{
-		Platform: "launchd", Service: "dev.portless.ingress", Installed: true,
+func healthyRelayStatus(paths installation.Layout, uid int) relayinstall.InstallationStatus {
+	return relayinstall.InstallationStatus{
+		Platform: "launchd", Service: "dev.portless.relay", Installed: true,
 		Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, HelperPresent: true, ConfigurationPresent: true,
-		ReceiptPresent: true, ResolverPresent: true, ResolverHealthy: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.Ingress, DNSTargetSocket: paths.DNS,
+		ReceiptPresent: true, ResolverPresent: true, ResolverHealthy: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket,
 		EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0",
 		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt", ResolverPath: "/fixed/resolver",
 	}

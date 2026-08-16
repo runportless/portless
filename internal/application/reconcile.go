@@ -25,7 +25,7 @@ type ReconciliationReport struct {
 
 func (s *Service) environmentRuntimeVerified(ctx context.Context, environment model.Environment) bool {
 	if s.daemonInstanceID == "" {
-		return environment.Status == model.EnvironmentHealthy || environment.Status == model.EnvironmentDevelopment
+		return environment.Status == model.EnvironmentHealthy
 	}
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	for _, service := range environment.Services {
@@ -104,7 +104,7 @@ func (s *Service) Reconcile(ctx context.Context) (ReconciliationReport, error) {
 		if currentErr != nil {
 			return report, currentErr
 		}
-		if current.Status == model.EnvironmentHealthy || current.Status == model.EnvironmentDevelopment {
+		if current.Status == model.EnvironmentHealthy {
 			report.Recovered = append(report.Recovered, scope)
 		} else {
 			report.Unverifiable = append(report.Unverifiable, scope+": "+current.Reason)
@@ -248,7 +248,7 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	if finalErr != nil {
 		return finalErr
 	}
-	if final.Status != model.EnvironmentHealthy && final.Status != model.EnvironmentDevelopment {
+	if final.Status != model.EnvironmentHealthy {
 		_, _ = s.timeline(ctx, scope, "daemon", "environment.reconciled", scope, "warning", "Runtime recovery completed with unavailable services", map[string]any{"daemonInstance": s.daemonInstanceID})
 	}
 	return nil

@@ -11,10 +11,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/portless-run/portless/internal/api"
-	"github.com/portless-run/portless/internal/bootstrap"
-	"github.com/portless-run/portless/internal/daemon"
-	"github.com/portless-run/portless/internal/ingress"
+	"github.com/portless-run/portless/internal/api/contract"
+	"github.com/portless-run/portless/internal/daemon/control"
+	"github.com/portless-run/portless/internal/daemon/instance"
+	"github.com/portless-run/portless/internal/daemon/lifecycle"
+	"github.com/portless-run/portless/internal/installation"
+	"github.com/portless-run/portless/internal/relay"
+	relayinstall "github.com/portless-run/portless/internal/relay/install"
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/runtime/container/docker"
 	"github.com/portless-run/portless/internal/runtime/container/podman"
@@ -64,8 +67,8 @@ type Report struct {
 }
 
 type dependencies struct {
-	checkDaemon        func(context.Context, bootstrap.Paths) (bootstrap.ControlRecord, error)
-	inspectRelay       func(context.Context) (ingress.InstallationStatus, error)
+	checkDaemon        func(context.Context) (instance.Record, error)
+	inspectRelay       func(context.Context) (relayinstall.InstallationStatus, error)
 	checkIngressSocket func(context.Context, string) error
 	checkDNSSocket     func(context.Context, string) error
 	processAlive       func(int) error
@@ -90,14 +93,14 @@ func ParseScope(value string) (Scope, error) {
 
 // Run performs read-only diagnostics. It never starts the daemon, invokes
 // sudo, changes runtime selection, or repairs the relay.
-func Run(ctx context.Context, paths bootstrap.Paths, scope Scope, uid int) (Report, error) {
+func Run(ctx context.Context, paths installation.Layout, scope Scope, uid int) (Report, error) {
 	if _, err := ParseScope(string(scope)); err != nil {
 		return Report{}, err
 	}
-	return run(ctx, paths, scope, uid, defaultDependencies()), nil
+	return run(ctx, paths, scope, uid, defaultDependencies(control.New(paths))), nil
 }
 
-func run(ctx context.Context, paths bootstrap.Paths, scope Scope, uid int, dependencies dependencies) Report {
+func run(ctx context.Context, paths installation.Layout, scope Scope, uid int, dependencies dependencies) Report {
 	checks := make([]Check, 0, 16)
 	if scope == ScopeAll || scope == ScopeDaemon {
 		checks = append(checks, daemonChecks(ctx, paths, uid, dependencies)...)
@@ -127,46 +130,46 @@ func run(ctx context.Context, paths bootstrap.Paths, scope Scope, uid int, depen
 	return report
 }
 
-func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependencies dependencies) []Check {
+func daemonChecks(ctx context.Context, paths installation.Layout, uid int, dependencies dependencies) []Check {
 	checks := make([]Check, 0, 6)
 	if detail, err := securePath(paths.Root, uid, pathDirectory); err != nil {
 		remediation := fmt.Sprintf("Confirm the directory belongs to your user, then run `chmod 700 %s`.", strconv.Quote(paths.Root))
 		if info, statErr := os.Stat(paths.Root); statErr != nil || !info.IsDir() {
 			remediation = "Run `portless up` or `portless ui` to initialize and start Portless."
-			checks = append(checks, failed("daemon.data_directory", "daemon", "Data directory is not usable", detailOrError(detail, err), remediation))
+			checks = append(checks, failed("lifecycle.data_directory", "daemon", "Data directory is not usable", detailOrError(detail, err), remediation))
 			return append(checks,
-				skipped("daemon.control_record", "daemon", "Control record was not checked"),
-				skipped("daemon.process", "daemon", "Daemon process was not checked"),
-				skipped("daemon.api", "daemon", "Daemon API was not checked"),
-				skipped("daemon.authentication", "daemon", "CLI authentication was not checked"),
-				skipped("daemon.ingress_socket", "daemon", "Private ingress socket was not checked"),
-				skipped("daemon.dns_socket", "daemon", "Private DNS socket was not checked"),
+				skipped("lifecycle.control_record", "daemon", "Control record was not checked"),
+				skipped("lifecycle.process", "daemon", "Daemon process was not checked"),
+				skipped("lifecycle.api", "daemon", "Daemon API was not checked"),
+				skipped("lifecycle.authentication", "daemon", "CLI authentication was not checked"),
+				skipped("lifecycle.ingress_socket", "daemon", "Private ingress socket was not checked"),
+				skipped("lifecycle.dns_socket", "daemon", "Private DNS socket was not checked"),
 			)
 		}
-		checks = append(checks, failed("daemon.data_directory", "daemon", "Data directory ownership or permissions are unsafe", detailOrError(detail, err), remediation))
+		checks = append(checks, failed("lifecycle.data_directory", "daemon", "Data directory ownership or permissions are unsafe", detailOrError(detail, err), remediation))
 	} else {
-		checks = append(checks, passed("daemon.data_directory", "daemon", "Data directory is private and accessible", detail))
+		checks = append(checks, passed("lifecycle.data_directory", "daemon", "Data directory is private and accessible", detail))
 	}
 
-	record, recordErr := bootstrap.ReadControl(paths)
+	record, recordErr := control.New(paths).ReadRecord()
 	controlDetail, controlPathErr := securePath(paths.Control, uid, pathRegular)
 	if recordErr != nil {
 		detail := joinDetails(detailOrError(controlDetail, controlPathErr), errorDetail("read control record", recordErr))
-		checks = append(checks, failed("daemon.control_record", "daemon", "Daemon control record is missing or invalid", detail, "Run `portless up` or `portless ui` to start a fresh daemon."))
+		checks = append(checks, failed("lifecycle.control_record", "daemon", "Daemon control record is missing or invalid", detail, "Run `portless up` or `portless ui` to start a fresh lifecycle."))
 		return append(checks,
-			skipped("daemon.process", "daemon", "Daemon process was not checked"),
-			skipped("daemon.api", "daemon", "Daemon API was not checked"),
-			skipped("daemon.authentication", "daemon", "CLI authentication was not checked"),
-			skipped("daemon.ingress_socket", "daemon", "Private ingress socket was not checked"),
-			skipped("daemon.dns_socket", "daemon", "Private DNS socket was not checked"),
+			skipped("lifecycle.process", "daemon", "Daemon process was not checked"),
+			skipped("lifecycle.api", "daemon", "Daemon API was not checked"),
+			skipped("lifecycle.authentication", "daemon", "CLI authentication was not checked"),
+			skipped("lifecycle.ingress_socket", "daemon", "Private ingress socket was not checked"),
+			skipped("lifecycle.dns_socket", "daemon", "Private DNS socket was not checked"),
 		)
 	}
 	controlProblems := make([]string, 0, 2)
 	if controlPathErr != nil {
 		controlProblems = append(controlProblems, detailOrError(controlDetail, controlPathErr))
 	}
-	if record.TokenPath != paths.Token {
-		controlProblems = append(controlProblems, fmt.Sprintf("configured token: %s; expected: %s", record.TokenPath, paths.Token))
+	if record.TokenPath != paths.AuthToken {
+		controlProblems = append(controlProblems, fmt.Sprintf("configured token: %s; expected: %s", record.TokenPath, paths.AuthToken))
 	}
 	legacyRecord := record.ProtocolVersion == "" || record.InstallationID == "" || record.InstanceID == "" || record.BuildID == "" || record.StartedAt.IsZero()
 	if legacyRecord {
@@ -177,41 +180,41 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 		if legacyRecord && len(controlProblems) == 1 {
 			remediation = "Replace this legacy daemon once with `portless daemon restart --force`."
 		}
-		checks = append(checks, failed("daemon.control_record", "daemon", "Daemon control record ownership, permissions, or paths are unsafe", strings.Join(controlProblems, "; "), remediation))
+		checks = append(checks, failed("lifecycle.control_record", "daemon", "Daemon control record ownership, permissions, or paths are unsafe", strings.Join(controlProblems, "; "), remediation))
 	} else {
-		checks = append(checks, passed("daemon.control_record", "daemon", "Daemon control record is valid", fmt.Sprintf("%s; port %d", controlDetail, record.Port)))
+		checks = append(checks, passed("lifecycle.control_record", "daemon", "Daemon control record is valid", fmt.Sprintf("%s; port %d", controlDetail, record.Port)))
 	}
 
 	if err := dependencies.processAlive(record.PID); err != nil {
-		checks = append(checks, failed("daemon.process", "daemon", "Recorded daemon process is not running", fmt.Sprintf("pid %d: %v", record.PID, err), "Run `portless up` or `portless ui` to start a fresh daemon."))
+		checks = append(checks, failed("lifecycle.process", "daemon", "Recorded daemon process is not running", fmt.Sprintf("pid %d: %v", record.PID, err), "Run `portless up` or `portless ui` to start a fresh lifecycle."))
 	} else {
-		checks = append(checks, passed("daemon.process", "daemon", "Daemon process is running", fmt.Sprintf("pid %d", record.PID)))
+		checks = append(checks, passed("lifecycle.process", "daemon", "Daemon process is running", fmt.Sprintf("pid %d", record.PID)))
 	}
 
-	healthRecord, healthErr := dependencies.checkDaemon(ctx, paths)
+	healthRecord, healthErr := dependencies.checkDaemon(ctx)
 	switch {
-	case errors.Is(healthErr, bootstrap.ErrLegacyDaemon):
-		checks = append(checks, failed("daemon.api", "daemon", "Legacy daemon cannot prove its identity to this CLI", healthErr.Error(), "Replace it once with `portless daemon restart --force`. The guarded fallback verifies process ownership and command arguments before signaling it."))
+	case errors.Is(healthErr, control.ErrLegacyDaemon):
+		checks = append(checks, failed("lifecycle.api", "daemon", "Legacy daemon cannot prove its identity to this CLI", healthErr.Error(), "Replace it once with `portless daemon restart --force`. The guarded fallback verifies process ownership and command arguments before signaling it."))
 	case healthErr != nil:
-		checks = append(checks, failed("daemon.api", "daemon", "Daemon identity or compatibility check failed", healthErr.Error(), "Run `portless daemon status`, then `portless daemon restart`; use `--force` only for a verified legacy daemon or when interrupting active environments is acceptable."))
-	case healthRecord.ProtocolVersion != daemon.ProtocolVersion:
-		checks = append(checks, failed("daemon.api", "daemon", "Daemon protocol version does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.ProtocolVersion, daemon.ProtocolVersion), "Restart the Portless daemon with the current CLI."))
-	case healthRecord.APIVersion != api.APIVersion:
-		checks = append(checks, failed("daemon.api", "daemon", "Daemon API version does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.APIVersion, api.APIVersion), "Restart the Portless daemon with the current CLI."))
+		checks = append(checks, failed("lifecycle.api", "daemon", "Daemon identity or compatibility check failed", healthErr.Error(), "Run `portless daemon status`, then `portless daemon restart`; use `--force` only for a verified legacy daemon or when interrupting active environments is acceptable."))
+	case healthRecord.ProtocolVersion != lifecycle.ProtocolVersion:
+		checks = append(checks, failed("lifecycle.api", "daemon", "Daemon protocol version does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.ProtocolVersion, lifecycle.ProtocolVersion), "Restart the Portless daemon with the current CLI."))
+	case healthRecord.APIVersion != contract.APIVersion:
+		checks = append(checks, failed("lifecycle.api", "daemon", "Daemon API version does not match this CLI", fmt.Sprintf("daemon: %s; CLI: %s", healthRecord.APIVersion, contract.APIVersion), "Restart the Portless daemon with the current CLI."))
 	default:
-		checks = append(checks, passed("daemon.api", "daemon", "Daemon identity is authenticated and compatible", fmt.Sprintf("protocol %s; API %s; instance %s; build %s", healthRecord.ProtocolVersion, healthRecord.APIVersion, shortIdentity(healthRecord.InstanceID), shortIdentity(healthRecord.BuildID))))
+		checks = append(checks, passed("lifecycle.api", "daemon", "Daemon identity is authenticated and compatible", fmt.Sprintf("protocol %s; API %s; instance %s; build %s", healthRecord.ProtocolVersion, healthRecord.APIVersion, shortIdentity(healthRecord.InstanceID), shortIdentity(healthRecord.BuildID))))
 	}
 	if healthErr == nil {
 		if len(healthRecord.RecoveryProblems) > 0 {
-			checks = append(checks, failed("daemon.runtime_recovery", "daemon", "One or more service runtimes could not be recovered", strings.Join(healthRecord.RecoveryProblems, "; "), "Run `portless status` and inspect affected service logs. Stop orphaned services before starting replacements."))
+			checks = append(checks, failed("lifecycle.runtime_recovery", "daemon", "One or more service runtimes could not be recovered", strings.Join(healthRecord.RecoveryProblems, "; "), "Run `portless status` and inspect affected service logs. Stop orphaned services before starting replacements."))
 		} else {
-			checks = append(checks, passed("daemon.runtime_recovery", "daemon", "Persisted runtime ownership and proxy routes are consistent", "daemon state "+healthRecord.State))
+			checks = append(checks, passed("lifecycle.runtime_recovery", "daemon", "Persisted runtime ownership and proxy routes are consistent", "daemon state "+healthRecord.State))
 		}
 	}
 
-	authDetail, authErr := securePath(paths.Token, uid, pathRegular)
+	authDetail, authErr := securePath(paths.AuthToken, uid, pathRegular)
 	if authErr == nil {
-		content, readErr := os.ReadFile(paths.Token)
+		content, readErr := os.ReadFile(paths.AuthToken)
 		if readErr != nil {
 			authErr = readErr
 		} else if strings.TrimSpace(string(content)) == "" {
@@ -219,37 +222,37 @@ func daemonChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenc
 		}
 	}
 	if authErr != nil {
-		checks = append(checks, failed("daemon.authentication", "daemon", "CLI authentication token is not usable", detailOrError(authDetail, authErr), "Restart the daemon after correcting ownership and permissions in the Portless data directory."))
+		checks = append(checks, failed("lifecycle.authentication", "daemon", "CLI authentication token is not usable", detailOrError(authDetail, authErr), "Restart the daemon after correcting ownership and permissions in the Portless data directory."))
 	} else {
-		checks = append(checks, passed("daemon.authentication", "daemon", "CLI authentication token is private and readable", authDetail))
+		checks = append(checks, passed("lifecycle.authentication", "daemon", "CLI authentication token is private and readable", authDetail))
 	}
 
-	socketDetail, socketPathErr := securePath(paths.Ingress, uid, pathSocket)
+	socketDetail, socketPathErr := securePath(paths.IngressSocket, uid, pathSocket)
 	var socketHealthErr error
-	if info, err := os.Lstat(paths.Ingress); err == nil && info.Mode()&os.ModeSocket != 0 {
-		socketHealthErr = dependencies.checkIngressSocket(ctx, paths.Ingress)
+	if info, err := os.Lstat(paths.IngressSocket); err == nil && info.Mode()&os.ModeSocket != 0 {
+		socketHealthErr = dependencies.checkIngressSocket(ctx, paths.IngressSocket)
 	}
 	if socketPathErr != nil || socketHealthErr != nil {
 		detail := joinDetails(detailOrError(socketDetail, socketPathErr), errorDetail("health check", socketHealthErr))
-		checks = append(checks, failed("daemon.ingress_socket", "daemon", "Private ingress socket is not usable", detail, "Restart the Portless daemon by running `portless up` or `portless ui`."))
+		checks = append(checks, failed("lifecycle.ingress_socket", "daemon", "Private ingress socket is not usable", detail, "Restart the Portless daemon by running `portless up` or `portless ui`."))
 	} else {
-		checks = append(checks, passed("daemon.ingress_socket", "daemon", "Private ingress socket is healthy", socketDetail))
+		checks = append(checks, passed("lifecycle.ingress_socket", "daemon", "Private ingress socket is healthy", socketDetail))
 	}
-	dnsSocketDetail, dnsSocketPathErr := securePath(paths.DNS, uid, pathSocket)
+	dnsSocketDetail, dnsSocketPathErr := securePath(paths.DNSSocket, uid, pathSocket)
 	var dnsSocketHealthErr error
-	if info, err := os.Lstat(paths.DNS); err == nil && info.Mode()&os.ModeSocket != 0 && dependencies.checkDNSSocket != nil {
-		dnsSocketHealthErr = dependencies.checkDNSSocket(ctx, paths.DNS)
+	if info, err := os.Lstat(paths.DNSSocket); err == nil && info.Mode()&os.ModeSocket != 0 && dependencies.checkDNSSocket != nil {
+		dnsSocketHealthErr = dependencies.checkDNSSocket(ctx, paths.DNSSocket)
 	}
 	if dnsSocketPathErr != nil || dnsSocketHealthErr != nil {
 		detail := joinDetails(detailOrError(dnsSocketDetail, dnsSocketPathErr), errorDetail("health check", dnsSocketHealthErr))
-		checks = append(checks, failed("daemon.dns_socket", "daemon", "Private DNS socket is not usable", detail, "Restart the Portless daemon by running `portless up` or `portless ui`."))
+		checks = append(checks, failed("lifecycle.dns_socket", "daemon", "Private DNS socket is not usable", detail, "Restart the Portless daemon by running `portless up` or `portless ui`."))
 	} else {
-		checks = append(checks, passed("daemon.dns_socket", "daemon", "Private DNS socket is healthy", dnsSocketDetail))
+		checks = append(checks, passed("lifecycle.dns_socket", "daemon", "Private DNS socket is healthy", dnsSocketDetail))
 	}
 	return checks
 }
 
-func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependencies dependencies) []Check {
+func relayChecks(ctx context.Context, paths installation.Layout, uid int, dependencies dependencies) []Check {
 	checks := make([]Check, 0, 8)
 	status, inspectErr := dependencies.inspectRelay(ctx)
 	dnsContext, cancelDNS := context.WithTimeout(ctx, 2*time.Second)
@@ -326,13 +329,13 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 		checks = append(checks, passed("relay.ownership", "relay", "Relay belongs to the current user", fmt.Sprintf("UID %d, GID %d", status.OwnerUID, status.OwnerGID)))
 	}
 
-	if status.TargetSocket != paths.Ingress {
-		checks = append(checks, failed("relay.target", "relay", "Relay targets a different daemon socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.TargetSocket), paths.Ingress), "Run `portless relay install` to repair the relay target."))
+	if status.TargetSocket != paths.IngressSocket {
+		checks = append(checks, failed("relay.target", "relay", "Relay targets a different daemon socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.TargetSocket), paths.IngressSocket), "Run `portless relay install` to repair the relay target."))
 	} else {
 		checks = append(checks, passed("relay.target", "relay", "Relay targets the current daemon socket", status.TargetSocket))
 	}
-	if status.DNSTargetSocket != paths.DNS {
-		checks = append(checks, failed("relay.dns_target", "relay", "Relay targets a different daemon DNS socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.DNSTargetSocket), paths.DNS), "Run `portless relay install` to repair the relay target."))
+	if status.DNSTargetSocket != paths.DNSSocket {
+		checks = append(checks, failed("relay.dns_target", "relay", "Relay targets a different daemon DNS socket", fmt.Sprintf("configured: %s; expected: %s", emptyAsUnknown(status.DNSTargetSocket), paths.DNSSocket), "Run `portless relay install` to repair the relay target."))
 	} else {
 		checks = append(checks, passed("relay.dns_target", "relay", "Relay targets the current daemon DNS socket", status.DNSTargetSocket))
 	}
@@ -362,12 +365,12 @@ func relayChecks(ctx context.Context, paths bootstrap.Paths, uid int, dependenci
 	checks = append(checks, portCheck(ctx, true, dependencies))
 	checks = append(checks, dnsPortCheck(ctx, true, dependencies))
 	if status.HTTPHealthy {
-		checks = append(checks, passed("relay.end_to_end", "relay", "Clean URL reaches the Portless daemon", ingress.ControlOrigin))
+		checks = append(checks, passed("relay.end_to_end", "relay", "Clean URL reaches the Portless daemon", relay.ControlOrigin))
 	} else {
 		checks = append(checks, failed("relay.end_to_end", "relay", "Clean URL cannot reach the Portless daemon", status.HealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
 	}
 	if status.DNSHealthy {
-		checks = append(checks, passed("relay.dns_end_to_end", "relay", "Portless DNS answers authoritative endpoint queries", ingress.DefaultDNSAddress))
+		checks = append(checks, passed("relay.dns_end_to_end", "relay", "Portless DNS answers authoritative endpoint queries", relay.DefaultDNSAddress))
 	} else {
 		checks = append(checks, failed("relay.dns_end_to_end", "relay", "Portless DNS cannot answer endpoint queries", status.DNSHealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
 	}
@@ -419,18 +422,18 @@ func dnsPortCheck(ctx context.Context, installed bool, dependencies dependencies
 	defer cancel()
 	listening, err := dependencies.dnsListening(probeContext)
 	if err != nil {
-		return failed("relay.dns_listener", "relay", "Could not inspect "+ingress.DefaultDNSAddress, err.Error(), "Inspect local listeners on the Portless DNS address and retry.")
+		return failed("relay.dns_listener", "relay", "Could not inspect "+relay.DefaultDNSAddress, err.Error(), "Inspect local listeners on the Portless DNS address and retry.")
 	}
 	if installed && listening {
-		return passed("relay.dns_listener", "relay", "A listener is accepting DNS connections on "+ingress.DefaultDNSAddress, "UDP and TCP are owned by the relay")
+		return passed("relay.dns_listener", "relay", "A listener is accepting DNS connections on "+relay.DefaultDNSAddress, "UDP and TCP are owned by the relay")
 	}
 	if installed {
-		return failed("relay.dns_listener", "relay", "Nothing is listening on "+ingress.DefaultDNSAddress, "The relay is installed but DNS is unavailable.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
+		return failed("relay.dns_listener", "relay", "Nothing is listening on "+relay.DefaultDNSAddress, "The relay is installed but DNS is unavailable.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
 	}
 	if listening {
-		return failed("relay.dns_listener", "relay", "The Portless DNS address is occupied by an unrecognized listener", ingress.DefaultDNSAddress, "Stop the conflicting listener, then run `portless relay install`.")
+		return failed("relay.dns_listener", "relay", "The Portless DNS address is occupied by an unrecognized listener", relay.DefaultDNSAddress, "Stop the conflicting listener, then run `portless relay install`.")
 	}
-	return passed("relay.dns_listener", "relay", "The Portless DNS address appears available", ingress.DefaultDNSAddress)
+	return passed("relay.dns_listener", "relay", "The Portless DNS address appears available", relay.DefaultDNSAddress)
 }
 
 func checkPortlessDNS(ctx context.Context, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {
@@ -462,15 +465,15 @@ func portCheck(ctx context.Context, installed bool, dependencies dependencies) C
 		return failed("relay.port_80", "relay", "Could not inspect 127.0.0.1:80", err.Error(), "Inspect local listeners on port 80 and retry.")
 	}
 	if installed && listening {
-		return passed("relay.port_80", "relay", "A listener is accepting connections on 127.0.0.1:80", ingress.DefaultListenAddress)
+		return passed("relay.port_80", "relay", "A listener is accepting connections on 127.0.0.1:80", relay.DefaultListenAddress)
 	}
 	if installed {
 		return failed("relay.port_80", "relay", "Nothing is listening on 127.0.0.1:80", "The relay is installed but is not accepting connections.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
 	}
 	if listening {
-		return failed("relay.port_80", "relay", "Port 80 is occupied by an unrecognized listener", ingress.DefaultListenAddress, "Stop the process using 127.0.0.1:80, then run `portless relay restart`.")
+		return failed("relay.port_80", "relay", "Port 80 is occupied by an unrecognized listener", relay.DefaultListenAddress, "Stop the process using 127.0.0.1:80, then run `portless relay restart`.")
 	}
-	return passed("relay.port_80", "relay", "Port 80 appears available for Portless", ingress.DefaultListenAddress)
+	return passed("relay.port_80", "relay", "Port 80 appears available for Portless", relay.DefaultListenAddress)
 }
 
 func checkLocalhostDNS(ctx context.Context, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {
@@ -550,7 +553,7 @@ func processAlive(pid int) error {
 
 func portListening(ctx context.Context) (bool, error) {
 	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	connection, err := dialer.DialContext(ctx, "tcp", ingress.DefaultListenAddress)
+	connection, err := dialer.DialContext(ctx, "tcp", relay.DefaultListenAddress)
 	if err == nil {
 		_ = connection.Close()
 		return true, nil
@@ -563,7 +566,7 @@ func portListening(ctx context.Context) (bool, error) {
 
 func dnsListening(ctx context.Context) (bool, error) {
 	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	connection, err := dialer.DialContext(ctx, "tcp", ingress.DefaultDNSAddress)
+	connection, err := dialer.DialContext(ctx, "tcp", relay.DefaultDNSAddress)
 	if err == nil {
 		_ = connection.Close()
 		return true, nil
@@ -585,10 +588,10 @@ func probeRuntimes(ctx context.Context) []container.ProbeResult {
 	return probes
 }
 
-func defaultDependencies() dependencies {
+func defaultDependencies(manager *control.Manager) dependencies {
 	return dependencies{
-		checkDaemon: bootstrap.CheckDaemon, inspectRelay: ingress.Inspect,
-		checkIngressSocket: ingress.CheckSocket, checkDNSSocket: ingress.CheckDNSSocket, processAlive: processAlive,
+		checkDaemon: manager.Check, inspectRelay: relayinstall.Inspect,
+		checkIngressSocket: relay.CheckSocket, checkDNSSocket: relay.CheckDNSSocket, processAlive: processAlive,
 		lookupIP: net.DefaultResolver.LookupIPAddr, portListening: portListening, dnsListening: dnsListening,
 		probeRuntimes: probeRuntimes,
 	}

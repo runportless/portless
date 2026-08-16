@@ -2,13 +2,12 @@ package cli
 
 import (
 	"context"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/internal/bootstrap"
+	"github.com/portless-run/portless/internal/api/contract"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/spf13/cobra"
 )
@@ -50,27 +49,23 @@ func (c *CLI) completionValues(parent context.Context, resource string) []string
 	}
 	ctx, cancel := context.WithTimeout(parent, 900*time.Millisecond)
 	defer cancel()
-	client, _, err := bootstrap.ConnectExisting(ctx, c.paths)
+	client, _, err := c.daemon.ConnectExisting(ctx)
 	if err != nil {
 		return nil
 	}
 	var values []string
 	switch resource {
 	case completionProjects:
-		var response struct {
-			Projects []model.Project `json:"projects"`
-		}
-		if client.Do(ctx, http.MethodGet, "/api/v1/projects?limit=1000", nil, &response) != nil {
+		response, listErr := client.ListProjects(ctx, 1000)
+		if listErr != nil {
 			return nil
 		}
 		for _, project := range response.Projects {
 			values = append(values, project.Name)
 		}
 	case completionEnvironments:
-		var response struct {
-			Environments []model.Environment `json:"environments"`
-		}
-		if client.Do(ctx, http.MethodGet, "/api/v1/environments?limit=1000", nil, &response) != nil {
+		response, listErr := client.ListEnvironments(ctx, "", 1000)
+		if listErr != nil {
 			return nil
 		}
 		for _, environment := range response.Environments {
@@ -95,20 +90,16 @@ func (c *CLI) completionValues(parent context.Context, resource string) []string
 				values = append(values, source.Name)
 			}
 		case completionRecordings:
-			var response struct {
-				Recordings []model.Recording `json:"recordings"`
-			}
-			if client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/recordings?limit=1000", nil, &response) != nil {
+			response, listErr := client.ListRecordings(ctx, environment.Project, environment.Name, 1000)
+			if listErr != nil {
 				return nil
 			}
 			for _, item := range response.Recordings {
 				values = append(values, item.Name)
 			}
 		case completionFaults:
-			var response struct {
-				Faults []model.FaultRule `json:"faults"`
-			}
-			if client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/faults?limit=1000", nil, &response) != nil {
+			response, listErr := client.ListFaults(ctx, environment.Project, environment.Name, 1000)
+			if listErr != nil {
 				return nil
 			}
 			for _, item := range response.Faults {
@@ -117,10 +108,8 @@ func (c *CLI) completionValues(parent context.Context, resource string) []string
 		case completionTraffic:
 			seen := make(map[int64]struct{})
 			for _, protocol := range []string{"http", "tcp"} {
-				var response struct {
-					Traffic []model.TrafficEvent `json:"traffic"`
-				}
-				if client.Do(ctx, http.MethodGet, environmentAPI(environment)+"/traffic?protocol="+protocol+"&limit=1000", nil, &response) != nil {
+				response, trafficErr := client.Traffic(ctx, environment.Project, environment.Name, contract.TrafficQuery{Protocol: protocol, Limit: 1000})
+				if trafficErr != nil {
 					continue
 				}
 				for _, item := range response.Traffic {

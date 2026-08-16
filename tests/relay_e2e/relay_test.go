@@ -20,9 +20,10 @@ import (
 	"time"
 
 	"github.com/portless-run/portless/internal/diagnostics"
-	"github.com/portless-run/portless/internal/ingress"
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/networking"
+	"github.com/portless-run/portless/internal/relay"
+	relayinstall "github.com/portless-run/portless/internal/relay/install"
 	"golang.org/x/sys/unix"
 )
 
@@ -109,10 +110,10 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 
 	dnsContext, cancelDNS := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancelDNS()
-	if err := ingress.CheckDNS(dnsContext); err != nil {
+	if err := relay.CheckDNS(dnsContext); err != nil {
 		t.Fatalf("direct relay DNS check failed: %v", err)
 	}
-	if err := ingress.CheckResolver(dnsContext); err != nil {
+	if err := relay.CheckResolver(dnsContext); err != nil {
 		t.Fatalf("system resolver did not use the installed Portless route: %v", err)
 	}
 
@@ -123,7 +124,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 	var restarted struct {
 		Action string `json:"action"`
 		State  string `json:"state"`
-		ingress.InstallationStatus
+		relayinstall.InstallationStatus
 	}
 	decodeJSON(t, restartResult.Stdout, &restarted)
 	if restarted.Action != "restart" || restarted.State != "ready" || !restarted.Healthy {
@@ -162,8 +163,8 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 		t.Fatalf("unexpected uninstall result: %#v", uninstalled)
 	}
 	assertRelayAbsent(t, mustRelayStatus(t, harness.runTest("--json", "relay", "status")))
-	waitForNoTCPListener(t, ingress.DefaultListenAddress)
-	waitForNoTCPListener(t, ingress.DefaultDNSAddress)
+	waitForNoTCPListener(t, relay.DefaultListenAddress)
+	waitForNoTCPListener(t, relay.DefaultDNSAddress)
 	if err := waitForResolverRemoval(); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 
 type relayStatus struct {
 	State string `json:"state"`
-	ingress.InstallationStatus
+	relayinstall.InstallationStatus
 }
 
 type daemonStatus struct {
@@ -336,11 +337,11 @@ func (harness *machineHarness) takeMachineOwnership() error {
 	if status.Installed {
 		return fmt.Errorf("machine-wide relay remains installed after pre-test removal: %#v", status)
 	}
-	if listenerAccepting(ingress.DefaultListenAddress) {
-		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", ingress.DefaultListenAddress)
+	if listenerAccepting(relay.DefaultListenAddress) {
+		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", relay.DefaultListenAddress)
 	}
-	if listenerAccepting(ingress.DefaultDNSAddress) {
-		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", ingress.DefaultDNSAddress)
+	if listenerAccepting(relay.DefaultDNSAddress) {
+		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", relay.DefaultDNSAddress)
 	}
 	return nil
 }
@@ -411,7 +412,7 @@ func (harness *machineHarness) isTestRelay(status relayStatus) bool {
 	if !harness.testInstallAttempted || (status.OwnerUID != 0 && status.OwnerUID != os.Getuid()) {
 		return false
 	}
-	expectedHTTP := filepath.Join(harness.home, "ingress.sock")
+	expectedHTTP := filepath.Join(harness.home, "relay.sock")
 	expectedDNS := filepath.Join(harness.home, "dns.sock")
 	httpTargetMatches := status.TargetSocket == "" || status.TargetSocket == expectedHTTP
 	dnsTargetMatches := status.DNSTargetSocket == "" || status.DNSTargetSocket == expectedDNS
@@ -493,7 +494,7 @@ func assertInstalledRelay(t *testing.T, status relayStatus, home string) {
 		!status.HelperPresent || !status.ConfigurationPresent || !status.ReceiptPresent || !status.ResolverPresent {
 		t.Fatalf("relay is not completely ready: %#v", status)
 	}
-	if status.OwnerUID != os.Getuid() || status.OwnerGID != os.Getgid() || status.TargetSocket != filepath.Join(home, "ingress.sock") || status.DNSTargetSocket != filepath.Join(home, "dns.sock") {
+	if status.OwnerUID != os.Getuid() || status.OwnerGID != os.Getgid() || status.TargetSocket != filepath.Join(home, "relay.sock") || status.DNSTargetSocket != filepath.Join(home, "dns.sock") {
 		t.Fatalf("relay ownership or target is incorrect: %#v", status)
 	}
 }
@@ -536,7 +537,7 @@ func assertDarwinLoopbackPoolAbsent(t *testing.T) {
 		}
 	}
 	managed := append([]string{}, networking.EndpointLoopbackAddresses()...)
-	dnsHost, _, _ := net.SplitHostPort(ingress.DefaultDNSAddress)
+	dnsHost, _, _ := net.SplitHostPort(relay.DefaultDNSAddress)
 	managed = append(managed, dnsHost)
 	for _, address := range managed {
 		if configured[address] {
@@ -577,7 +578,7 @@ func relayRequest(t *testing.T, host, path string) *http.Response {
 	transport := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", ingress.DefaultListenAddress)
+			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", relay.DefaultListenAddress)
 		},
 		DisableKeepAlives: true,
 	}
@@ -643,7 +644,7 @@ func waitForResolverRemoval() error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		err := ingress.CheckResolver(ctx)
+		err := relay.CheckResolver(ctx)
 		cancel()
 		if err != nil {
 			return nil
@@ -653,12 +654,12 @@ func waitForResolverRemoval() error {
 	return errors.New("system resolver still routes portless.test after relay uninstall")
 }
 
-func installationRoot(status ingress.InstallationStatus) (string, error) {
+func installationRoot(status relayinstall.InstallationStatus) (string, error) {
 	if !filepath.IsAbs(status.TargetSocket) || !filepath.IsAbs(status.DNSTargetSocket) {
 		return "", errors.New("existing relay has non-absolute daemon socket targets")
 	}
 	root := filepath.Dir(status.TargetSocket)
-	if root == "/" || root == "." || filepath.Dir(status.DNSTargetSocket) != root || filepath.Base(status.TargetSocket) != "ingress.sock" || filepath.Base(status.DNSTargetSocket) != "dns.sock" {
+	if root == "/" || root == "." || filepath.Dir(status.DNSTargetSocket) != root || filepath.Base(status.TargetSocket) != "relay.sock" || filepath.Base(status.DNSTargetSocket) != "dns.sock" {
 		return "", fmt.Errorf("existing relay targets are not a recognizable Portless home: %s and %s", status.TargetSocket, status.DNSTargetSocket)
 	}
 	return root, nil

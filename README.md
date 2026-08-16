@@ -354,6 +354,20 @@ flowchart LR
 
 The control API is served only for `localhost`, `127.0.0.1`, `::1`, and `portless.localhost`. An application Host is routed directly to ingress and receives `421` for `/api/...`, even on the same listener.
 
+The code follows these process boundaries under `internal`: `api/contract`
+owns wire types, `api/client` owns authenticated client transport, and
+`api/server` owns HTTP routing. `daemon` is the per-user composition root;
+`daemon/instance` owns the private process-discovery record,
+`daemon/control` discovers and controls that process, and `daemon/lifecycle`
+owns its authenticated identity and shutdown protocol. `relay` owns the
+privileged HTTP/DNS data plane, `relay/install` owns its machine-wide
+installation, and `installation` owns data-root safety using only the Go
+standard library. Ordinary CLI commands and the embedded UI both use the
+daemon API. The CLI composes its unavoidable host operations behind narrow,
+injectable dependencies; only process bootstrap/recovery, relay
+administration, local checkout resolution, completion, and browser launch
+remain local responsibilities.
+
 State defaults to `~/.portless`. Set `PORTLESS_HOME` to isolate development or test instances.
 
 ## Develop and test

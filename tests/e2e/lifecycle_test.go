@@ -157,10 +157,13 @@ func TestCLIDebugModesArePortlessOwnedAndAdditive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("debug checkout up failed: %v\n%s\ndaemon log:\n%s", err, upOutput, readDaemonLog(home))
 	}
-	for _, expected := range []string{"debug-e2e/local", "development", "checkout", "debug", "Debuggers", "node-inspector"} {
+	for _, expected := range []string{"debug-e2e/local", "healthy", "checkout", "debug", "Debuggers", "node-inspector"} {
 		if !strings.Contains(upOutput, expected) {
 			t.Fatalf("debug up output does not contain %q:\n%s", expected, upOutput)
 		}
+	}
+	if strings.Contains(upOutput, "debug services are ready") {
+		t.Fatalf("debug up output presents launch mode as health:\n%s", upOutput)
 	}
 
 	checkoutService := waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchDebug)

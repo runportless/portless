@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/internal/bootstrap"
+	apiclient "github.com/portless-run/portless/internal/api/client"
 	"github.com/portless-run/portless/internal/model"
 )
 
@@ -109,7 +109,7 @@ func TestDownAllStartsEveryActiveEnvironmentBeforeWaiting(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	application, output, errorsOutput := newTestCLI(t)
-	client := &bootstrap.Client{BaseURL: server.URL, Token: "test-token", HTTP: server.Client()}
+	client := apiclient.New(server.URL, "test-token", server.Client())
 	err := application.downAll(context.Background(), client, downOptions{all: true, wait: true, timeout: time.Second})
 	if err != nil {
 		t.Fatalf("downAll returned error: %v", err)
@@ -175,7 +175,7 @@ func TestDownAllAggregatesRequestAndOperationFailures(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	application, output, errorsOutput := newTestCLI(t)
-	client := &bootstrap.Client{BaseURL: server.URL, Token: "test-token", HTTP: server.Client()}
+	client := apiclient.New(server.URL, "test-token", server.Client())
 	err := application.downAll(context.Background(), client, downOptions{all: true, wait: true, timeout: time.Second})
 	var reported *reportedCommandError
 	if !errors.As(err, &reported) {
@@ -219,7 +219,7 @@ func TestDownAllNoWaitWritesAggregateJSON(t *testing.T) {
 
 	application, output, errorsOutput := newTestCLI(t)
 	application.jsonOutput = true
-	client := &bootstrap.Client{BaseURL: server.URL, Token: "test-token", HTTP: server.Client()}
+	client := apiclient.New(server.URL, "test-token", server.Client())
 	if err := application.downAll(context.Background(), client, downOptions{all: true, wait: false, timeout: time.Second}); err != nil {
 		t.Fatalf("downAll returned error: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestDownAllVolumesIncludesStoppedEnvironments(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	application, output, errorsOutput := newTestCLI(t)
-	client := &bootstrap.Client{BaseURL: server.URL, Token: "test-token", HTTP: server.Client()}
+	client := apiclient.New(server.URL, "test-token", server.Client())
 	if err := application.downAll(context.Background(), client, downOptions{all: true, volumes: true, wait: false, timeout: time.Second}); err != nil {
 		t.Fatalf("downAll returned error: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestDownAllReportsWhenEverythingIsAlreadyStopped(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	application, output, errorsOutput := newTestCLI(t)
-	client := &bootstrap.Client{BaseURL: server.URL, Token: "test-token", HTTP: server.Client()}
+	client := apiclient.New(server.URL, "test-token", server.Client())
 	if err := application.downAll(context.Background(), client, downOptions{all: true, wait: true, timeout: time.Second}); err != nil {
 		t.Fatalf("downAll returned error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestDownAllRefusesTruncatedInventory(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := &bootstrap.Client{BaseURL: server.URL, Token: "test-token", HTTP: server.Client()}
+	client := apiclient.New(server.URL, "test-token", server.Client())
 	_, err := loadDownAllTargets(context.Background(), client, false)
 	if err == nil || !strings.Contains(err.Error(), "refused a partial machine-wide shutdown") {
 		t.Fatalf("loadDownAllTargets error = %v, want truncated-inventory refusal", err)

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/internal/bootstrap"
-	"github.com/portless-run/portless/internal/model"
-	"github.com/portless-run/portless/internal/runtime/container"
+	apiclient "github.com/portless-run/portless/internal/api/client"
+	"github.com/portless-run/portless/internal/api/contract"
+	"github.com/portless-run/portless/internal/daemon/control"
+	"github.com/portless-run/portless/internal/installation"
 )
 
 var (
@@ -27,14 +27,6 @@ var (
 	}
 )
 
-type resetPlan struct {
-	Projects                  int      `json:"projects"`
-	Environments              int      `json:"environments"`
-	ManagedVolumeEnvironments int      `json:"managedVolumeEnvironments"`
-	ActiveEnvironments        []string `json:"activeEnvironments"`
-	TopologyIncompatible      bool     `json:"topologyIncompatible"`
-}
-
 type resetDaemonOutput struct {
 	State      string    `json:"state"`
 	PID        int       `json:"pid"`
@@ -43,32 +35,32 @@ type resetDaemonOutput struct {
 }
 
 type resetOutput struct {
-	Action                    string                  `json:"action"`
-	Confirmed                 bool                    `json:"confirmed"`
-	Forced                    bool                    `json:"forced"`
-	Changed                   bool                    `json:"changed"`
-	Projects                  int                     `json:"projects"`
-	Environments              int                     `json:"environments"`
-	ManagedVolumeEnvironments int                     `json:"managedVolumeEnvironments"`
-	ActiveEnvironments        []string                `json:"activeEnvironments"`
-	WillRemove                []string                `json:"willRemove,omitempty"`
-	Removed                   []string                `json:"removed,omitempty"`
-	Preserved                 []string                `json:"preserved"`
-	ProcessesStopped          int                     `json:"processesStopped"`
-	RuntimeCleanup            []container.ResetResult `json:"runtimeCleanup,omitempty"`
-	Daemon                    *resetDaemonOutput      `json:"daemon,omitempty"`
-	TopologyIncompatible      bool                    `json:"topologyIncompatible"`
+	Action                    string                        `json:"action"`
+	Confirmed                 bool                          `json:"confirmed"`
+	Forced                    bool                          `json:"forced"`
+	Changed                   bool                          `json:"changed"`
+	Projects                  int                           `json:"projects"`
+	Environments              int                           `json:"environments"`
+	ManagedVolumeEnvironments int                           `json:"managedVolumeEnvironments"`
+	ActiveEnvironments        []string                      `json:"activeEnvironments"`
+	WillRemove                []string                      `json:"willRemove,omitempty"`
+	Removed                   []string                      `json:"removed,omitempty"`
+	Preserved                 []string                      `json:"preserved"`
+	ProcessesStopped          int                           `json:"processesStopped"`
+	RuntimeCleanup            []contract.RuntimeResetResult `json:"runtimeCleanup,omitempty"`
+	Daemon                    *resetDaemonOutput            `json:"daemon,omitempty"`
+	TopologyIncompatible      bool                          `json:"topologyIncompatible"`
 }
 
 func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	var (
-		client *bootstrap.Client
+		client *apiclient.Client
 		err    error
 	)
 	if options.force && options.yes {
 		client, err = c.connectCurrentDaemonForForcedReset(ctx)
 	} else {
-		client, _, err = bootstrap.Connect(ctx, c.paths)
+		client, _, err = c.daemon.Connect(ctx)
 	}
 	if err != nil {
 		return err
@@ -98,11 +90,8 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	if !c.jsonOutput && (plan.ManagedVolumeEnvironments > 0 || plan.TopologyIncompatible) {
 		fmt.Fprintln(c.Out, "Removing Portless-managed container resources...")
 	}
-	var prepared struct {
-		Processes int                     `json:"processes"`
-		Runtimes  []container.ResetResult `json:"runtimes"`
-	}
-	if err := client.Do(ctx, http.MethodPost, "/api/v1/runtime/reset", map[string]bool{"force": options.force}, &prepared); err != nil {
+	prepared, err := client.PrepareReset(ctx, options.force)
+	if err != nil {
 		return err
 	}
 	resetLifecycleComplete := false
@@ -112,10 +101,10 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 		}
 		cancelContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = client.Do(cancelContext, http.MethodPost, "/api/v1/runtime/reset/cancel", nil, nil)
+		_ = client.CancelReset(cancelContext)
 	}()
 
-	_, record, err := bootstrap.ResetDaemonApplicationState(ctx, c.paths, options.force)
+	_, record, err := c.daemon.ResetApplicationState(ctx, options.force)
 	if err != nil {
 		return err
 	}
@@ -128,7 +117,7 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	result.WillRemove = nil
 	result.Removed = append([]string(nil), resetRemovalCategories...)
 	result.ProcessesStopped = prepared.Processes
-	result.RuntimeCleanup = append([]container.ResetResult(nil), prepared.Runtimes...)
+	result.RuntimeCleanup = append([]contract.RuntimeResetResult(nil), prepared.Runtimes...)
 	result.Daemon = &resetDaemonOutput{State: "running", PID: record.PID, InstanceID: record.InstanceID, StartedAt: record.StartedAt}
 	if c.jsonOutput {
 		return writeJSON(c.Out, result)
@@ -137,26 +126,26 @@ func (c *CLI) reset(ctx context.Context, options resetOptions) error {
 	return nil
 }
 
-func (c *CLI) connectCurrentDaemonForForcedReset(ctx context.Context) (*bootstrap.Client, error) {
-	inspection, inspectErr := bootstrap.InspectDaemon(ctx, c.paths)
+func (c *CLI) connectCurrentDaemonForForcedReset(ctx context.Context) (*apiclient.Client, error) {
+	inspection, inspectErr := c.daemon.Inspect(ctx)
 	if inspectErr == nil && inspection.Compatible && inspection.CurrentBuild {
-		client, _, err := bootstrap.Connect(ctx, c.paths)
+		client, _, err := c.daemon.Connect(ctx)
 		return client, err
 	}
-	if _, err := bootstrap.StopDaemon(ctx, c.paths, bootstrap.StopOptions{Force: true, Timeout: 15 * time.Second}); err != nil {
+	if _, err := c.daemon.Stop(ctx, control.StopOptions{Force: true, Timeout: 15 * time.Second}); err != nil {
 		return nil, fmt.Errorf("replace daemon before forced reset: %w", err)
 	}
-	client, _, err := bootstrap.Connect(ctx, c.paths)
+	client, _, err := c.daemon.Connect(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("start current daemon before forced reset: %w", err)
 	}
 	return client, nil
 }
 
-func loadResetPlan(ctx context.Context, client *bootstrap.Client) (resetPlan, error) {
-	var plan resetPlan
-	if err := client.Do(ctx, http.MethodGet, "/api/v1/runtime/reset", nil, &plan); err != nil {
-		return resetPlan{}, err
+func loadResetPlan(ctx context.Context, client *apiclient.Client) (contract.ResetPlan, error) {
+	plan, err := client.ResetPlan(ctx)
+	if err != nil {
+		return contract.ResetPlan{}, err
 	}
 	if plan.ActiveEnvironments == nil {
 		plan.ActiveEnvironments = []string{}
@@ -164,16 +153,13 @@ func loadResetPlan(ctx context.Context, client *bootstrap.Client) (resetPlan, er
 	return plan, nil
 }
 
-func verifyEmptyReset(ctx context.Context, paths bootstrap.Paths) error {
-	client, _, err := bootstrap.ConnectExisting(ctx, paths)
+func verifyEmptyReset(ctx context.Context, paths installation.Layout) error {
+	client, _, err := control.New(paths).ConnectExisting(ctx)
 	if err != nil {
 		return fmt.Errorf("verify reset daemon: %w", err)
 	}
-	var response struct {
-		Environments []model.Environment `json:"environments"`
-		Total        int                 `json:"total"`
-	}
-	if err := client.Do(ctx, http.MethodGet, "/api/v1/environments?limit=1", nil, &response); err != nil {
+	response, err := client.ListEnvironments(ctx, "", 1)
+	if err != nil {
 		return fmt.Errorf("verify reset database: %w", err)
 	}
 	if response.Total != 0 || len(response.Environments) != 0 {
