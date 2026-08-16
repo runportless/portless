@@ -111,10 +111,17 @@ func (d detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Fi
 			return spec.Findings{}, fmt.Errorf("package %s does not produce a valid service name", current.file)
 		}
 		manager := packageManager(workspace, current.directory)
+		debug := nodeDebugCapability(current.manifest, manager, script)
+		if debug == nil {
+			result.Diagnostics = append(result.Diagnostics, spec.Diagnostic{
+				Severity: spec.SeverityInfo, Code: "DEBUG_UNAVAILABLE", File: current.file,
+				Message: fmt.Sprintf("%s can run normally, but its package scripts do not expose a safe Node or NestJS debug command", name),
+			})
+		}
 		result.Candidates = append(result.Candidates, spec.Candidate{
 			Key: current.directory, Directory: current.directory, RunDirectory: current.directory,
 			Definition: model.ServiceDefinition{
-				Name: name, Kind: model.ServiceProcess, Framework: d.descriptor.ID,
+				Name: name, Kind: model.ServiceProcess, Framework: d.descriptor.ID, Debug: debug,
 				Command: []string{manager, "run", script}, PortEnvironment: "PORT", Required: true,
 				Health:   model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second},
 				Evidence: []model.Evidence{{File: current.file, Explanation: d.explanation, Confidence: "high"}},
@@ -122,6 +129,137 @@ func (d detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Fi
 		})
 	}
 	return result, nil
+}
+
+func nodeDebugCapability(manifest packageJSON, manager, managedScript string) *model.DebugCapability {
+	candidates := []string{"start:debug", managedScript}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, script := range candidates {
+		if script == "" {
+			continue
+		}
+		if _, duplicate := seen[script]; duplicate {
+			continue
+		}
+		seen[script] = struct{}{}
+		command, ok := tokenizeSimpleScript(manifest.Scripts[script])
+		if !ok || len(command) == 0 {
+			continue
+		}
+		switch path.Base(command[0]) {
+		case "node":
+			return &model.DebugCapability{Adapter: model.DebugNodeInspector, Launcher: model.DebugNodeDirect, Command: command}
+		case "nest":
+			if len(command) < 2 || command[1] != "start" {
+				continue
+			}
+			command = stripNestDebugAddress(command)
+			return &model.DebugCapability{Adapter: model.DebugNodeInspector, Launcher: model.DebugNestCLI, Command: packageExecCommand(manager, command)}
+		}
+	}
+	return nil
+}
+
+func packageExecCommand(manager string, command []string) []string {
+	var prefix []string
+	switch manager {
+	case "npm":
+		prefix = []string{manager, "exec", "--"}
+	case "bun":
+		prefix = []string{manager, "x"}
+	default:
+		prefix = []string{manager, "exec"}
+	}
+	return append(prefix, command...)
+}
+
+func stripNestDebugAddress(command []string) []string {
+	result := make([]string, 0, len(command))
+	for index := 0; index < len(command); index++ {
+		argument := command[index]
+		if strings.HasPrefix(argument, "--debug=") {
+			continue
+		}
+		if argument == "--debug" || argument == "-d" {
+			if index+1 < len(command) && debugAddressArgument(command[index+1]) {
+				index++
+			}
+			continue
+		}
+		result = append(result, argument)
+	}
+	return result
+}
+
+func debugAddressArgument(value string) bool {
+	if value == "" || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for _, character := range value {
+		if character != ':' && character != '.' && (character < '0' || character > '9') &&
+			(character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// tokenizeSimpleScript accepts the conventional single-command scripts that
+// Portless can safely execute without a shell. Pipelines, redirections,
+// boolean operators, subshells, and leading environment assignments are
+// intentionally rejected instead of being guessed at.
+func tokenizeSimpleScript(value string) ([]string, bool) {
+	var result []string
+	var current strings.Builder
+	var quote rune
+	escaped, started := false, false
+	flush := func() {
+		if started {
+			result = append(result, current.String())
+			current.Reset()
+			started = false
+		}
+	}
+	for _, character := range value {
+		if escaped {
+			current.WriteRune(character)
+			started, escaped = true, false
+			continue
+		}
+		if quote != '\'' && character == '\\' {
+			escaped, started = true, true
+			continue
+		}
+		if quote != 0 {
+			if character == quote {
+				quote = 0
+				started = true
+			} else {
+				current.WriteRune(character)
+				started = true
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote, started = character, true
+		case ' ', '\t':
+			flush()
+		case '|', '&', ';', '<', '>', '(', ')', '\r', '\n':
+			return nil, false
+		default:
+			current.WriteRune(character)
+			started = true
+		}
+	}
+	if escaped || quote != 0 {
+		return nil, false
+	}
+	flush()
+	if len(result) == 0 || strings.Contains(result[0], "=") {
+		return nil, false
+	}
+	return result, true
 }
 
 func (d detector) matches(manifest packageJSON) bool {

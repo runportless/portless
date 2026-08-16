@@ -1,0 +1,5 @@
+{
+  "name": "portless-debug-node",
+  "private": true,
+  "workspaces": ["apps/*"]
+}

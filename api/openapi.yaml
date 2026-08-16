@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 6.0.0
+  version: 7.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -27,7 +27,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '6.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '7.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -408,6 +408,14 @@ paths:
         - in: header
           name: Idempotency-Key
           schema: { type: string, maxLength: 200 }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                debugServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' } }
+                managed: { type: boolean, default: false }
       responses:
         '202':
           description: Durable startup operation
@@ -525,6 +533,26 @@ paths:
       responses:
         '202':
           description: Service-restart operation accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/manage:
+    parameters: *serviceParameters
+    post:
+      operationId: manageService
+      responses:
+        '202':
+          description: Service restart in normal managed mode accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/debug:
+    parameters: *serviceParameters
+    post:
+      operationId: debugService
+      responses:
+        '202':
+          description: Service restart with its discovered debugger enabled accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
@@ -956,8 +984,8 @@ components:
         startedAt: { type: string, format: date-time }
         instanceId: { type: string }
         buildId: { type: string }
-        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '2.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '6.0.0', description: Stable semantic API version. }
+        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '7.0.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1055,6 +1083,14 @@ components:
             version: { type: string, example: '17' }
         command: { type: array, items: { type: string } }
         workingDirectory: { type: string }
+        serviceDirectory: { type: string }
+        debug:
+          type: object
+          required: [adapter, launcher, command]
+          properties:
+            adapter: { type: string, enum: [node-inspector, jdwp] }
+            launcher: { type: string, enum: [node-direct, nest-cli, spring-gradle, spring-maven] }
+            command: { type: array, items: { type: string } }
         portEnvironment: { type: string }
         port: { type: integer, minimum: 1, maximum: 65535, description: Plugin-resolved client-facing port for a TCP service. }
         environment: { type: object, additionalProperties: { type: string } }
@@ -1064,9 +1100,18 @@ components:
       allOf:
         - { $ref: '#/components/schemas/ServiceDefinition' }
         - type: object
-          required: [status, generation, endpoints, restartCount, recentRequests]
+          required: [status, launchMode, generation, endpoints, restartCount, recentRequests]
           properties:
             status: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
+            launchMode: { type: string, enum: [managed, debug] }
+            debugger:
+              type: object
+              required: [adapter, host, port, state]
+              properties:
+                adapter: { type: string, enum: [node-inspector, jdwp] }
+                host: { type: string, const: '127.0.0.1' }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+                state: { type: string, enum: [starting, listening, stopped] }
             reason: { type: string }
             generation: { type: integer, format: int64 }
             pid: { type: integer }
@@ -1201,7 +1246,7 @@ components:
         environments: { type: array, items: { $ref: '#/components/schemas/EnvironmentSummary' } }
     EnvironmentStatus:
       type: string
-      enum: [starting, recovering, healthy, degraded, failed, stopping, stopped, unknown]
+      enum: [starting, recovering, development, healthy, degraded, failed, stopping, stopped, unknown]
     ConfigurationIssue:
       type: object
       required: [code, message]

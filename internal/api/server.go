@@ -24,7 +24,7 @@ import (
 	"github.com/portless-run/portless/internal/store"
 )
 
-const APIVersion = "6.0.0"
+const APIVersion = "7.0.0"
 
 type Server struct {
 	app           *application.Service
@@ -761,7 +761,14 @@ func (s *Server) handleUp(writer http.ResponseWriter, request *http.Request, pro
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	operation, err := s.app.Up(request.Context(), project, environment, principal.Actor, request.Header.Get("Idempotency-Key"))
+	var input application.UpOptions
+	if request.Body != nil && request.ContentLength != 0 {
+		if err := decodeJSON(request, &input); err != nil {
+			writeDecodeError(writer, err)
+			return
+		}
+	}
+	operation, err := s.app.Up(request.Context(), project, environment, principal.Actor, request.Header.Get("Idempotency-Key"), input)
 	if err != nil {
 		s.writeError(writer, err, environmentSubject(project, environment))
 		return
@@ -887,6 +894,10 @@ func (s *Server) handleServices(writer http.ResponseWriter, request *http.Reques
 			operation, actionErr = s.app.RestartService(request.Context(), project, environment, serviceName, principal.Actor)
 		case "stop":
 			operation, actionErr = s.app.StopService(request.Context(), project, environment, serviceName, principal.Actor)
+		case "manage":
+			operation, actionErr = s.app.ManageService(request.Context(), project, environment, serviceName, principal.Actor)
+		case "debug":
+			operation, actionErr = s.app.DebugService(request.Context(), project, environment, serviceName, principal.Actor)
 		default:
 			writeAPIError(writer, http.StatusNotFound, APIError{Code: "ROUTE_NOT_FOUND", Message: "service action not found"})
 			return

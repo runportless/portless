@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	ProtocolVersion = "1.0.0"
+	ProtocolVersion = "2.0.0"
 	statusPath      = "/v1/status"
 	stopPath        = "/v1/stop"
 )
@@ -36,25 +36,29 @@ type Manifest struct {
 	Service     string                  `json:"service"`
 	Generation  int64                   `json:"generation"`
 	Port        int                     `json:"port"`
+	LaunchMode  model.LaunchMode        `json:"launchMode"`
+	Debugger    *model.DebuggerRuntime  `json:"debugger,omitempty"`
 	Definition  model.ServiceDefinition `json:"definition"`
 	Environment map[string]string       `json:"environment"`
 	LogsRoot    string                  `json:"logsRoot"`
 }
 
 type Status struct {
-	ProtocolVersion string     `json:"protocolVersion"`
-	Scope           string     `json:"scope"`
-	Service         string     `json:"service"`
-	Generation      int64      `json:"generation"`
-	SupervisorPID   int        `json:"supervisorPid"`
-	PID             int        `json:"pid,omitempty"`
-	Port            int        `json:"port"`
-	State           string     `json:"state"`
-	Error           string     `json:"error,omitempty"`
-	Expected        bool       `json:"expected"`
-	StartedAt       time.Time  `json:"startedAt"`
-	ExitedAt        *time.Time `json:"exitedAt,omitempty"`
-	LogDirectory    string     `json:"logDirectory"`
+	ProtocolVersion string                 `json:"protocolVersion"`
+	Scope           string                 `json:"scope"`
+	Service         string                 `json:"service"`
+	Generation      int64                  `json:"generation"`
+	SupervisorPID   int                    `json:"supervisorPid"`
+	PID             int                    `json:"pid,omitempty"`
+	Port            int                    `json:"port"`
+	LaunchMode      model.LaunchMode       `json:"launchMode"`
+	Debugger        *model.DebuggerRuntime `json:"debugger,omitempty"`
+	State           string                 `json:"state"`
+	Error           string                 `json:"error,omitempty"`
+	Expected        bool                   `json:"expected"`
+	StartedAt       time.Time              `json:"startedAt"`
+	ExitedAt        *time.Time             `json:"exitedAt,omitempty"`
+	LogDirectory    string                 `json:"logDirectory"`
 }
 
 type runner struct {
@@ -133,6 +137,7 @@ func Run(ctx context.Context, manifestPath string) error {
 	run := &runner{manifest: manifest, command: command, stop: make(chan struct{}), status: Status{
 		ProtocolVersion: ProtocolVersion, Scope: manifest.Scope, Service: manifest.Service,
 		Generation: manifest.Generation, SupervisorPID: os.Getpid(), Port: manifest.Port,
+		LaunchMode: manifest.LaunchMode, Debugger: cloneDebugger(manifest.Debugger),
 		State: "starting", StartedAt: startedAt, LogDirectory: logDirectory,
 	}}
 	if err := run.persist(); err != nil {
@@ -334,7 +339,7 @@ func StatePath(socketPath string) string { return strings.TrimSuffix(socketPath,
 func terminal(state string) bool { return state == "stopped" || state == "exited" || state == "failed" }
 
 func validateStatus(status Status) error {
-	if status.ProtocolVersion != ProtocolVersion || status.Scope == "" || status.Service == "" || status.Generation <= 0 || status.Port <= 0 {
+	if status.ProtocolVersion != ProtocolVersion || status.Scope == "" || status.Service == "" || status.Generation <= 0 || status.Port <= 0 || !validLaunch(status.LaunchMode, status.Debugger) {
 		return errors.New("invalid supervisor status")
 	}
 	return nil
@@ -347,7 +352,29 @@ func validateManifest(manifest Manifest) error {
 	if len(manifest.Definition.Command) == 0 || manifest.Definition.Kind != model.ServiceProcess {
 		return errors.New("supervisor requires a process service command")
 	}
+	if !validLaunch(manifest.LaunchMode, manifest.Debugger) {
+		return errors.New("supervisor launch mode is invalid")
+	}
 	return nil
+}
+
+func validLaunch(mode model.LaunchMode, debugger *model.DebuggerRuntime) bool {
+	switch mode {
+	case model.LaunchManaged:
+		return debugger == nil
+	case model.LaunchDebug:
+		return debugger != nil && debugger.Adapter != "" && debugger.Host == "127.0.0.1" && debugger.Port > 0 && debugger.Port <= 65535
+	default:
+		return false
+	}
+}
+
+func cloneDebugger(input *model.DebuggerRuntime) *model.DebuggerRuntime {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	return &result
 }
 
 func readManifest(path string) (Manifest, error) {

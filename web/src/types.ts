@@ -1,6 +1,8 @@
-export type EnvironmentStatus = 'starting' | 'recovering' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
+export type EnvironmentStatus = 'starting' | 'recovering' | 'development' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
 export type ServiceStatus = 'planned' | 'starting' | 'recovering' | 'ready' | 'unhealthy' | 'exited' | 'failed' | 'stopping' | 'stopped' | 'unknown'
 export type ProviderKind = 'local' | 'container' | 'remote'
+export type LaunchMode = 'managed' | 'debug'
+export type DebugAdapter = 'node-inspector' | 'jdwp'
 export type RemoteClassification = 'development' | 'qa' | 'staging' | 'unknown'
 export type WritePolicy = 'read-only' | 'read-write'
 
@@ -72,6 +74,8 @@ export interface ServiceDefinition {
   resource?: { type: string; version: string }
   command?: string[]
   workingDirectory?: string
+  serviceDirectory?: string
+  debug?: { adapter: DebugAdapter; launcher: 'node-direct' | 'nest-cli' | 'spring-gradle' | 'spring-maven'; command: string[] }
   portEnvironment?: string
   port?: number
   environment?: Record<string, string>
@@ -92,6 +96,8 @@ export interface Endpoint {
 }
 
 export interface Service extends ServiceDefinition {
+  launchMode: LaunchMode
+  debugger?: { adapter: DebugAdapter; host: string; port: number; state: 'starting' | 'listening' | 'stopped' | string }
   status: ServiceStatus
   reason?: string
   generation: number

@@ -3,6 +3,8 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,6 +96,11 @@ type environmentContextOutput struct {
 	Selector    string            `json:"selector"`
 	Resolution  string            `json:"resolution"`
 	Environment model.Environment `json:"environment"`
+}
+
+type upRequest struct {
+	DebugServices []string `json:"debugServices,omitempty"`
+	Managed       bool     `json:"managed,omitempty"`
 }
 
 type errorOutput struct {
@@ -413,11 +420,31 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 	if err != nil {
 		return err
 	}
+	request := upRequest{Managed: options.managed}
+	if !options.managed {
+		debugService := strings.TrimSpace(options.debug)
+		if debugService == "" {
+			cwd, cwdErr := currentWorkingDirectory()
+			if cwdErr != nil {
+				return cwdErr
+			}
+			debugService, err = debugServiceForPath(environment, cwd)
+			if err != nil {
+				return err
+			}
+		}
+		if debugService != "" {
+			request.DebugServices = []string{debugService}
+		}
+	}
 	operationContext, cancel := context.WithTimeout(ctx, options.timeout)
 	defer cancel()
 	var operation model.Operation
-	idempotency := fmt.Sprintf("cli-up-%s-%s-%d", environment.Project, environment.Name, time.Now().UTC().Unix()/30)
-	if err := client.DoWithHeaders(operationContext, http.MethodPost, environmentAPI(environment)+"/up", nil, &operation, map[string]string{"Idempotency-Key": idempotency}); err != nil {
+	idempotency, err := invocationKey("cli-up")
+	if err != nil {
+		return err
+	}
+	if err := client.DoWithHeaders(operationContext, http.MethodPost, environmentAPI(environment)+"/up", request, &operation, map[string]string{"Idempotency-Key": idempotency}); err != nil {
 		return err
 	}
 	if !options.wait {
@@ -443,6 +470,7 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 		}
 	} else {
 		c.printStatus(environment)
+		c.printDebugGuidance(environment)
 	}
 	if options.open {
 		next := "/environments/" + bootstrap.EscapePath(environment.Project, environment.Name)
@@ -451,6 +479,14 @@ func (c *CLI) up(ctx context.Context, selector string, options upOptions) error 
 		}
 	}
 	return nil
+}
+
+func invocationKey(prefix string) (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("create operation idempotency key: %w", err)
+	}
+	return prefix + "-" + hex.EncodeToString(random[:]), nil
 }
 
 func (c *CLI) down(ctx context.Context, selector string, options downOptions) error {
@@ -1665,6 +1701,78 @@ func currentSourceRoot(ctx context.Context) (string, error) {
 	return root, nil
 }
 
+func currentWorkingDirectory() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(cwd); resolveErr == nil {
+		cwd = resolved
+	}
+	return filepath.Abs(cwd)
+}
+
+func debugServiceForPath(environment model.Environment, path string) (string, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	bestName, bestDirectory := "", ""
+	for _, service := range environment.Services {
+		if service.Kind != model.ServiceProcess || providerFor(environment, service.Name) != model.ProviderLocal {
+			continue
+		}
+		for _, candidate := range serviceDirectories(environment, service) {
+			directory, absErr := filepath.Abs(candidate)
+			if absErr != nil {
+				continue
+			}
+			relative, relErr := filepath.Rel(directory, path)
+			if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				continue
+			}
+			if len(directory) < len(bestDirectory) {
+				continue
+			}
+			if len(directory) == len(bestDirectory) && bestName != "" && !strings.EqualFold(bestName, service.Name) {
+				return "", fmt.Errorf("%s contains more than one service; choose one with `portless up --debug <service>`", path)
+			}
+			bestName, bestDirectory = service.Name, directory
+		}
+	}
+	return bestName, nil
+}
+
+func serviceDirectories(environment model.Environment, service model.Service) []string {
+	if service.ServiceDirectory != "" {
+		return []string{service.ServiceDirectory}
+	}
+	var result []string
+	binding := model.ComponentBinding{}
+	for _, candidate := range environment.Bindings {
+		if strings.EqualFold(candidate.Service, service.Name) {
+			binding = candidate
+			break
+		}
+	}
+	var sourceRoot string
+	for _, source := range environment.Sources {
+		if strings.EqualFold(source.Name, binding.Source) {
+			sourceRoot = source.Path
+			break
+		}
+	}
+	if sourceRoot != "" {
+		for _, evidence := range service.Evidence {
+			if evidence.File == "" {
+				continue
+			}
+			result = append(result, filepath.Join(sourceRoot, filepath.Dir(filepath.FromSlash(evidence.File))))
+		}
+	}
+	return result
+}
+
 func (c *CLI) loadEnvironment(ctx context.Context, client *bootstrap.Client, selector string) (model.Environment, error) {
 	project, environment, err := model.ParseEnvironmentSelector(selector)
 	if err != nil {
@@ -1865,7 +1973,7 @@ func (c *CLI) printStatus(environment model.Environment) {
 		}
 	}
 	fmt.Fprintf(c.Out, "%s  %s  %d/%d ready\n\n", c.heading(c.Out, environment.Project+"/"+environment.Name), c.state(c.Out, string(environment.Status)), ready, len(environment.Services))
-	fmt.Fprintln(c.Out, c.muted(c.Out, "SERVICE                 PROVIDER    KIND        STATE          ENDPOINT"))
+	fmt.Fprintln(c.Out, c.muted(c.Out, "SERVICE                 PROVIDER    MODE         KIND        STATE          ENDPOINT"))
 	for _, service := range environment.Services {
 		kind := string(service.Kind)
 		if service.Framework != "" {
@@ -1880,9 +1988,36 @@ func (c *CLI) printStatus(environment model.Environment) {
 				break
 			}
 		}
-		fmt.Fprintf(c.Out, "%-23s %-11s %-11s %s %s\n", service.Name, provider, kind, c.state(c.Out, fmt.Sprintf("%-14s", service.Status)), c.accent(c.Out, statusEndpoint(service)))
+		fmt.Fprintf(c.Out, "%-23s %-11s %-12s %-11s %s %s\n", service.Name, provider, serviceMode(environment, service), kind, c.state(c.Out, fmt.Sprintf("%-14s", service.Status)), c.accent(c.Out, statusEndpoint(service)))
 	}
 	fmt.Fprintln(c.Out, "\nDashboard:", c.accent(c.Out, environment.DashboardURL))
+}
+
+func (c *CLI) printDebugGuidance(environment model.Environment) {
+	var debugging []model.Service
+	for _, service := range environment.Services {
+		if service.LaunchMode == model.LaunchDebug && service.Debugger != nil {
+			debugging = append(debugging, service)
+		}
+	}
+	if len(debugging) == 0 {
+		return
+	}
+	fmt.Fprintln(c.Out, "\n"+c.heading(c.Out, "Debuggers"))
+	for _, service := range debugging {
+		fmt.Fprintf(c.Out, "  %-18s %s at %s:%d\n", service.Name, service.Debugger.Adapter, service.Debugger.Host, service.Debugger.Port)
+	}
+	fmt.Fprintln(c.Out, "\nUse your IDE's Attach to Process action and choose the matching Node or JVM process. No run configuration or environment file is required.")
+}
+
+func serviceMode(environment model.Environment, service model.Service) string {
+	if providerFor(environment, service.Name) != model.ProviderLocal || service.Kind != model.ServiceProcess {
+		return "—"
+	}
+	if service.LaunchMode == "" {
+		return string(model.LaunchManaged)
+	}
+	return string(service.LaunchMode)
 }
 
 func statusEndpoint(service model.Service) string {

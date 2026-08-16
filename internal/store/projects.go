@@ -380,28 +380,41 @@ func (s *Store) EnvironmentsByPath(ctx context.Context, path string) ([]model.En
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT DISTINCT p.name, e.name
+SELECT p.name, e.name, source.path
 FROM environment_sources source
 JOIN environments e ON e.private_key = source.environment_key
 JOIN projects p ON p.private_key = e.project_key
-WHERE source.path = ? ORDER BY p.name, e.name`, path)
+ORDER BY p.name, e.name, source.path`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var refs [][2]string
+	refs := make(map[[2]string]struct{})
 	for rows.Next() {
 		var ref [2]string
-		if err := rows.Scan(&ref[0], &ref[1]); err != nil {
+		var sourcePath string
+		if err := rows.Scan(&ref[0], &ref[1], &sourcePath); err != nil {
 			return nil, err
 		}
-		refs = append(refs, ref)
+		if pathWithin(sourcePath, path) {
+			refs[ref] = struct{}{}
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	result := make([]model.Environment, 0, len(refs))
-	for _, ref := range refs {
+	ordered := make([][2]string, 0, len(refs))
+	for ref := range refs {
+		ordered = append(ordered, ref)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i][0] == ordered[j][0] {
+			return ordered[i][1] < ordered[j][1]
+		}
+		return ordered[i][0] < ordered[j][0]
+	})
+	result := make([]model.Environment, 0, len(ordered))
+	for _, ref := range ordered {
 		environment, err := s.Environment(ctx, ref[0], ref[1])
 		if err != nil {
 			return nil, err
@@ -601,16 +614,30 @@ func (s *Store) SetContextSelection(ctx context.Context, path, projectName, envi
 	if err != nil {
 		return err
 	}
-	var belongs int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM environment_sources WHERE environment_key = ? AND path = ?`, key, path).Scan(&belongs); err != nil {
+	rows, err := s.db.QueryContext(ctx, `SELECT path FROM environment_sources WHERE environment_key = ?`, key)
+	if err != nil {
 		return err
 	}
-	if belongs == 0 {
+	defer rows.Close()
+	selectionPath := ""
+	for rows.Next() {
+		var sourcePath string
+		if err := rows.Scan(&sourcePath); err != nil {
+			return err
+		}
+		if pathWithin(sourcePath, path) && len(sourcePath) > len(selectionPath) {
+			selectionPath = sourcePath
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if selectionPath == "" {
 		return errors.New("the selected environment does not use this source path")
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO context_selections(path, environment_key, selected_at) VALUES(?, ?, ?)
-ON CONFLICT(path) DO UPDATE SET environment_key = excluded.environment_key, selected_at = excluded.selected_at`, path, key, nowText())
+ON CONFLICT(path) DO UPDATE SET environment_key = excluded.environment_key, selected_at = excluded.selected_at`, selectionPath, key, nowText())
 	return err
 }
 
@@ -619,15 +646,32 @@ func (s *Store) ContextSelection(ctx context.Context, path string) (model.Enviro
 	if err != nil {
 		return model.Environment{}, err
 	}
-	var projectName, environmentName string
-	err = s.db.QueryRowContext(ctx, `
-SELECT p.name, e.name FROM context_selections c
+	rows, err := s.db.QueryContext(ctx, `
+SELECT c.path, p.name, e.name FROM context_selections c
 JOIN environments e ON e.private_key = c.environment_key
 JOIN projects p ON p.private_key = e.project_key
 JOIN environment_sources source ON source.environment_key = c.environment_key AND source.path = c.path
-WHERE c.path = ?`, path).Scan(&projectName, &environmentName)
+	ORDER BY length(c.path) DESC`)
 	if err != nil {
-		return model.Environment{}, mapSQLError(err)
+		return model.Environment{}, err
+	}
+	defer rows.Close()
+	var projectName, environmentName string
+	for rows.Next() {
+		var selectionPath, candidateProject, candidateEnvironment string
+		if err := rows.Scan(&selectionPath, &candidateProject, &candidateEnvironment); err != nil {
+			return model.Environment{}, err
+		}
+		if pathWithin(selectionPath, path) {
+			projectName, environmentName = candidateProject, candidateEnvironment
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return model.Environment{}, err
+	}
+	if projectName == "" {
+		return model.Environment{}, ErrNotFound
 	}
 	return s.Environment(ctx, projectName, environmentName)
 }
@@ -637,7 +681,29 @@ func (s *Store) ClearContextSelection(ctx context.Context, path string) (bool, e
 	if err != nil {
 		return false, err
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM context_selections WHERE path = ?`, path)
+	rows, err := s.db.QueryContext(ctx, `SELECT path FROM context_selections ORDER BY length(path) DESC`)
+	if err != nil {
+		return false, err
+	}
+	selectionPath := ""
+	for rows.Next() {
+		var candidate string
+		if err := rows.Scan(&candidate); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if pathWithin(candidate, path) {
+			selectionPath = candidate
+			break
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	if selectionPath == "" {
+		return false, nil
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM context_selections WHERE path = ?`, selectionPath)
 	if err != nil {
 		return false, err
 	}
@@ -703,6 +769,8 @@ type ServiceRuntimeUpdate struct {
 	SupervisorPID    int
 	ContainerName    string
 	ObservedAt       *time.Time
+	LaunchMode       model.LaunchMode
+	Debugger         *model.DebuggerRuntime
 }
 
 type ServiceRuntimeRecord struct {
@@ -722,6 +790,8 @@ type ServiceRuntimeRecord struct {
 	SupervisorPID    int
 	ContainerName    string
 	ObservedAt       *time.Time
+	LaunchMode       model.LaunchMode
+	Debugger         *model.DebuggerRuntime
 }
 
 func (s *Store) SetServiceRuntime(ctx context.Context, selector, serviceName string, update ServiceRuntimeUpdate) error {
@@ -737,13 +807,25 @@ func (s *Store) SetServiceRuntime(ctx context.Context, selector, serviceName str
 	if update.ObservedAt != nil {
 		observed = update.ObservedAt.UTC().Format(time.RFC3339Nano)
 	}
+	if update.LaunchMode == "" {
+		update.LaunchMode = model.LaunchManaged
+	}
+	debugAdapter, debugHost, debugPort, debugState := "", "", 0, ""
+	if update.Debugger != nil {
+		debugAdapter = string(update.Debugger.Adapter)
+		debugHost = update.Debugger.Host
+		debugPort = update.Debugger.Port
+		debugState = update.Debugger.State
+	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE service_runtime SET status = ?, reason = ?, generation = ?, pid = ?, upstream_port = ?,
   started_at = ?, restart_count = ?, log_path = ?, private_run_key = ?, owner_instance_id = ?,
-  supervisor_socket = ?, supervisor_state = ?, supervisor_pid = ?, container_name = ?, observed_at = ?
+  supervisor_socket = ?, supervisor_state = ?, supervisor_pid = ?, container_name = ?, observed_at = ?,
+  launch_mode = ?, debug_adapter = ?, debug_host = ?, debug_port = ?, debug_state = ?
 WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, update.Status, update.Reason, update.Generation,
 		update.PID, update.UpstreamPort, started, update.RestartCount, update.LogPath, update.PrivateRunKey,
-		update.OwnerInstanceID, update.SupervisorSocket, update.SupervisorState, update.SupervisorPID, update.ContainerName, observed, key, serviceName)
+		update.OwnerInstanceID, update.SupervisorSocket, update.SupervisorState, update.SupervisorPID, update.ContainerName, observed,
+		update.LaunchMode, debugAdapter, debugHost, debugPort, debugState, key, serviceName)
 	if err != nil {
 		return err
 	}
@@ -761,19 +843,27 @@ func (s *Store) ServiceRuntime(ctx context.Context, selector, serviceName string
 	}
 	var result ServiceRuntimeRecord
 	var status string
+	var launchMode, debugAdapter, debugHost, debugState string
+	var debugPort int
 	var started, observed sql.NullString
 	err = s.db.QueryRowContext(ctx, `
 SELECT service_name, status, reason, generation, pid, upstream_port, started_at, restart_count,
-       log_path, private_run_key, owner_instance_id, supervisor_socket, supervisor_state, supervisor_pid, container_name, observed_at
+       log_path, private_run_key, owner_instance_id, supervisor_socket, supervisor_state, supervisor_pid, container_name, observed_at,
+       launch_mode, debug_adapter, debug_host, debug_port, debug_state
 FROM service_runtime WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, key, serviceName).Scan(
 		&result.ServiceName, &status, &result.Reason, &result.Generation, &result.PID, &result.UpstreamPort,
 		&started, &result.RestartCount, &result.LogPath, &result.PrivateRunKey, &result.OwnerInstanceID,
 		&result.SupervisorSocket, &result.SupervisorState, &result.SupervisorPID, &result.ContainerName, &observed,
+		&launchMode, &debugAdapter, &debugHost, &debugPort, &debugState,
 	)
 	if err != nil {
 		return ServiceRuntimeRecord{}, mapSQLError(err)
 	}
 	result.Status = model.ServiceStatus(status)
+	result.LaunchMode = model.LaunchMode(launchMode)
+	if debugAdapter != "" {
+		result.Debugger = &model.DebuggerRuntime{Adapter: model.DebugAdapter(debugAdapter), Host: debugHost, Port: debugPort, State: debugState}
+	}
 	result.StartedAt = parseOptionalTime(started)
 	result.ObservedAt = parseOptionalTime(observed)
 	return result, nil
@@ -787,6 +877,49 @@ func (s *Store) SetServiceStatus(ctx context.Context, selector, serviceName stri
 	result, err := s.db.ExecContext(ctx, `
 UPDATE service_runtime SET status = ?, reason = ?
 WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, status, reason, key, serviceName)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetServiceLaunch(ctx context.Context, selector, serviceName string, mode model.LaunchMode, debugger *model.DebuggerRuntime) error {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return err
+	}
+	if mode == "" {
+		mode = model.LaunchManaged
+	}
+	debugAdapter, debugHost, debugPort, debugState := "", "", 0, ""
+	if debugger != nil {
+		debugAdapter, debugHost, debugPort, debugState = string(debugger.Adapter), debugger.Host, debugger.Port, debugger.State
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE service_runtime SET launch_mode = ?, debug_adapter = ?, debug_host = ?, debug_port = ?, debug_state = ?
+WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, mode, debugAdapter, debugHost, debugPort, debugState, key, serviceName)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetServiceDebuggerState(ctx context.Context, selector, serviceName, state string) error {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE service_runtime SET debug_state = ?
+WHERE environment_key = ? AND service_name = ? COLLATE NOCASE AND debug_adapter <> ''`, state, key, serviceName)
 	if err != nil {
 		return err
 	}
@@ -856,7 +989,8 @@ func (s *Store) hydrateEnvironment(ctx context.Context, row environmentRow) (mod
 		return model.Environment{}, fmt.Errorf("decode environment %s: %w", selector, err)
 	}
 	runtimeRows, err := s.db.QueryContext(ctx, `
-SELECT service_name, status, reason, generation, pid, upstream_port, started_at, restart_count
+SELECT service_name, status, reason, generation, pid, upstream_port, started_at, restart_count,
+       launch_mode, debug_adapter, debug_host, debug_port, debug_state
 FROM service_runtime WHERE environment_key = ?`, row.key)
 	if err != nil {
 		return model.Environment{}, err
@@ -865,13 +999,20 @@ FROM service_runtime WHERE environment_key = ?`, row.key)
 	for runtimeRows.Next() {
 		var service model.Service
 		var status string
+		var launchMode, debugAdapter, debugHost, debugState string
+		var debugPort int
 		var started sql.NullString
 		if err := runtimeRows.Scan(&service.Name, &status, &service.Reason, &service.Generation,
-			&service.PID, &service.UpstreamPort, &started, &service.RestartCount); err != nil {
+			&service.PID, &service.UpstreamPort, &started, &service.RestartCount,
+			&launchMode, &debugAdapter, &debugHost, &debugPort, &debugState); err != nil {
 			runtimeRows.Close()
 			return model.Environment{}, err
 		}
 		service.Status = model.ServiceStatus(status)
+		service.LaunchMode = model.LaunchMode(launchMode)
+		if debugAdapter != "" {
+			service.Debugger = &model.DebuggerRuntime{Adapter: model.DebugAdapter(debugAdapter), Host: debugHost, Port: debugPort, State: debugState}
+		}
 		service.StartedAt = parseOptionalTime(started)
 		runtime[strings.ToLower(service.Name)] = service
 	}
@@ -882,6 +1023,9 @@ FROM service_runtime WHERE environment_key = ?`, row.key)
 	for _, serviceDefinition := range definition.Services {
 		service := runtime[strings.ToLower(serviceDefinition.Name)]
 		service.ServiceDefinition = serviceDefinition
+		if service.LaunchMode == "" {
+			service.LaunchMode = model.LaunchManaged
+		}
 		if service.Status == "" {
 			service.Status = model.ServicePlanned
 		}
@@ -1066,6 +1210,14 @@ func canonicalPath(path string) (string, error) {
 		absolute = resolved
 	}
 	return filepath.Clean(absolute), nil
+}
+
+func pathWithin(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func bindingFor(bindings []model.ComponentBinding, service string) model.ComponentBinding {

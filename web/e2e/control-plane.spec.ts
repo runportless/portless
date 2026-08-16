@@ -102,6 +102,34 @@ test('renders real services, endpoints, topology, and service details', async ({
   await drawer.getByRole('button', { name: 'Close' }).click()
 })
 
+test('starts a Portless-owned debugger and returns the service to normal mode', async ({ page }) => {
+  const state = readE2EState()
+  const debugPath = `/environments/${state.debugProject}/${state.environment}`
+  await authenticate(page, debugPath)
+
+  const checkout = page.locator('.service-row--interactive').filter({ hasText: 'checkout' })
+  await expect(checkout).toContainText('managed')
+  await checkout.getByRole('button', { name: 'INSPECT' }).click()
+
+  const drawer = page.getByRole('dialog', { name: 'checkout service' })
+  await drawer.getByRole('button', { name: 'DEBUG' }).click()
+  await expect(drawer).toContainText('node-inspector', { timeout: 30_000 })
+  await expect(drawer).toContainText('listening', { timeout: 30_000 })
+  await expect(drawer).toContainText('Attach to Process')
+  await expect(checkout).toContainText('debug')
+
+  const environment = await controlAPI<{ services: Array<{ name: string; pid: number; launchMode: string; debugger?: { host: string; port: number; state: string } }> }>(`/api/v1/environments/${state.debugProject}/${state.environment}`)
+  const debugService = environment.services.find((service) => service.name === 'checkout')
+  expect(debugService).toMatchObject({ launchMode: 'debug', debugger: { host: '127.0.0.1', state: 'listening' } })
+  expect(debugService?.pid).toBeGreaterThan(0)
+  expect(debugService?.debugger?.port).toBeGreaterThan(0)
+
+  await drawer.getByRole('button', { name: 'RUN NORMALLY' }).click()
+  await expect(drawer.getByRole('button', { name: 'DEBUG' })).toBeVisible({ timeout: 30_000 })
+  await expect(drawer).not.toContainText('node-inspector')
+  await expect(checkout).toContainText('managed')
+})
+
 test('shows captured request and response details', async ({ page }) => {
   await authenticate(page)
   const response = await applicationRequest('/checkout?sku=coffee-mug&quantity=2', {
@@ -192,8 +220,8 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   const drawer = page.getByRole('dialog', { name: 'Portless Daemon' })
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
-  await expect(drawer.getByText(/^2\.0\.0$/)).toBeVisible()
-  await expect(drawer.getByText(/^6\.0\.0$/)).toBeVisible()
+  await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
+  await expect(drawer.getByText(/^7\.0\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   await drawer.getByRole('button', { name: 'FULL SCREEN' }).click()

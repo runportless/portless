@@ -10,14 +10,18 @@ export default async function globalSetup() {
   const repository = resolve(e2eDirectory, '..', '..')
   const binary = resolve(process.env.PORTLESS_E2E_BINARY || join(repository, 'bin', 'portless-e2e'))
   const fixture = resolve(process.env.PORTLESS_E2E_FIXTURE || join(repository, 'tests', 'fixtures', 'store-lite'))
+  const debugFixture = resolve(join(repository, 'tests', 'fixtures', 'debug-node'))
   const root = mkdtempSync(join(tmpdir(), 'portless-ui-e2e-'))
   const home = join(root, 'home')
   const checkout = join(root, 'store-lite')
+  const debugCheckout = join(root, 'debug-node')
   mkdirSync(home, { mode: 0o700 })
   cpSync(fixture, checkout, { recursive: true })
+  cpSync(debugFixture, debugCheckout, { recursive: true })
 
   try {
     runCLI(binary, home, checkout, ['up', '--name', 'ui-e2e', '--no-open', '--timeout', '2m'])
+    runCLI(binary, home, debugCheckout, ['up', '--name', 'ui-debug', '--managed', '--no-open', '--timeout', '2m'])
     const control = JSON.parse(readFileSync(join(home, 'control.json'), 'utf8')) as { port: number }
     const state: E2EState = {
       root,
@@ -29,6 +33,8 @@ export default async function globalSetup() {
       project: 'ui-e2e',
       environment: 'local',
       applicationHost: 'checkout.local.ui-e2e.localhost',
+      debugCheckout,
+      debugProject: 'ui-debug',
     }
     writeFileSync(stateFile(), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
     chmodSync(stateFile(), 0o600)

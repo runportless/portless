@@ -166,9 +166,9 @@ func (c *CLI) listServices(ctx context.Context, limit int) error {
 		return nil
 	}
 	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.heading(c.Out, "Services"), environment.Project, environment.Name)
-	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-22s %-11s %-12s %-13s %-11s %-9s %s", "SERVICE", "PROVIDER", "KIND", "STATE", "GENERATION", "RESTARTS", "ENDPOINT")))
+	fmt.Fprintln(c.Out, c.muted(c.Out, fmt.Sprintf("%-22s %-11s %-12s %-12s %-13s %-11s %-9s %s", "SERVICE", "PROVIDER", "MODE", "KIND", "STATE", "GENERATION", "RESTARTS", "ENDPOINT")))
 	for _, service := range response.Services {
-		fmt.Fprintf(c.Out, "%-22s %-11s %-12s %s %-11d %-9d %s\n", service.Name, providerFor(environment, service.Name), serviceType(service.ServiceDefinition), c.state(c.Out, fmt.Sprintf("%-13s", service.Status)), service.Generation, service.RestartCount, c.accent(c.Out, statusEndpoint(service)))
+		fmt.Fprintf(c.Out, "%-22s %-11s %-12s %-12s %s %-11d %-9d %s\n", service.Name, providerFor(environment, service.Name), serviceMode(environment, service), serviceType(service.ServiceDefinition), c.state(c.Out, fmt.Sprintf("%-13s", service.Status)), service.Generation, service.RestartCount, c.accent(c.Out, statusEndpoint(service)))
 	}
 	return nil
 }
@@ -187,6 +187,7 @@ func (c *CLI) showService(ctx context.Context, name string) error {
 	}
 	fmt.Fprintln(c.Out, c.heading(c.Out, service.Name))
 	fmt.Fprintf(c.Out, "\n  %-15s %s\n", "Provider:", providerFor(environment, service.Name))
+	fmt.Fprintf(c.Out, "  %-15s %s\n", "Mode:", serviceMode(environment, service))
 	fmt.Fprintf(c.Out, "  %-15s %s\n", "Kind:", serviceType(service.ServiceDefinition))
 	fmt.Fprintf(c.Out, "  %-15s %s\n", "State:", c.state(c.Out, string(service.Status)))
 	if service.Reason != "" {
@@ -213,6 +214,10 @@ func (c *CLI) showService(ctx context.Context, name string) error {
 	}
 	if service.StartedAt != nil {
 		fmt.Fprintf(c.Out, "  %-15s %s\n", "Started:", service.StartedAt.Local().Format(time.RFC3339))
+	}
+	if service.Debugger != nil {
+		fmt.Fprintf(c.Out, "  %-15s %s\n", "Debugger:", service.Debugger.Adapter)
+		fmt.Fprintf(c.Out, "  %-15s %s:%d (%s)\n", "Debug address:", service.Debugger.Host, service.Debugger.Port, service.Debugger.State)
 	}
 	return nil
 }
@@ -277,7 +282,7 @@ func (c *CLI) serviceAction(ctx context.Context, action, name string, options se
 		c.printOperation(operation)
 		return nil
 	}
-	past := map[string]string{"start": "started", "stop": "stopped", "restart": "restarted"}[action]
+	past := map[string]string{"start": "started", "stop": "stopped", "restart": "restarted", "debug": "debugging", "manage": "managed"}[action]
 	fmt.Fprintf(c.Out, "%s %s\n", name, c.state(c.Out, past))
 	return nil
 }

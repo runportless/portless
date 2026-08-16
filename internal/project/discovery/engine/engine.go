@@ -426,6 +426,16 @@ func normalizeCandidate(root string, workspace spec.Workspace, descriptor spec.D
 			return pluginCandidate{}, fmt.Errorf("service %s has an invalid command argument", candidate.Definition.Name)
 		}
 	}
+	if candidate.Definition.Debug != nil {
+		if candidate.Definition.Debug.Adapter == "" || candidate.Definition.Debug.Launcher == "" || len(candidate.Definition.Debug.Command) == 0 {
+			return pluginCandidate{}, fmt.Errorf("service %s has an incomplete debug capability", candidate.Definition.Name)
+		}
+		for _, argument := range candidate.Definition.Debug.Command {
+			if argument == "" || strings.ContainsAny(argument, "\x00\r\n") {
+				return pluginCandidate{}, fmt.Errorf("service %s has an invalid debug command argument", candidate.Definition.Name)
+			}
+		}
+	}
 	if candidate.Definition.PortEnvironment != "" && !environmentPattern.MatchString(candidate.Definition.PortEnvironment) {
 		return pluginCandidate{}, fmt.Errorf("service %s has invalid port environment %q", candidate.Definition.Name, candidate.Definition.PortEnvironment)
 	}
@@ -436,10 +446,15 @@ func normalizeCandidate(root string, workspace spec.Workspace, descriptor spec.D
 	if runDirectory != "." {
 		workingDirectory = filepath.Join(root, filepath.FromSlash(runDirectory))
 	}
+	serviceDirectory := root
+	if directory != "." {
+		serviceDirectory = filepath.Join(root, filepath.FromSlash(directory))
+	}
 	candidate.Key = key
 	candidate.Directory = directory
 	candidate.RunDirectory = runDirectory
 	candidate.Definition.WorkingDirectory = workingDirectory
+	candidate.Definition.ServiceDirectory = serviceDirectory
 	return pluginCandidate{Candidate: candidate, plugin: descriptor.ID, primaryOrder: descriptor.PrimaryOrder}, nil
 }
 

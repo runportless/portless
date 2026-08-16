@@ -62,6 +62,7 @@ func AddSource(project model.ProjectModel, projectSources []model.ProjectSource,
 
 		logical := service
 		logical.WorkingDirectory = ""
+		logical.ServiceDirectory = ""
 		definition.Services = append(definition.Services, logical)
 		serviceDefinitions[key] = logical
 		if service.Kind == model.ServiceProcess {
@@ -128,6 +129,7 @@ func InitialProject(name string, sources []model.SourceBinding) (model.ProjectMo
 	for _, service := range serviceDefinitions {
 		logical := service
 		logical.WorkingDirectory = ""
+		logical.ServiceDirectory = ""
 		definition.Services = append(definition.Services, logical)
 	}
 	sort.Slice(definition.Services, func(i, j int) bool { return definition.Services[i].Name < definition.Services[j].Name })

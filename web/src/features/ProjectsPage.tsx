@@ -161,6 +161,7 @@ function aggregateProjectStatus(environments: Environment[]): EnvironmentStatus 
   const urgent = priority.find((status) => states.has(status))
   if (urgent) return urgent
   if (active.every((environment) => environment.status === 'healthy')) return 'healthy'
+  if (active.every((environment) => environment.status === 'healthy' || environment.status === 'development')) return 'development'
   return 'degraded'
 }
 

@@ -15,6 +15,7 @@ const environment = {
     required: true,
     health: { kind: 'http', timeout: 5, interval: 10 },
     status: 'ready',
+    launchMode: 'managed',
     generation: 1,
     endpoints: [],
     restartCount: 0,

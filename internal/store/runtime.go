@@ -77,7 +77,8 @@ func (s *Store) ServiceRuntimes(ctx context.Context, selector string) ([]Service
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT service_name, status, reason, generation, pid, upstream_port, started_at, restart_count,
-       log_path, private_run_key, owner_instance_id, supervisor_socket, supervisor_state, supervisor_pid, container_name, observed_at
+       log_path, private_run_key, owner_instance_id, supervisor_socket, supervisor_state, supervisor_pid, container_name, observed_at,
+       launch_mode, debug_adapter, debug_host, debug_port, debug_state
 FROM service_runtime WHERE environment_key = ? ORDER BY service_name COLLATE NOCASE`, key)
 	if err != nil {
 		return nil, err
@@ -87,15 +88,22 @@ FROM service_runtime WHERE environment_key = ? ORDER BY service_name COLLATE NOC
 	for rows.Next() {
 		var item ServiceRuntimeRecord
 		var status string
+		var launchMode, debugAdapter, debugHost, debugState string
+		var debugPort int
 		var started, observed sql.NullString
 		if err := rows.Scan(
 			&item.ServiceName, &status, &item.Reason, &item.Generation, &item.PID, &item.UpstreamPort,
 			&started, &item.RestartCount, &item.LogPath, &item.PrivateRunKey, &item.OwnerInstanceID,
 			&item.SupervisorSocket, &item.SupervisorState, &item.SupervisorPID, &item.ContainerName, &observed,
+			&launchMode, &debugAdapter, &debugHost, &debugPort, &debugState,
 		); err != nil {
 			return nil, err
 		}
 		item.Status = model.ServiceStatus(status)
+		item.LaunchMode = model.LaunchMode(launchMode)
+		if debugAdapter != "" {
+			item.Debugger = &model.DebuggerRuntime{Adapter: model.DebugAdapter(debugAdapter), Host: debugHost, Port: debugPort, State: debugState}
+		}
 		item.StartedAt = parseOptionalTime(started)
 		item.ObservedAt = parseOptionalTime(observed)
 		result = append(result, item)

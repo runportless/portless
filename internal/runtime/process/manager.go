@@ -41,6 +41,13 @@ type StartResult struct {
 	SupervisorSocket string
 	SupervisorState  string
 	SupervisorPID    int
+	LaunchMode       model.LaunchMode
+	Debugger         *model.DebuggerRuntime
+}
+
+type StartOptions struct {
+	LaunchMode model.LaunchMode
+	Debugger   *model.DebuggerRuntime
 }
 
 type managedProcess struct {
@@ -98,18 +105,21 @@ func AllocatePort() (int, error) {
 }
 
 func (m *Manager) Start(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string) (StartResult, error) {
-	return m.StartPrepared(ctx, scope, definition, generation, environment, logsRoot, nil)
+	return m.StartPrepared(ctx, scope, definition, generation, environment, logsRoot, StartOptions{LaunchMode: model.LaunchManaged}, nil)
 }
 
-func (m *Manager) StartPrepared(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string, prepared func(StartResult) error) (StartResult, error) {
+func (m *Manager) StartPrepared(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string, options StartOptions, prepared func(StartResult) error) (StartResult, error) {
 	if definition.Kind != model.ServiceProcess {
 		return StartResult{}, errors.New("process manager only starts process services")
 	}
 	if len(definition.Command) == 0 {
 		return StartResult{}, errors.New("service command is empty")
 	}
+	if err := validateStartOptions(options); err != nil {
+		return StartResult{}, err
+	}
 	if m.supervised {
-		return m.startSupervised(ctx, scope, definition, generation, environment, logsRoot, prepared)
+		return m.startSupervised(ctx, scope, definition, generation, environment, logsRoot, options, prepared)
 	}
 	project, environmentName, err := model.ParseEnvironmentSelector(scope)
 	if err != nil {
@@ -191,7 +201,7 @@ func (m *Manager) StartPrepared(ctx context.Context, scope string, definition mo
 			m.onExit(ExitEvent{Scope: scope, Service: definition.Name, Generation: generation, Error: run.exitError, Expected: run.stopping.Load()})
 		}
 	}()
-	result := StartResult{PID: command.Process.Pid, Port: port, Generation: generation, PrivateRunKey: privateKey, StartedAt: startedAt, LogDirectory: logDirectory}
+	result := StartResult{PID: command.Process.Pid, Port: port, Generation: generation, PrivateRunKey: privateKey, StartedAt: startedAt, LogDirectory: logDirectory, LaunchMode: options.LaunchMode, Debugger: cloneDebugger(options.Debugger)}
 	if prepared != nil {
 		if err := prepared(result); err != nil {
 			_ = m.Stop(context.Background(), scope, definition.Name, 3*time.Second)
@@ -319,10 +329,11 @@ func (m *Manager) Attach(ctx context.Context, scope, service string, generation 
 		PID: status.PID, Port: status.Port, Generation: status.Generation, PrivateRunKey: privateKey,
 		StartedAt: status.StartedAt, LogDirectory: status.LogDirectory,
 		SupervisorSocket: socketPath, SupervisorState: statePath, SupervisorPID: status.SupervisorPID,
+		LaunchMode: status.LaunchMode, Debugger: cloneDebugger(status.Debugger),
 	}, nil
 }
 
-func (m *Manager) startSupervised(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string, prepared func(StartResult) error) (StartResult, error) {
+func (m *Manager) startSupervised(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string, options StartOptions, prepared func(StartResult) error) (StartResult, error) {
 	if m.executable == "" || m.runsRoot == "" || m.socketRoot == "" {
 		return StartResult{}, errors.New("supervisor executable and runtime directory are required")
 	}
@@ -365,6 +376,7 @@ func (m *Manager) startSupervised(ctx context.Context, scope string, definition 
 		Port: port, Generation: generation, PrivateRunKey: privateKey, StartedAt: startedAt,
 		LogDirectory:     filepath.Join(logsRoot, definition.Name, strconv.FormatInt(generation, 10)),
 		SupervisorSocket: socketPath, SupervisorState: statePath,
+		LaunchMode: options.LaunchMode, Debugger: cloneDebugger(options.Debugger),
 	}
 	if prepared != nil {
 		if err := prepared(provisional); err != nil {
@@ -374,6 +386,7 @@ func (m *Manager) startSupervised(ctx context.Context, scope string, definition 
 	manifest := supervisor.Manifest{
 		SocketPath: socketPath, StatePath: statePath, RunKey: privateKey, Scope: scope,
 		Service: definition.Name, Generation: generation, Port: port, Definition: definition,
+		LaunchMode: options.LaunchMode, Debugger: cloneDebugger(options.Debugger),
 		Environment: environment, LogsRoot: logsRoot,
 	}
 	if err := supervisor.WriteManifest(manifestPath, manifest); err != nil {
@@ -433,12 +446,37 @@ func (m *Manager) startSupervised(ctx context.Context, scope string, definition 
 		PID: status.PID, Port: status.Port, Generation: generation, PrivateRunKey: privateKey,
 		StartedAt: status.StartedAt, LogDirectory: status.LogDirectory,
 		SupervisorSocket: socketPath, SupervisorState: statePath, SupervisorPID: status.SupervisorPID,
+		LaunchMode: status.LaunchMode, Debugger: cloneDebugger(status.Debugger),
 	}
 	if err := health.Wait(ctx, port, definition.Health); err != nil {
 		_ = m.Stop(context.Background(), scope, definition.Name, 3*time.Second)
 		return result, err
 	}
 	return result, nil
+}
+
+func validateStartOptions(options StartOptions) error {
+	switch options.LaunchMode {
+	case model.LaunchManaged:
+		if options.Debugger != nil {
+			return errors.New("managed process cannot expose a debugger")
+		}
+	case model.LaunchDebug:
+		if options.Debugger == nil || options.Debugger.Adapter == "" || options.Debugger.Host != "127.0.0.1" || options.Debugger.Port < 1 || options.Debugger.Port > 65535 {
+			return errors.New("debug process requires a valid loopback debugger")
+		}
+	default:
+		return errors.New("process launch mode is invalid")
+	}
+	return nil
+}
+
+func cloneDebugger(input *model.DebuggerRuntime) *model.DebuggerRuntime {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	return &result
 }
 
 func (m *Manager) stopUnreadySupervisor(socketPath, statePath, privateKey string, supervisorPID int) {

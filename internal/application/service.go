@@ -26,6 +26,7 @@ import (
 	"github.com/portless-run/portless/internal/runtime/container"
 	"github.com/portless-run/portless/internal/runtime/container/docker"
 	"github.com/portless-run/portless/internal/runtime/container/podman"
+	"github.com/portless-run/portless/internal/runtime/debuglaunch"
 	"github.com/portless-run/portless/internal/runtime/logstore"
 	processruntime "github.com/portless-run/portless/internal/runtime/process"
 	"github.com/portless-run/portless/internal/runtime/supervisor"
@@ -62,6 +63,11 @@ type EnvironmentContext struct {
 	Resolution  string              `json:"resolution"`
 	Environment *model.Environment  `json:"environment,omitempty"`
 	Candidates  []model.Environment `json:"candidates"`
+}
+
+type UpOptions struct {
+	DebugServices []string `json:"debugServices,omitempty"`
+	Managed       bool     `json:"managed,omitempty"`
 }
 
 func (e RuntimeInUseError) Error() string {
@@ -620,7 +626,7 @@ func (s *Service) ProjectModel(ctx context.Context, name string) (model.ProjectM
 	return s.store.ProjectModel(ctx, name)
 }
 
-func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, idempotencyKey string) (model.Operation, error) {
+func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, idempotencyKey string, options UpOptions) (model.Operation, error) {
 	s.resetGate.RLock()
 	defer s.resetGate.RUnlock()
 	if s.resetting {
@@ -637,6 +643,23 @@ func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, i
 	if compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings); len(compiled.Issues) > 0 {
 		return model.Operation{}, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
+	if options.Managed && len(options.DebugServices) > 0 {
+		return model.Operation{}, errors.New("managed startup cannot also select debug services")
+	}
+	for index, requested := range options.DebugServices {
+		definition, exists := serviceDefinitionForEnvironment(environment, requested)
+		if !exists {
+			return model.Operation{}, fmt.Errorf("service %s was not found in %s", requested, model.EnvironmentSelector(projectName, environmentName))
+		}
+		binding := bindingForEnvironment(environment, definition.Name)
+		if definition.Kind != model.ServiceProcess || binding.Provider != model.ProviderLocal {
+			return model.Operation{}, fmt.Errorf("service %s cannot run in debug mode because its provider is %s", definition.Name, binding.Provider)
+		}
+		if definition.Debug == nil {
+			return model.Operation{}, fmt.Errorf("service %s can run normally, but no safe debug launcher was discovered", definition.Name)
+		}
+		options.DebugServices[index] = definition.Name
+	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
 	operation, err := s.store.CreateOperation(ctx, scope, "up", actor, idempotencyKey)
 	if err != nil {
@@ -645,7 +668,7 @@ func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, i
 	if operation.State != "running" || len(operation.Events) > 0 {
 		return operation, nil
 	}
-	go s.runUp(scope, operation)
+	go s.runUp(scope, operation, options)
 	return operation, nil
 }
 
@@ -900,12 +923,16 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			increment = 1
 		}
 		if currentDefinition.Kind == model.ServiceProcess {
-			currentErr = s.startProcess(context.Background(), current, currentDefinition, operation, increment)
+			launchMode := currentRuntime.LaunchMode
+			if launchMode == "" {
+				launchMode = model.LaunchManaged
+			}
+			currentErr = s.startProcess(context.Background(), current, currentDefinition, operation, increment, launchMode)
 		} else {
 			currentErr = s.startContainer(context.Background(), current, currentDefinition, increment)
 		}
 		if currentErr != nil {
-			_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceFailed, Reason: currentErr.Error(), Generation: currentRuntime.Generation, RestartCount: currentRuntime.RestartCount})
+			_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceFailed, currentErr.Error())
 			s.failOperation(scope, operation, currentErr)
 			s.releaseSourceLeasesIfIdle(scope)
 			return
@@ -988,7 +1015,11 @@ func (s *Service) StopService(ctx context.Context, projectName, environmentName,
 			return
 		}
 		s.proxy.RemoveTarget(scope, serviceName)
-		_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: currentRuntime.Generation, RestartCount: currentRuntime.RestartCount})
+		launchMode := currentRuntime.LaunchMode
+		if launchMode == "" {
+			launchMode = model.LaunchManaged
+		}
+		_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: currentRuntime.Generation, RestartCount: currentRuntime.RestartCount, LaunchMode: launchMode})
 		s.reconcileEnvironmentStatus(context.Background(), scope)
 		s.releaseSourceLeasesIfIdle(scope)
 		s.completeOperation(scope, operation, "Service "+serviceName+" stopped")
@@ -1449,7 +1480,7 @@ func (s *Service) Proxy() *proxy.Manager { return s.proxy }
 
 func (s *Service) Broker() *events.Broker { return s.broker }
 
-func (s *Service) runUp(scope string, operation model.Operation) {
+func (s *Service) runUp(scope string, operation model.Operation, options UpOptions) {
 	lock := s.projectLock(scope)
 	lock.Lock()
 	defer lock.Unlock()
@@ -1460,8 +1491,9 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		s.failOperation(scope, operation, err)
 		return
 	}
-	if environment.Status == model.EnvironmentHealthy && s.environmentRuntimeVerified(ctx, environment) {
-		s.completeOperation(scope, operation, "Environment is already healthy")
+	changingModes := options.Managed || len(options.DebugServices) > 0
+	if !changingModes && (environment.Status == model.EnvironmentHealthy || environment.Status == model.EnvironmentDevelopment) && s.environmentRuntimeVerified(ctx, environment) {
+		s.completeOperation(scope, operation, "Environment is already ready")
 		return
 	}
 	if environment.Status != model.EnvironmentStopped && !s.environmentRuntimeVerified(ctx, environment) {
@@ -1474,7 +1506,7 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 			s.failOperation(scope, operation, err)
 			return
 		}
-		if environment.Status == model.EnvironmentHealthy {
+		if !changingModes && (environment.Status == model.EnvironmentHealthy || environment.Status == model.EnvironmentDevelopment) {
 			s.completeOperation(scope, operation, "Environment runtime was recovered")
 			return
 		}
@@ -1484,6 +1516,23 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 				return
 			}
 		}
+	}
+	targetModes := make(map[string]model.LaunchMode)
+	for _, service := range environment.Services {
+		if service.Kind != model.ServiceProcess || bindingForEnvironment(environment, service.Name).Provider != model.ProviderLocal {
+			continue
+		}
+		mode := service.LaunchMode
+		if mode == "" || environment.Status == model.EnvironmentStopped {
+			mode = model.LaunchManaged
+		}
+		if options.Managed {
+			mode = model.LaunchManaged
+		}
+		targetModes[strings.ToLower(service.Name)] = mode
+	}
+	for _, serviceName := range options.DebugServices {
+		targetModes[strings.ToLower(serviceName)] = model.LaunchDebug
 	}
 	if err := s.acquireSourceLeases(scope, environment); err != nil {
 		s.failOperation(scope, operation, err)
@@ -1528,20 +1577,36 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		return
 	}
 	for _, serviceName := range order {
-		if current := runtimeFor(environment, serviceName); current.Status == model.ServiceReady && s.proxy.HasTarget(scope, serviceName) {
+		service, _ := serviceDefinition(definition, serviceName)
+		current := runtimeFor(environment, serviceName)
+		targetMode := targetModes[strings.ToLower(serviceName)]
+		if targetMode == "" {
+			targetMode = model.LaunchManaged
+		}
+		modeMatches := service.Kind != model.ServiceProcess || current.LaunchMode == targetMode ||
+			(current.LaunchMode == "" && targetMode == model.LaunchManaged)
+		if current.Status == model.ServiceReady && s.proxy.HasTarget(scope, serviceName) && modeMatches {
 			_ = s.serviceEvent(scope, operation, serviceName, "ready", serviceName+" is already ready")
 			continue
 		}
-		service, _ := serviceDefinition(definition, serviceName)
+		restartIncrement := int64(0)
+		if service.Kind == model.ServiceProcess && !modeMatches && s.processes.IsRunning(scope, serviceName) {
+			_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Restarting "+serviceName+" in "+string(targetMode)+" mode")
+			if err := s.processes.Stop(ctx, scope, serviceName, 10*time.Second); err != nil {
+				s.failOperation(scope, operation, err)
+				return
+			}
+			s.proxy.RemoveTarget(scope, serviceName)
+			restartIncrement = 1
+		}
 		_ = s.serviceEvent(scope, operation, serviceName, "starting", "Starting "+serviceName)
 		if service.Kind == model.ServiceResource {
 			err = s.startContainer(ctx, environment, service, 0)
 		} else {
-			err = s.startProcess(ctx, environment, service, operation, 0)
+			err = s.startProcess(ctx, environment, service, operation, restartIncrement, targetMode)
 		}
 		if err != nil {
-			runtime := runtimeFor(environment, serviceName)
-			_ = s.store.SetServiceRuntime(context.Background(), scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceFailed, Reason: err.Error(), Generation: runtime.Generation})
+			_ = s.store.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceFailed, err.Error())
 			s.failOperation(scope, operation, fmt.Errorf("%s: %w", serviceName, err))
 			return
 		}
@@ -1552,9 +1617,20 @@ func (s *Service) runUp(scope string, operation model.Operation) {
 		s.failOperation(scope, operation, err)
 		return
 	}
-	_ = s.store.SetEnvironmentStatus(ctx, environment.Project, environment.Name, model.EnvironmentHealthy, "")
-	_, _ = s.timeline(ctx, scope, operation.Actor, "environment.healthy", scope, "info", "All required local and remote services are ready", nil)
-	s.completeOperation(scope, operation, "Environment is healthy")
+	s.reconcileEnvironmentStatus(ctx, scope)
+	debugServices := 0
+	for _, mode := range targetModes {
+		if mode == model.LaunchDebug {
+			debugServices++
+		}
+	}
+	if debugServices > 0 {
+		_, _ = s.timeline(ctx, scope, operation.Actor, "environment.development", scope, "info", "Environment is ready with debug services", map[string]any{"services": debugServices})
+		s.completeOperation(scope, operation, "Environment is ready for development")
+	} else {
+		_, _ = s.timeline(ctx, scope, operation.Actor, "environment.healthy", scope, "info", "All required local and remote services are ready", nil)
+		s.completeOperation(scope, operation, "Environment is healthy")
+	}
 	snapshot, _ := s.Environment(ctx, environment.Project, environment.Name)
 	s.publish(scope, "environment.state", snapshot)
 }
@@ -1587,12 +1663,12 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 			continue
 		}
 		_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Stopping "+serviceName)
+		current := runtimeFor(environment, serviceName)
 		if err := s.processes.Stop(ctx, scope, serviceName, 10*time.Second); err != nil {
 			s.failOperation(scope, operation, err)
 			return
 		}
-		runtime := runtimeFor(environment, serviceName)
-		_ = s.store.SetServiceRuntime(ctx, scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: runtime.Generation, RestartCount: runtime.RestartCount})
+		_ = s.store.SetServiceRuntime(ctx, scope, serviceName, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: current.Generation, RestartCount: current.RestartCount, LaunchMode: model.LaunchManaged})
 		s.proxy.RemoveTarget(scope, serviceName)
 	}
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
@@ -1621,7 +1697,7 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 		}
 	}
 	for _, service := range environment.Services {
-		_ = s.store.SetServiceRuntime(ctx, scope, service.Name, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: service.Generation})
+		_ = s.store.SetServiceRuntime(ctx, scope, service.Name, store.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: service.Generation, LaunchMode: model.LaunchManaged})
 	}
 	s.proxy.CloseEnvironment(ctx, scope)
 	_ = s.store.DeleteConnectionRuntimes(ctx, scope)
@@ -1691,69 +1767,49 @@ func (s *Service) ensurePublicTCPProxies(ctx context.Context, environment model.
 	return nil
 }
 
-func (s *Service) startProcess(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, operation model.Operation, restartIncrement int64) error {
+func (s *Service) startProcess(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, operation model.Operation, restartIncrement int64, launchMode model.LaunchMode) error {
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
-	processEnvironment := make(map[string]string)
-	modelDefinition, err := s.store.EnvironmentModel(ctx, environment.Project, environment.Name)
-	if err != nil {
-		return err
-	}
 	runtime := runtimeFor(environment, definition.Name)
 	nextGeneration := runtime.Generation + 1
-	for _, connection := range modelDefinition.Connections {
-		if connection.Source != definition.Name {
-			continue
-		}
-		listenIP, dnsName, port := "127.0.0.1", "", 0
-		persisted, persistedErr := s.store.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
-		if persistedErr != nil && !errors.Is(persistedErr, store.ErrNotFound) {
-			return persistedErr
-		}
-		if connection.Protocol != model.ProtocolHTTP {
-			allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
-			if allocationErr != nil {
-				return fmt.Errorf("load stable endpoint for %s:%s: %w", connection.Source, connection.Target, allocationErr)
-			}
-			listenIP, dnsName, port = allocation.ListenIP, allocation.DNSName, allocation.ListenPort
-			_, err = s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, allocation.Address())
-		} else if persistedErr == nil && persisted.SourceGeneration == nextGeneration {
-			port, err = s.proxy.EnsureEdgeAtPort(ctx, scope, connection, persisted.ListenPort)
-		} else {
-			port, err = s.proxy.EnsureEdge(ctx, scope, connection)
-		}
-		if err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		if err := s.store.SaveConnectionRuntime(ctx, scope, store.ConnectionRuntime{
-			Source: connection.Source, Target: connection.Target, Protocol: connection.Protocol,
-			SourceGeneration: nextGeneration, ListenIP: listenIP, DNSName: dnsName, ListenPort: port, OwnerInstanceID: s.daemonInstanceID,
-			State: "ready", ObservedAt: &now,
-		}); err != nil {
-			return err
-		}
-		host := listenIP
-		if dnsName != "" {
-			host = dnsName
-		}
-		target, exists := serviceDefinition(modelDefinition, connection.Target)
-		if !exists {
-			return fmt.Errorf("connection target %s is not defined", connection.Target)
-		}
-		binding, bindErr := s.connectionBinding(target, connection, host, port, s.containerEnvironmentFor(scope, connection.Target), true)
-		if bindErr != nil {
-			return bindErr
-		}
-		for name, value := range binding.Values {
-			processEnvironment[name] = value
-		}
+	if launchMode == "" {
+		launchMode = model.LaunchManaged
+	}
+	if launchMode == model.LaunchManaged {
+		_ = s.store.SetServiceLaunch(ctx, scope, definition.Name, launchMode, nil)
+	}
+	processEnvironment, err := s.prepareProcessEnvironment(ctx, environment, definition, nextGeneration)
+	if err != nil {
+		return err
 	}
 	privateKey, err := s.store.PrivateEnvironmentKeyForSelector(ctx, scope)
 	if err != nil {
 		return err
 	}
+	launchDefinition := definition
+	var debugger *model.DebuggerRuntime
+	if launchMode == model.LaunchDebug {
+		_ = s.store.SetServiceLaunch(ctx, scope, definition.Name, launchMode, nil)
+		debugPort, allocateErr := processruntime.AllocatePort()
+		if allocateErr != nil {
+			return fmt.Errorf("allocate debugger port for %s: %w", definition.Name, allocateErr)
+		}
+		artifactsRoot := filepath.Join(s.dataDirectory, "environments", privateKey, "runtime", definition.Name, strconv.FormatInt(nextGeneration, 10))
+		launch, prepareErr := debuglaunch.Prepare(definition.Debug, debugPort, artifactsRoot)
+		if prepareErr != nil {
+			return fmt.Errorf("prepare %s debugger: %w", definition.Name, prepareErr)
+		}
+		launchDefinition.Command = launch.Command
+		for name, value := range launch.Environment {
+			processEnvironment[name] = value
+		}
+		value := launch.Debugger
+		debugger = &value
+		_ = s.store.SetServiceLaunch(ctx, scope, definition.Name, launchMode, cloneDebugger(debugger))
+	} else if launchMode != model.LaunchManaged {
+		return fmt.Errorf("unsupported launch mode %q", launchMode)
+	}
 	logsRoot := filepath.Join(s.dataDirectory, "environments", privateKey, "logs")
-	result, err := s.processes.StartPrepared(ctx, scope, definition, nextGeneration, processEnvironment, logsRoot, func(prepared processruntime.StartResult) error {
+	result, err := s.processes.StartPrepared(ctx, scope, launchDefinition, nextGeneration, processEnvironment, logsRoot, processruntime.StartOptions{LaunchMode: launchMode, Debugger: debugger}, func(prepared processruntime.StartResult) error {
 		now := time.Now().UTC()
 		return s.store.SetServiceRuntime(ctx, scope, definition.Name, store.ServiceRuntimeUpdate{
 			Status: model.ServiceStarting, Generation: prepared.Generation, UpstreamPort: prepared.Port,
@@ -1761,10 +1817,27 @@ func (s *Service) startProcess(ctx context.Context, environment model.Environmen
 			LogPath: prepared.LogDirectory, PrivateRunKey: prepared.PrivateRunKey,
 			OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: prepared.SupervisorSocket,
 			SupervisorState: prepared.SupervisorState, SupervisorPID: prepared.SupervisorPID, ObservedAt: &now,
+			LaunchMode: launchMode, Debugger: cloneDebugger(debugger),
 		})
 	})
 	if err != nil {
+		if debugger != nil {
+			debugger.State = "stopped"
+		}
+		_ = s.store.SetServiceLaunch(context.Background(), scope, definition.Name, launchMode, cloneDebugger(debugger))
 		return err
+	}
+	if debugger != nil {
+		debugContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err = debuglaunch.Wait(debugContext, *debugger)
+		cancel()
+		if err != nil {
+			_ = s.processes.Stop(context.Background(), scope, definition.Name, 3*time.Second)
+			debugger.State = "stopped"
+			_ = s.store.SetServiceLaunch(context.Background(), scope, definition.Name, launchMode, cloneDebugger(debugger))
+			return err
+		}
+		debugger.State = "listening"
 	}
 	s.proxy.SetTarget(scope, definition.Name, result.Port)
 	now := time.Now().UTC()
@@ -1773,7 +1846,74 @@ func (s *Service) startProcess(ctx context.Context, environment model.Environmen
 		StartedAt: &result.StartedAt, RestartCount: runtime.RestartCount + restartIncrement, LogPath: result.LogDirectory, PrivateRunKey: result.PrivateRunKey,
 		OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: result.SupervisorSocket,
 		SupervisorState: result.SupervisorState, SupervisorPID: result.SupervisorPID, ObservedAt: &now,
+		LaunchMode: launchMode, Debugger: cloneDebugger(debugger),
 	})
+}
+
+func cloneDebugger(input *model.DebuggerRuntime) *model.DebuggerRuntime {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	return &result
+}
+
+func (s *Service) prepareProcessEnvironment(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, generation int64) (map[string]string, error) {
+	scope := model.EnvironmentSelector(environment.Project, environment.Name)
+	processEnvironment := make(map[string]string)
+	modelDefinition, err := s.store.EnvironmentModel(ctx, environment.Project, environment.Name)
+	if err != nil {
+		return nil, err
+	}
+	for _, connection := range modelDefinition.Connections {
+		if connection.Source != definition.Name {
+			continue
+		}
+		listenIP, dnsName, port := "127.0.0.1", "", 0
+		persisted, persistedErr := s.store.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
+		if persistedErr != nil && !errors.Is(persistedErr, store.ErrNotFound) {
+			return nil, persistedErr
+		}
+		if connection.Protocol != model.ProtocolHTTP {
+			allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
+			if allocationErr != nil {
+				return nil, fmt.Errorf("load stable endpoint for %s:%s: %w", connection.Source, connection.Target, allocationErr)
+			}
+			listenIP, dnsName, port = allocation.ListenIP, allocation.DNSName, allocation.ListenPort
+			_, err = s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, allocation.Address())
+		} else if persistedErr == nil && persisted.SourceGeneration == generation {
+			port, err = s.proxy.EnsureEdgeAtPort(ctx, scope, connection, persisted.ListenPort)
+		} else {
+			port, err = s.proxy.EnsureEdge(ctx, scope, connection)
+		}
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now().UTC()
+		if err := s.store.SaveConnectionRuntime(ctx, scope, store.ConnectionRuntime{
+			Source: connection.Source, Target: connection.Target, Protocol: connection.Protocol,
+			SourceGeneration: generation, ListenIP: listenIP, DNSName: dnsName, ListenPort: port, OwnerInstanceID: s.daemonInstanceID,
+			State: "ready", ObservedAt: &now,
+		}); err != nil {
+			return nil, err
+		}
+		host := listenIP
+		if dnsName != "" {
+			host = dnsName
+		}
+		target, exists := serviceDefinition(modelDefinition, connection.Target)
+		if !exists {
+			return nil, fmt.Errorf("connection target %s is not defined", connection.Target)
+		}
+		binding, bindErr := s.connectionBinding(target, connection, host, port, s.containerEnvironmentFor(scope, connection.Target), true)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		for name, value := range binding.Values {
+			processEnvironment[name] = value
+		}
+	}
+	return processEnvironment, nil
 }
 
 func (s *Service) processExited(event processruntime.ExitEvent) {
@@ -1799,6 +1939,9 @@ func (s *Service) processExited(event processruntime.ExitEvent) {
 	// able to authenticate the durable terminal state instead of degrading a
 	// known exit into an unverifiable process.
 	_ = s.store.SetServiceStatus(ctx, event.Scope, event.Service, status, reason)
+	if runtime.LaunchMode == model.LaunchDebug {
+		_ = s.store.SetServiceDebuggerState(ctx, event.Scope, event.Service, "stopped")
+	}
 	s.proxy.RemoveTarget(event.Scope, event.Service)
 	s.reconcileEnvironmentStatus(ctx, event.Scope)
 	s.releaseSourceLeasesIfIdle(event.Scope)
@@ -1892,6 +2035,15 @@ func (s *Service) reconcileEnvironmentStatus(ctx context.Context, scope string) 
 		}
 	}
 	status, reason := model.DeriveEnvironmentStatus(services, "")
+	for _, service := range services {
+		if service.LaunchMode == model.LaunchDebug {
+			if status == model.EnvironmentHealthy {
+				status = model.EnvironmentDevelopment
+				reason = "debug services are ready"
+			}
+			break
+		}
+	}
 	_ = s.store.SetEnvironmentStatus(ctx, environment.Project, environment.Name, status, reason)
 	s.publish(scope, "environment.state", map[string]any{"status": status, "reason": reason})
 }

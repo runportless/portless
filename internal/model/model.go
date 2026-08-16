@@ -5,14 +5,15 @@ import "time"
 type EnvironmentStatus string
 
 const (
-	EnvironmentStarting   EnvironmentStatus = "starting"
-	EnvironmentRecovering EnvironmentStatus = "recovering"
-	EnvironmentHealthy    EnvironmentStatus = "healthy"
-	EnvironmentDegraded   EnvironmentStatus = "degraded"
-	EnvironmentFailed     EnvironmentStatus = "failed"
-	EnvironmentStopping   EnvironmentStatus = "stopping"
-	EnvironmentStopped    EnvironmentStatus = "stopped"
-	EnvironmentUnknown    EnvironmentStatus = "unknown"
+	EnvironmentStarting    EnvironmentStatus = "starting"
+	EnvironmentRecovering  EnvironmentStatus = "recovering"
+	EnvironmentDevelopment EnvironmentStatus = "development"
+	EnvironmentHealthy     EnvironmentStatus = "healthy"
+	EnvironmentDegraded    EnvironmentStatus = "degraded"
+	EnvironmentFailed      EnvironmentStatus = "failed"
+	EnvironmentStopping    EnvironmentStatus = "stopping"
+	EnvironmentStopped     EnvironmentStatus = "stopped"
+	EnvironmentUnknown     EnvironmentStatus = "unknown"
 )
 
 type ServiceStatus string
@@ -28,6 +29,29 @@ const (
 	ServiceStopping   ServiceStatus = "stopping"
 	ServiceStopped    ServiceStatus = "stopped"
 	ServiceUnknown    ServiceStatus = "unknown"
+)
+
+type LaunchMode string
+
+const (
+	LaunchManaged LaunchMode = "managed"
+	LaunchDebug   LaunchMode = "debug"
+)
+
+type DebugAdapter string
+
+const (
+	DebugNodeInspector DebugAdapter = "node-inspector"
+	DebugJDWP          DebugAdapter = "jdwp"
+)
+
+type DebugLauncher string
+
+const (
+	DebugNodeDirect   DebugLauncher = "node-direct"
+	DebugNestCLI      DebugLauncher = "nest-cli"
+	DebugSpringGradle DebugLauncher = "spring-gradle"
+	DebugSpringMaven  DebugLauncher = "spring-maven"
 )
 
 type ServiceKind string
@@ -101,14 +125,35 @@ type ResourceDefinition struct {
 	Version string `json:"version"`
 }
 
+// DebugCapability is a discovery-owned, declarative recipe. Command is an
+// already-tokenized base command; the selected launcher is solely responsible
+// for inserting a private debugger address without invoking a shell.
+type DebugCapability struct {
+	Adapter  DebugAdapter  `json:"adapter"`
+	Launcher DebugLauncher `json:"launcher"`
+	Command  []string      `json:"command"`
+}
+
+type DebuggerRuntime struct {
+	Adapter DebugAdapter `json:"adapter"`
+	Host    string       `json:"host"`
+	Port    int          `json:"port"`
+	State   string       `json:"state"`
+}
+
 type ServiceDefinition struct {
 	Name             string              `json:"name"`
 	Kind             ServiceKind         `json:"kind"`
 	Framework        string              `json:"framework,omitempty"`
 	Resource         *ResourceDefinition `json:"resource,omitempty"`
+	Debug            *DebugCapability    `json:"debug,omitempty"`
 	Command          []string            `json:"command,omitempty"`
 	WorkingDirectory string              `json:"workingDirectory,omitempty"`
-	PortEnvironment  string              `json:"portEnvironment,omitempty"`
+	// ServiceDirectory identifies the physical source directory for CWD-based
+	// service selection. It can differ from WorkingDirectory in monorepos whose
+	// build command runs from a shared root.
+	ServiceDirectory string `json:"serviceDirectory,omitempty"`
+	PortEnvironment  string `json:"portEnvironment,omitempty"`
 	// Port is the stable client-facing port for a TCP service. Discovery copies
 	// the registered resource plugin's port into the model so persistence and
 	// endpoint allocation remain independent of executable plugin code.
@@ -240,16 +285,18 @@ type Environment struct {
 
 type Service struct {
 	ServiceDefinition
-	Status        ServiceStatus `json:"status"`
-	Reason        string        `json:"reason,omitempty"`
-	Generation    int64         `json:"generation"`
-	PID           int           `json:"pid,omitempty"`
-	UpstreamPort  int           `json:"upstreamPort,omitempty"`
-	Endpoints     []Endpoint    `json:"endpoints"`
-	StartedAt     *time.Time    `json:"startedAt,omitempty"`
-	RestartCount  int64         `json:"restartCount"`
-	RecentRequest int64         `json:"recentRequests"`
-	P95Millis     int64         `json:"p95Millis,omitempty"`
+	LaunchMode    LaunchMode       `json:"launchMode"`
+	Debugger      *DebuggerRuntime `json:"debugger,omitempty"`
+	Status        ServiceStatus    `json:"status"`
+	Reason        string           `json:"reason,omitempty"`
+	Generation    int64            `json:"generation"`
+	PID           int              `json:"pid,omitempty"`
+	UpstreamPort  int              `json:"upstreamPort,omitempty"`
+	Endpoints     []Endpoint       `json:"endpoints"`
+	StartedAt     *time.Time       `json:"startedAt,omitempty"`
+	RestartCount  int64            `json:"restartCount"`
+	RecentRequest int64            `json:"recentRequests"`
+	P95Millis     int64            `json:"p95Millis,omitempty"`
 }
 
 type Operation struct {

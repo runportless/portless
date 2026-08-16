@@ -120,6 +120,19 @@ func TestHTTPBodyCaptureSkipsBinaryContent(t *testing.T) {
 	}
 }
 
+func TestMissingTargetReturnsBadGateway(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	manager := NewManager(controlStore, events.NewBroker())
+
+	missing := httptest.NewRecorder()
+	manager.ServeIngress(missing, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/health", nil), scope, "checkout")
+	if missing.Code != http.StatusBadGateway || missing.Header().Get("Retry-After") != "" || !strings.Contains(missing.Body.String(), "not available") {
+		t.Fatalf("ordinary missing target = %d headers=%v body=%q", missing.Code, missing.Header(), missing.Body.String())
+	}
+}
+
 func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
 	controlStore, err := store.Open(filepath.Join(t.TempDir(), "portless.db"))
 	if err != nil {

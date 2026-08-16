@@ -38,6 +38,7 @@ Processes and managed resource containers still receive private dynamic runtime 
 - Explicit remote classification and write policy; read-only targets reject unsafe methods before traffic leaves the machine.
 - Readable project and service names throughout the CLI, API, URLs, and UI; immutable ownership keys remain private.
 - Persistent per-service supervisors, dynamic ports, HTTP/TCP readiness, bounded structured process/container logs, dependency-aware environment and individual-service lifecycle, daemon-crash reconciliation, and durable operations.
+- Context-aware debug startup: from a supported service directory, `portless up` starts that service under Portless with its debugger enabled and starts the rest normally.
 - Generic declarative Docker Engine or Podman networks, named volumes, generated local credentials, commands, and TCP/exec readiness. Docker Compose is not used.
 - Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
 - Unified, filtered HTTP/TCP traffic inspection with redacted request/response headers and durable detail lookup through recordings.
@@ -74,11 +75,21 @@ The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin
 
 1. Run `portless setup` once. It asks for administrator approval to install the narrow loopback relay used by clean HTTP URLs and TCP endpoint DNS, then immediately drops to your user account. `portless relay install` is the explicit equivalent.
 2. Install and start Docker Engine or Podman if the project needs a managed resource.
-3. Enter a Spring Boot or NestJS repository.
-4. Run `portless up` to discover and start its `local` environment.
-5. Use the browser dashboard to inspect and control the running environment.
+3. Enter the directory for the service you are changing.
+4. Run `portless up`. Portless discovers the project, starts its dependencies and peer services normally, and starts the current service with a Node inspector or JVM debug endpoint when one can be discovered safely.
+5. In your IDE, use **Attach to Process** and choose the matching Node or JVM process; the command prints its debugger type and loopback address. You do not need a Portless-specific run configuration or environment file.
+6. Use the browser dashboard to inspect ownership, traffic, recordings, and faults.
 
 `portless env rescan` refreshes every source in the selected environment while it is stopped. The next `portless up` uses the refreshed model immediately.
+
+Run `portless up` from a project root to start every service normally while
+preserving any active debug modes. `portless up --debug <service>` selects a
+debug-capable service explicitly from any directory. Debug mode is additive:
+running `portless up` later from another service directory keeps the first
+service running in debug mode and enables the second. `portless service manage
+<service>` restarts one service normally; `portless up --managed` restarts every
+debug service in normal managed mode. Because Portless owns both modes, daemon
+restart and environment shutdown retain deterministic process ownership.
 
 `portless setup` and `portless relay install` are idempotent. On macOS they install a root-owned launchd job and an `/etc/resolver/portless.test` route; on systemd Linux they install an equivalent unit and a routing domain for `systemd-resolved`. The helper binds only `127.0.0.1:80` and UDP/TCP `127.77.0.1:1053`, then drops to the installing user before accepting traffic. The scoped resolver explicitly uses port 1053, avoiding macOS's system-owned wildcard DNS listener on port 53. macOS setup also reserves a bounded `127.77.0.x` loopback pool because Darwin does not make the full `127/8` range bindable by default; Linux already does. Its DNS server is authoritative only for `portless.test` and never forwards unrelated queries, so the machine's normal DNS remains untouched. If an owned address is already in use, installation reports the conflict instead of replacing it. A root-owned receipt records which local user and private HTTP/DNS sockets own the machine-wide relay.
 
@@ -110,6 +121,8 @@ portless env select billing/local
 portless env current
 portless env clear
 portless --env billing/qa status
+portless up --debug checkout
+portless up --managed
 portless open [service]
 portless url [service]
 portless logs [service] --tail
@@ -123,6 +136,8 @@ portless service list
 portless service show checkout
 portless service config checkout
 portless service restart checkout
+portless service debug checkout
+portless service manage checkout
 portless connection list
 portless connection show checkout:orders
 portless timeline

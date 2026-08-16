@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -170,7 +171,7 @@ func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *test
 			t.Fatalf("listed environment %s did not expose its source-addition issue: %#v", candidate.Name, candidate.Issues)
 		}
 	}
-	if _, err := app.Up(ctx, "store", "qa", "test", ""); err == nil || !strings.Contains(err.Error(), "no provider binding") {
+	if _, err := app.Up(ctx, "store", "qa", "test", "", UpOptions{}); err == nil || !strings.Contains(err.Error(), "no provider binding") {
 		t.Fatalf("incomplete environment start error = %v", err)
 	}
 
@@ -287,7 +288,7 @@ func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testin
 	if result.Processes != 0 || len(result.Runtimes) != 0 {
 		t.Fatalf("unexpected reset runtime cleanup: %#v", result)
 	}
-	if _, err := app.Up(ctx, "billing", "local", "test", ""); err == nil || !strings.Contains(err.Error(), "reset preparation") {
+	if _, err := app.Up(ctx, "billing", "local", "test", "", UpOptions{}); err == nil || !strings.Contains(err.Error(), "reset preparation") {
 		t.Fatalf("new start was accepted after reset preparation: %v", err)
 	}
 	app.CancelReset()
@@ -612,6 +613,145 @@ func TestEnvironmentContextExplainsSelectionAndInference(t *testing.T) {
 	resolved, err = app.EnvironmentContext(ctx, source)
 	if err != nil || resolved.Resolution != "ambiguous" || len(resolved.Candidates) != 2 {
 		t.Fatalf("context after clear = %#v, err = %v", resolved, err)
+	}
+}
+
+func TestUpStartsFocusedServiceUnderPortlessWithDebugger(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	source := t.TempDir()
+	definition := model.ProjectModel{
+		SuggestedName: "billing", PrimaryService: "checkout",
+		Services: []model.ServiceDefinition{{
+			Name: "checkout", Kind: model.ServiceProcess, Framework: "nestjs", Required: true,
+			Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, WorkingDirectory: source, ServiceDirectory: source,
+			Debug:           &model.DebugCapability{Adapter: model.DebugNodeInspector, Launcher: model.DebugNestCLI, Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}},
+			PortEnvironment: "PORT", Environment: map[string]string{"LOG_LEVEL": "debug", "PORTLESS_APPLICATION_TEST_HELPER": "1"},
+			Health: model.HealthCheck{Kind: "http", Path: "/health", Timeout: time.Second, Interval: 20 * time.Millisecond},
+		}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "billing", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition,
+		[]model.SourceBinding{{Name: "billing", Path: source, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "billing"}}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-one", Executable: os.Args[0]})
+	defer app.Close(ctx)
+	defer app.processes.Stop(context.Background(), "billing/local", "checkout", time.Second)
+
+	operation, err := app.Up(ctx, "billing", "local", "test", "debug-up", UpOptions{DebugServices: []string{"checkout"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("up operation = %#v", operation)
+	}
+	service := serviceSnapshot(t, app, "checkout")
+	if service.Status != model.ServiceReady || service.LaunchMode != model.LaunchDebug || service.Debugger == nil || service.Debugger.State != "listening" || service.PID == 0 {
+		t.Fatalf("debug service = %#v", service)
+	}
+	environment, err := app.Environment(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment.Status != model.EnvironmentDevelopment {
+		t.Fatalf("environment status = %s, want development", environment.Status)
+	}
+	assertIngressStatus(t, app, http.StatusOK)
+	response, err := http.Get("http://" + net.JoinHostPort(service.Debugger.Host, strconv.Itoa(service.Debugger.Port)) + "/json/list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("debugger status = %s", response.Status)
+	}
+	debugPort := service.Debugger.Port
+	managed, err := app.ManageService(ctx, "billing", "local", "checkout", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed = waitForOperation(t, app, managed); managed.State != "succeeded" {
+		t.Fatalf("manage operation = %#v", managed)
+	}
+	service = serviceSnapshot(t, app, "checkout")
+	if service.LaunchMode != model.LaunchManaged || service.Debugger != nil || service.Status != model.ServiceReady || service.Generation != 2 {
+		t.Fatalf("managed service = %#v", service)
+	}
+	probe, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	request, _ := http.NewRequestWithContext(probe, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(debugPort)+"/json/list", nil)
+	if response, requestErr := http.DefaultClient.Do(request); requestErr == nil {
+		response.Body.Close()
+		t.Fatal("old debugger remained reachable after returning to managed mode")
+	}
+}
+
+func TestReconcileAdoptsDebugProcessAndDebugger(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	source := t.TempDir()
+	definition := model.ProjectModel{
+		SuggestedName: "billing", PrimaryService: "checkout",
+		Services: []model.ServiceDefinition{{
+			Name: "checkout", Kind: model.ServiceProcess, Framework: "nestjs", Required: true,
+			Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, WorkingDirectory: source, ServiceDirectory: source,
+			Debug:           &model.DebugCapability{Adapter: model.DebugNodeInspector, Launcher: model.DebugNestCLI, Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}},
+			Environment:     map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+			PortEnvironment: "PORT",
+			Health:          model.HealthCheck{Kind: "http", Path: "/health", Timeout: time.Second, Interval: 20 * time.Millisecond},
+		}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "billing", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition,
+		[]model.SourceBinding{{Name: "billing", Path: source, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "billing"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	first := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-one", Executable: os.Args[0]})
+	operation, err := first.Up(ctx, "billing", "local", "test", "debug-up", UpOptions{DebugServices: []string{"checkout"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, first, operation); operation.State != "succeeded" {
+		t.Fatalf("up operation = %#v", operation)
+	}
+	before := serviceSnapshot(t, first, "checkout")
+	first.Close(ctx)
+
+	second := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-two", Executable: os.Args[0]})
+	defer second.Close(ctx)
+	defer second.processes.Stop(context.Background(), "billing/local", "checkout", time.Second)
+	report, err := second.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unverifiable) != 0 || len(report.Recovered) != 1 || report.Recovered[0] != "billing/local" {
+		t.Fatalf("reconciliation report = %#v", report)
+	}
+	recovered := serviceSnapshot(t, second, "checkout")
+	if recovered.LaunchMode != model.LaunchDebug || recovered.Debugger == nil || recovered.Debugger.State != "listening" || recovered.Debugger.Port != before.Debugger.Port || recovered.PID != before.PID {
+		t.Fatalf("debug process changed across daemon restart: before=%#v after=%#v", before, recovered)
+	}
+	assertIngressStatus(t, second, http.StatusOK)
+	if ok, reasons := second.CanHandoff(ctx); !ok {
+		t.Fatalf("recovered debug environment cannot hand off: %v", reasons)
 	}
 }
 
@@ -1313,6 +1453,25 @@ func TestResourceBindingInjectsMultipleVariablesAndRedactsSecrets(t *testing.T) 
 func TestApplicationProcessHelper(t *testing.T) {
 	if os.Getenv("PORTLESS_APPLICATION_TEST_HELPER") != "1" {
 		return
+	}
+	for index, argument := range os.Args {
+		if argument != "--debug" || index+1 >= len(os.Args) {
+			continue
+		}
+		debugListener, err := net.Listen("tcp", os.Args[index+1])
+		if err != nil {
+			os.Exit(4)
+		}
+		debugServer := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/json/list" {
+				http.NotFound(writer, request)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`[{"type":"node","title":"checkout"}]`))
+		})}
+		go func() { _ = debugServer.Serve(debugListener) }()
+		break
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:"+os.Getenv("PORT"))
 	if err != nil {

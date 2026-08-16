@@ -514,6 +514,15 @@ func TestStatusUsesRestrainedPaletteWhenColorIsEnabled(t *testing.T) {
 	}
 }
 
+func TestDevelopmentStateUsesSuccessColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	application, _, _ := newTestCLI(t)
+	application.colorPreference = colorAlways
+	if actual := application.state(application.Out, string(model.EnvironmentDevelopment)); actual != ansiGreen+string(model.EnvironmentDevelopment)+ansiReset {
+		t.Fatalf("development color = %q", actual)
+	}
+}
+
 func TestCobraDoctorJSONReportsFailuresWithoutStartingDaemon(t *testing.T) {
 	application, output, errorsOutput := newTestCLI(t)
 	if err := os.Chmod(application.paths.Root, 0o700); err != nil {
@@ -1021,6 +1030,8 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless service start":   showHelp,
 		"portless service stop":    showHelp,
 		"portless service restart": showHelp,
+		"portless service debug":   showHelp,
+		"portless service manage":  showHelp,
 		"portless connection":      showHelp,
 		"portless connection list": runAction,
 		"portless connection show": showHelp,
@@ -1243,5 +1254,72 @@ func TestAbsoluteSourcePathUsesCLIWorkingDirectory(t *testing.T) {
 	}
 	if actual != expected {
 		t.Fatalf("absoluteSourcePath = %q, want %q", actual, expected)
+	}
+}
+
+func TestDebugServiceForPathSelectsTheDeepestLocalProcess(t *testing.T) {
+	root := t.TempDir()
+	checkout := filepath.Join(root, "apps", "checkout")
+	orders := filepath.Join(root, "apps", "orders")
+	for _, directory := range []string{checkout, orders} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := model.Environment{
+		Bindings: []model.ComponentBinding{
+			{Service: "checkout", Provider: model.ProviderLocal},
+			{Service: "orders", Provider: model.ProviderLocal},
+		},
+		Services: []model.Service{
+			{ServiceDefinition: model.ServiceDefinition{Name: "checkout", Kind: model.ServiceProcess, ServiceDirectory: checkout}},
+			{ServiceDefinition: model.ServiceDefinition{Name: "orders", Kind: model.ServiceProcess, ServiceDirectory: orders}},
+		},
+	}
+	selected, err := debugServiceForPath(environment, filepath.Join(checkout, "src"))
+	if err != nil || selected != "checkout" {
+		t.Fatalf("selected = %q, err=%v", selected, err)
+	}
+	selected, err = debugServiceForPath(environment, root)
+	if err != nil || selected != "" {
+		t.Fatalf("project root selected = %q, err=%v", selected, err)
+	}
+}
+
+func TestDebugServiceForPathDoesNotTreatSharedBuildRootAsAService(t *testing.T) {
+	root := t.TempDir()
+	inventory := filepath.Join(root, "apps", "inventory")
+	if err := os.MkdirAll(inventory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	environment := model.Environment{
+		Sources:  []model.SourceBinding{{Name: "store", Path: root}},
+		Bindings: []model.ComponentBinding{{Service: "inventory", Provider: model.ProviderLocal, Source: "store"}},
+		Services: []model.Service{{ServiceDefinition: model.ServiceDefinition{
+			Name: "inventory", Kind: model.ServiceProcess, WorkingDirectory: root,
+			Evidence: []model.Evidence{{File: "apps/inventory/build.gradle"}},
+		}}},
+	}
+	selected, err := debugServiceForPath(environment, root)
+	if err != nil || selected != "" {
+		t.Fatalf("project root selected = %q, err=%v", selected, err)
+	}
+	selected, err = debugServiceForPath(environment, inventory)
+	if err != nil || selected != "inventory" {
+		t.Fatalf("inventory directory selected = %q, err=%v", selected, err)
+	}
+}
+
+func TestInvocationKeysAreUnique(t *testing.T) {
+	first, err := invocationKey("cli-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := invocationKey("cli-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || !strings.HasPrefix(first, "cli-up-") || len(first) != len("cli-up-")+32 {
+		t.Fatalf("invocation keys = %q, %q", first, second)
 	}
 }

@@ -31,6 +31,7 @@ func TestRunnerAuthenticatesStatusAndStopsProcess(t *testing.T) {
 	manifest := Manifest{
 		SocketPath: filepath.Join(socketRoot, "service.sock"), StatePath: filepath.Join(data, "state.json"),
 		RunKey: "private-test-key", Scope: "billing/local", Service: "checkout", Generation: 3, Port: port,
+		LaunchMode: model.LaunchManaged,
 		Definition: model.ServiceDefinition{
 			Name: "checkout", Kind: model.ServiceProcess,
 			Command:     []string{os.Args[0], "-test.run=TestSupervisorServiceHelper", "--"},

@@ -137,6 +137,92 @@ func TestCLIZeroConfigurationLifecycle(t *testing.T) {
 	}
 }
 
+func TestCLIDebugModesArePortlessOwnedAndAdditive(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required for the debug lifecycle E2E test")
+	}
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm is required for the debug lifecycle E2E test")
+	}
+	binary := e2eBinary(t)
+	home, checkout := isolatedFixture(t, "debug-node")
+	defer cleanupInstallation(t, binary, home, checkout)
+	checkoutDirectory := filepath.Join(checkout, "apps", "checkout")
+	ordersDirectory := filepath.Join(checkout, "apps", "orders")
+
+	if output, err := runCLIAt(binary, home, checkout, "up", "--name", "debug-e2e", "--no-open", "--timeout", "2m"); err != nil {
+		t.Fatalf("initial managed up failed: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	upOutput, err := runCLIAt(binary, home, checkoutDirectory, "up", "--no-open", "--timeout", "2m")
+	if err != nil {
+		t.Fatalf("debug checkout up failed: %v\n%s\ndaemon log:\n%s", err, upOutput, readDaemonLog(home))
+	}
+	for _, expected := range []string{"debug-e2e/local", "development", "checkout", "debug", "Debuggers", "node-inspector"} {
+		if !strings.Contains(upOutput, expected) {
+			t.Fatalf("debug up output does not contain %q:\n%s", expected, upOutput)
+		}
+	}
+
+	checkoutService := waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchDebug)
+	if checkoutService.Debugger == nil || checkoutService.Debugger.State != "listening" || checkoutService.PID == 0 {
+		t.Fatalf("checkout debugger = %#v", checkoutService)
+	}
+	assertDebuggerReachable(t, checkoutService)
+	checkoutPID := checkoutService.PID
+
+	ordersUp, err := runCLIAt(binary, home, ordersDirectory, "up", "--no-open", "--timeout", "2m")
+	if err != nil {
+		t.Fatalf("debug orders up failed: %v\n%s", err, ordersUp)
+	}
+	checkoutService = waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchDebug)
+	ordersService := waitForCLIServiceMode(t, binary, home, ordersDirectory, "orders", model.ServiceReady, model.LaunchDebug)
+	if checkoutService.PID != checkoutPID || checkoutService.Debugger == nil || ordersService.Debugger == nil {
+		t.Fatalf("debug modes were not additive: checkout=%#v orders=%#v", checkoutService, ordersService)
+	}
+	assertDebuggerReachable(t, ordersService)
+	checkoutDebugPort := checkoutService.Debugger.Port
+	ordersPID, ordersDebugPort := ordersService.PID, ordersService.Debugger.Port
+
+	if output, err := runCLIAt(binary, home, checkoutDirectory, "daemon", "restart", "--timeout", "30s"); err != nil {
+		t.Fatalf("restart daemon with active debuggers: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	checkoutService = waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchDebug)
+	ordersService = waitForCLIServiceMode(t, binary, home, ordersDirectory, "orders", model.ServiceReady, model.LaunchDebug)
+	if checkoutService.PID != checkoutPID || checkoutService.Debugger == nil || checkoutService.Debugger.Port != checkoutDebugPort ||
+		ordersService.PID != ordersPID || ordersService.Debugger == nil || ordersService.Debugger.Port != ordersDebugPort {
+		t.Fatalf("debug processes were replaced instead of adopted: checkout=%#v orders=%#v", checkoutService, ordersService)
+	}
+	assertDebuggerReachable(t, checkoutService)
+	assertDebuggerReachable(t, ordersService)
+
+	response := applicationRequest(t, home, "checkout.local.debug-e2e.localhost", "/checkout", nil)
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"checkout":"accepted"`) {
+		t.Fatalf("debug service request = %s, err=%v\n%s", response.Status, readErr, body)
+	}
+
+	if output, err := runCLIAt(binary, home, ordersDirectory, "service", "manage", "orders", "--timeout", "2m"); err != nil {
+		t.Fatalf("return orders to managed mode: %v\n%s", err, output)
+	}
+	managedOrders := waitForCLIServiceMode(t, binary, home, ordersDirectory, "orders", model.ServiceReady, model.LaunchManaged)
+	if managedOrders.Debugger != nil {
+		t.Fatalf("orders debugger remained after manage: %#v", managedOrders)
+	}
+	checkoutService = waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchDebug)
+	if checkoutService.PID != checkoutPID {
+		t.Fatalf("managing orders restarted checkout: before=%d after=%d", checkoutPID, checkoutService.PID)
+	}
+
+	if output, err := runCLIAt(binary, home, checkoutDirectory, "up", "--managed", "--no-open", "--timeout", "2m"); err != nil {
+		t.Fatalf("return environment to managed mode: %v\n%s", err, output)
+	}
+	managedCheckout := waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchManaged)
+	if managedCheckout.Debugger != nil {
+		t.Fatalf("checkout debugger remained after managed up: %#v", managedCheckout)
+	}
+}
+
 func TestCLIFaultAndRecordingRoundTrip(t *testing.T) {
 	binary := e2eBinary(t)
 	home, checkout := isolatedFixture(t, "store-lite")
@@ -351,6 +437,57 @@ func assertReadyStoreLite(t *testing.T, environment model.Environment) {
 	sort.Strings(edges)
 	if strings.Join(edges, ",") != "checkout:inventory,checkout:orders" {
 		t.Fatalf("connections = %v", edges)
+	}
+}
+
+func waitForCLIServiceMode(t *testing.T, binary, home, directory, name string, status model.ServiceStatus, mode model.LaunchMode) model.Service {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	var last model.Service
+	var lastOutput string
+	for time.Now().Before(deadline) {
+		output, err := runCLIAt(binary, home, directory, "--json", "status")
+		lastOutput = output
+		if err == nil {
+			var environment model.Environment
+			if json.Unmarshal([]byte(output), &environment) == nil {
+				for _, service := range environment.Services {
+					if service.Name != name {
+						continue
+					}
+					last = service
+					if service.Status == status && service.LaunchMode == mode &&
+						(mode != model.LaunchDebug || service.Debugger != nil && service.Debugger.State == "listening") {
+						return service
+					}
+				}
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	t.Fatalf("service %s did not reach %s/%s: last=%#v output=%s", name, status, mode, last, lastOutput)
+	return model.Service{}
+}
+
+func assertDebuggerReachable(t *testing.T, service model.Service) {
+	t.Helper()
+	if service.Debugger == nil {
+		t.Fatal("service has no debugger")
+	}
+	probeContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(probeContext, http.MethodGet,
+		"http://"+service.Debugger.Host+":"+fmt.Sprint(service.Debugger.Port)+"/json/list", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("debugger for %s is not reachable: %v", service.Name, err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("debugger for %s returned %s", service.Name, response.Status)
 	}
 }
 

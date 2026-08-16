@@ -17,6 +17,36 @@ cd examples/store
 portless up
 ```
 
+Running from the project root starts every service normally. For the usual
+edit/debug loop, run `portless up` from the service directory instead. Portless
+starts the rest of the environment normally and starts that service itself with
+its discovered debugger enabled:
+
+```bash
+cd examples/store/apps/checkout
+portless up --no-open
+```
+
+The command prints checkout's Node inspector address. In your IDE, choose
+**Attach to Process** and select the matching Node process. There is no
+Portless-specific launch profile or environment file; Portless already launched
+the application with its complete generated environment and keeps the clean URL
+routed to it.
+
+To debug orders at the same time, leave checkout running, open a second IDE
+window (or debug session), and run:
+
+```bash
+cd examples/store/apps/orders
+portless up --no-open
+```
+
+Attach the second IDE to the matching orders process. Checkout and orders now
+both run under Portless in debug mode while inventory, PostgreSQL, and Valkey
+run normally. Use `portless service manage orders` to restart only
+orders normally, or `portless up --managed` to restart every debug service in
+normal managed mode.
+
 Portless automatically uses the first available engine and remembers that choice. Use `portless runtime status` to inspect both Docker and Podman, or `portless runtime use docker|podman` while environments are stopped to select one explicitly. No Compose file is created or used.
 
 After startup, run:

@@ -100,7 +100,7 @@ func gradleCandidate(workspace spec.Workspace, file, directory string, encoded [
 		health.Kind = "http"
 		health.Path = "/actuator/health"
 	}
-	return springCandidate(file, directory, buildRoot, spec.ServiceName(nameSource), []string{executable, task}, health, "Spring Boot Gradle plugin found"), true, nil
+	return springCandidate(file, directory, buildRoot, spec.ServiceName(nameSource), []string{executable, task}, model.DebugSpringGradle, health, "Spring Boot Gradle plugin found"), true, nil
 }
 
 func mavenCandidate(workspace spec.Workspace, file, directory string, encoded []byte) (spec.Candidate, bool, error) {
@@ -149,14 +149,15 @@ func mavenCandidate(workspace spec.Workspace, file, directory string, encoded []
 		health.Kind = "http"
 		health.Path = "/actuator/health"
 	}
-	return springCandidate(file, directory, buildRoot, spec.ServiceName(nameSource), command, health, "Spring Boot Maven configuration found"), true, nil
+	return springCandidate(file, directory, buildRoot, spec.ServiceName(nameSource), command, model.DebugSpringMaven, health, "Spring Boot Maven configuration found"), true, nil
 }
 
-func springCandidate(file, directory, runDirectory, name string, command []string, health model.HealthCheck, explanation string) spec.Candidate {
+func springCandidate(file, directory, runDirectory, name string, command []string, launcher model.DebugLauncher, health model.HealthCheck, explanation string) spec.Candidate {
 	return spec.Candidate{
 		Key: directory, Directory: directory, RunDirectory: runDirectory,
 		Definition: model.ServiceDefinition{
 			Name: name, Kind: model.ServiceProcess, Framework: "spring-boot", Command: command,
+			Debug:           &model.DebugCapability{Adapter: model.DebugJDWP, Launcher: launcher, Command: append([]string{}, command...)},
 			PortEnvironment: "SERVER_PORT", Required: true, Health: health,
 			Evidence: []model.Evidence{{File: file, Explanation: explanation, Confidence: "high"}},
 		},

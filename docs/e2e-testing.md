@@ -43,6 +43,9 @@ The CLI E2E suite protects these product contracts:
 
 - zero-configuration discovery and a complete `up`, request, inspect, logs,
   `down` lifecycle;
+- context-aware startup from a nested service directory, Portless-owned Node
+  inspectors, additive debug modes, independent return to normal mode, and
+  clean environment-wide reset with `up --managed`;
 - human-readable default output, valid `--json` output, grouped help, and
   useful help for incomplete commands;
 - traffic detail capture and secret-header redaction;
@@ -65,6 +68,8 @@ The Playwright suite protects these browser journeys:
 - environment creation through the modal without duplicating project sources;
 - browser theme persistence;
 - services, copyable endpoints, topology edges, service details, and logs;
+- starting a real Portless-owned Node debugger from the service drawer,
+  displaying its attach endpoint, and returning the service to normal mode;
 - captured request and response inspection with redaction;
 - recording and fault workflows;
 - environment stop/start controls; and
@@ -94,6 +99,9 @@ client -> checkout -> inventory
 
 The multi-source test materializes those applications as separate temporary Go
 modules so it exercises project compilation rather than a monorepo shortcut.
+The `tests/fixtures/debug-node` workspace provides two small NestJS-shaped Node
+services with safe direct-node launch commands. It verifies real inspector
+listeners and process ownership without installing application dependencies.
 
 ## Destructive relay integration
 

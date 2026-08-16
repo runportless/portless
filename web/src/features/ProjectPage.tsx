@@ -117,13 +117,13 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
       <StatePanel title="REVISION" value={environment.revision} detail={`updated · ${relativeTime(environment.updatedAt)} ago`} />
     </div>
     <section className="panel services-panel">
-      <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} managed workloads</small></div>
-      <div className="table-row table-row--header service-row"><span /><span>Name</span><span>Provider</span><span>State</span><span>Restarts</span><span>Requests</span><span>P95</span><span>Endpoint / reason</span><span /></div>
+      <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} workloads</small></div>
+      <div className="table-row table-row--header service-row"><span /><span>Name</span><span>Mode</span><span>State</span><span>Restarts</span><span>Requests</span><span>P95</span><span>Endpoint / reason</span><span /></div>
       {services.items.map((service) => {
         const endpoint = overviewServiceEndpoint(environment, service)
         const copied = copiedEndpoint === service.name
         return <div className="table-row service-row service-row--interactive" key={service.name} onClick={() => onService(service)}>
-          <StatusMark status={service.status} label={false} /><strong>{service.name}</strong><span>{bindingFor(environment, service.name)?.provider || service.kind}</span><StatusMark status={service.status} /><span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span><span>{service.recentRequests || '—'}</span><span>{service.p95Millis ? `${service.p95Millis}ms` : '—'}</span><span className="service-list-endpoint"><span className="truncate muted" title={service.reason || endpoint || 'not running'}>{service.reason || endpoint || 'not running'}</span>{!service.reason && endpoint && <button className={`service-copy-button${copied ? ' is-copied' : ''}`} type="button" aria-label={`Copy ${service.name} endpoint`} title={copied ? 'Copied' : 'Copy endpoint'} onClick={(event) => void copyServiceEndpoint(event, service.name, endpoint)}><CopyIcon copied={copied} /></button>}</span><button className="row-action" type="button" onClick={(event) => { event.stopPropagation(); onService(service) }}>INSPECT</button>
+          <StatusMark status={service.status} label={false} /><strong>{service.name}</strong><span>{displayLaunchMode(environment, service)}</span><StatusMark status={service.status} /><span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span><span>{service.recentRequests || '—'}</span><span>{service.p95Millis ? `${service.p95Millis}ms` : '—'}</span><span className="service-list-endpoint"><span className="truncate muted" title={service.reason || endpoint || 'not running'}>{service.reason || endpoint || 'not running'}</span>{!service.reason && endpoint && <button className={`service-copy-button${copied ? ' is-copied' : ''}`} type="button" aria-label={`Copy ${service.name} endpoint`} title={copied ? 'Copied' : 'Copy endpoint'} onClick={(event) => void copyServiceEndpoint(event, service.name, endpoint)}><CopyIcon copied={copied} /></button>}</span><button className="row-action" type="button" onClick={(event) => { event.stopPropagation(); onService(service) }}>INSPECT</button>
         </div>
       })}
       <PanelPagination label="services" pagination={services} onPage={setServicePage} />
@@ -555,20 +555,22 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
   }, [fullScreen, onClose])
-  const action = async (name: 'restart' | 'stop' | 'start') => {
+  const action = async (name: 'restart' | 'stop' | 'start' | 'debug' | 'manage') => {
     setBusy(name)
     try { await api<Operation>(`${base}/${name}`, { method: 'POST' }); onChanged() } finally { setBusy('') }
   }
   const endpoints = serviceEndpoints(service, bindingFor(environment, service.name))
   const httpEndpoint = publicEndpoint(service, 'http')
+  const localProcess = service.kind === 'process' && bindingFor(environment, service.name)?.provider === 'local'
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
     <aside className={`drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
-      <div className="drawer-actions"><button className="button button--primary" onClick={() => action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy || (service.status === 'ready' ? 'RESTART' : 'START')}</button><button className="button" onClick={() => action('stop')} disabled={!!busy || service.status === 'stopped'}>STOP</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
+      <div className="drawer-actions">{localProcess && service.debug && <button className="button button--primary" onClick={() => action(service.launchMode === 'debug' ? 'manage' : 'debug')} disabled={!!busy}>{busy || (service.launchMode === 'debug' ? 'RUN NORMALLY' : 'DEBUG')}</button>}<button className={`button${!localProcess || !service.debug ? ' button--primary' : ''}`} onClick={() => action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{service.status === 'ready' ? 'RESTART' : 'START'}</button><button className="button" onClick={() => action('stop')} disabled={!!busy || service.status === 'stopped'}>STOP</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
       <nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>
       <div className="drawer-content">
         {drawerTab === 'details' && <>
-          <div className="detail-grid"><Detail label="KIND" value={service.framework || service.resource?.type || service.kind} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div>
+          <div className="detail-grid"><Detail label="KIND" value={service.framework || service.resource?.type || service.kind} /><Detail label="MODE" value={displayLaunchMode(environment, service)} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div>
+          {service.debugger && <section className="drawer-section"><div className="eyebrow">DEBUGGER</div><pre>{service.debugger.adapter} · {service.debugger.host}:{service.debugger.port}</pre><small>{service.debugger.state}. Use your IDE's Attach to Process action and choose the matching Node or JVM process.</small></section>}
           <section className="drawer-section service-endpoints"><div className="eyebrow">ENDPOINTS</div><div className="service-endpoint-list">{endpoints.map((endpoint) => <div className="service-endpoint" key={`${endpoint.label}:${endpoint.value}`}><span>{endpoint.label}</span>{endpoint.href ? <a href={endpoint.href} target="_blank" rel="noreferrer">{endpoint.value} ↗</a> : <code>{endpoint.value}</code>}<small>{endpoint.detail}</small></div>)}{endpoints.length === 0 && <p className="muted">No endpoint is available while this service is stopped.</p>}</div></section>
           <section className="drawer-section"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.resource?.type} ${service.resource?.version}`}</pre></section>
           <section className="drawer-section"><div className="eyebrow">HEALTH</div><p><StatusMark status={service.status} /> {service.health.kind}{service.health.path ? ` ${service.health.path}` : ''}</p><small>{service.reason || 'No current readiness error.'}</small></section>
@@ -883,6 +885,11 @@ export function TimelinePanel({ timeline }: { timeline: TimelineEvent[] }) {
 
 function bindingFor(environment: Environment, service: string) {
   return environment.bindings?.find((binding) => binding.service === service)
+}
+
+function displayLaunchMode(environment: Environment, service: Service) {
+  if (service.kind !== 'process' || bindingFor(environment, service.name)?.provider !== 'local') return '—'
+  return service.launchMode || 'managed'
 }
 
 function environmentUIPath(environment: Environment, tab: Tab, edge?: string, protocol?: 'http' | 'tcp') {

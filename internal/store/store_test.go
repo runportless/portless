@@ -108,6 +108,7 @@ func TestRecoverableRuntimeOwnershipAndProxyPortsPersist(t *testing.T) {
 		StartedAt: &started, RestartCount: 2, LogPath: "/private/logs", PrivateRunKey: "run-key",
 		OwnerInstanceID: "daemon-two", SupervisorSocket: "/tmp/runner.sock",
 		SupervisorState: "/private/state.json", SupervisorPID: 1200, ObservedAt: &observed,
+		LaunchMode: model.LaunchDebug, Debugger: &model.DebuggerRuntime{Adapter: model.DebugNodeInspector, Host: "127.0.0.1", Port: 43123, State: "listening"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +116,15 @@ func TestRecoverableRuntimeOwnershipAndProxyPortsPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.OwnerInstanceID != "daemon-two" || runtime.SupervisorSocket != "/tmp/runner.sock" || runtime.SupervisorState != "/private/state.json" || runtime.Generation != 4 {
+	if runtime.OwnerInstanceID != "daemon-two" || runtime.SupervisorSocket != "/tmp/runner.sock" || runtime.SupervisorState != "/private/state.json" || runtime.Generation != 4 || runtime.LaunchMode != model.LaunchDebug || runtime.Debugger == nil || runtime.Debugger.Port != 43123 {
 		t.Fatalf("runtime ownership was not persisted: %#v", runtime)
+	}
+	if err := controlStore.SetServiceDebuggerState(ctx, "billing/local", "checkout", "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err = controlStore.ServiceRuntime(ctx, "billing/local", "checkout")
+	if err != nil || runtime.Debugger == nil || runtime.Debugger.State != "stopped" {
+		t.Fatalf("debugger state = %#v, err=%v", runtime.Debugger, err)
 	}
 	if err := controlStore.SaveConnectionRuntime(ctx, "billing/local", ConnectionRuntime{
 		Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, SourceGeneration: 4,
@@ -194,7 +202,18 @@ func TestContextSelectionCanBeClearedIdempotently(t *testing.T) {
 	if selected, err := controlStore.ContextSelection(ctx, sourcePath); err != nil || selected.Name != "local" {
 		t.Fatalf("selection = %#v, err = %v", selected, err)
 	}
-	cleared, err := controlStore.ClearContextSelection(ctx, sourcePath)
+	nestedPath := filepath.Join(sourcePath, "apps", "checkout")
+	if err := controlStore.SetContextSelection(ctx, nestedPath, "billing", "local"); err != nil {
+		t.Fatalf("select environment from nested service path: %v", err)
+	}
+	if selected, err := controlStore.ContextSelection(ctx, nestedPath); err != nil || selected.Name != "local" {
+		t.Fatalf("nested selection = %#v, err = %v", selected, err)
+	}
+	matching, err := controlStore.EnvironmentsByPath(ctx, nestedPath)
+	if err != nil || len(matching) != 1 || matching[0].Project != "billing" {
+		t.Fatalf("nested path environments = %#v, err = %v", matching, err)
+	}
+	cleared, err := controlStore.ClearContextSelection(ctx, nestedPath)
 	if err != nil || !cleared {
 		t.Fatalf("first clear = %v, %v; want true, nil", cleared, err)
 	}

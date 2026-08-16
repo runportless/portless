@@ -104,7 +104,7 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 	}
 
 	upOutput, err := runCLIAt(binary, home, checkout,
-		"--env", "distributed-store/qa-assisted", "up", "--no-open", "--timeout", "2m",
+		"--env", "distributed-store/qa-assisted", "up", "--managed", "--no-open", "--timeout", "2m",
 	)
 	if err != nil {
 		t.Fatalf("start mixed-provider environment: %v\n%s\ndaemon log:\n%s", err, upOutput, readDaemonLog(home))

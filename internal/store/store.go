@@ -84,6 +84,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"supervisor_pid", "INTEGER NOT NULL DEFAULT 0"},
 		{"container_name", "TEXT NOT NULL DEFAULT ''"},
 		{"observed_at", "TEXT"},
+		{"launch_mode", "TEXT NOT NULL DEFAULT 'managed'"},
+		{"debug_adapter", "TEXT NOT NULL DEFAULT ''"},
+		{"debug_host", "TEXT NOT NULL DEFAULT ''"},
+		{"debug_port", "INTEGER NOT NULL DEFAULT 0"},
+		{"debug_state", "TEXT NOT NULL DEFAULT ''"},
 		{"listen_ip", "TEXT NOT NULL DEFAULT '127.0.0.1'"},
 		{"dns_name", "TEXT NOT NULL DEFAULT ''"},
 	} {
@@ -216,6 +221,11 @@ CREATE TABLE IF NOT EXISTS service_runtime (
   supervisor_pid INTEGER NOT NULL DEFAULT 0,
   container_name TEXT NOT NULL DEFAULT '',
   observed_at TEXT,
+	launch_mode TEXT NOT NULL DEFAULT 'managed',
+	debug_adapter TEXT NOT NULL DEFAULT '',
+	debug_host TEXT NOT NULL DEFAULT '',
+	debug_port INTEGER NOT NULL DEFAULT 0,
+	debug_state TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(environment_key, service_name)
 );
 

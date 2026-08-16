@@ -10,6 +10,8 @@ export interface E2EState {
   project: string
   environment: string
   applicationHost: string
+  debugCheckout: string
+  debugProject: string
 }
 
 export function stateFile() {

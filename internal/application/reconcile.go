@@ -12,6 +12,7 @@ import (
 
 	"github.com/portless-run/portless/internal/model"
 	"github.com/portless-run/portless/internal/networking"
+	"github.com/portless-run/portless/internal/runtime/debuglaunch"
 	"github.com/portless-run/portless/internal/runtime/health"
 	"github.com/portless-run/portless/internal/runtime/supervisor"
 	"github.com/portless-run/portless/internal/store"
@@ -24,15 +25,15 @@ type ReconciliationReport struct {
 
 func (s *Service) environmentRuntimeVerified(ctx context.Context, environment model.Environment) bool {
 	if s.daemonInstanceID == "" {
-		return environment.Status == model.EnvironmentHealthy
+		return environment.Status == model.EnvironmentHealthy || environment.Status == model.EnvironmentDevelopment
 	}
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	for _, service := range environment.Services {
-		if service.Status != model.ServiceReady {
+		runtime, err := s.store.ServiceRuntime(ctx, scope, service.Name)
+		if err != nil || runtime.OwnerInstanceID != s.daemonInstanceID {
 			return false
 		}
-		runtime, err := s.store.ServiceRuntime(ctx, scope, service.Name)
-		if err != nil || runtime.OwnerInstanceID != s.daemonInstanceID || !s.proxy.HasTarget(scope, service.Name) {
+		if service.Status != model.ServiceReady || !s.proxy.HasTarget(scope, service.Name) {
 			return false
 		}
 	}
@@ -103,7 +104,7 @@ func (s *Service) Reconcile(ctx context.Context) (ReconciliationReport, error) {
 		if currentErr != nil {
 			return report, currentErr
 		}
-		if current.Status == model.EnvironmentHealthy {
+		if current.Status == model.EnvironmentHealthy || current.Status == model.EnvironmentDevelopment {
 			report.Recovered = append(report.Recovered, scope)
 		} else {
 			report.Unverifiable = append(report.Unverifiable, scope+": "+current.Reason)
@@ -172,7 +173,6 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 			s.proxy.RemoveTarget(scope, serviceDefinition.Name)
 		}
 	}
-
 	current, err := s.store.Environment(ctx, environment.Project, environment.Name)
 	if err != nil {
 		return err
@@ -248,7 +248,7 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	if finalErr != nil {
 		return finalErr
 	}
-	if final.Status != model.EnvironmentHealthy {
+	if final.Status != model.EnvironmentHealthy && final.Status != model.EnvironmentDevelopment {
 		_, _ = s.timeline(ctx, scope, "daemon", "environment.reconciled", scope, "warning", "Runtime recovery completed with unavailable services", map[string]any{"daemonInstance": s.daemonInstanceID})
 	}
 	return nil
@@ -309,6 +309,10 @@ func (s *Service) reconcileProcess(ctx context.Context, scope string, definition
 				if started == nil && !persisted.StartedAt.IsZero() {
 					started = &persisted.StartedAt
 				}
+				debugger := cloneDebugger(runtime.Debugger)
+				if debugger != nil {
+					debugger.State = "stopped"
+				}
 				s.proxy.RemoveTarget(scope, definition.Name)
 				return s.store.SetServiceRuntime(ctx, scope, definition.Name, store.ServiceRuntimeUpdate{
 					Status: status, Reason: reason, Generation: runtime.Generation, PID: persisted.PID,
@@ -316,6 +320,7 @@ func (s *Service) reconcileProcess(ctx context.Context, scope string, definition
 					LogPath: persisted.LogDirectory, PrivateRunKey: runtime.PrivateRunKey,
 					OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: runtime.SupervisorSocket,
 					SupervisorState: runtime.SupervisorState, SupervisorPID: persisted.SupervisorPID, ObservedAt: &now,
+					LaunchMode: runtime.LaunchMode, Debugger: debugger,
 				})
 			}
 		}
@@ -328,12 +333,22 @@ func (s *Service) reconcileProcess(ctx context.Context, scope string, definition
 	if live.Scope != scope || live.Service != definition.Name || live.Generation != runtime.Generation {
 		return errors.New("supervisor identity does not match persisted service run")
 	}
+	if live.LaunchMode != runtime.LaunchMode || !debuggersEqual(live.Debugger, runtime.Debugger) {
+		return errors.New("supervisor launch mode does not match persisted service run")
+	}
 	result, err := s.processes.Attach(probeCtx, scope, definition.Name, runtime.Generation, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
 	if err != nil {
 		return err
 	}
 	if err := health.Wait(probeCtx, result.Port, definition.Health); err != nil {
 		return err
+	}
+	debugger := cloneDebugger(result.Debugger)
+	if debugger != nil {
+		if err := debuglaunch.Wait(probeCtx, *debugger); err != nil {
+			return err
+		}
+		debugger.State = "listening"
 	}
 	s.proxy.SetTarget(scope, definition.Name, result.Port)
 	now := time.Now().UTC()
@@ -346,8 +361,15 @@ func (s *Service) reconcileProcess(ctx context.Context, scope string, definition
 		StartedAt: started, RestartCount: runtime.RestartCount, LogPath: result.LogDirectory,
 		PrivateRunKey: runtime.PrivateRunKey, OwnerInstanceID: s.daemonInstanceID,
 		SupervisorSocket: result.SupervisorSocket, SupervisorState: result.SupervisorState,
-		SupervisorPID: result.SupervisorPID, ObservedAt: &now,
+		SupervisorPID: result.SupervisorPID, ObservedAt: &now, LaunchMode: result.LaunchMode, Debugger: debugger,
 	})
+}
+
+func debuggersEqual(left, right *model.DebuggerRuntime) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Adapter == right.Adapter && left.Host == right.Host && left.Port == right.Port
 }
 
 func recoveredTerminalStatus(state string) (model.ServiceStatus, bool) {
@@ -473,6 +495,9 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 						detail = "supervisor identity does not match persisted service run"
 					}
 					reasons = append(reasons, scope+"/"+service.Name+": "+detail)
+				}
+				if probeErr == nil && (status.LaunchMode != runtime.LaunchMode || !debuggersEqual(status.Debugger, runtime.Debugger)) {
+					reasons = append(reasons, scope+"/"+service.Name+": supervisor launch mode does not match persisted service run")
 				}
 			case model.ProviderContainer:
 				if runtime.ContainerName == "" {

@@ -318,7 +318,7 @@ func (c *CLI) failure(writer io.Writer, value string) string {
 
 func (c *CLI) state(writer io.Writer, value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "healthy", "ready", "running", "active", "succeeded", "passed", "pass", "selected":
+	case "healthy", "development", "ready", "attached", "running", "active", "succeeded", "passed", "pass", "selected":
 		return c.success(writer, value)
 	case "degraded", "starting", "stopping", "warning", "warn", "outdated", "installed; service stopped", "running; daemon unavailable":
 		return c.warning(writer, value)

@@ -62,6 +62,8 @@ type upOptions struct {
 	timeout time.Duration
 	open    bool
 	wait    bool
+	debug   string
+	managed bool
 }
 
 type downOptions struct {
@@ -440,8 +442,14 @@ func (c *CLI) upCommand() *cobra.Command {
 	noOpen, noWait := false, false
 	command := &cobra.Command{
 		Use:   "up",
-		Short: "Start an environment",
-		Args:  usageArgs(cobra.NoArgs),
+		Short: "Prepare an environment for development",
+		Long: "Start the environment and prepare it for the way you are working. " +
+			"From a registered service directory, Portless starts that service with its debugger enabled and starts the rest normally. " +
+			"From a project directory that does not identify one service, it preserves existing launch modes and starts missing services normally.",
+		Example: "  portless up\n" +
+			"  portless up --debug checkout\n" +
+			"  portless up --managed",
+		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			effective := options
 			if noOpen {
@@ -459,6 +467,10 @@ func (c *CLI) upCommand() *cobra.Command {
 	flags.BoolVar(&options.open, "open", options.open, "open the dashboard")
 	flags.BoolVar(&noOpen, "no-open", false, "do not open a browser")
 	flags.BoolVar(&noWait, "no-wait", false, "return after the operation is accepted")
+	flags.StringVar(&options.debug, "debug", "", "start one service with its discovered debugger enabled")
+	flags.BoolVar(&options.managed, "managed", false, "start every service in normal managed mode")
+	command.MarkFlagsMutuallyExclusive("debug", "managed")
+	_ = command.RegisterFlagCompletionFunc("debug", c.complete(completionServices))
 	command.MarkFlagsMutuallyExclusive("open", "no-open")
 	return command
 }
@@ -634,11 +646,17 @@ func (c *CLI) serviceCommand() *cobra.Command {
 	show.ValidArgsFunction = c.complete(completionServices)
 	config.ValidArgsFunction = c.complete(completionServices)
 	command.AddCommand(list, show, config)
-	for _, action := range []string{"start", "stop", "restart"} {
+	for _, action := range []string{"start", "stop", "restart", "debug", "manage"} {
 		action := action
 		options := &serviceActionOptions{wait: true, timeout: 2 * time.Minute}
 		noWait := false
-		child := &cobra.Command{Use: action + " <service>", Short: strings.ToUpper(action[:1]) + action[1:] + " a service", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+		short := strings.ToUpper(action[:1]) + action[1:] + " a service"
+		if action == "manage" {
+			short = "Restart a service in normal managed mode"
+		} else if action == "debug" {
+			short = "Restart a service with its debugger enabled"
+		}
+		child := &cobra.Command{Use: action + " <service>", Short: short, Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 			effective := *options
 			if noWait {
 				effective.wait = false
