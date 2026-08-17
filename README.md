@@ -41,7 +41,7 @@ Processes and managed resource containers still receive private dynamic runtime 
 - Context-aware debug startup: from a supported service directory, `portless up` starts that service under Portless with its debugger enabled and starts the rest normally.
 - Generic declarative Docker Engine or Podman networks, named volumes, generated local credentials, commands, and TCP/exec readiness. Docker Compose is not used.
 - Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
-- Unified, filtered HTTP/TCP traffic inspection with redacted request/response headers and durable detail lookup through recordings.
+- Unified, filtered HTTP/TCP traffic inspection with lossless request/response headers and durable detail lookup through recordings.
 - Named, bounded local recordings and JSON export.
 - Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and optional expiry.
 - SQLite WAL state, project timeline, CLI bearer auth, one-use browser claims, session cookies, CSRF, Origin checks, and strict control/application Host separation.
@@ -390,7 +390,7 @@ portless up --no-open
 portless ui
 ```
 
-Tests cover the Cobra command tree and completion, naming and non-leakage, multi-source compilation, isolated environment state, provider and worktree switching, SQLite idempotency, browser claims and CSRF, dependency pruning and ordering, process lifecycle, control/application host isolation, remote read-only enforcement, proxy traffic redaction, recording persistence, and fault application.
+Tests cover the Cobra command tree and completion, naming and non-leakage, multi-source compilation, isolated environment state, provider and worktree switching, SQLite idempotency, browser claims and CSRF, dependency pruning and ordering, process lifecycle, control/application host isolation, remote read-only enforcement, lossless proxy traffic capture, recording persistence, and fault application.
 
 The E2E suites run the compiled CLI, real daemon and supervisors, real fixture
 services, edge proxies, and embedded UI in an isolated `PORTLESS_HOME`.

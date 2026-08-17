@@ -49,6 +49,12 @@ func TestCLIZeroConfigurationLifecycle(t *testing.T) {
 	}
 	assertReadyStoreLite(t, environment)
 
+	rootResponse := applicationRequest(t, home, "checkout.local.store-e2e.localhost", "/", nil)
+	rootResponse.Body.Close()
+	if rootResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("checkout root response = %s, want 404", rootResponse.Status)
+	}
+
 	response := applicationRequest(t, home, "checkout.local.store-e2e.localhost", "/checkout?sku=coffee-mug&quantity=2", map[string]string{
 		"Authorization": "Bearer e2e-secret",
 		"X-E2E-Trace":   "visible",
@@ -74,10 +80,21 @@ func TestCLIZeroConfigurationLifecycle(t *testing.T) {
 	if err := json.Unmarshal([]byte(trafficOutput), &traffic); err != nil {
 		t.Fatalf("decode traffic: %v\n%s", err, trafficOutput)
 	}
-	if traffic.Project != "store-e2e" || traffic.Environment != "local" || len(traffic.Traffic) != 1 {
+	if traffic.Project != "store-e2e" || traffic.Environment != "local" || len(traffic.Traffic) != 2 {
 		t.Fatalf("unexpected external traffic: %#v", traffic)
 	}
-	eventOutput, err := runCLIAt(binary, home, checkout, "--json", "traffic", "show", fmt.Sprint(traffic.Traffic[0].Sequence))
+	var checkoutTraffic *model.TrafficEvent
+	paths := make(map[string]int)
+	for index := range traffic.Traffic {
+		paths[traffic.Traffic[index].Path] = traffic.Traffic[index].Status
+		if traffic.Traffic[index].Path == "/checkout" {
+			checkoutTraffic = &traffic.Traffic[index]
+		}
+	}
+	if paths["/"] != http.StatusNotFound || paths["/checkout"] != http.StatusOK || checkoutTraffic == nil {
+		t.Fatalf("external traffic did not preserve distinct request paths: %#v", traffic.Traffic)
+	}
+	eventOutput, err := runCLIAt(binary, home, checkout, "--json", "traffic", "show", fmt.Sprint(checkoutTraffic.Sequence))
 	if err != nil {
 		t.Fatalf("show traffic event: %v\n%s", err, eventOutput)
 	}
@@ -88,8 +105,8 @@ func TestCLIZeroConfigurationLifecycle(t *testing.T) {
 	if event.Method != http.MethodGet || event.Path != "/checkout" || event.Status != http.StatusOK {
 		t.Fatalf("unexpected traffic detail: %#v", event)
 	}
-	if event.RequestHeaders["Authorization"] != "[REDACTED]" || event.RequestHeaders["X-E2e-Trace"] != "visible" {
-		t.Fatalf("traffic headers were not safely captured: %#v", event.RequestHeaders)
+	if event.RequestHeaders["Authorization"] != "Bearer e2e-secret" || event.RequestHeaders["X-E2e-Trace"] != "visible" {
+		t.Fatalf("traffic headers were not captured losslessly: %#v", event.RequestHeaders)
 	}
 	if !strings.Contains(event.ResponseBody, `"checkout":"accepted"`) {
 		t.Fatalf("traffic response body was not captured: %q", event.ResponseBody)

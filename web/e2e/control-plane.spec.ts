@@ -145,7 +145,7 @@ test('shows captured request and response details', async ({ page }) => {
 
   const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
   await expect(detail).toContainText('GET /checkout')
-  await expect(detail.locator('.traffic-message--request')).toContainText('[REDACTED]')
+  await expect(detail.locator('.traffic-message--request')).toContainText('Bearer browser-e2e-secret')
   await expect(detail.locator('.traffic-message--request')).toContainText('visible')
   await expect(detail.locator('.traffic-message--response')).toContainText('"checkout": "accepted"')
 })

@@ -389,7 +389,7 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
 		Path: request.URL.EscapedPath(), Status: status, DurationMS: completed.Sub(started).Milliseconds(),
 		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
-		RequestHeaders: redactHeaders(request.Header), ResponseHeaders: redactHeaders(responseHeaders),
+		RequestHeaders: captureHeaders(request.Header), ResponseHeaders: captureHeaders(responseHeaders),
 		RequestBody: requestCapture.text(), ResponseBody: responseCapture.text(),
 		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
 	}
@@ -703,15 +703,10 @@ func removeHopHeaders(headers http.Header) {
 	}
 }
 
-func redactHeaders(headers http.Header) map[string]string {
+func captureHeaders(headers http.Header) map[string]string {
 	result := make(map[string]string)
 	for name, values := range headers {
 		canonical := textproto.CanonicalMIMEHeaderKey(name)
-		lower := strings.ToLower(canonical)
-		if strings.Contains(lower, "authorization") || strings.Contains(lower, "cookie") || strings.Contains(lower, "token") || strings.Contains(lower, "api-key") || strings.Contains(lower, "secret") {
-			result[canonical] = "[REDACTED]"
-			continue
-		}
 		result[canonical] = strings.Join(values, ", ")
 	}
 	return result

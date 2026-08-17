@@ -5,11 +5,13 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -66,6 +68,94 @@ func TestForcedResetRecoversActiveIncompatibleTopology(t *testing.T) {
 	if len(projects.Projects) != 0 {
 		t.Fatalf("reset left %d projects behind: %s", len(projects.Projects), projectsOutput)
 	}
+}
+
+func TestForcedResetTerminatesRealSupervisorsWithIncompatibleTopology(t *testing.T) {
+	binary := e2eBinary(t)
+	home, checkout := isolatedFixture(t, "store-lite")
+	defer cleanupInstallation(t, binary, home, checkout)
+
+	if output, err := runCLIAt(binary, home, checkout, "up", "--name", "reset-live-e2e", "--no-open", "--timeout", "2m"); err != nil {
+		t.Fatalf("start environment: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	environment := environmentStatus(t, binary, home, checkout)
+	var pids []int
+	for _, service := range environment.Services {
+		if service.PID == 0 {
+			t.Fatalf("service %s has no supervisor PID before reset: %#v", service.Name, service)
+		}
+		pids = append(pids, service.PID)
+	}
+	corruptStoredTopology(t, home, environment)
+
+	if output, err := runCLIAt(binary, home, checkout, "down", "--all"); err == nil {
+		t.Fatalf("down --all unexpectedly decoded the legacy model:\n%s", output)
+	} else if !strings.Contains(output, "INCOMPATIBLE_STATE") || !strings.Contains(output, "portless reset --force --yes") {
+		t.Fatalf("down --all did not provide the forced-reset recovery path: %v\n%s", err, output)
+	}
+
+	output, err := runCLIAt(binary, home, checkout, "reset", "--force", "--yes")
+	if err != nil {
+		t.Fatalf("forced reset with active supervisors failed: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	if !strings.Contains(output, "Portless reset complete.") {
+		t.Fatalf("forced reset did not report completion:\n%s", output)
+	}
+	waitForProcessExit(t, pids...)
+
+	projectsOutput, err := runCLIAt(binary, home, checkout, "--json", "project", "list")
+	if err != nil {
+		t.Fatalf("list projects after live forced reset: %v\n%s", err, projectsOutput)
+	}
+	var projects struct {
+		Projects []json.RawMessage `json:"projects"`
+	}
+	if err := json.Unmarshal([]byte(projectsOutput), &projects); err != nil || len(projects.Projects) != 0 {
+		t.Fatalf("forced reset retained project state: err=%v output=%s", err, projectsOutput)
+	}
+}
+
+func corruptStoredTopology(t *testing.T, home string, environment model.Environment) {
+	t.Helper()
+	legacy := model.ProjectModel{SuggestedName: environment.Project}
+	for _, service := range environment.Services {
+		legacy.Services = append(legacy.Services, service.ServiceDefinition)
+	}
+	legacy.Connections = append(legacy.Connections, environment.Connections...)
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlStore, err := store.Open(filepath.Join(home, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	if _, err := controlStore.DB().ExecContext(context.Background(), `UPDATE projects SET model_json = ?`, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.DB().ExecContext(context.Background(), `UPDATE environments SET model_json = ?`, encoded); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForProcessExit(t *testing.T, pids ...int) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		var alive []int
+		for _, pid := range pids {
+			err := syscall.Kill(pid, syscall.Signal(0))
+			if err == nil || errors.Is(err, syscall.EPERM) {
+				alive = append(alive, pid)
+			}
+		}
+		if len(alive) == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Portless-owned processes survived forced reset: %v", pids)
 }
 
 func readDaemonLog(home string) string {

@@ -48,7 +48,7 @@ The CLI E2E suite protects these product contracts:
   clean environment-wide reset with `up --managed`;
 - human-readable default output, valid `--json` output, grouped help, and
   useful help for incomplete commands;
-- traffic detail capture and secret-header redaction;
+- lossless traffic detail and header capture;
 - bounded recordings and persistent fault creation, matching, disable,
   re-enable, export, and deletion;
 - authenticated daemon restart with adoption of the original service
@@ -70,7 +70,7 @@ The Playwright suite protects these browser journeys:
 - services, copyable endpoints, topology edges, service details, and logs;
 - starting a real Portless-owned Node debugger from the service drawer,
   displaying its attach endpoint, and returning the service to normal mode;
-- captured request and response inspection with redaction;
+- captured request and response inspection with complete headers;
 - recording and fault workflows;
 - environment stop/start controls; and
 - daemon details, full-screen drawer behavior, restart, reconnect, and runtime

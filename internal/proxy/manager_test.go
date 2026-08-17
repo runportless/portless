@@ -51,7 +51,7 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 		t.Fatalf("response code=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 	traffic := broker.RecentTraffic(scope, 10)
-	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].RequestHeaders["Authorization"] != "[REDACTED]" || traffic[0].RequestHeaders["X-Trace"] != "visible" || traffic[0].ResponseHeaders["Set-Cookie"] != "[REDACTED]" || traffic[0].ResponseHeaders["X-Upstream"] != "checkout" || traffic[0].RequestBody != `{"sku":"coffee"}` || traffic[0].ResponseBody != `{"created":true}` {
+	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].RequestHeaders["Authorization"] != "Bearer should-not-leak" || traffic[0].RequestHeaders["X-Trace"] != "visible" || traffic[0].ResponseHeaders["Set-Cookie"] != "session=should-not-leak" || traffic[0].ResponseHeaders["X-Upstream"] != "checkout" || traffic[0].RequestBody != `{"sku":"coffee"}` || traffic[0].ResponseBody != `{"created":true}` {
 		t.Fatalf("unexpected traffic %#v", traffic)
 	}
 

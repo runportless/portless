@@ -14,7 +14,7 @@ describe('environment topology', () => {
       startedAt: '2026-08-13T12:00:00Z', completedAt: '2026-08-13T12:00:00.024Z',
       method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
       durationMs: 24, requestBytes: 42, responseBytes: 118,
-      requestHeaders: { Authorization: '[REDACTED]', 'Content-Type': 'application/json' },
+      requestHeaders: { Authorization: 'Bearer local-dev-token', 'Content-Type': 'application/json' },
       responseHeaders: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-7' },
       requestBody: '{"sku":"coffee","quantity":2}',
       responseBody: '{"order":42,"state":"created"}',
@@ -26,7 +26,8 @@ describe('environment topology', () => {
     expect(markup).toContain('>REQUEST<')
     expect(markup).toContain('POST /orders')
     expect(markup).toContain('Host: orders.local.billing.localhost')
-    expect(markup).toContain('Authorization: [REDACTED]')
+    expect(markup).toContain('Authorization: Bearer local-dev-token')
+		expect(markup).toContain('>HEADERS<')
     expect(markup).toContain('>RESPONSE<')
     expect(markup).toContain('HTTP 201')
     expect(markup).toContain('X-Request-Id: req-7')

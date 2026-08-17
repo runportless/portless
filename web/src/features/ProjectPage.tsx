@@ -648,7 +648,7 @@ function TrafficMessage({ event, direction }: { event: TrafficEvent; direction: 
   return <section className={`traffic-message traffic-message--${direction}`}>
     <div className="traffic-message__title"><span>{direction.toUpperCase()}</span><small>{formatBytes(Math.max(0, bytes))}</small></div>
     <div className="traffic-message__line"><code>{startLine}</code></div>
-    <div className="traffic-message__headers"><span>HEADERS · REDACTED</span><pre>{headers}</pre></div>
+    <div className="traffic-message__headers"><span>HEADERS</span><pre>{headers}</pre></div>
     <div className="traffic-message__body"><span>BODY{truncated ? ' · TRUNCATED' : ''}</span>{body ? <><pre>{formatTrafficBody(body)}</pre>{truncated && <small>Showing the first 64 KB of the {direction} body.</small>}</> : <strong>{trafficBodySummary(bytes, direction)}</strong>}</div>
   </section>
 }

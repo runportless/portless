@@ -412,7 +412,7 @@ func (harness *machineHarness) isTestRelay(status relayStatus) bool {
 	if !harness.testInstallAttempted || (status.OwnerUID != 0 && status.OwnerUID != os.Getuid()) {
 		return false
 	}
-	expectedHTTP := filepath.Join(harness.home, "relay.sock")
+	expectedHTTP := filepath.Join(harness.home, "ingress.sock")
 	expectedDNS := filepath.Join(harness.home, "dns.sock")
 	httpTargetMatches := status.TargetSocket == "" || status.TargetSocket == expectedHTTP
 	dnsTargetMatches := status.DNSTargetSocket == "" || status.DNSTargetSocket == expectedDNS
@@ -494,7 +494,7 @@ func assertInstalledRelay(t *testing.T, status relayStatus, home string) {
 		!status.HelperPresent || !status.ConfigurationPresent || !status.ReceiptPresent || !status.ResolverPresent {
 		t.Fatalf("relay is not completely ready: %#v", status)
 	}
-	if status.OwnerUID != os.Getuid() || status.OwnerGID != os.Getgid() || status.TargetSocket != filepath.Join(home, "relay.sock") || status.DNSTargetSocket != filepath.Join(home, "dns.sock") {
+	if status.OwnerUID != os.Getuid() || status.OwnerGID != os.Getgid() || status.TargetSocket != filepath.Join(home, "ingress.sock") || status.DNSTargetSocket != filepath.Join(home, "dns.sock") {
 		t.Fatalf("relay ownership or target is incorrect: %#v", status)
 	}
 }
@@ -659,7 +659,7 @@ func installationRoot(status relayinstall.InstallationStatus) (string, error) {
 		return "", errors.New("existing relay has non-absolute daemon socket targets")
 	}
 	root := filepath.Dir(status.TargetSocket)
-	if root == "/" || root == "." || filepath.Dir(status.DNSTargetSocket) != root || filepath.Base(status.TargetSocket) != "relay.sock" || filepath.Base(status.DNSTargetSocket) != "dns.sock" {
+	if root == "/" || root == "." || filepath.Dir(status.DNSTargetSocket) != root || filepath.Base(status.TargetSocket) != "ingress.sock" || filepath.Base(status.DNSTargetSocket) != "dns.sock" {
 		return "", fmt.Errorf("existing relay targets are not a recognizable Portless home: %s and %s", status.TargetSocket, status.DNSTargetSocket)
 	}
 	return root, nil
