@@ -1,8 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficEvent } from '../types'
-import { buildTopology, EnvironmentPage, overviewServiceEndpoint, paginateOverview, serviceEndpoints, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion, TrafficDetail } from './ProjectPage'
+import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficExchange } from '../types'
+import { buildTopology, EnvironmentPage, overviewServiceEndpoint, paginateOverview, serviceEndpoints, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
 
@@ -14,19 +15,22 @@ describe('environment topology', () => {
       startedAt: '2026-08-13T12:00:00Z', completedAt: '2026-08-13T12:00:00.024Z',
       method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
       durationMs: 24, requestBytes: 42, responseBytes: 118,
-      requestHeaders: { Authorization: 'Bearer local-dev-token', 'Content-Type': 'application/json' },
-      responseHeaders: { 'Content-Type': 'application/json', 'X-Request-Id': 'req-7' },
+      requestHeaders: { Authorization: ['[REDACTED]'], 'Content-Type': ['application/json'] },
+      responseHeaders: { 'Content-Type': ['application/json'], 'X-Request-Id': ['req-7'] },
       requestBody: '{"sku":"coffee","quantity":2}',
       responseBody: '{"order":42,"state":"created"}',
-    } as TrafficEvent
+      requestCapturedBytes: 32,
+      responseCapturedBytes: 30,
+    } as TrafficExchange
 
-    const markup = renderToStaticMarkup(createElement(TrafficDetail, { event, onClose: () => undefined }))
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: event, onClose: () => undefined }))
 
     expect(markup).toContain('aria-label="Traffic request and response 7"')
     expect(markup).toContain('>REQUEST<')
     expect(markup).toContain('POST /orders')
     expect(markup).toContain('Host: orders.local.billing.localhost')
-    expect(markup).toContain('Authorization: Bearer local-dev-token')
+	expect(markup).toContain('Authorization: [REDACTED]')
+	expect(markup).not.toContain('Bearer local-dev-token')
 		expect(markup).toContain('>HEADERS<')
     expect(markup).toContain('>RESPONSE<')
     expect(markup).toContain('HTTP 201')
@@ -152,7 +156,7 @@ describe('environment topology', () => {
     const metrics = summarizeTopologyTraffic([
       { protocol: 'http', source: 'checkout', target: 'orders', startedAt: '2026-08-12T12:00:28Z', completedAt: '2026-08-12T12:00:29Z', durationMs: 1000, status: 200, sequence: 1, requestBytes: 10, responseBytes: 20 },
       { protocol: 'http', source: 'checkout', target: 'orders', startedAt: '2026-08-12T11:59:00Z', completedAt: '2026-08-12T11:59:01Z', durationMs: 10, status: 500, sequence: 2, requestBytes: 10, responseBytes: 20 },
-    ] as TrafficEvent[], now)
+    ] as TrafficExchange[], now)
     const metric = metrics.get(topologyEdgeKey('checkout', 'orders'))
     expect(metric?.samples).toHaveLength(1)
     expect(topologyEdgeTone(metric, false, now)).toBe('slow')
@@ -166,7 +170,7 @@ describe('environment topology', () => {
       startedAt: new Date(now-(index+1)*3_000-10).toISOString(),
       completedAt: new Date(now-(index+1)*3_000).toISOString(),
       durationMs: 10, status: 200, sequence: index+1, requestBytes: 10, responseBytes: 20,
-    })) as TrafficEvent[]
+    })) as TrafficExchange[]
     const metric = summarizeTopologyTraffic(traffic, now).get(topologyEdgeKey('checkout', 'orders'))
 
     const motion = topologyParticleMotion(metric, now)

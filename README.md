@@ -41,7 +41,7 @@ Processes and managed resource containers still receive private dynamic runtime 
 - Context-aware debug startup: from a supported service directory, `portless up` starts that service under Portless with its debugger enabled and starts the rest normally.
 - Generic declarative Docker Engine or Podman networks, named volumes, generated local credentials, commands, and TCP/exec readiness. Docker Compose is not used.
 - Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
-- Unified, filtered HTTP/TCP traffic inspection with lossless request/response headers and durable detail lookup through recordings.
+- Trace-first HTTP/TCP inspection with explicit correlation confidence, expandable service waterfalls, raw exchange mode, exact request targets, repeated request/response headers, bounded body detail, and durable lookup through recordings.
 - Named, bounded local recordings and JSON export.
 - Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and optional expiry.
 - SQLite WAL state, project timeline, CLI bearer auth, one-use browser claims, session cookies, CSRF, Origin checks, and strict control/application Host separation.
@@ -151,6 +151,8 @@ portless logs [service] --tail
 portless traffic list --service checkout --tail
 portless traffic list --edge checkout:orders --protocol http
 portless traffic show 42
+portless traffic traces --service checkout
+portless traffic trace 42
 
 portless project list
 portless project show [project]
@@ -194,6 +196,14 @@ source <(portless completion zsh)
 When the daemon is already running, completion includes current projects, environments, services, connections, traffic sequences, recordings, faults, and sources. Completion never starts or replaces a daemon and silently falls back to static command completion when state is unavailable.
 
 Human-readable output is the default across the CLI. Add the global `--json` flag before or after a subcommand for scripting; streaming commands emit JSON Lines. Bounded list commands expose `--limit`, and logs also support `--since`, `--timestamps`, and `--tail`.
+
+Traffic traces are rebuildable projections over a bounded live exchange window.
+They report whether each relationship is exact, inferred, partial, or ambiguous;
+Portless does not claim timing inference is certain. Exchange detail retains
+repeated non-sensitive headers and up to 64 KiB of inspectable request and
+response bodies. Authorization, cookie, and common API-key/token header values
+are replaced with `[REDACTED]` before retention. Bodies and other application
+values remain local diagnostic data and can still be sensitive.
 
 CLI color defaults to `auto`, which uses a restrained status palette only when output is going to an interactive terminal. `portless config color always` or `portless config color never` saves a machine-local preference in `~/.portless/preferences.json`; `portless config color auto` restores terminal detection. `portless config reset` removes all saved CLI preferences and restores their built-in defaults. The global `--no-color` flag and the `NO_COLOR` environment variable override the saved preference for one invocation. JSON, redirected output in `auto` mode, and generated completion scripts never contain ANSI color codes.
 

@@ -17,18 +17,22 @@ import (
 	"github.com/portless-run/portless/portless-daemon/events"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/networking"
+	trafficstore "github.com/portless-run/portless/portless-daemon/traffic"
 )
 
-func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing.T) {
+func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T) {
 	ctx := context.Background()
 	controlStore := environmentStore(t)
 	defer controlStore.Close()
 	scope := model.EnvironmentSelector("billing", "local")
 	var upstreamRequestBody string
+	var upstreamTraceparent string
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		upstreamRequestBody = string(body)
-		writer.Header().Set("X-Upstream", "checkout")
+		upstreamTraceparent = request.Header.Get("Traceparent")
+		writer.Header().Add("X-Upstream", "checkout")
+		writer.Header().Add("X-Upstream", "orders")
 		writer.Header().Set("Set-Cookie", "session=should-not-leak")
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusCreated)
@@ -38,21 +42,24 @@ func TestIngressTrafficRedactionRecordingAndFaultAreEnvironmentScoped(t *testing
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	manager := NewManager(controlStore, broker)
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 
-	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/orders", strings.NewReader(`{"sku":"coffee"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/orders/%2Fitem?sku=coffee%20mug&quantity=2", strings.NewReader(`{"sku":"coffee"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer should-not-leak")
 	request.Header.Set("X-Trace", "visible")
+	request.Header.Add("X-Trace", "also-visible")
+	request.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	response := httptest.NewRecorder()
 	manager.ServeIngress(response, request, scope, "checkout")
-	if response.Code != http.StatusCreated || response.Header().Get("X-Upstream") != "checkout" || upstreamRequestBody != `{"sku":"coffee"}` {
+	if response.Code != http.StatusCreated || len(response.Header().Values("X-Upstream")) != 2 || upstreamRequestBody != `{"sku":"coffee"}` {
 		t.Fatalf("response code=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
-	traffic := broker.RecentTraffic(scope, 10)
-	if len(traffic) != 1 || traffic[0].Project != "billing" || traffic[0].Environment != "local" || traffic[0].RequestHeaders["Authorization"] != "Bearer should-not-leak" || traffic[0].RequestHeaders["X-Trace"] != "visible" || traffic[0].ResponseHeaders["Set-Cookie"] != "session=should-not-leak" || traffic[0].ResponseHeaders["X-Upstream"] != "checkout" || traffic[0].RequestBody != `{"sku":"coffee"}` || traffic[0].ResponseBody != `{"created":true}` {
-		t.Fatalf("unexpected traffic %#v", traffic)
+	exchanges := trafficStore.RecentExchanges(scope, 10)
+	if len(exchanges) != 1 || exchanges[0].Project != "billing" || exchanges[0].Environment != "local" || exchanges[0].RequestTarget != "/orders/%2Fitem?sku=coffee%20mug&quantity=2" || exchanges[0].TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || exchanges[0].ParentSpanID != "00f067aa0ba902b7" || upstreamTraceparent != "00-"+exchanges[0].TraceID+"-"+exchanges[0].SpanID+"-01" || firstHeader(exchanges[0].RequestHeaders, "Authorization") != "[REDACTED]" || len(exchanges[0].RequestHeaders["X-Trace"]) != 2 || firstHeader(exchanges[0].RequestHeaders, "X-Trace") != "visible" || firstHeader(exchanges[0].ResponseHeaders, "Set-Cookie") != "[REDACTED]" || len(exchanges[0].ResponseHeaders["X-Upstream"]) != 2 || firstHeader(exchanges[0].ResponseHeaders, "X-Upstream") != "checkout" || exchanges[0].RequestBody != `{"sku":"coffee"}` || exchanges[0].ResponseBody != `{"created":true}` {
+		t.Fatalf("unexpected traffic %#v", exchanges)
 	}
 
 	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "checkout-debug"}); err != nil {
@@ -92,7 +99,8 @@ func TestHTTPBodyCaptureIsBoundedWithoutChangingForwardedPayloads(t *testing.T) 
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	manager := NewManager(controlStore, broker)
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 
 	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/upload", strings.NewReader(requestContent))
@@ -100,12 +108,12 @@ func TestHTTPBodyCaptureIsBoundedWithoutChangingForwardedPayloads(t *testing.T) 
 	response := httptest.NewRecorder()
 	manager.ServeIngress(response, request, scope, "checkout")
 
-	traffic := broker.RecentTraffic(scope, 1)
+	exchanges := trafficStore.RecentExchanges(scope, 1)
 	if received != len(requestContent) || response.Body.String() != responseContent {
 		t.Fatalf("proxy changed payload lengths: request=%d response=%d", received, response.Body.Len())
 	}
-	if len(traffic) != 1 || len(traffic[0].RequestBody) != trafficBodyLimit || len(traffic[0].ResponseBody) != trafficBodyLimit || !traffic[0].RequestBodyTruncated || !traffic[0].ResponseBodyTruncated {
-		t.Fatalf("unexpected bounded capture: %#v", traffic)
+	if len(exchanges) != 1 || len(exchanges[0].RequestBody) != trafficBodyLimit || len(exchanges[0].ResponseBody) != trafficBodyLimit || !exchanges[0].RequestBodyTruncated || !exchanges[0].ResponseBodyTruncated {
+		t.Fatalf("unexpected bounded capture: %#v", exchanges)
 	}
 }
 
@@ -124,7 +132,7 @@ func TestMissingTargetReturnsBadGateway(t *testing.T) {
 	controlStore := environmentStore(t)
 	defer controlStore.Close()
 	scope := model.EnvironmentSelector("billing", "local")
-	manager := NewManager(controlStore, events.NewBroker())
+	manager := newManagerForTest(controlStore)
 
 	missing := httptest.NewRecorder()
 	manager.ServeIngress(missing, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/health", nil), scope, "checkout")
@@ -140,7 +148,7 @@ func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
 	}
 	defer controlStore.Close()
 	connection := model.Connection{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP}
-	first := NewManager(controlStore, events.NewBroker())
+	first := newManagerForTest(controlStore)
 	port, err := first.EnsureEdge(context.Background(), "billing/local", connection)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +157,7 @@ func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
 		t.Fatal("first manager did not report its edge")
 	}
 	first.CloseEnvironment(context.Background(), "billing/local")
-	second := NewManager(controlStore, events.NewBroker())
+	second := newManagerForTest(controlStore)
 	defer second.Close(context.Background())
 	restored, err := second.EnsureEdgeAtPort(context.Background(), "billing/local", connection, port)
 	if err != nil {
@@ -180,7 +188,7 @@ func TestTCPEdgeOutlivesTheOperationContextThatCreatedIt(t *testing.T) {
 		_, _ = io.Copy(connection, connection)
 	}()
 
-	manager := NewManager(controlStore, events.NewBroker())
+	manager := newManagerForTest(controlStore)
 	defer manager.Close(context.Background())
 	manager.SetTarget("billing/local", "redis", upstream.Addr().(*net.TCPAddr).Port)
 	operationContext, cancelOperation := context.WithCancel(context.Background())
@@ -241,7 +249,7 @@ func TestStableTCPEdgesShareTheConventionalPortAndKeepSourceFaultsIsolated(t *te
 	checkoutAddress := net.JoinHostPort(firstIP, strconv.Itoa(sharedPort))
 	ordersAddress := net.JoinHostPort(secondIP, strconv.Itoa(sharedPort))
 
-	manager := NewManager(controlStore, events.NewBroker())
+	manager := newManagerForTest(controlStore)
 	defer manager.Close(ctx)
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
 	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP}, checkoutAddress); err != nil {
@@ -306,7 +314,7 @@ func TestTCPFaultAppliesOnlyToItsDirectedSourceEdge(t *testing.T) {
 		}
 	}()
 
-	manager := NewManager(controlStore, events.NewBroker())
+	manager := newManagerForTest(controlStore)
 	defer manager.Close(ctx)
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
 	checkoutPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP})
@@ -368,7 +376,7 @@ func TestTCPEdgePublishesActivityBeforeTheConnectionCloses(t *testing.T) {
 	}()
 
 	broker := events.NewBroker()
-	manager := NewManager(controlStore, broker)
+	manager := NewManager(controlStore, trafficstore.NewStore(broker), broker)
 	defer manager.Close(context.Background())
 	scope := model.EnvironmentSelector("billing", "local")
 	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.tcp.activity"})
@@ -431,7 +439,8 @@ func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {
 	}()
 
 	broker := events.NewBroker()
-	manager := NewManager(controlStore, broker)
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
 	defer manager.Close(context.Background())
 	scope := model.EnvironmentSelector("billing", "local")
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
@@ -454,10 +463,10 @@ func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		traffic := broker.RecentTraffic(scope, 1)
-		if len(traffic) == 1 {
-			if traffic[0].Error != "" {
-				t.Fatalf("successful TCP exchange error = %q", traffic[0].Error)
+		exchanges := trafficStore.RecentExchanges(scope, 1)
+		if len(exchanges) == 1 {
+			if exchanges[0].Error != "" {
+				t.Fatalf("successful TCP exchange error = %q", exchanges[0].Error)
 			}
 			return
 		}
@@ -476,7 +485,7 @@ func TestRemoteTargetForwardsHTTPAndEnforcesReadOnlyPolicy(t *testing.T) {
 		writer.WriteHeader(http.StatusNoContent)
 	}))
 	defer remote.Close()
-	manager := NewManager(controlStore, events.NewBroker())
+	manager := newManagerForTest(controlStore)
 	if err := manager.SetRemoteTarget(scope, "payments", model.RemoteTarget{URL: remote.URL + "/api", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health"}); err != nil {
 		t.Fatal(err)
 	}
@@ -510,4 +519,16 @@ func environmentStore(t *testing.T) *database.Store {
 		t.Fatal(err)
 	}
 	return controlStore
+}
+
+func newManagerForTest(controlStore *database.Store) *Manager {
+	broker := events.NewBroker()
+	return NewManager(controlStore, trafficstore.NewStore(broker), broker)
+}
+
+func firstHeader(headers map[string][]string, name string) string {
+	if len(headers[name]) == 0 {
+		return ""
+	}
+	return headers[name][0]
 }

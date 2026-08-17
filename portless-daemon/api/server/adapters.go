@@ -6,14 +6,14 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
-func trafficSummary(event model.TrafficEvent) model.TrafficEvent {
-	event.RequestHeaders = nil
-	event.ResponseHeaders = nil
-	event.RequestBody = ""
-	event.ResponseBody = ""
-	event.RequestBodyTruncated = false
-	event.ResponseBodyTruncated = false
-	return event
+func trafficSummary(exchange model.TrafficExchange) model.TrafficExchange {
+	exchange.RequestHeaders = nil
+	exchange.ResponseHeaders = nil
+	exchange.RequestBody = ""
+	exchange.ResponseBody = ""
+	exchange.RequestBodyTruncated = false
+	exchange.ResponseBodyTruncated = false
+	return exchange
 }
 
 func environmentSubject(project, environment string) map[string]any {

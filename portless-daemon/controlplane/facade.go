@@ -19,7 +19,7 @@ func (s *Service) Subscribe(ctx context.Context, scope string, topics []string) 
 	return s.broker.Subscribe(ctx, scope, topics)
 }
 
-// AddTraffic records a captured exchange through the application boundary.
-func (s *Service) AddTraffic(event model.TrafficEvent) model.TrafficEvent {
-	return s.broker.AddTraffic(event)
+// AddTrafficExchange records a captured exchange through the application boundary.
+func (s *Service) AddTrafficExchange(exchange model.TrafficExchange) model.TrafficExchange {
+	return s.traffic.AddExchange(exchange)
 }

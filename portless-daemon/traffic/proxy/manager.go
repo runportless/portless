@@ -21,6 +21,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/events"
 	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/portless-run/portless/portless-daemon/traffic"
 )
 
 type edge struct {
@@ -47,6 +48,7 @@ type target struct {
 type Manager struct {
 	database  *database.Store
 	broker    *events.Broker
+	traffic   *traffic.Store
 	mu        sync.RWMutex
 	targets   map[string]target
 	edges     map[string]*edge
@@ -99,12 +101,13 @@ func (r *capturingReadCloser) Read(content []byte) (int, error) {
 	return read, err
 }
 
-// NewManager constructs a proxy manager backed by durable experiment state and live events.
-func NewManager(controlStore *database.Store, broker *events.Broker) *Manager {
+// NewManager constructs a proxy manager backed by durable experiment state,
+// traffic retention, and live control-plane notifications.
+func NewManager(controlStore *database.Store, trafficStore *traffic.Store, broker *events.Broker) *Manager {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.ResponseHeaderTimeout = 30 * time.Second
-	return &Manager{database: controlStore, broker: broker, targets: make(map[string]target), edges: make(map[string]*edge), transport: transport}
+	return &Manager{database: controlStore, broker: broker, traffic: trafficStore, targets: make(map[string]target), edges: make(map[string]*edge), transport: transport}
 }
 
 // SetTarget registers a local loopback HTTP or TCP target for a service.
@@ -323,6 +326,7 @@ func (m *Manager) Close(ctx context.Context) {
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
 	started := time.Now().UTC()
+	traceContext := newExchangeTraceContext(request.Header.Get("Traceparent"))
 	requestCapture := captureRequestBody(request)
 	fault := m.matchFault(request.Context(), scope, source, targetName, request.Method, request.URL.Path)
 	if fault != nil {
@@ -333,29 +337,30 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		if fault.StatusCode != 0 {
 			writer.Header().Set("X-Portless-Fault", fault.Name)
 			http.Error(writer, "Portless fault "+fault.Name, fault.StatusCode)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header(), requestCapture, nil)
+			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header(), requestCapture, nil, traceContext)
 			return
 		}
 		if fault.Abort {
 			m.abortHTTP(writer)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil, requestCapture, nil)
+			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil, requestCapture, nil, traceContext)
 			return
 		}
 	}
 	upstream, ok := m.target(scope, targetName)
 	if !ok {
 		http.Error(writer, "Portless: "+targetName+" is not available", http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil)
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	if upstream.provider == model.ProviderRemote && upstream.writePolicy == model.WriteReadOnly && !safeMethod(request.Method) {
 		writer.Header().Set("X-Portless-Remote-Policy", string(model.WriteReadOnly))
 		http.Error(writer, "Portless: remote target is read-only", http.StatusForbidden)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header(), requestCapture, nil)
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	outgoing := request.Clone(request.Context())
 	outgoing.RequestURI = ""
+	outgoing.Header.Set("Traceparent", traceContext.header())
 	if upstream.provider == model.ProviderRemote {
 		outgoing.URL.Scheme = upstream.baseURL.Scheme
 		outgoing.URL.Host = upstream.baseURL.Host
@@ -370,7 +375,7 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	response, err := m.transport.RoundTrip(outgoing)
 	if err != nil {
 		http.Error(writer, "Portless upstream error: "+err.Error(), http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil)
+		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	defer response.Body.Close()
@@ -387,10 +392,10 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	if copyErr != nil {
 		errorText = copyErr.Error()
 	}
-	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header, requestCapture, responseCapture)
+	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header, requestCapture, responseCapture, traceContext)
 }
 
-func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header, requestCapture, responseCapture *bodyCapture) {
+func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header, requestCapture, responseCapture *bodyCapture, traceContext exchangeTraceContext) {
 	completed := time.Now().UTC()
 	project, environment := scopeNames(scope)
 	requestBytes := request.ContentLength
@@ -400,21 +405,24 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 	if requestBytes < 0 {
 		requestBytes = 0
 	}
-	event := model.TrafficEvent{
+	exchange := model.TrafficExchange{
 		Project: project, Environment: environment, Protocol: model.ProtocolHTTP, Source: source, Target: targetName,
 		TargetProvider: upstream.provider, RemoteClassification: upstream.classification,
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
-		Path: request.URL.EscapedPath(), Status: status, DurationMS: completed.Sub(started).Milliseconds(),
+		Path: request.URL.Path, RequestTarget: exactRequestTarget(request.URL), RequestKind: classifyRequest(source, request),
+		Status: status, DurationMS: completed.Sub(started).Milliseconds(),
 		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
+		RequestCapturedBytes: capturedBytes(requestCapture), ResponseCapturedBytes: capturedBytes(responseCapture),
+		TraceID: traceContext.traceID, SpanID: traceContext.spanID, ParentSpanID: traceContext.parentSpanID,
 		RequestHeaders: captureHeaders(request.Header), ResponseHeaders: captureHeaders(responseHeaders),
 		RequestBody: requestCapture.text(), ResponseBody: responseCapture.text(),
 		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
 	}
 	var persistBodies bool
-	event.Recording, persistBodies = m.matchRecording(ctx, scope, source, targetName)
-	event = m.broker.AddTraffic(event)
-	if event.Recording != "" {
-		persisted := event
+	exchange.Recording, persistBodies = m.matchRecording(ctx, scope, source, targetName)
+	exchange = m.traffic.AddExchange(exchange)
+	if exchange.Recording != "" {
+		persisted := exchange
 		if !persistBodies {
 			persisted.RequestBody = ""
 			persisted.ResponseBody = ""
@@ -563,17 +571,17 @@ func (m *Manager) publishTCPActivity(current *edge, phase string, activeConnecti
 func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, responseBytes int64, fault, errorText string) {
 	completed := time.Now().UTC()
 	project, environment := scopeNames(current.scope)
-	event := model.TrafficEvent{Project: project, Environment: environment, Protocol: current.protocol, Source: current.source, Target: current.target,
+	exchange := model.TrafficExchange{Project: project, Environment: environment, Protocol: current.protocol, Source: current.source, Target: current.target,
 		StartedAt: started, CompletedAt: completed, DurationMS: completed.Sub(started).Milliseconds(),
 		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText}
 	if upstream, ok := m.target(current.scope, current.target); ok {
-		event.TargetProvider = upstream.provider
-		event.RemoteClassification = upstream.classification
+		exchange.TargetProvider = upstream.provider
+		exchange.RemoteClassification = upstream.classification
 	}
-	event.Recording, _ = m.matchRecording(context.Background(), current.scope, current.source, current.target)
-	event = m.broker.AddTraffic(event)
-	if event.Recording != "" {
-		_ = m.database.PersistTraffic(context.Background(), event)
+	exchange.Recording, _ = m.matchRecording(context.Background(), current.scope, current.source, current.target)
+	exchange = m.traffic.AddExchange(exchange)
+	if exchange.Recording != "" {
+		_ = m.database.PersistTraffic(context.Background(), exchange)
 	}
 }
 
@@ -722,13 +730,26 @@ func removeHopHeaders(headers http.Header) {
 	}
 }
 
-func captureHeaders(headers http.Header) map[string]string {
-	result := make(map[string]string)
+func captureHeaders(headers http.Header) map[string][]string {
+	result := make(map[string][]string)
 	for name, values := range headers {
 		canonical := textproto.CanonicalMIMEHeaderKey(name)
-		result[canonical] = strings.Join(values, ", ")
+		if sensitiveTrafficHeader(canonical) {
+			result[canonical] = []string{"[REDACTED]"}
+			continue
+		}
+		result[canonical] = append([]string(nil), values...)
 	}
 	return result
+}
+
+func sensitiveTrafficHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token":
+		return true
+	default:
+		return false
+	}
 }
 
 func targetKey(project, service string) string { return project + "\x00" + service }

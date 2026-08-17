@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 7.0.0
+  version: 8.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -27,7 +27,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '7.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -625,14 +625,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LogEntries' }
-  /environments/{projectName}/{environmentName}/traffic:
+  /environments/{projectName}/{environmentName}/traffic/exchanges:
     parameters: *environmentParameters
     get:
-      operationId: listTraffic
+      operationId: listTrafficExchanges
       parameters:
         - in: query
           name: protocol
-          schema: { type: string, enum: [http, tcp], default: http }
+          schema: { type: string, enum: [all, http, tcp], default: all }
           description: tcp includes raw TCP and protocol-aware Postgres and Redis connections.
         - { $ref: '#/components/parameters/Limit1000' }
         - in: query
@@ -654,15 +654,15 @@ paths:
           schema: { type: integer, format: int64, minimum: 0, default: 0 }
       responses:
         '200':
-          description: Newest-first bounded traffic summaries from the live buffer; headers are available from the detail route.
+          description: Newest-first bounded exchange summaries from the live buffer; headers and bodies are available from the detail route.
           content:
             application/json:
               schema:
                 type: object
-                required: [traffic]
+                required: [exchanges]
                 properties:
-                  traffic: { type: array, items: { $ref: '#/components/schemas/TrafficEvent' } }
-  /environments/{projectName}/{environmentName}/traffic/{sequence}:
+                  exchanges: { type: array, items: { $ref: '#/components/schemas/TrafficExchange' } }
+  /environments/{projectName}/{environmentName}/traffic/exchanges/{sequence}:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
       - { $ref: '#/components/parameters/EnvironmentName' }
@@ -671,13 +671,58 @@ paths:
         required: true
         schema: { type: integer, format: int64, minimum: 1 }
     get:
-      operationId: getTrafficEvent
+      operationId: getTrafficExchange
       responses:
         '200':
-          description: One traffic event from the live buffer or a retained recording
+          description: One complete traffic exchange from the live buffer or a retained recording
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TrafficEvent' }
+              schema: { $ref: '#/components/schemas/TrafficExchange' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /environments/{projectName}/{environmentName}/traffic/traces:
+    parameters: *environmentParameters
+    get:
+      operationId: listTrafficTraces
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+        - in: query
+          name: service
+          schema: { $ref: '#/components/schemas/ServiceName' }
+          description: Match traces containing the service as either endpoint.
+        - in: query
+          name: edge
+          schema: { type: string, pattern: '^[^:]+:[^:]+$' }
+          description: Match traces containing this directed source:target edge.
+        - in: query
+          name: background
+          schema: { type: string, enum: [exclude, include], default: exclude }
+          description: Include browser subresource and other background traces.
+      responses:
+        '200':
+          description: Newest-first trace summaries rebuilt from the bounded exchange window
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [traces]
+                properties:
+                  traces: { type: array, items: { $ref: '#/components/schemas/TrafficTrace' } }
+  /environments/{projectName}/{environmentName}/traffic/traces/{number}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: path
+        name: number
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getTrafficTrace
+      responses:
+        '200':
+          description: One trace with its tree and waterfall span projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficTrace' }
         '404': { $ref: '#/components/responses/NotFound' }
   /environments/{projectName}/{environmentName}/stream:
     parameters: *environmentParameters
@@ -752,7 +797,11 @@ paths:
     get:
       operationId: exportRecording
       responses:
-        '200': { description: Portless JSON recording export }
+        '200':
+          description: Portless JSON recording export
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecordingExport' }
   /environments/{projectName}/{environmentName}/faults:
     parameters: *environmentParameters
     get:
@@ -985,7 +1034,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '7.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.0.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1190,7 +1239,7 @@ components:
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         service: { type: string, description: Empty when entries from all services were requested. }
         entries: { type: array, items: { $ref: '#/components/schemas/LogEntry' } }
-    TrafficEvent:
+    TrafficExchange:
       type: object
       required: [project, environment, sequence, protocol, source, target, startedAt, completedAt, durationMs, requestBytes, responseBytes]
       properties:
@@ -1207,15 +1256,65 @@ components:
         method: { type: string }
         host: { type: string }
         path: { type: string }
+        requestTarget: { type: string, description: Exact escaped path and query string received by the proxy. }
+        requestKind: { type: string, enum: [navigation, subresource, fetch, service, unknown] }
         status: { type: integer }
         durationMs: { type: integer, format: int64 }
         requestBytes: { type: integer, format: int64 }
         responseBytes: { type: integer, format: int64 }
+        requestCapturedBytes: { type: integer, format: int64, minimum: 0 }
+        responseCapturedBytes: { type: integer, format: int64, minimum: 0 }
         fault: { type: string }
         recording: { type: string }
         error: { type: string }
-        requestHeaders: { type: object, additionalProperties: { type: string }, description: Sensitive values are redacted before capture. }
-        responseHeaders: { type: object, additionalProperties: { type: string }, description: Sensitive values are redacted before capture. }
+        traceId: { type: string, pattern: '^[0-9a-f]{32}$' }
+        spanId: { type: string, pattern: '^[0-9a-f]{16}$' }
+        parentSpanId: { type: string, pattern: '^[0-9a-f]{16}$' }
+        requestHeaders:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+          description: Repeated values are preserved; known credential-bearing values are replaced with [REDACTED] before retention.
+        responseHeaders:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+          description: Repeated values are preserved; known credential-bearing values are replaced with [REDACTED] before retention.
+        requestBody: { type: string, description: Bounded inspectable request-body prefix. }
+        responseBody: { type: string, description: Bounded inspectable response-body prefix. }
+        requestBodyTruncated: { type: boolean }
+        responseBodyTruncated: { type: boolean }
+    TrafficTraceSpan:
+      type: object
+      required: [exchange, depth, startOffsetMs, correlation]
+      properties:
+        exchange: { $ref: '#/components/schemas/TrafficExchange' }
+        parentSequence: { type: integer, format: int64, minimum: 1 }
+        depth: { type: integer, minimum: 0 }
+        startOffsetMs: { type: integer, format: int64, minimum: 0 }
+        correlation: { type: string, enum: [exact, inferred, partial, ambiguous] }
+    TrafficTrace:
+      type: object
+      required: [project, environment, number, lastSequence, startedAt, completedAt, durationMs, source, target, error, faulted, background, spanCount, correlation]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        number: { type: integer, format: int64, minimum: 1, description: Environment-local number equal to the earliest retained exchange sequence in the trace. }
+        lastSequence: { type: integer, format: int64, minimum: 1, description: Highest exchange sequence currently projected into the trace; used for deterministic snapshot reconciliation. }
+        traceId: { type: string, pattern: '^[0-9a-f]{32}$' }
+        rootSequence: { type: integer, format: int64, minimum: 1 }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        durationMs: { type: integer, format: int64, minimum: 0 }
+        method: { type: string }
+        requestTarget: { type: string }
+        source: { type: string }
+        target: { type: string }
+        status: { type: integer }
+        error: { type: boolean }
+        faulted: { type: boolean }
+        background: { type: boolean }
+        spanCount: { type: integer, minimum: 1 }
+        correlation: { type: string, enum: [exact, inferred, partial, ambiguous] }
+        spans: { type: array, items: { $ref: '#/components/schemas/TrafficTraceSpan' } }
     EnvironmentSummary:
       type: object
       required: [project, name, revision, status, serviceCount, readyCount, remoteCount, updatedAt]
@@ -1331,6 +1430,15 @@ components:
             startedAt: { type: string, format: date-time }
             completedAt: { type: string, format: date-time }
             eventCount: { type: integer, format: int64, minimum: 0 }
+    RecordingExport:
+      type: object
+      required: [schemaVersion, project, environment, recording, exchanges]
+      properties:
+        schemaVersion: { type: integer, const: 2 }
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        recording: { $ref: '#/components/schemas/ArtifactName' }
+        exchanges: { type: array, items: { $ref: '#/components/schemas/TrafficExchange' } }
     FaultInput:
       type: object
       required: [name, source, target]

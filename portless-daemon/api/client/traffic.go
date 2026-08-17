@@ -12,7 +12,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/api/contract"
 )
 
-func trafficValues(query contract.TrafficQuery) url.Values {
+func trafficValues(query contract.TrafficExchangeQuery) url.Values {
 	values := url.Values{}
 	if query.Protocol != "" {
 		values.Set("protocol", query.Protocol)
@@ -32,17 +32,48 @@ func trafficValues(query contract.TrafficQuery) url.Values {
 	return values
 }
 
-// Traffic returns captured traffic matching query.
-func (c *Client) Traffic(ctx context.Context, project, environment string, query contract.TrafficQuery) (contract.TrafficList, error) {
-	var result contract.TrafficList
-	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic?"+trafficValues(query).Encode(), nil, &result)
+func traceValues(query contract.TrafficTraceQuery) url.Values {
+	values := url.Values{}
+	if query.Service != "" {
+		values.Set("service", query.Service)
+	}
+	if query.Edge != "" {
+		values.Set("edge", query.Edge)
+	}
+	if query.IncludeBackground {
+		values.Set("background", "include")
+	}
+	if query.Limit > 0 {
+		values.Set("limit", strconv.Itoa(query.Limit))
+	}
+	return values
+}
+
+// TrafficExchanges returns captured exchanges matching query.
+func (c *Client) TrafficExchanges(ctx context.Context, project, environment string, query contract.TrafficExchangeQuery) (contract.TrafficExchangeList, error) {
+	var result contract.TrafficExchangeList
+	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/exchanges?"+trafficValues(query).Encode(), nil, &result)
 	return result, err
 }
 
-// TrafficEvent returns one captured traffic event by sequence number.
-func (c *Client) TrafficEvent(ctx context.Context, project, environment string, sequence int64) (contract.TrafficEvent, error) {
-	var result contract.TrafficEvent
-	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/"+strconv.FormatInt(sequence, 10), nil, &result)
+// TrafficExchange returns one captured exchange by sequence number.
+func (c *Client) TrafficExchange(ctx context.Context, project, environment string, sequence int64) (contract.TrafficExchange, error) {
+	var result contract.TrafficExchange
+	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/exchanges/"+strconv.FormatInt(sequence, 10), nil, &result)
+	return result, err
+}
+
+// TrafficTraces returns trace summaries matching query.
+func (c *Client) TrafficTraces(ctx context.Context, project, environment string, query contract.TrafficTraceQuery) (contract.TrafficTraceList, error) {
+	var result contract.TrafficTraceList
+	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/traces?"+traceValues(query).Encode(), nil, &result)
+	return result, err
+}
+
+// TrafficTrace returns one full trace projection by environment-local number.
+func (c *Client) TrafficTrace(ctx context.Context, project, environment string, number int64) (contract.TrafficTrace, error) {
+	var result contract.TrafficTrace
+	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/traces/"+strconv.FormatInt(number, 10), nil, &result)
 	return result, err
 }
 

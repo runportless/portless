@@ -12,24 +12,24 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
-func matchesTrafficOptions(event model.TrafficEvent, options trafficOptions) bool {
-	if options.protocol == "http" && event.Protocol != model.ProtocolHTTP {
+func matchesTrafficOptions(exchange model.TrafficExchange, options trafficOptions) bool {
+	if options.protocol == "http" && exchange.Protocol != model.ProtocolHTTP {
 		return false
 	}
-	if options.protocol == "tcp" && event.Protocol == model.ProtocolHTTP {
+	if options.protocol == "tcp" && exchange.Protocol == model.ProtocolHTTP {
 		return false
 	}
-	if options.service != "" && event.Source != options.service && event.Target != options.service {
+	if options.service != "" && exchange.Source != options.service && exchange.Target != options.service {
 		return false
 	}
 	if options.edge != "" {
 		source, target, _ := command.ParseEdge(options.edge)
-		return event.Source == source && event.Target == target
+		return exchange.Source == source && exchange.Target == target
 	}
 	return true
 }
 
-func printHeaderMap(writer io.Writer, title string, headers map[string]string) {
+func printHeaderMap(writer io.Writer, title string, headers map[string][]string) {
 	if len(headers) == 0 {
 		return
 	}
@@ -40,7 +40,9 @@ func printHeaderMap(writer io.Writer, title string, headers map[string]string) {
 	sort.Strings(keys)
 	fmt.Fprintln(writer, "\n"+title+":")
 	for _, key := range keys {
-		fmt.Fprintf(writer, "  %-24s %s\n", key+":", headers[key])
+		for _, value := range headers[key] {
+			fmt.Fprintf(writer, "  %-24s %s\n", key+":", value)
+		}
 	}
 }
 

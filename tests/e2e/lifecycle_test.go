@@ -73,39 +73,40 @@ func TestCLIZeroConfigurationLifecycle(t *testing.T) {
 		t.Fatalf("list external traffic: %v\n%s", err, trafficOutput)
 	}
 	var traffic struct {
-		Project     string               `json:"project"`
-		Environment string               `json:"environment"`
-		Traffic     []model.TrafficEvent `json:"traffic"`
+		Project     string                  `json:"project"`
+		Environment string                  `json:"environment"`
+		Exchanges   []model.TrafficExchange `json:"exchanges"`
 	}
 	if err := json.Unmarshal([]byte(trafficOutput), &traffic); err != nil {
 		t.Fatalf("decode traffic: %v\n%s", err, trafficOutput)
 	}
-	if traffic.Project != "store-e2e" || traffic.Environment != "local" || len(traffic.Traffic) != 2 {
+	if traffic.Project != "store-e2e" || traffic.Environment != "local" || len(traffic.Exchanges) != 2 {
 		t.Fatalf("unexpected external traffic: %#v", traffic)
 	}
-	var checkoutTraffic *model.TrafficEvent
+	var checkoutTraffic *model.TrafficExchange
 	paths := make(map[string]int)
-	for index := range traffic.Traffic {
-		paths[traffic.Traffic[index].Path] = traffic.Traffic[index].Status
-		if traffic.Traffic[index].Path == "/checkout" {
-			checkoutTraffic = &traffic.Traffic[index]
+	for index := range traffic.Exchanges {
+		paths[traffic.Exchanges[index].Path] = traffic.Exchanges[index].Status
+		if traffic.Exchanges[index].Path == "/checkout" {
+			checkoutTraffic = &traffic.Exchanges[index]
 		}
 	}
 	if paths["/"] != http.StatusNotFound || paths["/checkout"] != http.StatusOK || checkoutTraffic == nil {
-		t.Fatalf("external traffic did not preserve distinct request paths: %#v", traffic.Traffic)
+		t.Fatalf("external traffic did not preserve distinct request paths: %#v", traffic.Exchanges)
 	}
 	eventOutput, err := runCLIAt(binary, home, checkout, "--json", "traffic", "show", fmt.Sprint(checkoutTraffic.Sequence))
 	if err != nil {
 		t.Fatalf("show traffic event: %v\n%s", err, eventOutput)
 	}
-	var event model.TrafficEvent
+	var event model.TrafficExchange
 	if err := json.Unmarshal([]byte(eventOutput), &event); err != nil {
 		t.Fatalf("decode traffic event: %v\n%s", err, eventOutput)
 	}
 	if event.Method != http.MethodGet || event.Path != "/checkout" || event.Status != http.StatusOK {
 		t.Fatalf("unexpected traffic detail: %#v", event)
 	}
-	if event.RequestHeaders["Authorization"] != "Bearer e2e-secret" || event.RequestHeaders["X-E2e-Trace"] != "visible" {
+	if len(event.RequestHeaders["Authorization"]) != 1 || event.RequestHeaders["Authorization"][0] != "[REDACTED]" ||
+		len(event.RequestHeaders["X-E2e-Trace"]) != 1 || event.RequestHeaders["X-E2e-Trace"][0] != "visible" {
 		t.Fatalf("traffic headers were not captured losslessly: %#v", event.RequestHeaders)
 	}
 	if !strings.Contains(event.ResponseBody, `"checkout":"accepted"`) {
@@ -118,9 +119,9 @@ func TestCLIZeroConfigurationLifecycle(t *testing.T) {
 			t.Fatalf("list %s traffic: %v\n%s", edge, err, output)
 		}
 		var result struct {
-			Traffic []model.TrafficEvent `json:"traffic"`
+			Exchanges []model.TrafficExchange `json:"exchanges"`
 		}
-		if err := json.Unmarshal([]byte(output), &result); err != nil || len(result.Traffic) != 1 {
+		if err := json.Unmarshal([]byte(output), &result); err != nil || len(result.Exchanges) != 1 {
 			t.Fatalf("expected one %s event: err=%v output=%s", edge, err, output)
 		}
 	}
@@ -311,20 +312,20 @@ func TestCLIFaultAndRecordingRoundTrip(t *testing.T) {
 		t.Fatalf("export recording: %v\n%s", err, exportOutput)
 	}
 	var exported struct {
-		SchemaVersion int                  `json:"schemaVersion"`
-		Project       string               `json:"project"`
-		Environment   string               `json:"environment"`
-		Recording     string               `json:"recording"`
-		Traffic       []model.TrafficEvent `json:"traffic"`
+		SchemaVersion int                     `json:"schemaVersion"`
+		Project       string                  `json:"project"`
+		Environment   string                  `json:"environment"`
+		Recording     string                  `json:"recording"`
+		Exchanges     []model.TrafficExchange `json:"exchanges"`
 	}
 	if err := json.Unmarshal([]byte(exportOutput), &exported); err != nil {
 		t.Fatalf("decode recording export: %v\n%s", err, exportOutput)
 	}
-	if exported.SchemaVersion != 1 || exported.Project != "experiments-e2e" || exported.Environment != "local" || exported.Recording != "orders-failure" || len(exported.Traffic) != 2 {
+	if exported.SchemaVersion != 2 || exported.Project != "experiments-e2e" || exported.Environment != "local" || exported.Recording != "orders-failure" || len(exported.Exchanges) != 2 {
 		t.Fatalf("unexpected recording export: %#v", exported)
 	}
-	if exported.Traffic[0].Source != "checkout" || exported.Traffic[0].Target != "orders" || exported.Traffic[0].Recording != "orders-failure" {
-		t.Fatalf("recording contains the wrong edge: %#v", exported.Traffic)
+	if exported.Exchanges[0].Source != "checkout" || exported.Exchanges[0].Target != "orders" || exported.Exchanges[0].Recording != "orders-failure" {
+		t.Fatalf("recording contains the wrong edge: %#v", exported.Exchanges)
 	}
 	if output, err := runCLIAt(binary, home, checkout, "record", "delete", "orders-failure", "--yes"); err != nil {
 		t.Fatalf("delete recording: %v\n%s", err, output)

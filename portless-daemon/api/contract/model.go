@@ -36,8 +36,11 @@ type LogEntry = model.LogEntry
 // TimelineEvent is the stable environment-timeline wire model.
 type TimelineEvent = model.TimelineEvent
 
-// TrafficEvent is the stable captured-traffic wire model.
-type TrafficEvent = model.TrafficEvent
+// TrafficExchange is the stable captured-exchange wire model.
+type TrafficExchange = model.TrafficExchange
+
+// TrafficTrace is the stable traffic-trace wire model.
+type TrafficTrace = model.TrafficTrace
 
 // Recording is the stable traffic-recording wire model.
 type Recording = model.Recording

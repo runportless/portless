@@ -1,8 +1,8 @@
 package contract
 
-// TrafficQuery filters captured traffic by protocol, service, edge, sequence,
-// and result limit.
-type TrafficQuery struct {
+// TrafficExchangeQuery filters captured exchanges by protocol, service, edge,
+// sequence, and result limit.
+type TrafficExchangeQuery struct {
 	Protocol string
 	Service  string
 	Edge     string
@@ -10,9 +10,23 @@ type TrafficQuery struct {
 	Limit    int
 }
 
-// TrafficList is a collection of captured traffic events.
-type TrafficList struct {
-	Traffic []TrafficEvent `json:"traffic"`
+// TrafficTraceQuery filters trace summaries by service, edge, background
+// classification, and result limit.
+type TrafficTraceQuery struct {
+	Service           string
+	Edge              string
+	IncludeBackground bool
+	Limit             int
+}
+
+// TrafficExchangeList is a collection of captured exchanges.
+type TrafficExchangeList struct {
+	Exchanges []TrafficExchange `json:"exchanges"`
+}
+
+// TrafficTraceList is a collection of trace summaries.
+type TrafficTraceList struct {
+	Traces []TrafficTrace `json:"traces"`
 }
 
 // RecordingList is a collection of retained traffic recordings.
@@ -23,11 +37,11 @@ type RecordingList struct {
 // RecordingExport is the portable versioned representation of a recording and
 // its captured events.
 type RecordingExport struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	Project       string         `json:"project"`
-	Environment   string         `json:"environment"`
-	Recording     string         `json:"recording"`
-	Traffic       []TrafficEvent `json:"traffic"`
+	SchemaVersion int               `json:"schemaVersion"`
+	Project       string            `json:"project"`
+	Environment   string            `json:"environment"`
+	Recording     string            `json:"recording"`
+	Exchanges     []TrafficExchange `json:"exchanges"`
 }
 
 // FaultList is a collection of traffic fault rules.

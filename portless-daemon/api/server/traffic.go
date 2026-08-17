@@ -20,7 +20,7 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 		methodNotAllowed(writer, http.MethodGet)
 		return
 	}
-	if len(segments) != 4 && len(segments) != 5 {
+	if len(segments) < 5 || len(segments) > 6 {
 		writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "traffic route not found"})
 		return
 	}
@@ -28,30 +28,41 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 		s.writeError(writer, err, environmentSubject(project, environment))
 		return
 	}
-	if len(segments) == 5 {
-		sequence, err := strconv.ParseInt(segments[4], 10, 64)
-		if err != nil || sequence <= 0 {
-			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_TRAFFIC_SEQUENCE", Message: "traffic sequence must be a positive integer"})
+	switch segments[4] {
+	case "exchanges":
+		s.handleTrafficExchanges(writer, request, project, environment, segments)
+	case "traces":
+		s.handleTrafficTraces(writer, request, project, environment, segments)
+	default:
+		writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "traffic route not found"})
+	}
+}
+
+func (s *Server) handleTrafficExchanges(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if len(segments) == 6 {
+		sequence, err := positiveTrafficNumber(segments[5], "exchange")
+		if err != nil {
+			writeAPIError(writer, http.StatusBadRequest, *err)
 			return
 		}
-		event, err := s.app.TrafficEvent(request.Context(), project, environment, sequence)
-		if err != nil {
-			if controlplane.IsNotFound(err) {
-				writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "TRAFFIC_NOT_FOUND", Message: "traffic event is no longer in the live buffer or a retained recording", Remediation: []contract.Remediation{{Label: "Capture durable traffic", Command: "portless record start debug"}}})
+		exchange, findErr := s.app.TrafficExchange(request.Context(), project, environment, sequence)
+		if findErr != nil {
+			if controlplane.IsNotFound(findErr) {
+				writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "TRAFFIC_EXCHANGE_NOT_FOUND", Message: "traffic exchange is no longer in the live buffer or a retained recording", Remediation: []contract.Remediation{{Label: "Capture durable traffic", Command: "portless record start debug"}}})
 				return
 			}
-			s.writeError(writer, err, environmentSubject(project, environment))
+			s.writeError(writer, findErr, environmentSubject(project, environment))
 			return
 		}
-		writeJSON(writer, http.StatusOK, event)
+		writeJSON(writer, http.StatusOK, exchange)
 		return
 	}
 	protocol := request.URL.Query().Get("protocol")
 	if protocol == "" {
-		protocol = string(model.ProtocolHTTP)
+		protocol = "all"
 	}
-	if protocol != string(model.ProtocolHTTP) && protocol != string(model.ProtocolTCP) {
-		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_TRAFFIC_PROTOCOL", Message: "protocol must be http or tcp"})
+	if protocol != "all" && protocol != string(model.ProtocolHTTP) && protocol != string(model.ProtocolTCP) {
+		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_TRAFFIC_PROTOCOL", Message: "protocol must be all, http, or tcp"})
 		return
 	}
 	limit, err := queryLimit(request, 250, 1000)
@@ -59,8 +70,8 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_LIMIT", Message: err.Error()})
 		return
 	}
-	all := s.app.Traffic(project, environment, 1000)
-	filtered := make([]model.TrafficEvent, 0, len(all))
+	all := s.app.TrafficExchanges(project, environment, 5000)
+	filtered := make([]model.TrafficExchange, 0, len(all))
 	service := request.URL.Query().Get("service")
 	source := request.URL.Query().Get("source")
 	target := request.URL.Query().Get("target")
@@ -93,7 +104,96 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 			break
 		}
 	}
-	writeJSON(writer, http.StatusOK, contract.TrafficList{Traffic: filtered})
+	writeJSON(writer, http.StatusOK, contract.TrafficExchangeList{Exchanges: filtered})
+}
+
+func (s *Server) handleTrafficTraces(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if len(segments) == 6 {
+		number, err := positiveTrafficNumber(segments[5], "trace")
+		if err != nil {
+			writeAPIError(writer, http.StatusBadRequest, *err)
+			return
+		}
+		trace, findErr := s.app.TrafficTrace(project, environment, number)
+		if findErr != nil {
+			if controlplane.IsNotFound(findErr) {
+				writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "TRAFFIC_TRACE_NOT_FOUND", Message: "traffic trace is no longer in the live buffer"})
+				return
+			}
+			s.writeError(writer, findErr, environmentSubject(project, environment))
+			return
+		}
+		writeJSON(writer, http.StatusOK, trace)
+		return
+	}
+	limit, err := queryLimit(request, 100, 1000)
+	if err != nil {
+		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_LIMIT", Message: err.Error()})
+		return
+	}
+	source, target, edgeErr := trafficEdge(request.URL.Query().Get("edge"))
+	if edgeErr != nil {
+		writeAPIError(writer, http.StatusBadRequest, *edgeErr)
+		return
+	}
+	service := request.URL.Query().Get("service")
+	includeBackground := request.URL.Query().Get("background") == "include"
+	filtered := make([]model.TrafficTrace, 0, limit)
+	for _, trace := range s.app.TrafficTraces(project, environment, 5000) {
+		if trace.Background && !includeBackground {
+			continue
+		}
+		if !traceMatches(trace, service, source, target) {
+			continue
+		}
+		trace.Spans = nil
+		filtered = append(filtered, trace)
+		if len(filtered) == limit {
+			break
+		}
+	}
+	writeJSON(writer, http.StatusOK, contract.TrafficTraceList{Traces: filtered})
+}
+
+func positiveTrafficNumber(value, kind string) (int64, *contract.APIError) {
+	number, err := strconv.ParseInt(value, 10, 64)
+	if err == nil && number > 0 {
+		return number, nil
+	}
+	apiError := contract.APIError{Code: "INVALID_TRAFFIC_NUMBER", Message: "traffic " + kind + " number must be a positive integer"}
+	return 0, &apiError
+}
+
+func trafficEdge(value string) (string, string, *contract.APIError) {
+	if value == "" {
+		return "", "", nil
+	}
+	source, target, found := strings.Cut(value, ":")
+	if !found || source == "" || target == "" || strings.Contains(target, ":") {
+		apiError := contract.APIError{Code: "INVALID_EDGE", Message: "edge must use source:target"}
+		return "", "", &apiError
+	}
+	return source, target, nil
+}
+
+func traceMatches(trace model.TrafficTrace, service, source, target string) bool {
+	if service == "" && source == "" && target == "" {
+		return true
+	}
+	for _, span := range trace.Spans {
+		exchange := span.Exchange
+		if service != "" && exchange.Source != service && exchange.Target != service {
+			continue
+		}
+		if source != "" && exchange.Source != source {
+			continue
+		}
+		if target != "" && exchange.Target != target {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request, project, environment string) {
@@ -133,9 +233,9 @@ func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request,
 				return
 			}
 			data := event.Data
-			if event.Type == "traffic.http" || event.Type == "traffic.tcp" {
-				if traffic, ok := event.Data.(model.TrafficEvent); ok {
-					data = trafficSummary(traffic)
+			if event.Type == "traffic.exchange" {
+				if exchange, ok := event.Data.(model.TrafficExchange); ok {
+					data = trafficSummary(exchange)
 				}
 			}
 			payload, _ := json.Marshal(data)
@@ -214,13 +314,13 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if len(segments) == 6 && segments[5] == "export" && request.Method == http.MethodGet {
-		traffic, err := s.app.RecordedTraffic(ctx, project, environment, name, 10_000)
+		exchanges, err := s.app.RecordedTraffic(ctx, project, environment, name, 10_000)
 		if err != nil {
 			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
 		writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.json"`, name))
-		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 1, Project: project, Environment: environment, Recording: name, Traffic: traffic})
+		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 2, Project: project, Environment: environment, Recording: name, Exchanges: exchanges})
 		return
 	}
 	writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "recording route not found"})

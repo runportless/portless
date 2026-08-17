@@ -201,7 +201,10 @@ export interface Operation { project: string; environment: string; number: numbe
 
 export interface LogEntry { timestamp: string; service: string; stream: string; generation: number; message: string }
 
-export interface TrafficEvent {
+export type TrafficRequestKind = 'navigation' | 'subresource' | 'fetch' | 'service' | 'unknown'
+export type TrafficCorrelation = 'exact' | 'inferred' | 'partial' | 'ambiguous'
+
+export interface TrafficExchange {
   project: string
   environment: string
   sequence: number
@@ -215,19 +218,57 @@ export interface TrafficEvent {
   method?: string
   host?: string
   path?: string
+  requestTarget?: string
+  requestKind?: TrafficRequestKind
   status?: number
   durationMs: number
   requestBytes: number
   responseBytes: number
+  requestCapturedBytes?: number
+  responseCapturedBytes?: number
   fault?: string
   recording?: string
   error?: string
-  requestHeaders?: Record<string, string>
-  responseHeaders?: Record<string, string>
+  traceId?: string
+  spanId?: string
+  parentSpanId?: string
+  requestHeaders?: Record<string, string[]>
+  responseHeaders?: Record<string, string[]>
   requestBody?: string
   responseBody?: string
   requestBodyTruncated?: boolean
   responseBodyTruncated?: boolean
+}
+
+export interface TrafficTraceSpan {
+  exchange: TrafficExchange
+  parentSequence?: number
+  depth: number
+  startOffsetMs: number
+  correlation: TrafficCorrelation
+}
+
+export interface TrafficTrace {
+  project: string
+  environment: string
+  number: number
+  lastSequence: number
+  traceId?: string
+  rootSequence?: number
+  startedAt: string
+  completedAt: string
+  durationMs: number
+  method?: string
+  requestTarget?: string
+  source: string
+  target: string
+  status?: number
+  error: boolean
+  faulted: boolean
+  background: boolean
+  spanCount: number
+  correlation: TrafficCorrelation
+  spans?: TrafficTraceSpan[]
 }
 
 export interface TrafficActivity {

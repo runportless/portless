@@ -9,23 +9,38 @@ import (
 
 func (c *Commands) trafficCommand() *cobra.Command {
 	root := shared.CommandGroup("traffic", "Inspect local application traffic")
-	options := trafficOptions{protocol: "http", limit: 250}
+	options := trafficOptions{protocol: "all", limit: 250}
 	list := &cobra.Command{Use: "list", Aliases: []string{"ls"}, Short: "List captured application traffic", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		return c.traffic(cmd.Context(), options)
 	}}
 	list.Flags().BoolVarP(&options.tail, "tail", "t", false, "stream live traffic")
-	list.Flags().StringVar(&options.protocol, "protocol", options.protocol, "protocol family: http or tcp")
-	list.Flags().IntVar(&options.limit, "limit", options.limit, "maximum traffic events")
+	list.Flags().StringVar(&options.protocol, "protocol", options.protocol, "protocol family: all, http, or tcp")
+	list.Flags().IntVar(&options.limit, "limit", options.limit, "maximum traffic exchanges")
 	list.Flags().StringVar(&options.service, "service", "", "match traffic where the service is either endpoint")
 	list.Flags().StringVar(&options.edge, "edge", "", "match one directed source:target edge")
 	list.MarkFlagsMutuallyExclusive("service", "edge")
 	_ = list.RegisterFlagCompletionFunc("service", c.Complete(shared.CompletionServices))
 	_ = list.RegisterFlagCompletionFunc("edge", c.Complete(shared.CompletionConnections))
-	show := &cobra.Command{Use: "show <sequence>", Short: "Show one captured traffic event", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+	show := &cobra.Command{Use: "show <sequence>", Short: "Show one captured traffic exchange", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		return c.showTraffic(cmd.Context(), args[0])
 	}}
 	show.ValidArgsFunction = c.Complete(shared.CompletionTraffic)
-	root.AddCommand(list, show)
+	traceOptions := traceOptions{limit: 100}
+	traces := &cobra.Command{Use: "traces", Short: "List correlated traffic traces", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+		return c.traces(cmd.Context(), traceOptions)
+	}}
+	traces.Flags().IntVar(&traceOptions.limit, "limit", traceOptions.limit, "maximum traces")
+	traces.Flags().StringVar(&traceOptions.service, "service", "", "match traces containing a service")
+	traces.Flags().StringVar(&traceOptions.edge, "edge", "", "match traces containing a source:target edge")
+	traces.Flags().BoolVar(&traceOptions.includeBackground, "include-background", false, "include browser background activity")
+	traces.MarkFlagsMutuallyExclusive("service", "edge")
+	_ = traces.RegisterFlagCompletionFunc("service", c.Complete(shared.CompletionServices))
+	_ = traces.RegisterFlagCompletionFunc("edge", c.Complete(shared.CompletionConnections))
+	trace := &cobra.Command{Use: "trace <number>", Short: "Show one correlated traffic trace", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+		return c.showTrace(cmd.Context(), args[0])
+	}}
+	trace.ValidArgsFunction = c.Complete(shared.CompletionTraces)
+	root.AddCommand(list, show, traces, trace)
 	return root
 }
 

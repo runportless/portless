@@ -173,13 +173,15 @@ test('shows captured request and response details', async ({ page }) => {
   expect(response.status).toBe(200)
 
   await page.getByRole('navigation', { name: 'ui-e2e/local views' }).getByRole('button', { name: 'Traffic' }).click()
+	await page.getByRole('tab', { name: 'EXCHANGES' }).click()
   const row = page.locator('button.traffic-row').filter({ hasText: '/checkout' }).filter({ hasText: 'external' }).first()
   await expect(row).toBeVisible()
   await row.click()
 
   const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
   await expect(detail).toContainText('GET /checkout')
-  await expect(detail.locator('.traffic-message--request')).toContainText('Bearer browser-e2e-secret')
+	await expect(detail.locator('.traffic-message--request')).toContainText('Authorization: [REDACTED]')
+	await expect(detail.locator('.traffic-message--request')).not.toContainText('Bearer browser-e2e-secret')
   await expect(detail.locator('.traffic-message--request')).toContainText('visible')
   await expect(detail.locator('.traffic-message--response')).toContainText('"checkout": "accepted"')
 })
@@ -200,10 +202,10 @@ test('creates, captures, exports, and deletes a recording', async ({ page }) => 
   const downloadEvent = page.waitForEvent('download')
   await row.getByRole('link', { name: 'EXPORT' }).click()
   const download = await downloadEvent
-  const exported = JSON.parse(await readDownload(await download.path())) as { recording: string; traffic: Array<{ source: string; target: string }> }
+	const exported = JSON.parse(await readDownload(await download.path())) as { recording: string; exchanges: Array<{ source: string; target: string }> }
   expect(exported.recording).toBe('ui-recording')
-  expect(exported.traffic).toHaveLength(1)
-  expect(exported.traffic[0]).toMatchObject({ source: 'checkout', target: 'orders' })
+	expect(exported.exchanges).toHaveLength(1)
+	expect(exported.exchanges[0]).toMatchObject({ source: 'checkout', target: 'orders' })
 
   await row.getByRole('button', { name: 'DELETE' }).click()
   await expect(page.locator('.experiment-row').filter({ hasText: 'ui-recording' })).toHaveCount(0)
@@ -310,7 +312,18 @@ test('filters, pauses, resumes, and switches live traffic protocols', async ({ p
   expect((await applicationRequest('/')).status).toBe(404)
   expect((await applicationRequest('/checkout?sku=traffic-controls&quantity=1')).status).toBe(200)
 
-  const filter = page.getByPlaceholder('filter method, path, edge…')
+  const tracesTab = page.getByRole('tab', { name: 'TRACES' })
+  const trafficHeader = page.locator('.traffic-header')
+  await expect(tracesTab).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(async () => {
+    const [headerBox, tabBox] = await Promise.all([trafficHeader.boundingBox(), tracesTab.boundingBox()])
+    if (!headerBox || !tabBox) return false
+    const top = tabBox.y - headerBox.y
+    const bottom = headerBox.y + headerBox.height - tabBox.y - tabBox.height
+    return top >= 0 && top <= 1 && bottom >= 0 && bottom <= 1
+  }).toBe(true)
+  await page.getByRole('tab', { name: 'EXCHANGES' }).click()
+  const filter = page.getByPlaceholder('filter path, service, edge, status…')
   const rows = page.locator('button.traffic-row')
   await filter.fill('/checkout')
   await expect(rows.first()).toBeVisible()
@@ -322,9 +335,10 @@ test('filters, pauses, resumes, and switches live traffic protocols', async ({ p
   await expect(page.locator('.live-count')).toContainText('PAUSED')
   expect((await applicationRequest(marker)).status).toBe(404)
   await expect.poll(async () => {
-    const snapshot = await controlAPI<{ traffic: Array<{ path: string }> }>('/api/v1/environments/ui-e2e/local/traffic?protocol=http&limit=500')
-    return snapshot.traffic.some((event) => event.path === marker)
+    const snapshot = await controlAPI<{ exchanges: Array<{ path: string }> }>('/api/v1/environments/ui-e2e/local/traffic/exchanges?protocol=http&limit=500')
+    return snapshot.exchanges.some((event) => event.path === marker)
   }).toBe(true)
+  await expect(page.locator('.live-count')).toContainText('BUFFERED')
   await expect(rows).toHaveCount(0)
 
   await page.getByRole('button', { name: 'RESUME' }).click()
@@ -334,10 +348,8 @@ test('filters, pauses, resumes, and switches live traffic protocols', async ({ p
   await filter.fill('')
   const protocol = page.getByRole('group', { name: 'Traffic protocol' })
   await protocol.getByRole('button', { name: 'TCP' }).click()
-  await expect(page.getByText('LIVE TCP TRAFFIC')).toBeVisible()
   await expect(protocol.getByRole('button', { name: 'TCP' })).toHaveClass(/is-active/)
   await protocol.getByRole('button', { name: 'HTTP' }).click()
-  await expect(page.getByText('LIVE HTTP TRAFFIC')).toBeVisible()
   await expect(protocol.getByRole('button', { name: 'HTTP' })).toHaveClass(/is-active/)
 })
 
@@ -350,7 +362,7 @@ test('supports keyboard topology inspection and command palette navigation', asy
   await expect(edge).toBeFocused()
   await edge.press('Enter')
   await expect(page).toHaveURL(new RegExp(`/environments/${state.project}/${state.environment}\\?tab=traffic&edge=external%3Acheckout&protocol=http$`))
-  await expect(page.getByPlaceholder('filter method, path, edge…')).toHaveValue('external:checkout')
+	await expect(page.locator('.traffic-filter-chip')).toContainText('external → checkout')
 
   await page.keyboard.press('Control+K')
   const palette = page.getByRole('dialog', { name: 'Command palette' })
@@ -413,7 +425,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
   await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-  await expect(drawer.getByText(/^7\.0\.0$/)).toBeVisible()
+	await expect(drawer.getByText(/^8\.0\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   await drawer.getByRole('button', { name: 'FULL SCREEN' }).click()

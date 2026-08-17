@@ -37,7 +37,7 @@ func (s *Service) decorateEnvironment(environment model.Environment) model.Envir
 			publicEndpoints[strings.ToLower(allocation.Target)] = append(publicEndpoints[strings.ToLower(allocation.Target)], allocation.Endpoint(model.EndpointPublic))
 		}
 	}
-	recentTraffic := s.broker.RecentTraffic(model.EnvironmentSelector(environment.Project, environment.Name), 1000)
+	recentTraffic := s.traffic.RecentExchanges(model.EnvironmentSelector(environment.Project, environment.Name), 1000)
 	cutoff := time.Now().UTC().Add(-30 * time.Second)
 	requestDurations := make(map[string][]int64)
 	for _, event := range recentTraffic {

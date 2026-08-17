@@ -1,6 +1,8 @@
 # Traffic tracing plan
 
-Status: deferred; retain for implementation after the package-structure refactor.
+Status: implemented in the API 8 traffic contract. Passive trace projection,
+trace-first UI, raw exchanges, bounded pause buffering, and CLI trace inspection
+are now part of the product. Framework-specific propagation remains follow-on work.
 
 ## Goal
 
@@ -28,15 +30,21 @@ The raw exchange list remains available for debugging and as the source of truth
 
 ## Capture semantics
 
-Traffic is developer-owned local diagnostic data. Portless will not redact traffic values.
+Traffic is developer-owned local diagnostic data, but known credential-bearing
+headers are replaced with `[REDACTED]` before an exchange enters live retention
+or a recording. Other request and response values remain developer-visible.
 
 - Preserve the exact HTTP request target, including the escaped path and raw query string, for display and export.
 - Keep `Path` as the decoded or normalized pathname used by fault matching; do not make fault rules depend on query values.
-- Preserve all request and response header values, including authorization, cookies, tokens, API keys, and secrets. Preserve repeated values rather than joining them irreversibly.
+- Preserve repeated request and response header values rather than joining them
+  irreversibly. Replace authorization, cookies, and common API-key/token header
+  values before retaining the exchange.
 - Preserve captured request and response bodies verbatim up to a documented memory limit.
 - Use explicit truncation flags and captured/observed byte counts when a body exceeds the limit.
-- Remove the `HEADERS · REDACTED` label from the UI and display `HEADERS`.
-- Document that live traffic, recordings, and exports can contain verbatim credentials and other local application data.
+- Display `HEADERS`; sensitive header values already arrive as `[REDACTED]` and
+  cannot be revealed by API clients.
+- Document that bodies and non-sensitive headers can still contain local
+  application data even though known credential headers are redacted.
 
 Size limits are resource protection, not a content-scrubbing policy. This decision applies to traffic capture; it does not remove secret handling from unrelated daemon logs, process arguments, or persisted configuration.
 
@@ -124,7 +132,8 @@ portless-web/src/features/traffic/
 ## Delivery sequence
 
 1. Move traffic ownership out of the generic event broker after the package refactor establishes final API/daemon boundaries.
-2. Introduce the exchange model and lossless request-target/header capture; remove traffic redaction and update recordings/exports.
+2. Introduce the exchange model, exact request-target capture, repeated headers,
+   credential-header redaction, and updated recordings/exports.
 3. Implement exact trace-context parsing and conservative trace assembly with explicit correlation quality.
 4. Add trace/raw API queries and protocol-neutral streaming with deterministic reconnect behavior.
 5. Extract the web traffic feature and ship Traces, Exchanges, the waterfall, background grouping, details, and pause buffering.
@@ -135,7 +144,8 @@ portless-web/src/features/traffic/
 ### Unit tests
 
 - Exact request target retains escaped path and raw query.
-- Repeated headers and sensitive values are returned verbatim.
+- Repeated non-sensitive headers are returned losslessly and credential-bearing
+  values are redacted before retention.
 - Bodies stop only at the size cap and report observed/captured bytes and truncation accurately.
 - Existing W3C trace context produces exact parentage.
 - Store-style HTTP and TCP timing produces the expected inferred tree.
@@ -147,7 +157,8 @@ portless-web/src/features/traffic/
 ### API and UI tests
 
 - Trace summaries, full spans, raw all-protocol results, filters, and detail lookup have stable shapes.
-- Sensitive header, query, and body values remain visible in detail responses and recordings.
+- Credential-bearing headers remain redacted in detail responses and recordings;
+  repeated safe headers, query values, and bounded bodies remain inspectable.
 - Incoming exchanges update an existing trace without duplicating it.
 - Traces/Exchanges switching, expansion, filtering, background grouping, span detail, pause/resume, empty state, and narrow layouts work.
 - The detail panel says `HEADERS`, never `HEADERS · REDACTED`.
@@ -161,7 +172,8 @@ Run the store fixture, open `/`, then `/checkout`, and assert:
 - Redis and PostgreSQL TCP sessions appear beneath the orders span when timing is unambiguous;
 - favicon traffic is retained as collapsed background activity;
 - raw mode contains every underlying exchange;
-- an injected authorization header and query value are available verbatim in exchange detail.
+- an injected authorization header is redacted while the query value and a
+  non-sensitive repeated header remain available in exchange detail.
 
 ## Non-goals for the first tracing slice
 

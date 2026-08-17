@@ -24,7 +24,7 @@ func TestCLIHelpContracts(t *testing.T) {
 				"Traffic:", "Administration:", "Help:", "--env string", "--json", "--no-color",
 			},
 		},
-		{name: "traffic group", args: []string{"traffic"}, expected: []string{"Inspect local application traffic", "portless traffic [command]", "list", "show"}},
+		{name: "traffic group", args: []string{"traffic"}, expected: []string{"Inspect local application traffic", "portless traffic [command]", "list", "show", "traces", "trace"}},
 		{name: "fault group", args: []string{"fault"}, expected: []string{"Introduce scoped failures", "portless fault [command]", "add", "delete", "disable", "enable", "list"}},
 		{name: "record group", args: []string{"record"}, expected: []string{"Capture bounded local traffic recordings", "portless record [command]", "start", "stop", "export", "delete"}},
 		{name: "environment group", args: []string{"env"}, expected: []string{"Manage project environments", "portless env [command]", "select", "current", "clone", "bind"}},

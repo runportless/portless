@@ -3,7 +3,7 @@
 package contract
 
 // APIVersion is the semantic version of the daemon HTTP contract.
-const APIVersion = "7.0.0"
+const APIVersion = "8.0.0"
 
 // ErrorEnvelope is the stable top-level JSON shape for API failures.
 type ErrorEnvelope struct {

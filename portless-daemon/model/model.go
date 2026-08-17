@@ -391,8 +391,41 @@ type OperationEvent struct {
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 
-// TrafficEvent records one completed HTTP or TCP exchange observed by Portless.
-type TrafficEvent struct {
+// TrafficRequestKind classifies the role of an HTTP request without depending
+// on browser-specific resource-type APIs.
+type TrafficRequestKind string
+
+const (
+	// TrafficRequestNavigation is a top-level document navigation.
+	TrafficRequestNavigation TrafficRequestKind = "navigation"
+	// TrafficRequestSubresource is browser background activity such as an image,
+	// stylesheet, script, or favicon request.
+	TrafficRequestSubresource TrafficRequestKind = "subresource"
+	// TrafficRequestFetch is a browser fetch or XMLHttpRequest-style request.
+	TrafficRequestFetch TrafficRequestKind = "fetch"
+	// TrafficRequestService is a request made by one application service to another.
+	TrafficRequestService TrafficRequestKind = "service"
+	// TrafficRequestUnknown means the available metadata could not classify the request.
+	TrafficRequestUnknown TrafficRequestKind = "unknown"
+)
+
+// TrafficCorrelation describes how confidently Portless related an exchange
+// to the other exchanges in a trace.
+type TrafficCorrelation string
+
+const (
+	// TrafficCorrelationExact means propagated trace context established the relationship.
+	TrafficCorrelationExact TrafficCorrelation = "exact"
+	// TrafficCorrelationInferred means a unique topology and timing relationship was found.
+	TrafficCorrelationInferred TrafficCorrelation = "inferred"
+	// TrafficCorrelationPartial means part of the trace was unavailable or could not be linked.
+	TrafficCorrelationPartial TrafficCorrelation = "partial"
+	// TrafficCorrelationAmbiguous means more than one parent was plausible and Portless did not guess.
+	TrafficCorrelationAmbiguous TrafficCorrelation = "ambiguous"
+)
+
+// TrafficExchange records one completed HTTP or TCP exchange observed by Portless.
+type TrafficExchange struct {
 	Project               string               `json:"project"`
 	Environment           string               `json:"environment"`
 	Sequence              int64                `json:"sequence"`
@@ -406,19 +439,61 @@ type TrafficEvent struct {
 	Method                string               `json:"method,omitempty"`
 	Host                  string               `json:"host,omitempty"`
 	Path                  string               `json:"path,omitempty"`
+	RequestTarget         string               `json:"requestTarget,omitempty"`
+	RequestKind           TrafficRequestKind   `json:"requestKind,omitempty"`
 	Status                int                  `json:"status,omitempty"`
 	DurationMS            int64                `json:"durationMs"`
 	RequestBytes          int64                `json:"requestBytes"`
 	ResponseBytes         int64                `json:"responseBytes"`
+	RequestCapturedBytes  int64                `json:"requestCapturedBytes,omitempty"`
+	ResponseCapturedBytes int64                `json:"responseCapturedBytes,omitempty"`
 	Fault                 string               `json:"fault,omitempty"`
 	Recording             string               `json:"recording,omitempty"`
 	Error                 string               `json:"error,omitempty"`
-	RequestHeaders        map[string]string    `json:"requestHeaders,omitempty"`
-	ResponseHeaders       map[string]string    `json:"responseHeaders,omitempty"`
+	TraceID               string               `json:"traceId,omitempty"`
+	SpanID                string               `json:"spanId,omitempty"`
+	ParentSpanID          string               `json:"parentSpanId,omitempty"`
+	RequestHeaders        map[string][]string  `json:"requestHeaders,omitempty"`
+	ResponseHeaders       map[string][]string  `json:"responseHeaders,omitempty"`
 	RequestBody           string               `json:"requestBody,omitempty"`
 	ResponseBody          string               `json:"responseBody,omitempty"`
 	RequestBodyTruncated  bool                 `json:"requestBodyTruncated,omitempty"`
 	ResponseBodyTruncated bool                 `json:"responseBodyTruncated,omitempty"`
+}
+
+// TrafficTraceSpan places one exchange within a trace tree and waterfall.
+type TrafficTraceSpan struct {
+	Exchange       TrafficExchange    `json:"exchange"`
+	ParentSequence int64              `json:"parentSequence,omitempty"`
+	Depth          int                `json:"depth"`
+	StartOffsetMS  int64              `json:"startOffsetMs"`
+	Correlation    TrafficCorrelation `json:"correlation"`
+}
+
+// TrafficTrace is a rebuildable projection of related exchanges. Number is
+// local to an environment and is the earliest observed exchange sequence in
+// the trace rather than an opaque global identifier.
+type TrafficTrace struct {
+	Project       string             `json:"project"`
+	Environment   string             `json:"environment"`
+	Number        int64              `json:"number"`
+	LastSequence  int64              `json:"lastSequence"`
+	TraceID       string             `json:"traceId,omitempty"`
+	RootSequence  int64              `json:"rootSequence,omitempty"`
+	StartedAt     time.Time          `json:"startedAt"`
+	CompletedAt   time.Time          `json:"completedAt"`
+	DurationMS    int64              `json:"durationMs"`
+	Method        string             `json:"method,omitempty"`
+	RequestTarget string             `json:"requestTarget,omitempty"`
+	Source        string             `json:"source"`
+	Target        string             `json:"target"`
+	Status        int                `json:"status,omitempty"`
+	Error         bool               `json:"error"`
+	Faulted       bool               `json:"faulted"`
+	Background    bool               `json:"background"`
+	SpanCount     int                `json:"spanCount"`
+	Correlation   TrafficCorrelation `json:"correlation"`
+	Spans         []TrafficTraceSpan `json:"spans,omitempty"`
 }
 
 // TrafficActivity describes a live connection or request phase for topology animation.

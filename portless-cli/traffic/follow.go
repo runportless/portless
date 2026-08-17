@@ -14,10 +14,7 @@ import (
 )
 
 func (c *Commands) followTraffic(ctx context.Context, client *apiclient.Client, environment model.Environment, options trafficOptions, seen map[int64]struct{}, jsonOutput bool) error {
-	topic := "traffic.http"
-	if options.protocol == "tcp" {
-		topic = "traffic.tcp"
-	}
+	topic := "traffic.exchange"
 	body, err := client.OpenEventStream(ctx, environment.Project, environment.Name, topic)
 	if err != nil {
 		return err
@@ -29,22 +26,22 @@ func (c *Commands) followTraffic(ctx context.Context, client *apiclient.Client, 
 			last = sequence
 		}
 	}
-	replay, err := client.Traffic(ctx, environment.Project, environment.Name, trafficQuery(options, last))
+	replay, err := client.TrafficExchanges(ctx, environment.Project, environment.Name, trafficQuery(options, last))
 	if err != nil {
 		return err
 	}
-	for index := len(replay.Traffic) - 1; index >= 0; index-- {
-		event := replay.Traffic[index]
-		if _, exists := seen[event.Sequence]; exists {
+	for index := len(replay.Exchanges) - 1; index >= 0; index-- {
+		exchange := replay.Exchanges[index]
+		if _, exists := seen[exchange.Sequence]; exists {
 			continue
 		}
-		seen[event.Sequence] = struct{}{}
+		seen[exchange.Sequence] = struct{}{}
 		if jsonOutput {
-			if err := command.WriteJSONLine(c.Out, event); err != nil {
+			if err := command.WriteJSONLine(c.Out, exchange); err != nil {
 				return err
 			}
 		} else {
-			c.printTraffic(event)
+			c.printTraffic(exchange)
 		}
 	}
 	scanner := bufio.NewScanner(body)
@@ -57,18 +54,18 @@ func (c *Commands) followTraffic(ctx context.Context, client *apiclient.Client, 
 			continue
 		}
 		if strings.HasPrefix(line, "data: ") && eventType == topic {
-			var event model.TrafficEvent
-			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) == nil && matchesTrafficOptions(event, options) {
-				if _, exists := seen[event.Sequence]; exists {
+			var exchange model.TrafficExchange
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &exchange) == nil && matchesTrafficOptions(exchange, options) {
+				if _, exists := seen[exchange.Sequence]; exists {
 					continue
 				}
-				seen[event.Sequence] = struct{}{}
+				seen[exchange.Sequence] = struct{}{}
 				if jsonOutput {
-					if err := command.WriteJSONLine(c.Out, event); err != nil {
+					if err := command.WriteJSONLine(c.Out, exchange); err != nil {
 						return err
 					}
 				} else {
-					c.printTraffic(event)
+					c.printTraffic(exchange)
 				}
 			}
 		}
@@ -79,24 +76,29 @@ func (c *Commands) followTraffic(ctx context.Context, client *apiclient.Client, 
 	return scanner.Err()
 }
 
-func (c *Commands) printTrafficList(environment model.Environment, protocol string, events []model.TrafficEvent) {
+func (c *Commands) printTrafficList(environment model.Environment, protocol string, exchanges []model.TrafficExchange) {
 	title := strings.ToUpper(protocol) + " traffic"
+	if protocol == "all" {
+		title = "Traffic exchanges"
+	}
 	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.Heading(c.Out, title), environment.Project, environment.Name)
-	if len(events) == 0 {
-		fmt.Fprintln(c.Out, c.Muted(c.Out, "No "+strings.ToUpper(protocol)+" traffic captured."))
+	if len(exchanges) == 0 {
+		fmt.Fprintln(c.Out, c.Muted(c.Out, "No matching traffic captured."))
 		return
 	}
 	if protocol == "http" {
 		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    METHOD  PATH               CODE  TIME    EDGE"))
-	} else {
+	} else if protocol == "tcp" {
 		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    PROTOCOL   TIME    EDGE                         RESULT"))
+	} else {
+		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    PROTO  REQUEST / SESSION       RESULT  TIME    EDGE"))
 	}
-	for _, event := range events {
-		c.printTraffic(event)
+	for _, exchange := range exchanges {
+		c.printTraffic(exchange)
 	}
 }
 
-func (c *Commands) printTraffic(event model.TrafficEvent) {
+func (c *Commands) printTraffic(event model.TrafficExchange) {
 	fault := ""
 	if event.Fault != "" {
 		fault = " fault=" + event.Fault
@@ -125,7 +127,10 @@ func (c *Commands) printTraffic(event model.TrafficEvent) {
 		fault = c.Warning(c.Out, fault)
 	}
 	method := event.Method
-	path := event.Path
+	path := event.RequestTarget
+	if path == "" {
+		path = event.Path
+	}
 	if method == "" {
 		method = strings.ToUpper(string(event.Protocol))
 	}
@@ -135,18 +140,32 @@ func (c *Commands) printTraffic(event model.TrafficEvent) {
 	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %s %5dms %s:%s%s\n", event.Sequence, method, path, status, event.DurationMS, event.Source, event.Target, fault)
 }
 
-func (c *Commands) printTrafficDetail(event model.TrafficEvent) {
-	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, strings.ToUpper(string(event.Protocol))+" traffic"), event.Sequence)
+func (c *Commands) printTrafficDetail(event model.TrafficExchange) {
+	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, strings.ToUpper(string(event.Protocol))+" exchange"), event.Sequence)
 	fmt.Fprintf(c.Out, "  %-18s %s → %s\n", "Edge:", event.Source, event.Target)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Provider:", command.EmptyAs(string(event.TargetProvider), "unknown"))
 	if event.Method != "" {
-		fmt.Fprintf(c.Out, "  %-18s %s %s\n", "Request:", event.Method, event.Path)
+		requestTarget := event.RequestTarget
+		if requestTarget == "" {
+			requestTarget = event.Path
+		}
+		fmt.Fprintf(c.Out, "  %-18s %s %s\n", "Request:", event.Method, requestTarget)
 	}
 	if event.Status != 0 {
 		fmt.Fprintf(c.Out, "  %-18s %d\n", "Status:", event.Status)
 	}
 	fmt.Fprintf(c.Out, "  %-18s %dms\n", "Duration:", event.DurationMS)
 	fmt.Fprintf(c.Out, "  %-18s %d / %d\n", "Bytes in / out:", event.RequestBytes, event.ResponseBytes)
+	if event.RequestCapturedBytes != 0 || event.ResponseCapturedBytes != 0 {
+		fmt.Fprintf(c.Out, "  %-18s %d / %d\n", "Captured in / out:", event.RequestCapturedBytes, event.ResponseCapturedBytes)
+	}
+	if event.TraceID != "" {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Trace:", event.TraceID)
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Span:", event.SpanID)
+		if event.ParentSpanID != "" {
+			fmt.Fprintf(c.Out, "  %-18s %s\n", "Parent span:", event.ParentSpanID)
+		}
+	}
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Fault:", command.EmptyAs(event.Fault, "none"))
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Recording:", command.EmptyAs(event.Recording, "none"))
 	if event.Error != "" {
@@ -156,7 +175,45 @@ func (c *Commands) printTrafficDetail(event model.TrafficEvent) {
 	printHeaderMap(c.Out, "Response headers", event.ResponseHeaders)
 }
 
-func matchesTraffic(event model.TrafficEvent, selector string) bool {
+func (c *Commands) printTraceList(environment model.Environment, traces []model.TrafficTrace) {
+	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.Heading(c.Out, "Traffic traces"), environment.Project, environment.Name)
+	if len(traces) == 0 {
+		fmt.Fprintln(c.Out, c.Muted(c.Out, "No matching traces captured."))
+		return
+	}
+	fmt.Fprintln(c.Out, c.Muted(c.Out, "TRACE  REQUEST / ROOT                 RESULT  TIME    SPANS  CORRELATION"))
+	for _, trace := range traces {
+		request := strings.TrimSpace(trace.Method + " " + trace.RequestTarget)
+		if request == "" {
+			request = trace.Source + ":" + trace.Target
+		}
+		result := fmt.Sprint(trace.Status)
+		if trace.Error {
+			result = c.Failure(c.Out, "error")
+		} else if trace.Status == 0 {
+			result = "ok"
+		}
+		fmt.Fprintf(c.Out, "#%-5d %-30s %-7s %5dms %5d  %s\n", trace.Number, request, result, trace.DurationMS, trace.SpanCount, trace.Correlation)
+	}
+}
+
+func (c *Commands) printTrace(trace model.TrafficTrace) {
+	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, "Traffic trace"), trace.Number)
+	fmt.Fprintf(c.Out, "  %-14s %s %s\n", "Root:", trace.Method, trace.RequestTarget)
+	fmt.Fprintf(c.Out, "  %-14s %dms\n", "Duration:", trace.DurationMS)
+	fmt.Fprintf(c.Out, "  %-14s %s\n", "Correlation:", trace.Correlation)
+	fmt.Fprintf(c.Out, "  %-14s %d\n\n", "Spans:", trace.SpanCount)
+	for _, span := range trace.Spans {
+		exchange := span.Exchange
+		operation := strings.TrimSpace(exchange.Method + " " + exchange.RequestTarget)
+		if operation == "" {
+			operation = strings.ToUpper(string(exchange.Protocol)) + " session"
+		}
+		fmt.Fprintf(c.Out, "  %s%s → %s  %-28s %dms  %s\n", strings.Repeat("  ", span.Depth), exchange.Source, exchange.Target, operation, exchange.DurationMS, span.Correlation)
+	}
+}
+
+func matchesTraffic(event model.TrafficExchange, selector string) bool {
 	if selector == "" {
 		return true
 	}

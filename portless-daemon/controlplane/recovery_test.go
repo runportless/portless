@@ -105,15 +105,15 @@ func TestApplicationRestoresTrafficSequenceFromRetainedRecordings(t *testing.T) 
 	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "retained"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := controlStore.PersistTraffic(ctx, model.TrafficEvent{Project: "billing", Environment: "local", Recording: "retained", Sequence: 41}); err != nil {
+	if err := controlStore.PersistTraffic(ctx, model.TrafficExchange{Project: "billing", Environment: "local", Recording: "retained", Sequence: 41}); err != nil {
 		t.Fatal(err)
 	}
 	broker := events.NewBroker()
 	app := New(controlStore, broker, Config{DataDirectory: data, InstallationKey: "test"})
 	defer app.Close(ctx)
-	event := broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP})
-	if event.Sequence != 42 {
-		t.Fatalf("restored sequence = %d, want 42", event.Sequence)
+	exchange := app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP})
+	if exchange.Sequence != 42 {
+		t.Fatalf("restored sequence = %d, want 42", exchange.Sequence)
 	}
 }
 

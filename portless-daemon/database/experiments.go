@@ -165,7 +165,7 @@ func (s *Store) DeleteRecording(ctx context.Context, selector, name string) erro
 }
 
 // PersistTraffic appends an event to matching active recordings while enforcing bounds.
-func (s *Store) PersistTraffic(ctx context.Context, event model.TrafficEvent) error {
+func (s *Store) PersistTraffic(ctx context.Context, event model.TrafficExchange) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scopeFromFields(event.Project, event.Environment))
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (s *Store) MaxRecordedTrafficSequence(ctx context.Context, selector string)
 }
 
 // RecordedTraffic reads persisted traffic in reverse order, optionally for one recording.
-func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName string, limit int) ([]model.TrafficEvent, error) {
+func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName string, limit int) ([]model.TrafficExchange, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return nil, err
@@ -234,13 +234,13 @@ func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName str
 		return nil, err
 	}
 	defer rows.Close()
-	var result []model.TrafficEvent
+	var result []model.TrafficExchange
 	for rows.Next() {
 		var encoded []byte
 		if err := rows.Scan(&encoded); err != nil {
 			return nil, err
 		}
-		var event model.TrafficEvent
+		var event model.TrafficExchange
 		if err := json.Unmarshal(encoded, &event); err != nil {
 			return nil, err
 		}

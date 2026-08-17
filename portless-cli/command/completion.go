@@ -27,6 +27,8 @@ const (
 	CompletionFaults = "faults"
 	// CompletionTraffic identifies captured-traffic-sequence completion candidates.
 	CompletionTraffic = "traffic"
+	// CompletionTraces identifies correlated traffic-trace-number completion candidates.
+	CompletionTraces = "traces"
 	// CompletionSources identifies project-source-name completion candidates.
 	CompletionSources = "sources"
 )
@@ -120,22 +122,24 @@ func (c *Context) CompletionValues(parent context.Context, resource string) []st
 				values = append(values, item.Name)
 			}
 		case CompletionTraffic:
-			seen := make(map[int64]struct{})
-			for _, protocol := range []string{"http", "tcp"} {
-				response, trafficErr := client.Traffic(ctx, environment.Project, environment.Name, contract.TrafficQuery{Protocol: protocol, Limit: 1000})
-				if trafficErr != nil {
-					continue
-				}
-				for _, item := range response.Traffic {
-					if _, exists := seen[item.Sequence]; !exists {
-						seen[item.Sequence] = struct{}{}
-						values = append(values, strconv.FormatInt(item.Sequence, 10))
-					}
-				}
+			response, trafficErr := client.TrafficExchanges(ctx, environment.Project, environment.Name, contract.TrafficExchangeQuery{Protocol: "all", Limit: 1000})
+			if trafficErr != nil {
+				return nil
+			}
+			for _, item := range response.Exchanges {
+				values = append(values, strconv.FormatInt(item.Sequence, 10))
+			}
+		case CompletionTraces:
+			response, traceErr := client.TrafficTraces(ctx, environment.Project, environment.Name, contract.TrafficTraceQuery{IncludeBackground: true, Limit: 1000})
+			if traceErr != nil {
+				return nil
+			}
+			for _, item := range response.Traces {
+				values = append(values, strconv.FormatInt(item.Number, 10))
 			}
 		}
 	}
-	if resource == CompletionTraffic {
+	if resource == CompletionTraffic || resource == CompletionTraces {
 		sort.Slice(values, func(i, j int) bool {
 			left, _ := strconv.ParseInt(values[i], 10, 64)
 			right, _ := strconv.ParseInt(values[j], 10, 64)

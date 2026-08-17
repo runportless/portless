@@ -14,6 +14,13 @@ type trafficOptions struct {
 	edge     string
 }
 
+type traceOptions struct {
+	limit             int
+	service           string
+	edge              string
+	includeBackground bool
+}
+
 type exportOptions struct {
 	output string
 	force  bool

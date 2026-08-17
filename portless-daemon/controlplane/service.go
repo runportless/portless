@@ -17,6 +17,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/runtime/container/docker"
 	"github.com/portless-run/portless/portless-daemon/runtime/container/podman"
 	processruntime "github.com/portless-run/portless/portless-daemon/runtime/process"
+	"github.com/portless-run/portless/portless-daemon/traffic"
 	"github.com/portless-run/portless/portless-daemon/traffic/proxy"
 )
 
@@ -94,6 +95,7 @@ type Config struct {
 type Service struct {
 	database             *database.Store
 	broker               *events.Broker
+	traffic              *traffic.Store
 	processes            *processruntime.Manager
 	containers           *container.Manager
 	proxy                *proxy.Manager
@@ -125,13 +127,15 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 		}
 		discoverer = created
 	}
+	trafficStore := traffic.NewStore(broker)
 	service := &Service{
 		database: controlStore, broker: broker, dataDirectory: config.DataDirectory,
+		traffic:         trafficStore,
 		installationKey: config.InstallationKey, daemonInstanceID: config.DaemonInstanceID, privateTCPIngress: config.PrivateTCPIngress,
 		projectLocks: make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string), sourceLeases: make(map[string]string),
 		discoverer: discoverer, resources: resources,
 	}
-	service.proxy = proxy.NewManager(controlStore, broker)
+	service.proxy = proxy.NewManager(controlStore, trafficStore, broker)
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
 	service.containers = container.NewManager(
 		filepath.Join(config.DataDirectory, "runtime.json"),
@@ -148,7 +152,7 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 		for _, environment := range environments {
 			scope := model.EnvironmentSelector(environment.Project, environment.Name)
 			if sequence, sequenceErr := controlStore.MaxRecordedTrafficSequence(context.Background(), scope); sequenceErr == nil {
-				broker.EnsureTrafficSequence(scope, sequence)
+				trafficStore.EnsureSequence(scope, sequence)
 			}
 		}
 	}

@@ -137,13 +137,13 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 		t.Fatalf("list mixed-provider traffic: %v\n%s", err, trafficOutput)
 	}
 	var traffic struct {
-		Traffic []model.TrafficEvent `json:"traffic"`
+		Exchanges []model.TrafficExchange `json:"exchanges"`
 	}
-	if err := json.Unmarshal([]byte(trafficOutput), &traffic); err != nil || len(traffic.Traffic) != 1 {
+	if err := json.Unmarshal([]byte(trafficOutput), &traffic); err != nil || len(traffic.Exchanges) != 1 {
 		t.Fatalf("decode mixed-provider traffic: err=%v output=%s", err, trafficOutput)
 	}
-	if traffic.Traffic[0].TargetProvider != model.ProviderRemote || traffic.Traffic[0].RemoteClassification != model.RemoteQA {
-		t.Fatalf("traffic lost remote provider metadata: %#v", traffic.Traffic[0])
+	if traffic.Exchanges[0].TargetProvider != model.ProviderRemote || traffic.Exchanges[0].RemoteClassification != model.RemoteQA {
+		t.Fatalf("traffic lost remote provider metadata: %#v", traffic.Exchanges[0])
 	}
 
 	connectionOutput, err := runCLIAt(binary, home, checkout,

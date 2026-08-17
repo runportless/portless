@@ -491,10 +491,10 @@ func TestEnvironmentDecoratesServicesWithRecentHTTPTraffic(t *testing.T) {
 	app := New(controlStore, broker, Config{DataDirectory: data, InstallationKey: "test"})
 	defer app.Close(ctx)
 	now := time.Now().UTC()
-	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "orders", CompletedAt: now.Add(-time.Second), DurationMS: 10})
-	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "orders", CompletedAt: now.Add(-2 * time.Second), DurationMS: 100})
-	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "checkout", CompletedAt: now.Add(-time.Minute), DurationMS: 999})
-	broker.AddTraffic(model.TrafficEvent{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Target: "orders", CompletedAt: now, DurationMS: 1})
+	app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "orders", CompletedAt: now.Add(-time.Second), DurationMS: 10})
+	app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "orders", CompletedAt: now.Add(-2 * time.Second), DurationMS: 100})
+	app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Target: "checkout", CompletedAt: now.Add(-time.Minute), DurationMS: 999})
+	app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Target: "orders", CompletedAt: now, DurationMS: 1})
 
 	environment, err := app.Environment(ctx, "billing", "local")
 	if err != nil {

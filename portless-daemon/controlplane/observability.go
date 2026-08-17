@@ -16,33 +16,44 @@ import (
 	"github.com/portless-run/portless/portless-daemon/runtime/logstore"
 )
 
-// Traffic returns the most recent in-memory traffic events for an environment.
-func (s *Service) Traffic(project, environment string, limit int) []model.TrafficEvent {
-	return s.broker.RecentTraffic(model.EnvironmentSelector(project, environment), limit)
+// TrafficExchanges returns the most recent in-memory traffic exchanges for an environment.
+func (s *Service) TrafficExchanges(project, environment string, limit int) []model.TrafficExchange {
+	return s.traffic.RecentExchanges(model.EnvironmentSelector(project, environment), limit)
 }
 
-// TrafficEvent finds one traffic event in live or recorded history by sequence number.
-func (s *Service) TrafficEvent(ctx context.Context, project, environment string, sequence int64) (model.TrafficEvent, error) {
-	for _, event := range s.Traffic(project, environment, 1000) {
-		if event.Sequence == sequence {
-			return event, nil
-		}
+// TrafficExchange finds one exchange in live or recorded history by sequence number.
+func (s *Service) TrafficExchange(ctx context.Context, project, environment string, sequence int64) (model.TrafficExchange, error) {
+	if exchange, ok := s.traffic.Exchange(model.EnvironmentSelector(project, environment), sequence); ok {
+		return exchange, nil
 	}
 	recorded, err := s.database.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), "", 10_000)
 	if err != nil {
-		return model.TrafficEvent{}, err
+		return model.TrafficExchange{}, err
 	}
-	for _, event := range recorded {
-		if event.Sequence == sequence {
-			return event, nil
+	for _, exchange := range recorded {
+		if exchange.Sequence == sequence {
+			return exchange, nil
 		}
 	}
-	return model.TrafficEvent{}, database.ErrNotFound
+	return model.TrafficExchange{}, database.ErrNotFound
 }
 
 // RecordedTraffic returns persisted traffic, optionally limited to one recording.
-func (s *Service) RecordedTraffic(ctx context.Context, project, environment, recording string, limit int) ([]model.TrafficEvent, error) {
+func (s *Service) RecordedTraffic(ctx context.Context, project, environment, recording string, limit int) ([]model.TrafficExchange, error) {
 	return s.database.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), recording, limit)
+}
+
+// TrafficTraces returns trace projections from the live exchange buffer.
+func (s *Service) TrafficTraces(project, environment string, limit int) []model.TrafficTrace {
+	return s.traffic.Traces(model.EnvironmentSelector(project, environment), limit)
+}
+
+// TrafficTrace returns one full live trace projection by environment-local number.
+func (s *Service) TrafficTrace(project, environment string, number int64) (model.TrafficTrace, error) {
+	if trace, ok := s.traffic.Trace(model.EnvironmentSelector(project, environment), number); ok {
+		return trace, nil
+	}
+	return model.TrafficTrace{}, database.ErrNotFound
 }
 
 // Timeline returns durable environment events in reverse chronological order.
