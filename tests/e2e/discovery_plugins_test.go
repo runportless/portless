@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/portless-daemon/model"
 )
 
 func TestCLIFrameworkDiscoveryPluginMatrix(t *testing.T) {

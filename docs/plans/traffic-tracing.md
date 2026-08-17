@@ -82,7 +82,7 @@ Transparent proxies alone cannot reliably establish causality when requests over
 
 ## Ownership and package boundary
 
-After the package-structure refactor, create a focused `internal/traffic` subsystem. It should own:
+Create the focused `portless-daemon/traffic` subsystem inside the daemon product. It should own:
 
 - bounded live exchange retention and sequence allocation;
 - exact-context parsing and conservative correlation;
@@ -109,7 +109,7 @@ Because this is version 1, the implementation may replace the current traffic re
 Extract traffic UI code from `ProjectPage.tsx` into a feature boundary:
 
 ```text
-web/src/features/traffic/
+portless-web/src/features/traffic/
   TrafficPanel.tsx
   TraceList.tsx
   TraceRow.tsx

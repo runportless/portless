@@ -1,0 +1,46 @@
+package nats
+
+import (
+	"context"
+	"net"
+	"strconv"
+	"time"
+
+	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/portless-run/portless/portless-daemon/providers"
+	"github.com/portless-run/portless/portless-daemon/providers/builtin/common"
+)
+
+type Plugin struct{}
+
+func New() providers.Plugin { return Plugin{} }
+
+func (Plugin) Descriptor() providers.Descriptor {
+	return providers.Descriptor{ID: "nats", DefaultVersion: "2"}
+}
+
+func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consumers []providers.Consumer) (providers.Findings, error) {
+	return common.Detect(ctx, workspace, consumers, common.Detection{
+		Name: "nats", Explanation: "NATS configuration or dependency found",
+		Markers:            []string{"nats://", "github.com/nats-io/nats.go", "io.nats", `"nats"`, `'nats'`, "nats-py"},
+		DefaultEnvironment: func(providers.Consumer) string { return "NATS_URL" },
+		ExplicitEnvironment: func(content string, consumer providers.Consumer) string {
+			return common.FirstEnvironment(content, "NATS_URL", "NATS_ADDRESS")
+		},
+	})
+}
+
+func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan, error) {
+	return providers.ContainerPlan{
+		Image: "docker.io/library/nats:" + definition.Version, ClientPort: 4222,
+		Readiness: providers.Readiness{Kind: "tcp", Timeout: time.Minute, Interval: 500 * time.Millisecond},
+	}, nil
+}
+
+func (Plugin) Bind(context providers.BindingContext) (providers.BindingResult, error) {
+	if !context.Active {
+		return providers.BindingResult{SafeValues: map[string]string{context.Environment: "not active"}}, nil
+	}
+	value := "nats://" + net.JoinHostPort(context.Host, strconv.Itoa(context.Port))
+	return providers.BindingResult{Values: map[string]string{context.Environment: value}, SafeValues: map[string]string{context.Environment: value}}, nil
+}

@@ -22,11 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/internal/diagnostics"
-	"github.com/portless-run/portless/internal/model"
-	"github.com/portless-run/portless/internal/networking"
-	"github.com/portless-run/portless/internal/relay"
-	relayinstall "github.com/portless-run/portless/internal/relay/install"
+	"github.com/portless-run/portless/portless-cli/doctor"
+	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/portless-run/portless/portless-daemon/networking"
+	"github.com/portless-run/portless/portless-relay"
 	"golang.org/x/sys/unix"
 )
 
@@ -75,7 +74,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 	if doctorResult.Err != nil {
 		t.Fatalf("doctor relay failed: %v\nstdout:\n%s\nstderr:\n%s", doctorResult.Err, doctorResult.Stdout, doctorResult.Stderr)
 	}
-	var report diagnostics.Report
+	var report doctor.Report
 	decodeJSON(t, doctorResult.Stdout, &report)
 	if !report.Healthy || report.Summary.Failed != 0 || report.Summary.Warnings != 0 || report.Summary.Skipped != 0 {
 		t.Fatalf("relay doctor was not healthy: %#v", report)
@@ -144,7 +143,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 	var restarted struct {
 		Action string `json:"action"`
 		State  string `json:"state"`
-		relayinstall.InstallationStatus
+		relay.InstallationStatus
 	}
 	decodeJSON(t, restartResult.Stdout, &restarted)
 	if restarted.Action != "restart" || restarted.State != "ready" || !restarted.Healthy {
@@ -256,7 +255,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 
 type relayStatus struct {
 	State string `json:"state"`
-	relayinstall.InstallationStatus
+	relay.InstallationStatus
 }
 
 type daemonStatus struct {
@@ -614,10 +613,10 @@ func assertDarwinLoopbackPoolAbsent(t *testing.T) {
 	}
 }
 
-func healthyDoctorCheck(report diagnostics.Report, code string) bool {
+func healthyDoctorCheck(report doctor.Report, code string) bool {
 	for _, check := range report.Checks {
 		if check.Code == code {
-			return check.Status == diagnostics.StatusPass || check.Status == diagnostics.StatusInfo
+			return check.Status == doctor.StatusPass || check.Status == doctor.StatusInfo
 		}
 	}
 	return false
@@ -851,7 +850,7 @@ func waitForResolverRemoval() error {
 	return errors.New("system resolver still routes portless.test after relay uninstall")
 }
 
-func installationRoot(status relayinstall.InstallationStatus) (string, error) {
+func installationRoot(status relay.InstallationStatus) (string, error) {
 	if !filepath.IsAbs(status.TargetSocket) || !filepath.IsAbs(status.DNSTargetSocket) {
 		return "", errors.New("existing relay has non-absolute daemon socket targets")
 	}

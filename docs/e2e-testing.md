@@ -230,10 +230,10 @@ coverage.
 
 Playwright runs serially because the scenarios intentionally share one real
 environment. On failure it retains a screenshot, video, trace, and error
-context under `web/test-results/`. Open a trace with:
+context under `portless-web/test-results/`. Open a trace with:
 
 ```bash
-npm --prefix web exec -- playwright show-trace web/test-results/<test>/trace.zip
+npm --prefix portless-web exec -- playwright show-trace portless-web/test-results/<test>/trace.zip
 ```
 
 CLI failures print the isolated daemon log in the failing assertion. To target

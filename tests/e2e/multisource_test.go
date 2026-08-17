@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/portless-daemon/model"
 )
 
 func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {

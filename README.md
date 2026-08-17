@@ -49,6 +49,26 @@ Processes and managed resource containers still receive private dynamic runtime 
 
 See [docs/implementation-status.md](docs/implementation-status.md) for the explicit boundary of this initial implementation.
 
+## Repository structure
+
+The source tree follows the running product rather than a generic `internal`
+layout:
+
+- `portless-cli` owns the `portless` executable and is split by user-facing
+  command domains: environment lifecycle, projects, observation, traffic, and
+  administration. Its `command` package owns shared CLI execution and output.
+- `portless-daemon` owns the daemon, its API, control plane, state, discovery,
+  runtimes, and traffic behavior.
+- `portless-relay` owns the privileged clean-URL and TCP DNS relay, including
+  installation and removal.
+- `portless-web` owns the React control plane and the assets embedded into the
+  daemon.
+
+There is no standalone API product: `portless-daemon/api` is the daemon's wire
+boundary shared by the CLI and browser. See the
+[product structure](docs/plans/package-structure-refactor.md) for ownership and
+dependency rules.
+
 ## Build
 
 Requirements for building Portless:
@@ -66,10 +86,12 @@ make
 
 `make` is the complete build entry point. On a clean checkout it installs the
 locked frontend development dependencies, compiles the embedded React UI, and
-then compiles the Go executable. Later builds reuse `web/node_modules` until a
-frontend manifest changes.
+then compiles the Go executable. Later builds reuse
+`portless-web/node_modules` until a frontend manifest changes.
 
-The Vite build is written to `webui/dist` and embedded by Go. The resulting `bin/portless` does not need Node.js to serve the UI.
+The Vite build is written to `portless-web/dist` and embedded directly by the
+`portless-web` product. The resulting `bin/portless` does not need Node.js to
+serve the UI.
 
 ## First run
 
@@ -412,4 +434,4 @@ See [docs/e2e-testing.md](docs/e2e-testing.md) for the covered journeys, test-on
 private-ingress boundary, failure artifacts, and the separate privileged
 machine-integration boundary.
 
-API reference: [api/openapi.yaml](api/openapi.yaml). Live event contract: [api/events.md](api/events.md).
+API reference: [portless-daemon/api/openapi.yaml](portless-daemon/api/openapi.yaml). Live event contract: [portless-daemon/api/events.md](portless-daemon/api/events.md).

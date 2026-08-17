@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/portless-daemon/model"
 )
 
 func TestCLIZeroConfigurationLifecycle(t *testing.T) {

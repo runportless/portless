@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/internal/model"
-	"github.com/portless-run/portless/internal/store"
+	"github.com/portless-run/portless/portless-daemon/database"
+	"github.com/portless-run/portless/portless-daemon/model"
 )
 
 func TestForcedResetRecoversActiveIncompatibleTopology(t *testing.T) {
@@ -126,7 +126,7 @@ func corruptStoredTopology(t *testing.T, home string, environment model.Environm
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlStore, err := store.Open(filepath.Join(home, "portless.db"))
+	controlStore, err := database.Open(filepath.Join(home, "portless.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func readDaemonLog(home string) string {
 func seedActiveIncompatibleTopology(t *testing.T, home string) {
 	t.Helper()
 	ctx := context.Background()
-	controlStore, err := store.Open(filepath.Join(home, "portless.db"))
+	controlStore, err := database.Open(filepath.Join(home, "portless.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func e2eBinary(t *testing.T) string {
 	binary := filepath.Join(t.TempDir(), "portless")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-tags=e2e", "-trimpath", "-o", binary, "./cmd/portless")
+	command := exec.CommandContext(ctx, "go", "build", "-tags=e2e", "-trimpath", "-o", binary, "./portless-cli/cmd/portless")
 	command.Dir = repository
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build E2E binary: %v\n%s", err, output)

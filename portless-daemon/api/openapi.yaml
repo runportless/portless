@@ -1,0 +1,1388 @@
+openapi: 3.1.0
+info:
+  title: Portless local control API
+  version: 7.0.0
+  description: >-
+    Loopback-only API shared by the Portless CLI and embedded UI. Projects are
+    reusable application topologies. Environments are independently configured
+    and runnable instances. Public routes use readable project, environment,
+    service, and artifact names; private ownership keys are never exposed.
+servers:
+  - url: http://portless.localhost/api/v1
+security:
+  - bearer: []
+  - browserSession: []
+paths:
+  /health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        '200':
+          description: Daemon readiness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ready, apiVersion]
+                properties:
+                  ready: { type: boolean }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '7.0.0', description: Stable semantic API version. }
+  /system:
+    get:
+      operationId: system
+      responses:
+        '200': { description: Local daemon metadata }
+  /daemon:
+    get:
+      operationId: daemonStatus
+      description: Browser-safe identity, lifecycle state, and handoff readiness for the local daemon.
+      responses:
+        '200':
+          description: Current daemon status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DaemonStatus' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /daemon/restart:
+    post:
+      operationId: restartDaemon
+      description: >-
+        Requests an authenticated daemon replacement without force. Active
+        environments must pass runtime handoff checks. Browser sessions remain
+        valid across the replacement and clients reconnect by observing a new
+        instanceId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instanceId]
+              properties:
+                instanceId: { type: string }
+      responses:
+        '202':
+          description: Replacement accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DaemonRestart' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /relay:
+    get:
+      operationId: relayStatus
+      description: Installation and end-to-end health of clean HTTP ingress and scoped TCP endpoint DNS.
+      responses:
+        '200':
+          description: Current privileged relay status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RelayStatus' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /runtime:
+    get:
+      operationId: runtimeStatus
+      responses:
+        '200':
+          description: Docker/Podman selection and availability
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RuntimeStatus' }
+    put:
+      operationId: selectRuntime
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preference]
+              properties:
+                preference: { type: string, enum: [auto, docker, podman] }
+      responses:
+        '200':
+          description: Persisted runtime preference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RuntimeStatus' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /runtime/start:
+    post:
+      operationId: startRuntime
+      responses:
+        '200': { description: Selected container runtime is ready }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /runtime/reset:
+    get:
+      operationId: planRuntimeReset
+      description: Format-independent reset inventory derived from normalized runtime ownership rows. Remains available when the stored project topology requires reset-and-rediscover recovery.
+      responses:
+        '200':
+          description: Counts, active environments, and topology compatibility needed to plan a guarded reset.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResetPlan' }
+    post:
+      operationId: prepareRuntimeReset
+      description: CLI-only runtime cleanup performed before application state is erased. Force permits active or unknown environments but never bypasses runtime ownership verification.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Verified supervisors and installation-owned container resources were stopped or removed.
+        '403':
+          description: Browser sessions cannot prepare a destructive runtime reset.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /browser-claims:
+    post:
+      operationId: createBrowserClaim
+      description: CLI bearer authentication only; claims are single-use and short-lived.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [next]
+              properties:
+                next: { type: string, example: /environments/billing/local }
+      responses:
+        '201': { description: Browser claim URL and expiry }
+  /session:
+    get:
+      operationId: session
+      responses:
+        '200': { description: Current CLI or browser principal and CSRF token }
+  /session/logout:
+    post:
+      operationId: logout
+      responses:
+        '204': { description: Browser session removed }
+  /projects:
+    get:
+      operationId: listProjects
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Logical projects with environment summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects]
+                properties:
+                  projects:
+                    type: array
+                    items: { $ref: '#/components/schemas/Project' }
+    post:
+      operationId: createProject
+      description: Discover and combine one or more named source checkouts, then create the local environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, sources]
+              properties:
+                name: { $ref: '#/components/schemas/ProjectName' }
+                sources:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/SourceInput' }
+      responses:
+        '201': { description: Project, initial environment, and discovery warnings }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /projects/discover:
+    post:
+      operationId: discoverProject
+      description: CLI-only single-checkout discovery used by bare `portless up`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: Absolute checkout path from the CLI process. }
+                name: { $ref: '#/components/schemas/ProjectName' }
+      responses:
+        '200': { description: Existing or newly created project and local environment }
+  /projects/{projectName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+    get:
+      operationId: getProject
+      responses:
+        '200':
+          description: Logical topology and environment summaries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: renameProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, revision]
+              properties:
+                name: { $ref: '#/components/schemas/ProjectName' }
+                revision: { type: integer, format: int64 }
+      responses:
+        '200': { description: Renamed project; all environments must be stopped }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: forgetProject
+      responses:
+        '204': { description: Stopped project and all environment metadata forgotten }
+  /projects/{projectName}/declaration:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+    get:
+      operationId: exportProjectDeclaration
+      responses:
+        '200': { description: Generated portless.project.json }
+  /projects/{projectName}/sources:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+    post:
+      operationId: addProjectSource
+      description: >-
+        CLI-only discovery that adds a logical source to the project and binds its absolute
+        checkout path only to the selected environment. Every environment in the project must
+        be stopped; other environments remain unbound until configured explicitly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, path, environment]
+              properties:
+                name: { $ref: '#/components/schemas/SourceName' }
+                path: { type: string, description: Absolute checkout path from the CLI process. }
+                environment: { $ref: '#/components/schemas/EnvironmentName' }
+      responses:
+        '201': { description: Updated project, selected environment, discovery warnings, and environment selectors requiring configuration }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /environments:
+    get:
+      operationId: listEnvironments
+      parameters:
+        - in: query
+          name: project
+          schema: { $ref: '#/components/schemas/ProjectName' }
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Environments across all projects or one filtered project
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [environments]
+                properties:
+                  environments:
+                    type: array
+                    items: { $ref: '#/components/schemas/Environment' }
+    post:
+      operationId: cloneEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project, name]
+              properties:
+                project: { $ref: '#/components/schemas/ProjectName' }
+                name: { $ref: '#/components/schemas/EnvironmentName' }
+                from: { $ref: '#/components/schemas/EnvironmentName', default: local }
+      responses:
+        '201':
+          description: New stopped environment with copied source and provider configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+  /environments/resolve:
+    get:
+      operationId: resolveEnvironmentForPath
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string, description: Absolute checkout path. }
+      responses:
+        '200': { description: Selected environment, or all environments containing the checkout }
+  /environments/context:
+    get:
+      operationId: getEnvironmentContextForPath
+      description: Resolves the effective environment for a checkout and explains whether it was saved, inferred, ambiguous, or absent.
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string, description: Absolute checkout path. }
+      responses:
+        '200':
+          description: Effective environment context for the checkout
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentContext' }
+  /environments/select:
+    put:
+      operationId: selectEnvironmentForPath
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, project, environment]
+              properties:
+                path: { type: string, description: Absolute checkout path. }
+                project: { $ref: '#/components/schemas/ProjectName' }
+                environment: { $ref: '#/components/schemas/EnvironmentName' }
+      responses:
+        '204': { description: Checkout context selection persisted }
+    delete:
+      operationId: clearEnvironmentSelectionForPath
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string, description: Absolute checkout path. }
+      responses:
+        '200':
+          description: Whether a saved checkout selection was removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared: { type: boolean }
+  /environments/{projectName}/{environmentName}:
+    parameters: &environmentParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+    get:
+      operationId: getEnvironment
+      responses:
+        '200':
+          description: Effective sources, providers, topology, and runtime state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: forgetEnvironment
+      responses:
+        '204': { description: Stopped environment metadata forgotten }
+  /environments/{projectName}/{environmentName}/rescan:
+    parameters: *environmentParameters
+    post:
+      operationId: rescanEnvironment
+      responses:
+        '200': { description: Refreshed all source discovery and recompiled topology }
+  /environments/{projectName}/{environmentName}/up:
+    parameters: *environmentParameters
+    post:
+      operationId: up
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                debugServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' } }
+                managed: { type: boolean, default: false }
+      responses:
+        '202':
+          description: Durable startup operation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/down:
+    parameters: *environmentParameters
+    post:
+      operationId: down
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                removeVolumes: { type: boolean, default: false }
+      responses:
+        '202':
+          description: Durable shutdown operation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/bindings/{serviceName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/ServiceName' }
+    put:
+      operationId: setComponentProvider
+      description: Environment must be stopped. The service field, if present, is replaced by the path service name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComponentBinding' }
+      responses:
+        '200':
+          description: Recompiled environment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+  /environments/{projectName}/{environmentName}/sources/{sourceName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/SourceName' }
+    put:
+      operationId: setEnvironmentSourcePath
+      description: Re-discovers a checkout or Git worktree and recompiles the stopped environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: Absolute checkout or worktree path. }
+      responses:
+        '200': { description: Recompiled environment and discovery warnings }
+  /environments/{projectName}/{environmentName}/services:
+    parameters: *environmentParameters
+    get:
+      operationId: listServices
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Effective service runtime snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services: { type: array, items: { $ref: '#/components/schemas/Service' } }
+  /environments/{projectName}/{environmentName}/services/{serviceName}:
+    parameters: &serviceParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/ServiceName' }
+    get:
+      operationId: getService
+      responses:
+        '200':
+          description: Service runtime snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/start:
+    parameters: *serviceParameters
+    post:
+      operationId: startService
+      responses:
+        '202':
+          description: Idempotent service-start operation accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/stop:
+    parameters: *serviceParameters
+    post:
+      operationId: stopService
+      responses:
+        '202':
+          description: Idempotent service-stop operation accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/restart:
+    parameters: *serviceParameters
+    post:
+      operationId: restartService
+      responses:
+        '202':
+          description: Service-restart operation accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/manage:
+    parameters: *serviceParameters
+    post:
+      operationId: manageService
+      responses:
+        '202':
+          description: Service restart in normal managed mode accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/debug:
+    parameters: *serviceParameters
+    post:
+      operationId: debugService
+      responses:
+        '202':
+          description: Service restart with its discovered debugger enabled accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/services/{serviceName}/configuration:
+    parameters: *serviceParameters
+    get:
+      operationId: serviceConfiguration
+      responses:
+        '200':
+          description: Effective configuration with sensitive values masked and generated connection values identified
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceConfiguration' }
+  /environments/{projectName}/{environmentName}/connections:
+    parameters: *environmentParameters
+    get:
+      operationId: listConnections
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Effective source/target edges, proxy addresses, providers, and injected values
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connections]
+                properties:
+                  connections: { type: array, items: { $ref: '#/components/schemas/EffectiveConnection' } }
+  /environments/{projectName}/{environmentName}/connections/{sourceName}/{targetName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: path
+        name: sourceName
+        required: true
+        schema: { type: string }
+      - in: path
+        name: targetName
+        required: true
+        schema: { $ref: '#/components/schemas/ServiceName' }
+    get:
+      operationId: getConnection
+      responses:
+        '200':
+          description: One effective directed connection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EffectiveConnection' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /environments/{projectName}/{environmentName}/logs:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: query
+        name: service
+        schema: { $ref: '#/components/schemas/ServiceName' }
+        description: Omit to merge entries from every service.
+    get:
+      operationId: serviceLogs
+      parameters:
+        - { $ref: '#/components/parameters/LogLimit' }
+        - in: query
+          name: since
+          description: Go duration such as 10m, or an RFC3339 timestamp.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Chronological structured log entries from retained process and container generations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogEntries' }
+  /environments/{projectName}/{environmentName}/traffic:
+    parameters: *environmentParameters
+    get:
+      operationId: listTraffic
+      parameters:
+        - in: query
+          name: protocol
+          schema: { type: string, enum: [http, tcp], default: http }
+          description: tcp includes raw TCP and protocol-aware Postgres and Redis connections.
+        - { $ref: '#/components/parameters/Limit1000' }
+        - in: query
+          name: service
+          schema: { $ref: '#/components/schemas/ServiceName' }
+          description: Match either endpoint.
+        - in: query
+          name: source
+          schema: { type: string }
+        - in: query
+          name: target
+          schema: { type: string }
+        - in: query
+          name: edge
+          schema: { type: string, pattern: '^[^:]+:[^:]+$' }
+          description: Directed source:target shorthand; overrides source and target.
+        - in: query
+          name: after
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Newest-first bounded traffic summaries from the live buffer; headers are available from the detail route.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [traffic]
+                properties:
+                  traffic: { type: array, items: { $ref: '#/components/schemas/TrafficEvent' } }
+  /environments/{projectName}/{environmentName}/traffic/{sequence}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: path
+        name: sequence
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getTrafficEvent
+      responses:
+        '200':
+          description: One traffic event from the live buffer or a retained recording
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficEvent' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /environments/{projectName}/{environmentName}/stream:
+    parameters: *environmentParameters
+    get:
+      operationId: environmentStream
+      parameters:
+        - in: query
+          name: topic
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+      responses:
+        '200': { description: text/event-stream; see portless-daemon/api/events.md }
+  /environments/{projectName}/{environmentName}/recordings:
+    parameters: *environmentParameters
+    get:
+      operationId: listRecordings
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Environment recordings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recordings]
+                properties:
+                  recordings: { type: array, items: { $ref: '#/components/schemas/Recording' } }
+    post:
+      operationId: startRecording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordingInput' }
+      responses:
+        '201':
+          description: Active bounded recording
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Recording' }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}:
+    parameters: &recordingParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/RecordingName' }
+    get:
+      operationId: getRecording
+      responses:
+        '200':
+          description: Recording metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Recording' }
+    delete:
+      operationId: deleteRecording
+      responses:
+        '204': { description: Completed recording deleted }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}/stop:
+    parameters: *recordingParameters
+    post:
+      operationId: stopRecording
+      responses:
+        '200':
+          description: Completed recording
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Recording' }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}/export:
+    parameters: *recordingParameters
+    get:
+      operationId: exportRecording
+      responses:
+        '200': { description: Portless JSON recording export }
+  /environments/{projectName}/{environmentName}/faults:
+    parameters: *environmentParameters
+    get:
+      operationId: listFaults
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Environment fault rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [faults]
+                properties:
+                  faults: { type: array, items: { $ref: '#/components/schemas/FaultRule' } }
+    post:
+      operationId: createFault
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FaultInput' }
+      responses:
+        '201':
+          description: Enabled fault rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FaultRule' }
+  /environments/{projectName}/{environmentName}/faults/{faultName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/FaultName' }
+    get:
+      operationId: getFault
+      responses:
+        '200':
+          description: Fault rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FaultRule' }
+    delete:
+      operationId: disableFault
+      responses:
+        '204': { description: Rule disabled; audit history retained }
+  /environments/{projectName}/{environmentName}/faults/disable-all:
+    parameters: *environmentParameters
+    post:
+      operationId: disableAllFaults
+      responses:
+        '200': { description: Active rules disabled atomically }
+  /environments/{projectName}/{environmentName}/operations:
+    parameters: *environmentParameters
+    get:
+      operationId: listOperations
+      parameters:
+        - { $ref: '#/components/parameters/Limit500' }
+      responses:
+        '200':
+          description: Newest-first environment operations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations]
+                properties:
+                  operations: { type: array, items: { $ref: '#/components/schemas/Operation' } }
+  /environments/{projectName}/{environmentName}/operations/{operationNumber}:
+    parameters: &operationParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/OperationNumber' }
+    get:
+      operationId: getOperation
+      responses:
+        '200':
+          description: Operation with events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+  /environments/{projectName}/{environmentName}/operations/{operationNumber}/events:
+    parameters: *operationParameters
+    get:
+      operationId: operationEvents
+      responses:
+        '200':
+          description: Ordered operation events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events: { type: array, items: { $ref: '#/components/schemas/OperationEvent' } }
+  /environments/{projectName}/{environmentName}/timeline:
+    parameters: *environmentParameters
+    get:
+      operationId: timeline
+      parameters:
+        - { $ref: '#/components/parameters/Limit1000' }
+      responses:
+        '200':
+          description: Newest-first durable environment timeline
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [timeline]
+                properties:
+                  timeline: { type: array, items: { $ref: '#/components/schemas/TimelineEvent' } }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: Mode-0600 installation secret used by the local CLI.
+    browserSession:
+      type: apiKey
+      in: cookie
+      name: portless_session
+      description: SameSite=Strict browser session; mutations also require X-Portless-CSRF.
+  parameters:
+    ProjectName:
+      in: path
+      name: projectName
+      required: true
+      schema: { $ref: '#/components/schemas/ProjectName' }
+    EnvironmentName:
+      in: path
+      name: environmentName
+      required: true
+      schema: { $ref: '#/components/schemas/EnvironmentName' }
+    ServiceName:
+      in: path
+      name: serviceName
+      required: true
+      schema: { $ref: '#/components/schemas/ServiceName' }
+    SourceName:
+      in: path
+      name: sourceName
+      required: true
+      schema: { $ref: '#/components/schemas/SourceName' }
+    RecordingName:
+      in: path
+      name: recordingName
+      required: true
+      schema: { $ref: '#/components/schemas/ArtifactName' }
+    FaultName:
+      in: path
+      name: faultName
+      required: true
+      schema: { $ref: '#/components/schemas/ArtifactName' }
+    OperationNumber:
+      in: path
+      name: operationNumber
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    Limit1000:
+      in: query
+      name: limit
+      description: Positive result bound; the endpoint applies its documented default when omitted.
+      schema: { type: integer, minimum: 1, maximum: 1000 }
+    Limit500:
+      in: query
+      name: limit
+      description: Positive result bound; defaults to 100.
+      schema: { type: integer, minimum: 1, maximum: 500 }
+    LogLimit:
+      in: query
+      name: limit
+      description: Maximum newest matching entries to return; defaults to 500.
+      schema: { type: integer, minimum: 1, maximum: 10000 }
+  responses:
+    NotFound:
+      description: Named resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: Name, revision, provider, or current-state conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unavailable:
+      description: Required local runtime unavailable
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  schemas:
+    ProjectName: &dnsName
+      type: string
+      pattern: '^[a-z][a-z0-9-]{0,62}$'
+      examples: [billing]
+    EnvironmentName: *dnsName
+    ServiceName: *dnsName
+    SourceName: *dnsName
+    ArtifactName:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
+      examples: [checkout-debug]
+    RuntimeStatus:
+      type: object
+      required: [preference, state, candidates]
+      properties:
+        preference: { type: string, enum: [auto, docker, podman] }
+        selected: { type: string, enum: [docker, podman] }
+        state: { type: string, enum: [ready, missing, failed] }
+        version: { type: string }
+        reason: { type: string }
+        candidates: { type: array, items: { type: object, additionalProperties: true } }
+    ResetPlan:
+      type: object
+      required: [projects, environments, managedVolumeEnvironments, activeEnvironments, topologyIncompatible]
+      properties:
+        projects: { type: integer, minimum: 0 }
+        environments: { type: integer, minimum: 0 }
+        managedVolumeEnvironments: { type: integer, minimum: 0 }
+        activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+        topologyIncompatible:
+          type: boolean
+          description: True when ordinary environment operations cannot decode the stored topology and active state requires an explicit forced reset.
+    DaemonStatus:
+      type: object
+      required: [state, pid, startedAt, instanceId, buildId, protocolVersion, apiVersion, handoffReady, recoveryProblems, activeEnvironments]
+      properties:
+        state: { type: string, enum: [reconciling, ready, draining] }
+        pid: { type: integer }
+        startedAt: { type: string, format: date-time }
+        instanceId: { type: string }
+        buildId: { type: string }
+        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '7.0.0', description: Stable semantic API version. }
+        handoffReady: { type: boolean }
+        recoveryProblems: { type: array, items: { type: string } }
+        activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    DaemonRestart:
+      type: object
+      required: [restarting, previousInstanceId, handoff, activeEnvironments]
+      properties:
+        restarting: { type: boolean, const: true }
+        previousInstanceId: { type: string }
+        handoff: { type: boolean, const: true }
+        activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    RelayStatus:
+      type: object
+      required: [platform, service, installed, running, healthy, httpHealthy, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress]
+      properties:
+        platform: { type: string, enum: [launchd, systemd, unsupported] }
+        service: { type: string }
+        installed: { type: boolean }
+        running: { type: boolean }
+        healthy: { type: boolean }
+        httpHealthy: { type: boolean }
+        dnsHealthy: { type: boolean }
+        resolverPresent: { type: boolean }
+        resolverHealthy: { type: boolean }
+        endpointPoolReady: { type: boolean }
+        endpointPoolDetail: { type: string }
+        targetSocket: { type: string }
+        dnsTargetSocket: { type: string }
+        dnsListenAddress: { type: string, example: '127.77.0.1:1053' }
+        resolverPath: { type: string }
+        healthError: { type: string }
+        dnsHealthError: { type: string }
+        resolverHealthError: { type: string }
+        problem: { type: string }
+    SourceInput:
+      type: object
+      required: [name, path]
+      properties:
+        name: { $ref: '#/components/schemas/SourceName' }
+        path: { type: string, description: Absolute path resolved by the CLI. }
+    ProjectSource:
+      type: object
+      required: [name]
+      properties:
+        name: { $ref: '#/components/schemas/SourceName' }
+        services: { type: array, items: { $ref: '#/components/schemas/ServiceName' } }
+    SourceBinding:
+      allOf:
+        - { $ref: '#/components/schemas/SourceInput' }
+        - type: object
+          required: [status, scannedAt]
+          properties:
+            status: { type: string }
+            warnings: { type: array, items: { type: string } }
+            scannedAt: { type: string, format: date-time }
+    RemoteTarget:
+      type: object
+      required: [url, classification, writePolicy]
+      properties:
+        url: { type: string, format: uri, pattern: '^https?://' }
+        classification: { type: string, enum: [development, qa, staging, unknown] }
+        writePolicy: { type: string, enum: [read-only, read-write] }
+        healthPath: { type: string, pattern: '^/' }
+    ComponentBinding:
+      type: object
+      required: [provider]
+      properties:
+        service: { $ref: '#/components/schemas/ServiceName' }
+        provider: { type: string, enum: [local, container, remote] }
+        source: { $ref: '#/components/schemas/SourceName' }
+        remote: { $ref: '#/components/schemas/RemoteTarget' }
+      description: >-
+        local requires source, container is valid only for discovered managed
+        dependencies, and remote requires remote configuration.
+    HealthCheck:
+      type: object
+      required: [kind, timeout, interval]
+      properties:
+        kind: { type: string, enum: [tcp, http, exec] }
+        path: { type: string }
+        timeout: { type: integer, description: Nanoseconds as encoded by Go time.Duration. }
+        interval: { type: integer, description: Nanoseconds as encoded by Go time.Duration. }
+    ServiceDefinition:
+      type: object
+      required: [name, kind, required, health]
+      properties:
+        name: { $ref: '#/components/schemas/ServiceName' }
+        kind: { type: string, enum: [process, resource] }
+        framework: { type: string }
+        resource:
+          type: object
+          required: [type, version]
+          properties:
+            type: { type: string, example: postgres }
+            version: { type: string, example: '17' }
+        command: { type: array, items: { type: string } }
+        workingDirectory: { type: string }
+        serviceDirectory: { type: string }
+        debug:
+          type: object
+          required: [adapter, launcher, command]
+          properties:
+            adapter: { type: string, enum: [node-inspector, jdwp] }
+            launcher: { type: string, enum: [node-direct, nest-cli, spring-gradle, spring-maven] }
+            command: { type: array, items: { type: string } }
+        portEnvironment: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535, description: Plugin-resolved client-facing port for a TCP service. }
+        environment: { type: object, additionalProperties: { type: string } }
+        required: { type: boolean }
+        health: { $ref: '#/components/schemas/HealthCheck' }
+    Service:
+      allOf:
+        - { $ref: '#/components/schemas/ServiceDefinition' }
+        - type: object
+          required: [status, launchMode, generation, endpoints, restartCount, recentRequests]
+          properties:
+            status: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
+            launchMode: { type: string, enum: [managed, debug] }
+            debugger:
+              type: object
+              required: [adapter, host, port, state]
+              properties:
+                adapter: { type: string, enum: [node-inspector, jdwp] }
+                host: { type: string, const: '127.0.0.1' }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+                state: { type: string, enum: [starting, listening, stopped] }
+            reason: { type: string }
+            generation: { type: integer, format: int64 }
+            pid: { type: integer }
+            upstreamPort: { type: integer }
+            endpoints: { type: array, items: { $ref: '#/components/schemas/Endpoint' } }
+            startedAt: { type: string, format: date-time }
+            restartCount: { type: integer, format: int64 }
+            recentRequests: { type: integer, format: int64 }
+            p95Millis: { type: integer, format: int64 }
+    Connection:
+      type: object
+      required: [source, target, protocol, required]
+      properties:
+        source: { type: string, description: Service name or external. }
+        target: { $ref: '#/components/schemas/ServiceName' }
+        protocol: { type: string, enum: [http, tcp] }
+        binding: { type: string, description: Resource plugin responsible for connection formatting. }
+        environment: { type: string }
+        required: { type: boolean }
+    Endpoint:
+      type: object
+      required: [kind, protocol, host, port, url]
+      properties:
+        kind: { type: string, enum: [public, connection] }
+        protocol: { type: string, enum: [http, tcp] }
+        host: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        url: { type: string, format: uri, example: 'tcp://postgres.local.store.portless.test:5432' }
+        address: { type: string, description: Internal listener address when needed for diagnostics. }
+    EffectiveConnection:
+      allOf:
+        - { $ref: '#/components/schemas/Connection' }
+        - type: object
+          required: [targetProvider, targetStatus]
+          properties:
+            targetProvider: { type: string, enum: [local, container, remote] }
+            targetStatus: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
+            endpoint: { $ref: '#/components/schemas/Endpoint' }
+            runtimeTarget: { type: string, description: Raw process, container, or remote target retained only for diagnostics. }
+            injectedEnvironment:
+              type: object
+              additionalProperties: { type: string }
+              description: Redacted environment values generated for the source service.
+    ConfigurationValue:
+      type: object
+      required: [key, value, classification, source]
+      properties:
+        key: { type: string }
+        value: { type: string }
+        classification: { type: string, enum: [public, masked, generated] }
+        source: { type: string }
+    ServiceConfiguration:
+      type: object
+      required: [service, command, environment, health]
+      properties:
+        service: { $ref: '#/components/schemas/ServiceName' }
+        command: { type: array, items: { type: string } }
+        workingDirectory: { type: string }
+        portEnvironment: { type: string }
+        environment: { type: array, items: { $ref: '#/components/schemas/ConfigurationValue' } }
+        health: { $ref: '#/components/schemas/HealthCheck' }
+    LogEntry:
+      type: object
+      required: [timestamp, service, stream, generation, message]
+      properties:
+        timestamp: { type: string, format: date-time }
+        service: { $ref: '#/components/schemas/ServiceName' }
+        stream: { type: string, enum: [stdout, stderr, container] }
+        generation: { type: integer, format: int64, minimum: 1 }
+        message: { type: string }
+    LogEntries:
+      type: object
+      required: [project, environment, service, entries]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        service: { type: string, description: Empty when entries from all services were requested. }
+        entries: { type: array, items: { $ref: '#/components/schemas/LogEntry' } }
+    TrafficEvent:
+      type: object
+      required: [project, environment, sequence, protocol, source, target, startedAt, completedAt, durationMs, requestBytes, responseBytes]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        sequence: { type: integer, format: int64, minimum: 1 }
+        protocol: { type: string, enum: [http, tcp] }
+        source: { type: string }
+        target: { type: string }
+        targetProvider: { type: string, enum: [local, container, remote] }
+        remoteClassification: { type: string, enum: [development, qa, staging, unknown] }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        method: { type: string }
+        host: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        durationMs: { type: integer, format: int64 }
+        requestBytes: { type: integer, format: int64 }
+        responseBytes: { type: integer, format: int64 }
+        fault: { type: string }
+        recording: { type: string }
+        error: { type: string }
+        requestHeaders: { type: object, additionalProperties: { type: string }, description: Sensitive values are redacted before capture. }
+        responseHeaders: { type: object, additionalProperties: { type: string }, description: Sensitive values are redacted before capture. }
+    EnvironmentSummary:
+      type: object
+      required: [project, name, revision, status, serviceCount, readyCount, remoteCount, updatedAt]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        name: { $ref: '#/components/schemas/EnvironmentName' }
+        revision: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/EnvironmentStatus' }
+        reason: { type: string }
+        serviceCount: { type: integer }
+        readyCount: { type: integer }
+        remoteCount: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        dashboardUrl: { type: string, format: uri }
+    Project:
+      type: object
+      required: [name, revision, createdAt, updatedAt]
+      properties:
+        name: { $ref: '#/components/schemas/ProjectName' }
+        revision: { type: integer, format: int64 }
+        primaryService: { $ref: '#/components/schemas/ServiceName' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        dashboardUrl: { type: string, format: uri }
+        sources: { type: array, items: { $ref: '#/components/schemas/ProjectSource' } }
+        services: { type: array, items: { $ref: '#/components/schemas/ServiceDefinition' } }
+        connections: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+        environments: { type: array, items: { $ref: '#/components/schemas/EnvironmentSummary' } }
+    EnvironmentStatus:
+      type: string
+      enum: [starting, recovering, healthy, degraded, failed, stopping, stopped, unknown]
+    ConfigurationIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        subject: { type: string }
+        message: { type: string }
+        remediation: { type: string }
+    Environment:
+      type: object
+      required: [project, name, revision, status, createdAt, updatedAt, services, connections]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        name: { $ref: '#/components/schemas/EnvironmentName' }
+        revision: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/EnvironmentStatus' }
+        reason: { type: string }
+        primaryService: { $ref: '#/components/schemas/ServiceName' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        dashboardUrl: { type: string, format: uri }
+        sources: { type: array, items: { $ref: '#/components/schemas/SourceBinding' } }
+        bindings: { type: array, items: { $ref: '#/components/schemas/ComponentBinding' } }
+        services: { type: array, items: { $ref: '#/components/schemas/Service' } }
+        connections: { type: array, items: { $ref: '#/components/schemas/Connection' } }
+        issues: { type: array, items: { $ref: '#/components/schemas/ConfigurationIssue' } }
+    EnvironmentContext:
+      type: object
+      required: [resolution, candidates]
+      properties:
+        resolution:
+          type: string
+          enum: [selected, inferred, ambiguous, none]
+        environment: { $ref: '#/components/schemas/Environment' }
+        candidates:
+          type: array
+          items: { $ref: '#/components/schemas/Environment' }
+    Operation:
+      type: object
+      required: [project, environment, number, type, state, actor, startedAt]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        number: { type: integer, format: int64 }
+        type: { type: string }
+        state: { type: string, enum: [running, succeeded, failed] }
+        actor: { type: string }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        error: { type: string }
+        events: { type: array, items: { $ref: '#/components/schemas/OperationEvent' } }
+    OperationEvent:
+      type: object
+      required: [sequence, timestamp, type, message]
+      properties:
+        sequence: { type: integer, format: int64 }
+        timestamp: { type: string, format: date-time }
+        type: { type: string }
+        subject: { type: string }
+        message: { type: string }
+        payload: { type: object, additionalProperties: true }
+    RecordingInput:
+      type: object
+      required: [name]
+      properties:
+        name: { $ref: '#/components/schemas/ArtifactName' }
+        source: { type: string }
+        target: { type: string }
+        captureBodies: { type: boolean, const: false, default: false }
+        maxEvents: { type: integer, default: 10000, maximum: 100000 }
+        maxBodyBytes: { type: integer, default: 65536, maximum: 1048576 }
+        expiresAt: { type: string, format: date-time }
+    Recording:
+      allOf:
+        - { $ref: '#/components/schemas/RecordingInput' }
+        - type: object
+          required: [project, environment, status, startedAt, eventCount]
+          properties:
+            project: { $ref: '#/components/schemas/ProjectName' }
+            environment: { $ref: '#/components/schemas/EnvironmentName' }
+            status: { type: string, enum: [active, completed, failed] }
+            startedAt: { type: string, format: date-time }
+            completedAt: { type: string, format: date-time }
+            eventCount: { type: integer, format: int64, minimum: 0 }
+    FaultInput:
+      type: object
+      required: [name, source, target]
+      properties:
+        name: { $ref: '#/components/schemas/ArtifactName' }
+        source: { type: string }
+        target: { type: string }
+        method: { type: string }
+        path: { type: string }
+        probability: { type: number, minimum: 0, maximum: 1, default: 1 }
+        latencyMs: { type: integer, minimum: 0 }
+        jitterMs: { type: integer, minimum: 0 }
+        statusCode: { type: integer, minimum: 400, maximum: 599 }
+        abort: { type: boolean }
+        expiresAt: { type: string, format: date-time }
+    FaultRule:
+      allOf:
+        - { $ref: '#/components/schemas/FaultInput' }
+        - type: object
+          required: [project, environment, enabled, createdAt, matchCount, revision, scopeSummary]
+          properties:
+            project: { $ref: '#/components/schemas/ProjectName' }
+            environment: { $ref: '#/components/schemas/EnvironmentName' }
+            enabled: { type: boolean }
+            createdAt: { type: string, format: date-time }
+            matchCount: { type: integer, format: int64, minimum: 0 }
+            revision: { type: integer, format: int64, minimum: 1 }
+            scopeSummary: { type: string }
+    TimelineEvent:
+      type: object
+      required: [project, environment, sequence, timestamp, actor, type, severity, summary]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        sequence: { type: integer, format: int64, minimum: 1 }
+        timestamp: { type: string, format: date-time }
+        actor: { type: string }
+        type: { type: string }
+        subject: { type: string }
+        severity: { type: string, enum: [info, warning, error] }
+        summary: { type: string }
+        details: { type: object, additionalProperties: true }
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            subject: { type: object, additionalProperties: true }
+            details: { type: object, additionalProperties: true }
+            remediation: { type: array, items: { type: object, additionalProperties: true } }
