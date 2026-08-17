@@ -15,12 +15,16 @@ import (
 
 var environmentURLPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)_URL\b`)
 
+// Analyzer discovers service dependencies from URL-shaped environment settings.
 type Analyzer struct{}
 
+// New returns the built-in environment-variable topology analyzer.
 func New() spec.TopologyAnalyzer { return Analyzer{} }
 
+// Descriptor returns topology analyzer registration metadata.
 func (Analyzer) Descriptor() spec.Descriptor { return spec.Descriptor{ID: "service-url"} }
 
+// Analyze resolves service URL settings to project connections or unresolved references.
 func (Analyzer) Analyze(ctx context.Context, workspace spec.Workspace, services []spec.ResolvedService) (spec.TopologyFindings, error) {
 	serviceNames := make(map[string]string, len(services))
 	for _, service := range services {

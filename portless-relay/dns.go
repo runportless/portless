@@ -15,6 +15,8 @@ import (
 	portlessdns "github.com/portless-run/portless/portless-daemon/dns"
 )
 
+// ServeDNSStreamRelay forwards length-prefixed TCP DNS connections from
+// listener to the daemon's private Unix socket until ctx is canceled.
 func ServeDNSStreamRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {
 	if !filepath.IsAbs(targetSocket) {
 		return errors.New("DNS target socket must be an absolute path")
@@ -47,6 +49,8 @@ func ServeDNSStreamRelay(ctx context.Context, listener net.Listener, targetSocke
 	}
 }
 
+// ServeDNSPacketRelay forwards UDP DNS packets to the daemon's private Unix
+// socket until ctx is canceled.
 func ServeDNSPacketRelay(ctx context.Context, connection net.PacketConn, targetSocket string, maxConnections int) error {
 	if !filepath.IsAbs(targetSocket) {
 		return errors.New("DNS target socket must be an absolute path")

@@ -18,6 +18,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
 )
 
+// ReconciliationReport summarizes runtimes recovered or left unverifiable at daemon startup.
 type ReconciliationReport struct {
 	Recovered    []string
 	Unverifiable []string
@@ -58,6 +59,7 @@ func (s *Service) environmentRuntimeVerified(ctx context.Context, environment mo
 	return true
 }
 
+// Reconcile verifies persisted runtime ownership and reconstructs proxy routes after startup.
 func (s *Service) Reconcile(ctx context.Context) (ReconciliationReport, error) {
 	report := ReconciliationReport{Recovered: []string{}, Unverifiable: []string{}}
 	if s.daemonInstanceID == "" {
@@ -443,6 +445,7 @@ func (s *Service) markConnectionRecoveryFailure(ctx context.Context, scope strin
 	s.proxy.RemoveTarget(scope, connection.Source)
 }
 
+// CanHandoff reports whether a replacement daemon can safely adopt all active runtimes.
 func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 	if s.daemonInstanceID == "" {
 		return false, []string{"daemon runtime ownership is not configured"}

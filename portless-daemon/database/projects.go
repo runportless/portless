@@ -10,6 +10,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/networking"
 )
 
+// CreateProject persists a new reusable project topology and source catalog.
 func (s *Store) CreateProject(ctx context.Context, name string, definition model.ProjectModel, sources []model.ProjectSource) (model.Project, error) {
 	if err := model.ValidateProjectName(name); err != nil {
 		return model.Project{}, err
@@ -40,6 +41,7 @@ VALUES(?, ?, 1, ?, ?, ?, ?, ?)`, key, name, definition.PrimaryService, modelJSON
 	return s.Project(ctx, name)
 }
 
+// Project loads a project together with topology and environment summaries.
 func (s *Store) Project(ctx context.Context, name string) (model.Project, error) {
 	var result model.Project
 	var modelJSON, sourcesJSON []byte
@@ -87,6 +89,7 @@ FROM projects WHERE name = ? COLLATE NOCASE`, name).Scan(
 	return result, nil
 }
 
+// ListProjects returns every project ordered by public name.
 func (s *Store) ListProjects(ctx context.Context) ([]model.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT name FROM projects ORDER BY name COLLATE NOCASE`)
 	if err != nil {
@@ -115,6 +118,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]model.Project, error) {
 	return projects, nil
 }
 
+// ProjectModel returns the reusable logical topology stored for a project.
 func (s *Store) ProjectModel(ctx context.Context, name string) (model.ProjectModel, error) {
 	var encoded []byte
 	if err := s.db.QueryRowContext(ctx, `SELECT model_json FROM projects WHERE name = ? COLLATE NOCASE`, name).Scan(&encoded); err != nil {
@@ -127,6 +131,7 @@ func (s *Store) ProjectModel(ctx context.Context, name string) (model.ProjectMod
 	return definition, nil
 }
 
+// UpdateProjectDefinition replaces topology and sources using optimistic concurrency.
 func (s *Store) UpdateProjectDefinition(ctx context.Context, name string, expectedRevision int64, definition model.ProjectModel, sources []model.ProjectSource) (model.Project, error) {
 	definition.SuggestedName = name
 	modelJSON, err := encodeProjectModel(logicalDefinition(definition))
@@ -153,6 +158,7 @@ WHERE name = ? COLLATE NOCASE AND (? = 0 OR revision = ?)`, modelJSON, sourcesJS
 	return s.Project(ctx, name)
 }
 
+// RenameProject renames a stopped project and reallocates its stable DNS endpoints.
 func (s *Store) RenameProject(ctx context.Context, oldName, newName string, expectedRevision int64) (model.Project, error) {
 	if err := model.ValidateProjectName(newName); err != nil {
 		return model.Project{}, err
@@ -221,6 +227,7 @@ WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, newName, plan.en
 	return s.Project(ctx, newName)
 }
 
+// ForgetProject deletes a project only when all of its environments are stopped.
 func (s *Store) ForgetProject(ctx context.Context, name string) error {
 	project, err := s.Project(ctx, name)
 	if err != nil {

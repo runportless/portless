@@ -12,23 +12,36 @@ import (
 )
 
 const (
-	TypeA    uint16 = 1
+	// TypeA is the DNS IPv4 address record type.
+	TypeA uint16 = 1
+	// TypeAAAA is the DNS IPv6 address record type.
 	TypeAAAA uint16 = 28
-	ClassIN  uint16 = 1
+	// ClassIN is the DNS Internet record class.
+	ClassIN uint16 = 1
 
-	ResponseSuccess       uint16 = 0
-	ResponseFormatError   uint16 = 1
+	// ResponseSuccess is the successful DNS response code.
+	ResponseSuccess uint16 = 0
+	// ResponseFormatError is the malformed-query DNS response code.
+	ResponseFormatError uint16 = 1
+	// ResponseServerFailure is the transient server-error DNS response code.
 	ResponseServerFailure uint16 = 2
-	ResponseNameError     uint16 = 3
-	ResponseRefused       uint16 = 5
+	// ResponseNameError is the nonexistent-name DNS response code.
+	ResponseNameError uint16 = 3
+	// ResponseRefused is the out-of-zone or unsupported-class DNS response code.
+	ResponseRefused uint16 = 5
 
+	// DefaultTTL is the short lifetime used for dynamic endpoint records.
 	DefaultTTL = 5
+	// MaxMessage bounds accepted and generated DNS messages.
 	MaxMessage = 4096
 )
 
+// HealthAddress is the fixed A record returned for the Portless DNS zone apex.
 var HealthAddress = netip.MustParseAddr("127.77.0.1")
 
+// Resolver resolves authoritative Portless endpoint names to loopback addresses.
 type Resolver interface {
+	// ResolveNetworkName resolves one normalized endpoint DNS name.
 	ResolveNetworkName(context.Context, string) (netip.Addr, bool, error)
 }
 
@@ -39,6 +52,8 @@ type question struct {
 	end   int
 }
 
+// Response parses an authoritative DNS query and returns a bounded wire-format
+// response for the Portless zone.
 func Response(ctx context.Context, resolver Resolver, query []byte) []byte {
 	if len(query) < 12 || len(query) > MaxMessage {
 		return errorResponse(query, ResponseFormatError)
@@ -78,6 +93,8 @@ func Response(ctx context.Context, resolver Resolver, query []byte) []byte {
 	return answer(query, parsed, address, true, ResponseSuccess)
 }
 
+// ServerFailure constructs a server-failure response while preserving a valid
+// query identifier and question when possible.
 func ServerFailure(query []byte) []byte {
 	if parsed, err := parseQuestion(query); err == nil {
 		return answer(query, parsed, netip.Addr{}, false, ResponseServerFailure)
@@ -85,6 +102,7 @@ func ServerFailure(query []byte) []byte {
 	return errorResponse(query, ResponseServerFailure)
 }
 
+// Query constructs a single-question DNS query for name, kind, and id.
 func Query(name string, kind uint16, id uint16) ([]byte, error) {
 	name = strings.TrimSuffix(strings.TrimSpace(name), ".")
 	if err := networking.ValidateDNSName(strings.ToLower(name)); err != nil {
@@ -104,6 +122,8 @@ func Query(name string, kind uint16, id uint16) ([]byte, error) {
 	return result, nil
 }
 
+// ParseAResponse validates a DNS response and returns its first IPv4 answer and
+// response code.
 func ParseAResponse(message []byte, expectedID uint16) (netip.Addr, uint16, error) {
 	if len(message) < 12 || binary.BigEndian.Uint16(message[0:2]) != expectedID || message[2]&0x80 == 0 {
 		return netip.Addr{}, 0, errors.New("invalid DNS response")
@@ -218,6 +238,7 @@ func errorResponse(query []byte, rcode uint16) []byte {
 	return result
 }
 
+// ResponseCode returns the DNS response code from a wire-format message.
 func ResponseCode(message []byte) (uint16, error) {
 	if len(message) < 4 {
 		return 0, fmt.Errorf("DNS response is truncated")

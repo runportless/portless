@@ -10,6 +10,8 @@ import (
 	"syscall"
 )
 
+// EnsurePrivateDirectory securely creates or validates a real, user-owned
+// directory and enforces mode 0700.
 func EnsurePrivateDirectory(path string) error {
 	if path == "" || filepath.Clean(path) == string(filepath.Separator) {
 		return errors.New("refusing to prepare a broad private directory")
@@ -56,6 +58,8 @@ func EnsurePrivateDirectory(path string) error {
 	return nil
 }
 
+// ReadPrivateTextFile reads a nonempty, user-owned regular file that grants no
+// group or other access.
 func ReadPrivateTextFile(path string) (string, error) {
 	info, err := os.Lstat(path)
 	if err != nil {

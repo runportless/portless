@@ -1,5 +1,6 @@
 package model
 
+// DeriveEnvironmentStatus computes aggregate status and reason from service states.
 func DeriveEnvironmentStatus(services []Service, activeOperation string) (EnvironmentStatus, string) {
 	switch activeOperation {
 	case "up":

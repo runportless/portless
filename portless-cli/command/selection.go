@@ -12,10 +12,14 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// Current connects to the daemon and resolves the environment associated with
+// the current checkout or invocation override.
 func (c *Context) Current(ctx context.Context) (*apiclient.Client, model.Environment, error) {
 	return c.CurrentOrNamed(ctx, "")
 }
 
+// CurrentOrNamed connects to the daemon and resolves selector, falling back to
+// the current checkout when selector and --env are both absent.
 func (c *Context) CurrentOrNamed(ctx context.Context, selector string) (*apiclient.Client, model.Environment, error) {
 	client, _, err := c.Daemon.Connect(ctx)
 	if err != nil {
@@ -28,6 +32,7 @@ func (c *Context) CurrentOrNamed(ctx context.Context, selector string) (*apiclie
 	return client, environment, nil
 }
 
+// FindCurrent resolves the environment associated with the current checkout.
 func (c *Context) FindCurrent(ctx context.Context, client *apiclient.Client) (model.Environment, error) {
 	resolved, err := c.ResolveEnvironmentContext(ctx, client)
 	if err != nil {
@@ -36,6 +41,8 @@ func (c *Context) FindCurrent(ctx context.Context, client *apiclient.Client) (mo
 	return resolved.Environment, nil
 }
 
+// ResolveEnvironment applies explicit selection rules and loads the resulting
+// environment, or infers one from the current checkout when none is explicit.
 func (c *Context) ResolveEnvironment(ctx context.Context, client *apiclient.Client, selector string) (model.Environment, error) {
 	effective, err := c.EffectiveEnvironmentSelector(selector)
 	if err != nil {
@@ -47,6 +54,8 @@ func (c *Context) ResolveEnvironment(ctx context.Context, client *apiclient.Clie
 	return c.FindCurrent(ctx, client)
 }
 
+// EffectiveEnvironmentSelector combines a command selector with the global
+// --env override and rejects invocations that provide both.
 func (c *Context) EffectiveEnvironmentSelector(selector string) (string, error) {
 	if selector != "" && c.EnvironmentOverride != "" {
 		return "", UsageError("an environment was provided twice; use only --env")
@@ -57,6 +66,8 @@ func (c *Context) EffectiveEnvironmentSelector(selector string) (string, error) 
 	return c.EnvironmentOverride, nil
 }
 
+// ResolveEnvironmentContext returns the environment selected for the current
+// source root together with the path and resolution strategy used.
 func (c *Context) ResolveEnvironmentContext(ctx context.Context, client *apiclient.Client) (EnvironmentContextOutput, error) {
 	root, err := c.CurrentSourceRoot(ctx)
 	if err != nil {
@@ -89,6 +100,8 @@ func (c *Context) ResolveEnvironmentContext(ctx context.Context, client *apiclie
 	}, nil
 }
 
+// EnvironmentsForCurrentPath lists every environment that uses the current
+// checkout's source root.
 func (c *Context) EnvironmentsForCurrentPath(ctx context.Context, client *apiclient.Client) ([]model.Environment, error) {
 	root, err := c.CurrentSourceRoot(ctx)
 	if err != nil {
@@ -101,6 +114,9 @@ func (c *Context) EnvironmentsForCurrentPath(ctx context.Context, client *apicli
 	return response.Environments, nil
 }
 
+// CurrentSourceRoot discovers the project root containing the working
+// directory and returns its symlink-resolved path. When no project marker is
+// found, the working directory itself is returned.
 func (c *Context) CurrentSourceRoot(ctx context.Context) (string, error) {
 	cwd, err := c.Local.WorkingDirectory()
 	if err != nil {
@@ -119,6 +135,8 @@ func (c *Context) CurrentSourceRoot(ctx context.Context) (string, error) {
 	return root, nil
 }
 
+// WorkingDirectory returns the absolute current working directory after
+// resolving symbolic links when possible.
 func WorkingDirectory() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -130,6 +148,8 @@ func WorkingDirectory() (string, error) {
 	return filepath.Abs(cwd)
 }
 
+// DebugServiceForPath selects the deepest local process service containing
+// path. It returns an empty name when no service matches and rejects ties.
 func DebugServiceForPath(environment model.Environment, path string) (string, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
@@ -161,6 +181,8 @@ func DebugServiceForPath(environment model.Environment, path string) (string, er
 	return bestName, nil
 }
 
+// ServiceDirectories returns the filesystem directories that may identify
+// service within its bound project source.
 func ServiceDirectories(environment model.Environment, service model.Service) []string {
 	if service.ServiceDirectory != "" {
 		return []string{service.ServiceDirectory}
@@ -191,6 +213,8 @@ func ServiceDirectories(environment model.Environment, service model.Service) []
 	return result
 }
 
+// LoadEnvironment parses a project/environment selector and retrieves that
+// environment from the daemon API.
 func (c *Context) LoadEnvironment(ctx context.Context, client *apiclient.Client, selector string) (model.Environment, error) {
 	project, environment, err := model.ParseEnvironmentSelector(selector)
 	if err != nil {
@@ -203,6 +227,8 @@ func (c *Context) LoadEnvironment(ctx context.Context, client *apiclient.Client,
 	return result, nil
 }
 
+// AmbiguousEnvironmentError describes competing checkout matches and tells the
+// user how to select one explicitly.
 func AmbiguousEnvironmentError(environments []model.Environment) error {
 	selectors := make([]string, 0, len(environments))
 	for _, environment := range environments {
@@ -211,6 +237,8 @@ func AmbiguousEnvironmentError(environments []model.Environment) error {
 	return fmt.Errorf("this checkout belongs to multiple environments (%s); select one with `portless env select project/environment` or pass `--env project/environment`", strings.Join(selectors, ", "))
 }
 
+// EnvironmentResolutionDescription translates an environment-resolution code
+// into human-readable CLI output.
 func EnvironmentResolutionDescription(resolution string) string {
 	switch resolution {
 	case "flag":

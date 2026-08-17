@@ -12,6 +12,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/system/installation"
 )
 
+// Record is the private on-disk discovery snapshot for one daemon instance.
 type Record struct {
 	PID              int       `json:"pid"`
 	Port             int       `json:"port"`
@@ -28,6 +29,7 @@ type Record struct {
 	ProcessHint      string    `json:"processHint"`
 }
 
+// Read loads and validates the daemon discovery record from layout.
 func Read(layout installation.Layout) (Record, error) {
 	content, err := installation.ReadPrivateTextFile(layout.Control)
 	if err != nil {
@@ -43,6 +45,7 @@ func Read(layout installation.Layout) (Record, error) {
 	return record, nil
 }
 
+// Write atomically publishes record with private file permissions.
 func Write(layout installation.Layout, record Record) error {
 	content, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -63,6 +66,8 @@ func Write(layout installation.Layout, record Record) error {
 	return nil
 }
 
+// RemoveOwn removes the discovery record only when it still identifies the
+// calling process and instanceID.
 func RemoveOwn(layout installation.Layout, instanceID string) {
 	record, err := Read(layout)
 	if err == nil && record.PID == os.Getpid() && record.InstanceID == instanceID {
@@ -70,6 +75,8 @@ func RemoveOwn(layout installation.Layout, instanceID string) {
 	}
 }
 
+// RemoveMatching removes the discovery record only when its process, port, and
+// instance still match expected.
 func RemoveMatching(layout installation.Layout, expected Record) {
 	current, err := Read(layout)
 	if err != nil || current.PID != expected.PID || current.Port != expected.Port || current.InstanceID != expected.InstanceID {

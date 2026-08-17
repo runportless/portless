@@ -17,14 +17,17 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// Host is the loopback address used for all debugger listeners.
 const Host = "127.0.0.1"
 
+// Result contains a safely transformed launch command and debugger endpoint.
 type Result struct {
 	Command     []string
 	Environment map[string]string
 	Debugger    model.DebuggerRuntime
 }
 
+// Prepare converts a discovered debug recipe into a concrete loopback-bound launch.
 func Prepare(capability *model.DebugCapability, port int, artifactsRoot string) (Result, error) {
 	if capability == nil {
 		return Result{}, errors.New("no safe debug launcher was discovered")
@@ -71,6 +74,7 @@ func Prepare(capability *model.DebugCapability, port int, artifactsRoot string) 
 	return result, nil
 }
 
+// Wait blocks until a Node Inspector or JDWP listener is accepting attachments.
 func Wait(ctx context.Context, debugger model.DebuggerRuntime) error {
 	if debugger.Port < 1 || debugger.Port > 65535 || debugger.Host != Host {
 		return errors.New("debugger endpoint is invalid")

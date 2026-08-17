@@ -15,12 +15,15 @@ import (
 
 var appPattern = regexp.MustCompile(`(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?FastAPI\s*\(`)
 
+// Detector discovers FastAPI application entry points in Python projects.
 type Detector struct{}
 
+// New returns a FastAPI service detector.
 func New() spec.ServiceDetector {
 	return Detector{}
 }
 
+// Descriptor returns FastAPI detector registration metadata.
 func (Detector) Descriptor() spec.Descriptor {
 	return spec.Descriptor{ID: "fastapi", RootMarkers: []string{"pyproject.toml", "requirements.txt", "uv.lock"}, PrimaryOrder: 60}
 }
@@ -32,6 +35,7 @@ type entrypoint struct {
 	app         string
 }
 
+// Detect finds FastAPI entry points and produces safe development commands.
 func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Findings, error) {
 	projectRoots, err := fastAPIProjects(ctx, workspace)
 	if err != nil {

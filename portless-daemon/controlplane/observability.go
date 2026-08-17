@@ -16,10 +16,12 @@ import (
 	"github.com/portless-run/portless/portless-daemon/runtime/logstore"
 )
 
+// Traffic returns the most recent in-memory traffic events for an environment.
 func (s *Service) Traffic(project, environment string, limit int) []model.TrafficEvent {
 	return s.broker.RecentTraffic(model.EnvironmentSelector(project, environment), limit)
 }
 
+// TrafficEvent finds one traffic event in live or recorded history by sequence number.
 func (s *Service) TrafficEvent(ctx context.Context, project, environment string, sequence int64) (model.TrafficEvent, error) {
 	for _, event := range s.Traffic(project, environment, 1000) {
 		if event.Sequence == sequence {
@@ -38,14 +40,17 @@ func (s *Service) TrafficEvent(ctx context.Context, project, environment string,
 	return model.TrafficEvent{}, database.ErrNotFound
 }
 
+// RecordedTraffic returns persisted traffic, optionally limited to one recording.
 func (s *Service) RecordedTraffic(ctx context.Context, project, environment, recording string, limit int) ([]model.TrafficEvent, error) {
 	return s.database.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), recording, limit)
 }
 
+// Timeline returns durable environment events in reverse chronological order.
 func (s *Service) Timeline(ctx context.Context, project, environment string, limit int) ([]model.TimelineEvent, error) {
 	return s.database.Timeline(ctx, model.EnvironmentSelector(project, environment), limit)
 }
 
+// StartRecording validates and begins a bounded metadata traffic capture.
 func (s *Service) StartRecording(ctx context.Context, recording model.Recording, actor string) (model.Recording, error) {
 	if err := model.ValidateArtifactName(recording.Name); err != nil {
 		return model.Recording{}, err
@@ -86,6 +91,7 @@ func (s *Service) StartRecording(ctx context.Context, recording model.Recording,
 	return created, nil
 }
 
+// StopRecording completes an active traffic recording.
 func (s *Service) StopRecording(ctx context.Context, project, environment, name, actor string) error {
 	scope := model.EnvironmentSelector(project, environment)
 	if err := s.database.StopRecording(ctx, scope, name, "stopped"); err != nil {
@@ -96,14 +102,17 @@ func (s *Service) StopRecording(ctx context.Context, project, environment, name,
 	return nil
 }
 
+// Recordings lists retained recordings for an environment.
 func (s *Service) Recordings(ctx context.Context, project, environment string) ([]model.Recording, error) {
 	return s.database.Recordings(ctx, model.EnvironmentSelector(project, environment))
 }
 
+// Recording returns one retained recording by name.
 func (s *Service) Recording(ctx context.Context, project, environment, name string) (model.Recording, error) {
 	return s.database.Recording(ctx, model.EnvironmentSelector(project, environment), name)
 }
 
+// DeleteRecording removes a recording and all of its captured traffic.
 func (s *Service) DeleteRecording(ctx context.Context, project, environment, name, actor string) error {
 	scope := model.EnvironmentSelector(project, environment)
 	if err := s.database.DeleteRecording(ctx, scope, name); err != nil {
@@ -113,6 +122,7 @@ func (s *Service) DeleteRecording(ctx context.Context, project, environment, nam
 	return nil
 }
 
+// CreateFault validates and enables a scoped traffic fault rule.
 func (s *Service) CreateFault(ctx context.Context, fault model.FaultRule, actor string) (model.FaultRule, error) {
 	if err := model.ValidateArtifactName(fault.Name); err != nil {
 		return model.FaultRule{}, err
@@ -164,14 +174,17 @@ func (s *Service) CreateFault(ctx context.Context, fault model.FaultRule, actor 
 	return created, nil
 }
 
+// Faults lists fault rules for an environment.
 func (s *Service) Faults(ctx context.Context, project, environment string) ([]model.FaultRule, error) {
 	return s.database.Faults(ctx, model.EnvironmentSelector(project, environment), false)
 }
 
+// Fault returns one fault rule by name.
 func (s *Service) Fault(ctx context.Context, project, environment, name string) (model.FaultRule, error) {
 	return s.database.Fault(ctx, model.EnvironmentSelector(project, environment), name)
 }
 
+// EnableFault reactivates a non-expired fault rule.
 func (s *Service) EnableFault(ctx context.Context, project, environment, name, actor string) (model.FaultRule, error) {
 	scope := model.EnvironmentSelector(project, environment)
 	fault, err := s.database.Fault(ctx, scope, name)
@@ -203,6 +216,7 @@ func (s *Service) EnableFault(ctx context.Context, project, environment, name, a
 	return fault, nil
 }
 
+// DisableFault deactivates a fault rule without deleting it.
 func (s *Service) DisableFault(ctx context.Context, project, environment, name, actor string) error {
 	scope := model.EnvironmentSelector(project, environment)
 	if err := s.database.DisableFault(ctx, scope, name); err != nil {
@@ -213,6 +227,7 @@ func (s *Service) DisableFault(ctx context.Context, project, environment, name, 
 	return nil
 }
 
+// DeleteFault permanently removes a fault rule.
 func (s *Service) DeleteFault(ctx context.Context, project, environment, name, actor string) error {
 	scope := model.EnvironmentSelector(project, environment)
 	if err := s.database.DeleteFault(ctx, scope, name); err != nil {
@@ -223,6 +238,7 @@ func (s *Service) DeleteFault(ctx context.Context, project, environment, name, a
 	return nil
 }
 
+// DisableAllFaults deactivates every enabled fault in an environment.
 func (s *Service) DisableAllFaults(ctx context.Context, project, environment, actor string) (int64, error) {
 	scope := model.EnvironmentSelector(project, environment)
 	count, err := s.database.DisableAllFaults(ctx, scope)
@@ -234,6 +250,7 @@ func (s *Service) DisableAllFaults(ctx context.Context, project, environment, ac
 	return count, nil
 }
 
+// Logs reads recent managed-process logs for one service or the entire environment.
 func (s *Service) Logs(ctx context.Context, project, environment, service string, limit int, since time.Time) ([]model.LogEntry, error) {
 	current, err := s.database.Environment(ctx, project, environment)
 	if err != nil {
@@ -256,6 +273,7 @@ func (s *Service) Logs(ctx context.Context, project, environment, service string
 	return logstore.Read(root, services, limit, since)
 }
 
+// ExportProject serializes a project's reusable topology as formatted JSON.
 func (s *Service) ExportProject(ctx context.Context, project string) ([]byte, error) {
 	definition, err := s.database.ProjectModel(ctx, project)
 	if err != nil {

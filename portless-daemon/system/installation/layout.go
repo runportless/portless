@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 )
 
+// Layout contains every path owned by one Portless data-directory boundary.
 type Layout struct {
 	Root          string
 	Database      string
@@ -21,6 +22,8 @@ type Layout struct {
 	Temporary     string
 }
 
+// ResolveLayout constructs an absolute installation layout from override,
+// PORTLESS_HOME, or the current user's default data directory.
 func ResolveLayout(override string) (Layout, error) {
 	root := override
 	if root == "" {

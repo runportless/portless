@@ -31,15 +31,22 @@ import (
 )
 
 var (
+	// ErrExecutableChanged requests a graceful daemon handoff after the on-disk
+	// executable changes.
 	ErrExecutableChanged = errors.New("Portless executable changed")
-	ErrRestartRequested  = errors.New("Portless daemon restart requested")
+	// ErrRestartRequested requests an explicit graceful daemon replacement.
+	ErrRestartRequested = errors.New("Portless daemon restart requested")
 )
 
+// Config defines the installation layout and preferred private control port
+// for a daemon process.
 type Config struct {
 	Layout        installation.Layout
 	PreferredPort int
 }
 
+// Run composes, reconciles, publishes, and serves one per-user Portless daemon
+// until shutdown, replacement, cancellation, or a listener failure.
 func Run(ctx context.Context, config Config) error {
 	paths := config.Layout
 	for _, directory := range []string{paths.Root, paths.Logs, paths.Temporary} {
@@ -242,6 +249,7 @@ type lifecycleAPIControl struct {
 	handler *lifecycle.Handler
 }
 
+// Status adapts lifecycle identity into the public daemon status contract.
 func (c lifecycleAPIControl) Status(ctx context.Context) (contract.DaemonStatus, error) {
 	identity, err := c.handler.Status(ctx)
 	if err != nil {
@@ -256,6 +264,7 @@ func (c lifecycleAPIControl) Status(ctx context.Context) (contract.DaemonStatus,
 	}, nil
 }
 
+// Restart requests lifecycle replacement and adapts its structured result or error.
 func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID string) (contract.DaemonRestart, error) {
 	result, err := c.handler.Restart(ctx, instanceID)
 	if err != nil {

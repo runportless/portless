@@ -14,14 +14,18 @@ import (
 	"github.com/portless-run/portless/portless-daemon/providers/builtin/common"
 )
 
+// Plugin provides MySQL discovery, container planning, and connection binding.
 type Plugin struct{}
 
+// New returns the built-in MySQL resource plugin.
 func New() providers.Plugin { return Plugin{} }
 
+// Descriptor returns MySQL plugin registration metadata.
 func (Plugin) Descriptor() providers.Descriptor {
 	return providers.Descriptor{ID: "mysql", DefaultVersion: "8.4"}
 }
 
+// Detect finds MySQL dependencies and their consumer environment variables.
 func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consumers []providers.Consumer) (providers.Findings, error) {
 	return common.Detect(ctx, workspace, consumers, common.Detection{
 		Name: "mysql", Explanation: "MySQL configuration or dependency found",
@@ -35,6 +39,7 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 	})
 }
 
+// Plan returns the managed MySQL container, credentials, volume, and readiness recipe.
 func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan, error) {
 	return providers.ContainerPlan{
 		Image: "docker.io/library/mysql:" + definition.Version, ClientPort: 3306,
@@ -52,6 +57,7 @@ func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan
 	}, nil
 }
 
+// Bind creates a MySQL or Spring JDBC connection configuration with masked safe values.
 func (Plugin) Bind(context providers.BindingContext) (providers.BindingResult, error) {
 	spring := strings.HasPrefix(context.Environment, "SPRING_DATASOURCE")
 	if !context.Active {

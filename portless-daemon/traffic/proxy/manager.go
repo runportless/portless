@@ -43,6 +43,7 @@ type target struct {
 	healthPath     string
 }
 
+// Manager owns source-scoped HTTP and TCP proxies, targets, capture, and fault behavior.
 type Manager struct {
 	database  *database.Store
 	broker    *events.Broker
@@ -60,6 +61,7 @@ type bodyCapture struct {
 	total int64
 }
 
+// Write records a bounded prefix while preserving the original byte count.
 func (c *bodyCapture) Write(content []byte) (int, error) {
 	written := len(content)
 	c.total += int64(written)
@@ -88,6 +90,7 @@ type capturingReadCloser struct {
 	capture *bodyCapture
 }
 
+// Read forwards body bytes while copying them into the bounded capture.
 func (r *capturingReadCloser) Read(content []byte) (int, error) {
 	read, err := r.ReadCloser.Read(content)
 	if read > 0 {
@@ -96,6 +99,7 @@ func (r *capturingReadCloser) Read(content []byte) (int, error) {
 	return read, err
 }
 
+// NewManager constructs a proxy manager backed by durable experiment state and live events.
 func NewManager(controlStore *database.Store, broker *events.Broker) *Manager {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -103,16 +107,19 @@ func NewManager(controlStore *database.Store, broker *events.Broker) *Manager {
 	return &Manager{database: controlStore, broker: broker, targets: make(map[string]target), edges: make(map[string]*edge), transport: transport}
 }
 
+// SetTarget registers a local loopback HTTP or TCP target for a service.
 func (m *Manager) SetTarget(scope, service string, port int) {
 	m.SetTargetProvider(scope, service, port, model.ProviderLocal)
 }
 
+// SetTargetProvider registers a loopback target and its effective provider classification.
 func (m *Manager) SetTargetProvider(scope, service string, port int, provider model.ProviderKind) {
 	m.mu.Lock()
 	m.targets[targetKey(scope, service)] = target{provider: provider, address: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
 	m.mu.Unlock()
 }
 
+// ConnectionRuntime reports effective listener, provider, and upstream details for an edge.
 func (m *Manager) ConnectionRuntime(scope, source, targetName string) (proxyAddress string, provider model.ProviderKind, targetEndpoint string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -130,6 +137,7 @@ func (m *Manager) ConnectionRuntime(scope, source, targetName string) (proxyAddr
 	return proxyAddress, provider, targetEndpoint
 }
 
+// SetRemoteTarget validates and registers an HTTP or HTTPS external service target.
 func (m *Manager) SetRemoteTarget(scope, service string, remote model.RemoteTarget) error {
 	parsed, err := url.Parse(remote.URL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
@@ -144,12 +152,14 @@ func (m *Manager) SetRemoteTarget(scope, service string, remote model.RemoteTarg
 	return nil
 }
 
+// RemoveTarget unregisters a service upstream without closing its source edges.
 func (m *Manager) RemoveTarget(scope, service string) {
 	m.mu.Lock()
 	delete(m.targets, targetKey(scope, service))
 	m.mu.Unlock()
 }
 
+// EnsureEdge creates or reuses a source-scoped proxy on an ephemeral loopback port.
 func (m *Manager) EnsureEdge(ctx context.Context, scope string, connection model.Connection) (int, error) {
 	address, err := m.ensureEdge(ctx, scope, connection, "127.0.0.1:0")
 	if err != nil {
@@ -158,6 +168,7 @@ func (m *Manager) EnsureEdge(ctx context.Context, scope string, connection model
 	return address.Port, nil
 }
 
+// EnsureEdgeAtPort creates or reuses a source-scoped proxy on a fixed loopback port.
 func (m *Manager) EnsureEdgeAtPort(ctx context.Context, scope string, connection model.Connection, port int) (int, error) {
 	if port < 1 || port > 65535 {
 		return 0, errors.New("persisted proxy port is invalid")
@@ -234,6 +245,7 @@ func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model
 	return listener.Addr().(*net.TCPAddr), nil
 }
 
+// HasTarget reports whether a service currently has a registered upstream.
 func (m *Manager) HasTarget(scope, service string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -241,6 +253,7 @@ func (m *Manager) HasTarget(scope, service string) bool {
 	return ok
 }
 
+// HasEdge reports whether an edge exists and optionally matches a listener port.
 func (m *Manager) HasEdge(scope, source, targetName string, port int) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -248,6 +261,7 @@ func (m *Manager) HasEdge(scope, source, targetName string, port int) bool {
 	return current != nil && current.listener != nil && (port == 0 || current.listener.Addr().(*net.TCPAddr).Port == port)
 }
 
+// HasEdgeAtAddress reports whether an edge is bound to an exact listener address.
 func (m *Manager) HasEdgeAtAddress(scope, source, targetName, address string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -255,10 +269,12 @@ func (m *Manager) HasEdgeAtAddress(scope, source, targetName, address string) bo
 	return current != nil && current.listener != nil && current.listener.Addr().String() == address
 }
 
+// ServeIngress forwards an external HTTP request through capture, fault, and policy controls.
 func (m *Manager) ServeIngress(w http.ResponseWriter, request *http.Request, scope, service string) {
 	m.forwardHTTP(w, request, scope, "external", service)
 }
 
+// CloseEnvironment closes every proxy listener and target registered for an environment.
 func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 	m.mu.Lock()
 	var closing []*edge
@@ -288,6 +304,7 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 	}
 }
 
+// Close idempotently closes all environment proxies and idle upstream connections.
 func (m *Manager) Close(ctx context.Context) {
 	if !m.closed.CompareAndSwap(false, true) {
 		return
@@ -487,6 +504,7 @@ func (m *Manager) forwardTCP(ctx context.Context, current *edge, downstream net.
 
 type trafficCounter struct{ value *atomic.Int64 }
 
+// Write counts proxied bytes while behaving as a successful sink.
 func (counter trafficCounter) Write(value []byte) (int, error) {
 	counter.value.Add(int64(len(value)))
 	return len(value), nil
@@ -664,6 +682,7 @@ func (m *Manager) target(scope, service string) (target, bool) {
 	return target, ok
 }
 
+// CheckRemote probes a configured remote service and rejects server-error responses.
 func (m *Manager) CheckRemote(ctx context.Context, scope, service string) error {
 	configured, ok := m.target(scope, service)
 	if !ok || configured.provider != model.ProviderRemote || configured.baseURL == nil {

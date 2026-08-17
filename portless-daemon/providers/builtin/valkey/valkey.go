@@ -11,14 +11,18 @@ import (
 	"github.com/portless-run/portless/portless-daemon/providers/builtin/common"
 )
 
+// Plugin provides Redis-compatible discovery with a managed Valkey runtime.
 type Plugin struct{}
 
+// New returns the built-in Valkey resource plugin.
 func New() providers.Plugin { return Plugin{} }
 
+// Descriptor returns Valkey plugin registration metadata and the Redis alias.
 func (Plugin) Descriptor() providers.Descriptor {
 	return providers.Descriptor{ID: "valkey", Aliases: []string{"redis"}, DefaultVersion: "8"}
 }
 
+// Detect finds Redis-compatible dependencies and their consumer environment variables.
 func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consumers []providers.Consumer) (providers.Findings, error) {
 	return common.Detect(ctx, workspace, consumers, common.Detection{
 		Name: "redis", Explanation: "Redis-compatible configuration or dependency found; Valkey proposed",
@@ -32,6 +36,7 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 	})
 }
 
+// Plan returns the managed Valkey container, volume, and readiness recipe.
 func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan, error) {
 	return providers.ContainerPlan{
 		Image: "docker.io/valkey/valkey:" + definition.Version, ClientPort: 6379,
@@ -40,6 +45,7 @@ func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan
 	}, nil
 }
 
+// Bind creates the Redis-compatible connection URL for a consumer.
 func (Plugin) Bind(context providers.BindingContext) (providers.BindingResult, error) {
 	if !context.Active {
 		return providers.BindingResult{SafeValues: map[string]string{context.Environment: "not active"}}, nil

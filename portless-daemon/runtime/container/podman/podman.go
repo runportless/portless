@@ -15,13 +15,18 @@ type engine struct {
 	binary string
 }
 
+// New returns an ownership-safe managed runtime backed by Podman.
 func New(installationKey, temporaryRoot string) container.Runtime {
 	return managed.New(&engine{binary: "podman"}, installationKey, temporaryRoot)
 }
 
+// Name returns Podman's canonical runtime name.
 func (e *engine) Name() container.RuntimeName { return container.RuntimePodman }
-func (e *engine) Binary() string              { return e.binary }
 
+// Binary returns the Podman CLI executable name.
+func (e *engine) Binary() string { return e.binary }
+
+// Probe reports Podman CLI, service, and version availability.
 func (e *engine) Probe(ctx context.Context) container.ProbeResult {
 	result := container.ProbeResult{Name: e.Name()}
 	path, err := exec.LookPath(e.binary)
@@ -60,6 +65,7 @@ func (e *engine) Probe(ctx context.Context) container.ProbeResult {
 	return result
 }
 
+// StartHost attempts to start the configured Podman machine when needed.
 func (e *engine) StartHost(ctx context.Context) container.ProbeResult {
 	result := e.Probe(ctx)
 	if result.State == "ready" || result.State == "missing" {
@@ -76,10 +82,12 @@ func (e *engine) StartHost(ctx context.Context) container.ProbeResult {
 	return e.Probe(ctx)
 }
 
+// ResourceExists reports whether Podman knows the named resource.
 func (e *engine) ResourceExists(ctx context.Context, kind, name string) bool {
 	return exec.CommandContext(ctx, e.binary, kind, "exists", name).Run() == nil
 }
 
+// VolumeMount formats a relabeled Podman named-volume mount.
 func (e *engine) VolumeMount(volume, path string) string { return volume + ":" + path + ":Z" }
 
 func commandFailure(output []byte, err error) string {

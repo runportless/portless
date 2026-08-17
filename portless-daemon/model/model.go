@@ -2,99 +2,151 @@ package model
 
 import "time"
 
+// EnvironmentStatus describes the aggregate lifecycle state of an environment.
 type EnvironmentStatus string
 
 const (
-	EnvironmentStarting   EnvironmentStatus = "starting"
+	// EnvironmentStarting indicates that required services are being started.
+	EnvironmentStarting EnvironmentStatus = "starting"
+	// EnvironmentRecovering indicates that Portless is restoring an interrupted environment.
 	EnvironmentRecovering EnvironmentStatus = "recovering"
-	EnvironmentHealthy    EnvironmentStatus = "healthy"
-	EnvironmentDegraded   EnvironmentStatus = "degraded"
-	EnvironmentFailed     EnvironmentStatus = "failed"
-	EnvironmentStopping   EnvironmentStatus = "stopping"
-	EnvironmentStopped    EnvironmentStatus = "stopped"
-	EnvironmentUnknown    EnvironmentStatus = "unknown"
+	// EnvironmentHealthy indicates that every required service is ready.
+	EnvironmentHealthy EnvironmentStatus = "healthy"
+	// EnvironmentDegraded indicates that the environment is usable but not fully healthy.
+	EnvironmentDegraded EnvironmentStatus = "degraded"
+	// EnvironmentFailed indicates that a required service could not be started or recovered.
+	EnvironmentFailed EnvironmentStatus = "failed"
+	// EnvironmentStopping indicates that services are being stopped.
+	EnvironmentStopping EnvironmentStatus = "stopping"
+	// EnvironmentStopped indicates that no services are running.
+	EnvironmentStopped EnvironmentStatus = "stopped"
+	// EnvironmentUnknown indicates that the daemon cannot verify the environment state.
+	EnvironmentUnknown EnvironmentStatus = "unknown"
 )
 
+// ServiceStatus describes the observed lifecycle state of a service.
 type ServiceStatus string
 
 const (
-	ServicePlanned    ServiceStatus = "planned"
-	ServiceStarting   ServiceStatus = "starting"
+	// ServicePlanned indicates that a service has not been started yet.
+	ServicePlanned ServiceStatus = "planned"
+	// ServiceStarting indicates that a service launch is in progress.
+	ServiceStarting ServiceStatus = "starting"
+	// ServiceRecovering indicates that Portless is adopting or restarting a service.
 	ServiceRecovering ServiceStatus = "recovering"
-	ServiceReady      ServiceStatus = "ready"
-	ServiceUnhealthy  ServiceStatus = "unhealthy"
-	ServiceExited     ServiceStatus = "exited"
-	ServiceFailed     ServiceStatus = "failed"
-	ServiceStopping   ServiceStatus = "stopping"
-	ServiceStopped    ServiceStatus = "stopped"
-	ServiceUnknown    ServiceStatus = "unknown"
+	// ServiceReady indicates that the service passed its readiness check.
+	ServiceReady ServiceStatus = "ready"
+	// ServiceUnhealthy indicates that a running service failed its readiness check.
+	ServiceUnhealthy ServiceStatus = "unhealthy"
+	// ServiceExited indicates that the service process terminated.
+	ServiceExited ServiceStatus = "exited"
+	// ServiceFailed indicates that the service could not be launched or recovered.
+	ServiceFailed ServiceStatus = "failed"
+	// ServiceStopping indicates that shutdown is in progress.
+	ServiceStopping ServiceStatus = "stopping"
+	// ServiceStopped indicates that the service is not running.
+	ServiceStopped ServiceStatus = "stopped"
+	// ServiceUnknown indicates that the service state cannot be verified.
+	ServiceUnknown ServiceStatus = "unknown"
 )
 
+// LaunchMode identifies how Portless started a process service.
 type LaunchMode string
 
 const (
+	// LaunchManaged starts a service without a debugger.
 	LaunchManaged LaunchMode = "managed"
-	LaunchDebug   LaunchMode = "debug"
+	// LaunchDebug starts a service with a supported debugger enabled.
+	LaunchDebug LaunchMode = "debug"
 )
 
+// DebugAdapter identifies the debugger protocol exposed by a service.
 type DebugAdapter string
 
 const (
+	// DebugNodeInspector selects the Node.js Inspector protocol.
 	DebugNodeInspector DebugAdapter = "node-inspector"
-	DebugJDWP          DebugAdapter = "jdwp"
+	// DebugJDWP selects the Java Debug Wire Protocol.
+	DebugJDWP DebugAdapter = "jdwp"
 )
 
+// DebugLauncher identifies a safe, framework-specific debug command transformation.
 type DebugLauncher string
 
 const (
-	DebugNodeDirect   DebugLauncher = "node-direct"
-	DebugNestCLI      DebugLauncher = "nest-cli"
+	// DebugNodeDirect launches a Node.js entry point directly.
+	DebugNodeDirect DebugLauncher = "node-direct"
+	// DebugNestCLI launches a NestJS application through its CLI.
+	DebugNestCLI DebugLauncher = "nest-cli"
+	// DebugSpringGradle launches Spring Boot through Gradle.
 	DebugSpringGradle DebugLauncher = "spring-gradle"
-	DebugSpringMaven  DebugLauncher = "spring-maven"
+	// DebugSpringMaven launches Spring Boot through Maven.
+	DebugSpringMaven DebugLauncher = "spring-maven"
 )
 
+// ServiceKind distinguishes executable services from managed dependencies.
 type ServiceKind string
 
 const (
-	ServiceProcess  ServiceKind = "process"
+	// ServiceProcess is a locally executable application process.
+	ServiceProcess ServiceKind = "process"
+	// ServiceResource is an infrastructure dependency managed by a provider.
 	ServiceResource ServiceKind = "resource"
 )
 
+// ProviderKind identifies where an environment obtains a service.
 type ProviderKind string
 
 const (
-	ProviderLocal     ProviderKind = "local"
+	// ProviderLocal runs a service from a bound local source.
+	ProviderLocal ProviderKind = "local"
+	// ProviderContainer runs a service in the selected container runtime.
 	ProviderContainer ProviderKind = "container"
-	ProviderRemote    ProviderKind = "remote"
+	// ProviderRemote routes the service to an external environment.
+	ProviderRemote ProviderKind = "remote"
 )
 
+// RemoteClassification records the safety classification of a remote target.
 type RemoteClassification string
 
 const (
+	// RemoteDevelopment identifies a development target.
 	RemoteDevelopment RemoteClassification = "development"
-	RemoteQA          RemoteClassification = "qa"
-	RemoteStaging     RemoteClassification = "staging"
-	RemoteUnknown     RemoteClassification = "unknown"
+	// RemoteQA identifies a quality-assurance target.
+	RemoteQA RemoteClassification = "qa"
+	// RemoteStaging identifies a staging target.
+	RemoteStaging RemoteClassification = "staging"
+	// RemoteUnknown identifies a target whose environment is not known.
+	RemoteUnknown RemoteClassification = "unknown"
 )
 
+// WritePolicy records whether Portless may send mutating requests to a remote target.
 type WritePolicy string
 
 const (
-	WriteReadOnly  WritePolicy = "read-only"
+	// WriteReadOnly blocks requests that may mutate remote state.
+	WriteReadOnly WritePolicy = "read-only"
+	// WriteReadWrite permits both read and write traffic.
 	WriteReadWrite WritePolicy = "read-write"
 )
 
+// Protocol identifies a connection's application protocol.
 type Protocol string
 
 const (
+	// ProtocolHTTP represents HTTP traffic.
 	ProtocolHTTP Protocol = "http"
-	ProtocolTCP  Protocol = "tcp"
+	// ProtocolTCP represents raw TCP traffic.
+	ProtocolTCP Protocol = "tcp"
 )
 
+// EndpointKind identifies an endpoint's role in local routing.
 type EndpointKind string
 
 const (
-	EndpointPublic     EndpointKind = "public"
+	// EndpointPublic is the user-facing endpoint for an application service.
+	EndpointPublic EndpointKind = "public"
+	// EndpointConnection is the source-scoped endpoint for a service dependency.
 	EndpointConnection EndpointKind = "connection"
 )
 
@@ -110,6 +162,7 @@ type Endpoint struct {
 	Address  string       `json:"address,omitempty"`
 }
 
+// HealthCheck defines how Portless determines whether a service is ready.
 type HealthCheck struct {
 	Kind     string        `json:"kind"`
 	Path     string        `json:"path,omitempty"`
@@ -133,6 +186,7 @@ type DebugCapability struct {
 	Command  []string      `json:"command"`
 }
 
+// DebuggerRuntime describes a debugger listener created for a running service.
 type DebuggerRuntime struct {
 	Adapter DebugAdapter `json:"adapter"`
 	Host    string       `json:"host"`
@@ -140,6 +194,7 @@ type DebuggerRuntime struct {
 	State   string       `json:"state"`
 }
 
+// ServiceDefinition is the discovered, environment-independent definition of a service.
 type ServiceDefinition struct {
 	Name             string              `json:"name"`
 	Kind             ServiceKind         `json:"kind"`
@@ -163,12 +218,14 @@ type ServiceDefinition struct {
 	Evidence    []Evidence        `json:"evidence,omitempty"`
 }
 
+// Evidence explains which source artifact produced a discovery conclusion.
 type Evidence struct {
 	File        string `json:"file"`
 	Explanation string `json:"explanation"`
 	Confidence  string `json:"confidence"`
 }
 
+// Connection describes a resolved dependency edge between two services.
 type Connection struct {
 	Source      string   `json:"source"`
 	Target      string   `json:"target"`
@@ -178,6 +235,7 @@ type Connection struct {
 	Required    bool     `json:"required"`
 }
 
+// EffectiveConnection combines a declared edge with its environment-specific target.
 type EffectiveConnection struct {
 	Connection
 	TargetProvider      ProviderKind      `json:"targetProvider"`
@@ -187,6 +245,7 @@ type EffectiveConnection struct {
 	InjectedEnvironment map[string]string `json:"injectedEnvironment,omitempty"`
 }
 
+// ConnectionReference is an unresolved dependency hint emitted during discovery.
 type ConnectionReference struct {
 	Source      string   `json:"source"`
 	TargetHint  string   `json:"targetHint"`
@@ -196,6 +255,7 @@ type ConnectionReference struct {
 	Required    bool     `json:"required"`
 }
 
+// ProjectModel is the reusable service topology discovered across project sources.
 type ProjectModel struct {
 	SuggestedName  string                `json:"suggestedName"`
 	PrimaryService string                `json:"primaryService,omitempty"`
@@ -204,11 +264,13 @@ type ProjectModel struct {
 	References     []ConnectionReference `json:"references,omitempty"`
 }
 
+// ProjectSource names a registered source and the services discovered from it.
 type ProjectSource struct {
 	Name     string   `json:"name"`
 	Services []string `json:"services,omitempty"`
 }
 
+// SourceBinding records the filesystem source selected for an environment.
 type SourceBinding struct {
 	Name       string       `json:"name"`
 	Path       string       `json:"path"`
@@ -218,6 +280,7 @@ type SourceBinding struct {
 	Definition ProjectModel `json:"-"`
 }
 
+// RemoteTarget describes an explicitly classified external service endpoint.
 type RemoteTarget struct {
 	URL            string               `json:"url"`
 	Classification RemoteClassification `json:"classification"`
@@ -225,6 +288,7 @@ type RemoteTarget struct {
 	HealthPath     string               `json:"healthPath,omitempty"`
 }
 
+// ComponentBinding selects a provider and source for one environment service.
 type ComponentBinding struct {
 	Service  string        `json:"service"`
 	Provider ProviderKind  `json:"provider"`
@@ -232,6 +296,7 @@ type ComponentBinding struct {
 	Remote   *RemoteTarget `json:"remote,omitempty"`
 }
 
+// ConfigurationIssue describes an invalid or incomplete environment setting.
 type ConfigurationIssue struct {
 	Code        string `json:"code"`
 	Subject     string `json:"subject,omitempty"`
@@ -239,6 +304,7 @@ type ConfigurationIssue struct {
 	Remediation string `json:"remediation,omitempty"`
 }
 
+// EnvironmentSummary contains list-view status for a project environment.
 type EnvironmentSummary struct {
 	Project      string            `json:"project"`
 	Name         string            `json:"name"`
@@ -252,6 +318,7 @@ type EnvironmentSummary struct {
 	DashboardURL string            `json:"dashboardUrl,omitempty"`
 }
 
+// Project is the complete public representation of a logical application.
 type Project struct {
 	Name           string               `json:"name"`
 	Revision       int64                `json:"revision"`
@@ -265,6 +332,7 @@ type Project struct {
 	Environments   []EnvironmentSummary `json:"environments,omitempty"`
 }
 
+// Environment is the effective topology, bindings, and runtime state for a project variant.
 type Environment struct {
 	Project        string               `json:"project"`
 	Name           string               `json:"name"`
@@ -282,6 +350,7 @@ type Environment struct {
 	Issues         []ConfigurationIssue `json:"issues,omitempty"`
 }
 
+// Service combines a service definition with its current environment runtime state.
 type Service struct {
 	ServiceDefinition
 	LaunchMode    LaunchMode       `json:"launchMode"`
@@ -298,6 +367,7 @@ type Service struct {
 	P95Millis     int64            `json:"p95Millis,omitempty"`
 }
 
+// Operation records a durable, multi-step environment or service action.
 type Operation struct {
 	Project     string           `json:"project"`
 	Environment string           `json:"environment"`
@@ -311,6 +381,7 @@ type Operation struct {
 	Events      []OperationEvent `json:"events,omitempty"`
 }
 
+// OperationEvent records one ordered update within an operation.
 type OperationEvent struct {
 	Sequence  int64          `json:"sequence"`
 	Timestamp time.Time      `json:"timestamp"`
@@ -320,6 +391,7 @@ type OperationEvent struct {
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 
+// TrafficEvent records one completed HTTP or TCP exchange observed by Portless.
 type TrafficEvent struct {
 	Project               string               `json:"project"`
 	Environment           string               `json:"environment"`
@@ -349,6 +421,7 @@ type TrafficEvent struct {
 	ResponseBodyTruncated bool                 `json:"responseBodyTruncated,omitempty"`
 }
 
+// TrafficActivity describes a live connection or request phase for topology animation.
 type TrafficActivity struct {
 	Project           string    `json:"project"`
 	Environment       string    `json:"environment"`
@@ -363,6 +436,7 @@ type TrafficActivity struct {
 	Fault             string    `json:"fault,omitempty"`
 }
 
+// ConfigurationValue is an effective service setting with its source and sensitivity.
 type ConfigurationValue struct {
 	Key            string `json:"key"`
 	Value          string `json:"value"`
@@ -370,6 +444,7 @@ type ConfigurationValue struct {
 	Source         string `json:"source"`
 }
 
+// ServiceConfiguration describes the effective launch configuration for a service.
 type ServiceConfiguration struct {
 	Service          string               `json:"service"`
 	Command          []string             `json:"command"`
@@ -379,6 +454,7 @@ type ServiceConfiguration struct {
 	Health           HealthCheck          `json:"health"`
 }
 
+// LogEntry is one timestamped line from a managed service stream.
 type LogEntry struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Service    string    `json:"service"`
@@ -387,6 +463,7 @@ type LogEntry struct {
 	Message    string    `json:"message"`
 }
 
+// Recording describes a bounded traffic-capture session and its retained event count.
 type Recording struct {
 	Project       string     `json:"project"`
 	Environment   string     `json:"environment"`
@@ -403,6 +480,7 @@ type Recording struct {
 	EventCount    int64      `json:"eventCount"`
 }
 
+// FaultRule defines a scoped traffic failure and its current activation state.
 type FaultRule struct {
 	Project      string     `json:"project"`
 	Environment  string     `json:"environment"`
@@ -424,6 +502,7 @@ type FaultRule struct {
 	ScopeSummary string     `json:"scopeSummary"`
 }
 
+// TimelineEvent records a durable user-visible environment history entry.
 type TimelineEvent struct {
 	Project     string         `json:"project"`
 	Environment string         `json:"environment"`

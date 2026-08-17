@@ -18,6 +18,7 @@ const (
 	allocationCount = networking.EndpointPoolSize
 )
 
+// NetworkAllocation is a stable DNS name, loopback address, and port assigned to an endpoint.
 type NetworkAllocation struct {
 	Kind       string
 	Source     string
@@ -29,10 +30,12 @@ type NetworkAllocation struct {
 	CreatedAt  time.Time
 }
 
+// Address returns the concrete loopback listener address.
 func (allocation NetworkAllocation) Address() string {
 	return net.JoinHostPort(allocation.ListenIP, fmt.Sprintf("%d", allocation.ListenPort))
 }
 
+// Endpoint converts the allocation into its user-facing endpoint representation.
 func (allocation NetworkAllocation) Endpoint(kind model.EndpointKind) model.Endpoint {
 	endpoint := model.Endpoint{
 		Kind: kind, Protocol: allocation.Protocol, Host: allocation.DNSName,
@@ -44,6 +47,7 @@ func (allocation NetworkAllocation) Endpoint(kind model.EndpointKind) model.Endp
 	return endpoint
 }
 
+// SyncNetworkAllocations reconciles durable endpoint assignments with the desired topology.
 func (s *Store) SyncNetworkAllocations(ctx context.Context, selector string, specs []networking.AllocationSpec) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -155,6 +159,7 @@ INSERT OR IGNORE INTO network_allocations(
 	return nil
 }
 
+// NetworkAllocations lists all stable endpoint assignments for an environment.
 func (s *Store) NetworkAllocations(ctx context.Context, selector string) ([]NetworkAllocation, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -182,6 +187,7 @@ ORDER BY endpoint_kind, target_name COLLATE NOCASE, source_name COLLATE NOCASE`,
 	return result, rows.Err()
 }
 
+// NetworkAllocation returns one endpoint assignment by its logical edge identity.
 func (s *Store) NetworkAllocation(ctx context.Context, selector, kind, source, target string, protocol model.Protocol) (NetworkAllocation, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {

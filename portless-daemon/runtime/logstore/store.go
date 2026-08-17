@@ -22,6 +22,7 @@ const (
 	retainedRuns    = 10
 )
 
+// Sink converts one process stream into bounded structured JSON Lines log entries.
 type Sink struct {
 	mu         sync.Mutex
 	file       *os.File
@@ -33,6 +34,7 @@ type Sink struct {
 	full       bool
 }
 
+// OpenSink opens a private bounded log sink and prunes old service generations.
 func OpenSink(directory, service, stream string, generation int64) (*Sink, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, err
@@ -59,6 +61,7 @@ func OpenSink(directory, service, stream string, generation int64) (*Sink, error
 	return &Sink{file: file, service: service, stream: stream, generation: generation, written: info.Size(), full: info.Size() >= maxLogFileBytes}, nil
 }
 
+// Write buffers partial input and persists complete bounded log lines.
 func (s *Sink) Write(content []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,6 +85,7 @@ func (s *Sink) Write(content []byte) (int, error) {
 	return len(content), nil
 }
 
+// Close flushes any partial line and closes the log file.
 func (s *Sink) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,6 +121,7 @@ func (s *Sink) writeLine(content []byte) error {
 	return err
 }
 
+// Read merges retained service streams chronologically and applies time and count limits.
 func Read(root string, services []string, limit int, since time.Time) ([]model.LogEntry, error) {
 	if limit <= 0 {
 		limit = 500

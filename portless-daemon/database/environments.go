@@ -11,6 +11,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/networking"
 )
 
+// CreateEnvironment persists a new stopped environment and allocates its stable endpoints.
 func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentName string, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
 	if err := model.ValidateEnvironmentName(environmentName); err != nil {
 		return model.Environment{}, err
@@ -58,6 +59,7 @@ VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?)`, key, projectKey, environmentName, model.
 	return s.Environment(ctx, projectName, environmentName)
 }
 
+// CloneEnvironment copies topology, source bindings, and provider bindings into a new environment.
 func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, targetName string) (model.Environment, error) {
 	source, err := s.Environment(ctx, projectName, sourceName)
 	if err != nil {
@@ -70,6 +72,7 @@ func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, t
 	return s.CreateEnvironment(ctx, projectName, targetName, definition, source.Sources, source.Bindings)
 }
 
+// Environment loads and hydrates one environment by public project and environment names.
 func (s *Store) Environment(ctx context.Context, projectName, environmentName string) (model.Environment, error) {
 	row, err := s.readEnvironmentRow(ctx, projectName, environmentName)
 	if err != nil {
@@ -78,6 +81,7 @@ func (s *Store) Environment(ctx context.Context, projectName, environmentName st
 	return s.hydrateEnvironment(ctx, row)
 }
 
+// EnvironmentBySelector loads an environment addressed as project/environment.
 func (s *Store) EnvironmentBySelector(ctx context.Context, selector string) (model.Environment, error) {
 	project, environment, err := model.ParseEnvironmentSelector(selector)
 	if err != nil {
@@ -86,6 +90,7 @@ func (s *Store) EnvironmentBySelector(ctx context.Context, selector string) (mod
 	return s.Environment(ctx, project, environment)
 }
 
+// ListEnvironments lists hydrated environments, optionally filtered by project.
 func (s *Store) ListEnvironments(ctx context.Context, projectName string) ([]model.Environment, error) {
 	query := `
 SELECT e.private_key, e.project_key, p.name, e.name, e.revision, e.status, e.reason,
@@ -124,6 +129,7 @@ FROM environments e JOIN projects p ON p.private_key = e.project_key`
 	return result, nil
 }
 
+// EnvironmentsByPath returns environments whose registered sources contain path.
 func (s *Store) EnvironmentsByPath(ctx context.Context, path string) ([]model.Environment, error) {
 	path, err := canonicalPath(path)
 	if err != nil {
@@ -174,6 +180,7 @@ ORDER BY p.name, e.name, source.path`)
 	return result, nil
 }
 
+// EnvironmentModel returns the compiled topology persisted for one environment.
 func (s *Store) EnvironmentModel(ctx context.Context, projectName, environmentName string) (model.ProjectModel, error) {
 	var encoded []byte
 	err := s.db.QueryRowContext(ctx, `
@@ -190,6 +197,7 @@ WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, env
 	return definition, nil
 }
 
+// ReplaceEnvironmentConfiguration atomically replaces stopped-environment configuration at a revision.
 func (s *Store) ReplaceEnvironmentConfiguration(ctx context.Context, projectName, environmentName string, expectedRevision int64, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
 	modelJSON, err := encodeProjectModel(definition)
 	if err != nil {
@@ -243,6 +251,7 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	return s.Environment(ctx, projectName, environmentName)
 }
 
+// ReplaceProjectAndEnvironmentConfiguration atomically extends project topology and one stopped environment.
 func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environmentName string, expectedEnvironmentRevision int64, environmentDefinition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
 	projectDefinition.SuggestedName = projectName
 	projectJSON, err := encodeProjectModel(logicalDefinition(projectDefinition))
@@ -329,6 +338,7 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 	return s.Environment(ctx, projectName, environmentName)
 }
 
+// SetEnvironmentBinding replaces one service provider binding in a stopped environment.
 func (s *Store) SetEnvironmentBinding(ctx context.Context, projectName, environmentName string, binding model.ComponentBinding) (model.Environment, error) {
 	environment, err := s.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -355,6 +365,7 @@ func (s *Store) SetEnvironmentBinding(ctx context.Context, projectName, environm
 	return s.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, definition, environment.Sources, environment.Bindings)
 }
 
+// SetContextSelection binds the closest registered source root containing path to an environment.
 func (s *Store) SetContextSelection(ctx context.Context, path, projectName, environmentName string) error {
 	path, err := canonicalPath(path)
 	if err != nil {
@@ -391,6 +402,7 @@ ON CONFLICT(path) DO UPDATE SET environment_key = excluded.environment_key, sele
 	return err
 }
 
+// ContextSelection resolves the nearest persisted environment selection containing path.
 func (s *Store) ContextSelection(ctx context.Context, path string) (model.Environment, error) {
 	path, err := canonicalPath(path)
 	if err != nil {
@@ -426,6 +438,7 @@ JOIN environment_sources source ON source.environment_key = c.environment_key AN
 	return s.Environment(ctx, projectName, environmentName)
 }
 
+// ClearContextSelection removes the nearest persisted selection containing path.
 func (s *Store) ClearContextSelection(ctx context.Context, path string) (bool, error) {
 	path, err := canonicalPath(path)
 	if err != nil {
@@ -464,6 +477,7 @@ func (s *Store) ClearContextSelection(ctx context.Context, path string) (bool, e
 	return changed > 0, nil
 }
 
+// ForgetEnvironment deletes a stopped environment and all cascaded application state.
 func (s *Store) ForgetEnvironment(ctx context.Context, projectName, environmentName string) error {
 	environment, err := s.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -487,6 +501,7 @@ func (s *Store) ForgetEnvironment(ctx context.Context, projectName, environmentN
 	return nil
 }
 
+// SetEnvironmentStatus updates an environment's aggregate runtime status and reason.
 func (s *Store) SetEnvironmentStatus(ctx context.Context, projectName, environmentName string, status model.EnvironmentStatus, reason string) error {
 	key, err := s.PrivateEnvironmentKey(ctx, projectName, environmentName)
 	if err != nil {

@@ -12,6 +12,8 @@ import (
 	"strconv"
 )
 
+// SetupRequest contains the executable, daemon sockets, ownership, and streams
+// needed to install the privileged relay.
 type SetupRequest struct {
 	Executable      string
 	TargetSocket    string
@@ -23,6 +25,8 @@ type SetupRequest struct {
 	Stderr          io.Writer
 }
 
+// UninstallRequest contains ownership and confirmation details for removing the
+// privileged relay.
 type UninstallRequest struct {
 	Executable string
 	UID        int
@@ -32,6 +36,8 @@ type UninstallRequest struct {
 	Stderr     io.Writer
 }
 
+// RestartRequest contains the executable and requesting-user details needed to
+// restart an installed relay.
 type RestartRequest struct {
 	Executable string
 	UID        int
@@ -46,6 +52,8 @@ func PrepareRuntime(ctx context.Context) error {
 	return prepareRelayLoopbackPool(ctx, false)
 }
 
+// Install validates request and installs the relay, elevating through sudo when
+// the current process is not already privileged.
 func Install(ctx context.Context, request SetupRequest) error {
 	if err := validateSetupRequest(request); err != nil {
 		return err
@@ -74,6 +82,8 @@ func Install(ctx context.Context, request SetupRequest) error {
 	return nil
 }
 
+// InstallPrivileged installs the platform relay service from a root process and
+// configures it to drop privileges to uid and gid.
 func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket, dnsTargetSocket string, uid, gid int) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal relay installer must run as root")
@@ -85,6 +95,8 @@ func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket, dnsT
 	return installPlatform(ctx, request)
 }
 
+// Restart verifies relay ownership and restarts the installed service,
+// elevating through sudo when necessary.
 func Restart(ctx context.Context, request RestartRequest) error {
 	if request.UID <= 0 {
 		return errors.New("Portless relay restart requires a non-root requesting user ID")
@@ -123,6 +135,8 @@ func Restart(ctx context.Context, request RestartRequest) error {
 	return nil
 }
 
+// RestartPrivileged restarts an installed relay from a root process after
+// validating that it belongs to requestingUID.
 func RestartPrivileged(ctx context.Context, requestingUID int) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal relay restarter must run as root")
@@ -140,6 +154,8 @@ func RestartPrivileged(ctx context.Context, requestingUID int) error {
 	return restartPlatform(ctx)
 }
 
+// Uninstall verifies relay ownership and removes the installed service. The
+// boolean result reports whether an installed relay was found for removal.
 func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 	if request.UID <= 0 && !request.Force {
 		return false, errors.New("Portless relay uninstall requires a non-root requesting user ID")
@@ -178,6 +194,8 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 	return true, nil
 }
 
+// UninstallPrivileged removes the platform relay from a root process after
+// validating requestingUID unless force explicitly overrides ownership.
 func UninstallPrivileged(ctx context.Context, requestingUID int, force bool) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal relay uninstaller must run as root")

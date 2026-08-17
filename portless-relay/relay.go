@@ -16,11 +16,15 @@ import (
 )
 
 const (
+	// DefaultListenAddress is the privileged loopback HTTP listener.
 	DefaultListenAddress = "127.0.0.1:80"
-	DefaultDNSAddress    = "127.77.0.1:1053"
-	defaultConnections   = 256
+	// DefaultDNSAddress is the loopback TCP and UDP DNS listener.
+	DefaultDNSAddress  = "127.77.0.1:1053"
+	defaultConnections = 256
 )
 
+// Config defines the public listeners, private daemon sockets, privilege
+// target, and concurrency limit for a relay process.
 type Config struct {
 	ListenAddress    string
 	TargetSocket     string
@@ -32,6 +36,8 @@ type Config struct {
 	MaxConnections   int
 }
 
+// Run starts the HTTP and DNS relay listeners, optionally drops privileges,
+// and serves until a listener fails or ctx is canceled.
 func Run(ctx context.Context, config Config) error {
 	if config.ListenAddress == "" {
 		config.ListenAddress = DefaultListenAddress
@@ -83,6 +89,8 @@ func Run(ctx context.Context, config Config) error {
 	return err
 }
 
+// ServeRelay forwards HTTP connections from listener to the daemon's private
+// ingress socket with a bounded number of concurrent connections.
 func ServeRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {
 	if !filepath.IsAbs(targetSocket) {
 		return errors.New("ingress target socket must be an absolute path")

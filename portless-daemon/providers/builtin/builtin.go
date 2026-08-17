@@ -9,10 +9,12 @@ import (
 	"github.com/portless-run/portless/portless-daemon/providers/builtin/valkey"
 )
 
+// Plugins returns all built-in managed resource plugins.
 func Plugins() []providers.Plugin {
 	return []providers.Plugin{postgres.New(), valkey.New(), mysql.New(), nats.New()}
 }
 
+// Registry returns a validated registry containing all built-in resource plugins.
 func Registry() *providers.Registry {
 	return providers.MustRegistry(Plugins()...)
 }

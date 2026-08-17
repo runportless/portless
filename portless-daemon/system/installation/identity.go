@@ -16,6 +16,7 @@ var (
 	buildIDErr  error
 )
 
+// CurrentBuildID returns the cached SHA-256 identity of the running executable.
 func CurrentBuildID() (string, error) {
 	buildIDOnce.Do(func() {
 		executable, err := os.Executable()
@@ -44,6 +45,8 @@ func BuildIDForPath(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// InstallationID derives the stable installation identity from its private
+// ownership key.
 func InstallationID(paths Layout) (string, error) {
 	key, err := ReadPrivateTextFile(paths.OwnershipKey)
 	if err != nil {
@@ -53,6 +56,7 @@ func InstallationID(paths Layout) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
+// IDFromKey derives an installation identity from ownership-key content.
 func IDFromKey(key string) string {
 	hash := sha256.Sum256([]byte("portless-installation\x00" + strings.TrimSpace(key)))
 	return hex.EncodeToString(hash[:])

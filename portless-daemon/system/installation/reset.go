@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// ResetStateResult lists application-state categories removed by a reset.
 type ResetStateResult struct {
 	Removed []string `json:"removed"`
 }

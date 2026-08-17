@@ -20,24 +20,29 @@ import (
 	"github.com/portless-run/portless/portless-daemon/traffic/proxy"
 )
 
+// NameConflictError reports a project-name collision and safe alternative names.
 type NameConflictError struct {
 	Name        string   `json:"name"`
 	Suggestions []string `json:"suggestions"`
 }
 
+// RuntimeInUseError identifies the active environment blocking a runtime change.
 type RuntimeInUseError struct {
 	Project string `json:"project"`
 }
 
+// ResetActiveEnvironmentsError lists environments that require an explicit forced reset.
 type ResetActiveEnvironmentsError struct {
 	Environments []string `json:"environments"`
 }
 
+// ResetRuntimeResult summarizes process and container cleanup performed before reset.
 type ResetRuntimeResult struct {
 	Processes int                  `json:"processes"`
 	Runtimes  []RuntimeResetResult `json:"runtimes"`
 }
 
+// ResetPlan summarizes application state and managed resources that reset would remove.
 type ResetPlan struct {
 	Projects                  int      `json:"projects"`
 	Environments              int      `json:"environments"`
@@ -46,29 +51,35 @@ type ResetPlan struct {
 	TopologyIncompatible      bool     `json:"topologyIncompatible"`
 }
 
+// EnvironmentContext explains how a checkout path resolves to an environment.
 type EnvironmentContext struct {
 	Resolution  string              `json:"resolution"`
 	Environment *model.Environment  `json:"environment,omitempty"`
 	Candidates  []model.Environment `json:"candidates"`
 }
 
+// UpOptions controls managed and debugger-aware environment startup.
 type UpOptions struct {
 	DebugServices []string `json:"debugServices,omitempty"`
 	Managed       bool     `json:"managed,omitempty"`
 }
 
+// Error describes why the selected container runtime cannot be changed.
 func (e RuntimeInUseError) Error() string {
 	return "stop project " + e.Project + " before changing the container runtime"
 }
 
+// Error describes the active environments preventing an unforced reset.
 func (e ResetActiveEnvironmentsError) Error() string {
 	return "all environments must be stopped before Portless application state is reset: " + strings.Join(e.Environments, ", ")
 }
 
+// Error describes the conflicting project name.
 func (e NameConflictError) Error() string {
 	return "project name " + e.Name + " is already used by another path"
 }
 
+// Config supplies runtime ownership, storage, discovery, and provider dependencies.
 type Config struct {
 	DataDirectory     string
 	InstallationKey   string
@@ -79,6 +90,7 @@ type Config struct {
 	Resources         *providers.Registry
 }
 
+// Service coordinates project state, runtimes, proxies, and observability operations.
 type Service struct {
 	database             *database.Store
 	broker               *events.Broker
@@ -99,6 +111,7 @@ type Service struct {
 	resources            *providers.Registry
 }
 
+// New constructs a control-plane service from persistent state and runtime dependencies.
 func New(controlStore *database.Store, broker *events.Broker, config Config) *Service {
 	resources := config.Resources
 	if resources == nil {
@@ -142,6 +155,7 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 	return service
 }
 
+// Close stops runtime managers and closes all active proxy listeners.
 func (s *Service) Close(ctx context.Context) {
 	s.processes.Close()
 	s.containers.Close()

@@ -1,3 +1,4 @@
+// Package cli assembles and runs the Portless command-line application.
 package cli
 
 import (
@@ -19,6 +20,7 @@ import (
 	"github.com/portless-run/portless/portless-relay"
 )
 
+// Version is the Portless CLI version reported by the root command.
 var Version = "dev"
 
 // CLI is the composition root for Portless's command-line product. Product
@@ -61,6 +63,8 @@ type localDependencies struct {
 	removeLauncher         func(command.LauncherPlan) (bool, error)
 }
 
+// New constructs a CLI that writes to out and errOut and stores its local
+// installation state in dataDirectory.
 func New(out, errOut io.Writer, dataDirectory string) (*CLI, error) {
 	return newWithDependencies(out, errOut, dataDirectory, localDependencies{})
 }

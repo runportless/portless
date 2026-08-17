@@ -23,6 +23,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
 )
 
+// ExitEvent reports a managed process termination to the control plane.
 type ExitEvent struct {
 	Scope      string
 	Service    string
@@ -31,6 +32,7 @@ type ExitEvent struct {
 	Expected   bool
 }
 
+// StartResult contains process, listener, log, supervisor, and debugger runtime state.
 type StartResult struct {
 	PID              int
 	Port             int
@@ -45,6 +47,7 @@ type StartResult struct {
 	Debugger         *model.DebuggerRuntime
 }
 
+// StartOptions selects managed or debug launch behavior for a process.
 type StartOptions struct {
 	LaunchMode model.LaunchMode
 	Debugger   *model.DebuggerRuntime
@@ -65,6 +68,7 @@ type managedProcess struct {
 	pid              int
 }
 
+// Manager starts, supervises, attaches to, and stops local application processes.
 type Manager struct {
 	mu         sync.Mutex
 	runs       map[string]*managedProcess
@@ -77,11 +81,13 @@ type Manager struct {
 	cancel     context.CancelFunc
 }
 
+// NewManager constructs an in-process manager without restart-surviving supervisors.
 func NewManager(onExit func(ExitEvent)) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{runs: make(map[string]*managedProcess), onExit: onExit, monitorCtx: ctx, cancel: cancel}
 }
 
+// NewSupervisedManager constructs a manager whose child supervisors survive daemon replacement.
 func NewSupervisedManager(executable, runsRoot string, onExit func(ExitEvent)) *Manager {
 	manager := NewManager(onExit)
 	manager.executable = executable
@@ -92,6 +98,7 @@ func NewSupervisedManager(executable, runsRoot string, onExit func(ExitEvent)) *
 	return manager
 }
 
+// AllocatePort asks the kernel for an available loopback TCP port.
 func AllocatePort() (int, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -104,10 +111,12 @@ func AllocatePort() (int, error) {
 	return port, nil
 }
 
+// Start launches a service in normal managed mode and waits for readiness.
 func (m *Manager) Start(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string) (StartResult, error) {
 	return m.StartPrepared(ctx, scope, definition, generation, environment, logsRoot, StartOptions{LaunchMode: model.LaunchManaged}, nil)
 }
 
+// StartPrepared launches a service and invokes prepared after private runtime details are allocated.
 func (m *Manager) StartPrepared(ctx context.Context, scope string, definition model.ServiceDefinition, generation int64, environment map[string]string, logsRoot string, options StartOptions, prepared func(StartResult) error) (StartResult, error) {
 	if definition.Kind != model.ServiceProcess {
 		return StartResult{}, errors.New("process manager only starts process services")
@@ -215,6 +224,7 @@ func (m *Manager) StartPrepared(ctx context.Context, scope string, definition mo
 	return result, nil
 }
 
+// Stop gracefully terminates a managed service process, escalating after timeout.
 func (m *Manager) Stop(ctx context.Context, scope, service string, timeout time.Duration) error {
 	key := runMapKey(scope, service)
 	m.mu.Lock()
@@ -285,6 +295,7 @@ func (m *Manager) Stop(ctx context.Context, scope, service string, timeout time.
 	return nil
 }
 
+// IsRunning reports whether the manager currently observes a live service run.
 func (m *Manager) IsRunning(scope, service string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -300,6 +311,7 @@ func (m *Manager) IsRunning(scope, service string) bool {
 	}
 }
 
+// Attach verifies and resumes monitoring a restart-surviving service supervisor.
 func (m *Manager) Attach(ctx context.Context, scope, service string, generation int64, socketPath, statePath, privateKey string) (StartResult, error) {
 	if !m.supervised {
 		return StartResult{}, errors.New("process manager does not support supervisor attachment")
@@ -563,6 +575,7 @@ func supervisorTerminal(state string) bool {
 	return state == "stopped" || state == "exited" || state == "failed"
 }
 
+// Close stops supervisor monitoring without terminating supervised service processes.
 func (m *Manager) Close() {
 	if m.cancel != nil {
 		m.cancel()

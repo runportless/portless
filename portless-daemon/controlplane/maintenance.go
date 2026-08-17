@@ -14,14 +14,17 @@ import (
 	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
 )
 
+// RuntimeStatus reports the configured and currently selected container runtime.
 func (s *Service) RuntimeStatus(ctx context.Context) RuntimeStatus {
 	return applicationRuntimeStatus(s.containers.Status(ctx))
 }
 
+// StartRuntime attempts to make the preferred container runtime available.
 func (s *Service) StartRuntime(ctx context.Context) RuntimeStatus {
 	return applicationRuntimeStatus(s.containers.StartHost(ctx))
 }
 
+// UseRuntime changes the preferred container runtime when no managed resources are active.
 func (s *Service) UseRuntime(ctx context.Context, value string) (RuntimeStatus, error) {
 	preference, err := container.ParseRuntimeName(value)
 	if err != nil {
@@ -51,6 +54,7 @@ func (s *Service) UseRuntime(ctx context.Context, value string) (RuntimeStatus, 
 	return applicationRuntimeStatus(s.containers.Status(ctx)), nil
 }
 
+// PrepareReset verifies ownership and stops managed runtimes before application state is removed.
 func (s *Service) PrepareReset(ctx context.Context, force bool) (result ResetRuntimeResult, err error) {
 	s.resetGate.Lock()
 	defer s.resetGate.Unlock()
@@ -88,6 +92,7 @@ func (s *Service) PrepareReset(ctx context.Context, force bool) (result ResetRun
 	return result, err
 }
 
+// ActiveEnvironments returns sorted selectors for environments with retained runtime activity.
 func (s *Service) ActiveEnvironments(ctx context.Context) ([]string, error) {
 	inventory, err := s.database.RuntimeInventory(ctx)
 	if err != nil {
@@ -96,6 +101,7 @@ func (s *Service) ActiveEnvironments(ctx context.Context) ([]string, error) {
 	return activeRuntimeEnvironments(inventory), nil
 }
 
+// ResetPlan summarizes the application and runtime state that a reset would remove.
 func (s *Service) ResetPlan(ctx context.Context) (ResetPlan, error) {
 	inventory, err := s.database.RuntimeInventory(ctx)
 	if err != nil {
@@ -150,6 +156,7 @@ func activeRuntimeEnvironments(inventory []database.EnvironmentRuntimeInventory)
 	return active
 }
 
+// CancelReset releases the reset gate when reset preparation is not committed.
 func (s *Service) CancelReset() {
 	s.resetGate.Lock()
 	s.resetting = false

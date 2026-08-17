@@ -1,3 +1,5 @@
+// Package doctor performs read-only diagnostics of the local Portless
+// installation and its optional runtime dependencies.
 package doctor
 
 import (
@@ -22,25 +24,38 @@ import (
 	"github.com/portless-run/portless/portless-relay"
 )
 
+// Scope identifies the Portless subsystem or collection of subsystems that a
+// diagnostic run should inspect.
 type Scope string
 
 const (
-	ScopeAll     Scope = "all"
-	ScopeDaemon  Scope = "daemon"
-	ScopeRelay   Scope = "relay"
+	// ScopeAll runs every available diagnostic check.
+	ScopeAll Scope = "all"
+	// ScopeDaemon limits diagnostics to daemon state and connectivity.
+	ScopeDaemon Scope = "daemon"
+	// ScopeRelay limits diagnostics to relay, DNS, and ingress state.
+	ScopeRelay Scope = "relay"
+	// ScopeRuntime limits diagnostics to local container runtimes.
 	ScopeRuntime Scope = "runtime"
 )
 
+// Status is the severity and outcome of one diagnostic check.
 type Status string
 
 const (
+	// StatusPass indicates a successful check.
 	StatusPass Status = "pass"
+	// StatusInfo indicates a non-actionable informational result.
 	StatusInfo Status = "info"
+	// StatusWarn indicates a degraded or optional capability.
 	StatusWarn Status = "warn"
+	// StatusFail indicates a required capability that is not working safely.
 	StatusFail Status = "fail"
+	// StatusSkip indicates a check that could not or should not be attempted.
 	StatusSkip Status = "skip"
 )
 
+// Check is one independently actionable diagnostic result.
 type Check struct {
 	Code        string `json:"code"`
 	Component   string `json:"component"`
@@ -50,6 +65,7 @@ type Check struct {
 	Remediation string `json:"remediation,omitempty"`
 }
 
+// Summary contains diagnostic-result counts grouped by status.
 type Summary struct {
 	Passed        int `json:"passed"`
 	Informational int `json:"informational"`
@@ -58,6 +74,7 @@ type Summary struct {
 	Skipped       int `json:"skipped"`
 }
 
+// Report is the complete machine-readable result of a diagnostic run.
 type Report struct {
 	Scope   Scope   `json:"scope"`
 	Healthy bool    `json:"healthy"`
@@ -77,6 +94,8 @@ type dependencies struct {
 	probeRuntimes      func(context.Context) []container.ProbeResult
 }
 
+// ParseScope normalizes and validates a user-supplied diagnostic scope. An
+// empty value selects ScopeAll.
 func ParseScope(value string) (Scope, error) {
 	if value == "" {
 		return ScopeAll, nil

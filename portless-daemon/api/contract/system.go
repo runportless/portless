@@ -5,11 +5,13 @@ import (
 	"time"
 )
 
+// Health is the unauthenticated compatibility response used by relay checks.
 type Health struct {
 	Ready      bool   `json:"ready"`
 	APIVersion string `json:"apiVersion"`
 }
 
+// SystemStatus identifies the running control plane and API version.
 type SystemStatus struct {
 	Name       string `json:"name"`
 	Version    string `json:"version,omitempty"`
@@ -17,6 +19,8 @@ type SystemStatus struct {
 	Telemetry  bool   `json:"telemetry,omitempty"`
 }
 
+// DaemonStatus describes the authenticated daemon process, compatibility,
+// recovery, and active environments.
 type DaemonStatus struct {
 	State              string    `json:"state"`
 	PID                int       `json:"pid"`
@@ -30,6 +34,7 @@ type DaemonStatus struct {
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 }
 
+// DaemonRestart reports an accepted daemon restart and handoff strategy.
 type DaemonRestart struct {
 	Restarting         bool     `json:"restarting"`
 	PreviousInstanceID string   `json:"previousInstanceId"`
@@ -37,10 +42,12 @@ type DaemonRestart struct {
 	ActiveEnvironments []string `json:"activeEnvironments"`
 }
 
+// DaemonRestartRequest identifies the daemon instance the caller intends to restart.
 type DaemonRestartRequest struct {
 	InstanceID string `json:"instanceId"`
 }
 
+// DaemonControlError is a structured refusal from a daemon lifecycle action.
 type DaemonControlError struct {
 	Code               string
 	Message            string
@@ -48,6 +55,7 @@ type DaemonControlError struct {
 	Problems           []string
 }
 
+// Error returns the control error code and message.
 func (e *DaemonControlError) Error() string {
 	if e == nil {
 		return ""
@@ -58,6 +66,7 @@ func (e *DaemonControlError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// RelayStatus is the daemon API representation of relay installation and health.
 type RelayStatus struct {
 	Platform             string     `json:"platform"`
 	Service              string     `json:"service"`

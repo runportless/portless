@@ -14,21 +14,33 @@ import (
 // runtime implementation errors.
 type ErrorKind string
 
+// ErrNotFound indicates that a requested control-plane resource does not exist.
 var ErrNotFound = errors.New("resource not found")
 
 const (
-	ErrorRequestFailed      ErrorKind = "request-failed"
-	ErrorNotFound           ErrorKind = "not-found"
-	ErrorRevisionConflict   ErrorKind = "revision-conflict"
-	ErrorNameTaken          ErrorKind = "name-taken"
-	ErrorAlreadyExists      ErrorKind = "already-exists"
+	// ErrorRequestFailed is the fallback classification for an unsuccessful request.
+	ErrorRequestFailed ErrorKind = "request-failed"
+	// ErrorNotFound identifies a missing resource.
+	ErrorNotFound ErrorKind = "not-found"
+	// ErrorRevisionConflict identifies an optimistic-concurrency conflict.
+	ErrorRevisionConflict ErrorKind = "revision-conflict"
+	// ErrorNameTaken identifies a project or resource name collision.
+	ErrorNameTaken ErrorKind = "name-taken"
+	// ErrorAlreadyExists identifies an attempt to recreate an existing resource.
+	ErrorAlreadyExists ErrorKind = "already-exists"
+	// ErrorActiveEnvironments indicates that active environments block an operation.
 	ErrorActiveEnvironments ErrorKind = "active-environments"
-	ErrorConfiguration      ErrorKind = "configuration"
-	ErrorIncompatibleState  ErrorKind = "incompatible-state"
-	ErrorRuntimeInUse       ErrorKind = "runtime-in-use"
+	// ErrorConfiguration identifies an invalid project or environment model.
+	ErrorConfiguration ErrorKind = "configuration"
+	// ErrorIncompatibleState identifies persisted state from an unsupported schema.
+	ErrorIncompatibleState ErrorKind = "incompatible-state"
+	// ErrorRuntimeInUse indicates that active resources prevent a runtime change.
+	ErrorRuntimeInUse ErrorKind = "runtime-in-use"
+	// ErrorRuntimeUnavailable indicates that no usable container runtime is available.
 	ErrorRuntimeUnavailable ErrorKind = "runtime-unavailable"
 )
 
+// ErrorClassification translates implementation errors into transport-safe details.
 type ErrorClassification struct {
 	Kind               ErrorKind
 	Suggestions        []string
@@ -36,6 +48,7 @@ type ErrorClassification struct {
 	Issues             []model.ConfigurationIssue
 }
 
+// ClassifyError maps a control-plane error to its public classification.
 func ClassifyError(err error) ErrorClassification {
 	classification := ErrorClassification{Kind: ErrorRequestFailed}
 	var conflict NameConflictError
@@ -69,6 +82,7 @@ func ClassifyError(err error) ErrorClassification {
 	return classification
 }
 
+// IsNotFound reports whether err represents a missing control-plane resource.
 func IsNotFound(err error) bool {
 	return ClassifyError(err).Kind == ErrorNotFound
 }

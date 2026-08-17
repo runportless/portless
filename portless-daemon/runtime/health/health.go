@@ -12,6 +12,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// Wait polls a loopback TCP or HTTP readiness check until success or timeout.
 func Wait(ctx context.Context, port int, check model.HealthCheck) error {
 	if check.Timeout <= 0 {
 		check.Timeout = 90 * time.Second

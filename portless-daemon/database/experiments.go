@@ -12,6 +12,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// CreateRecording persists the sole active bounded recording for an environment.
 func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) (model.Recording, error) {
 	scope := scopeFromFields(recording.Project, recording.Environment)
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scope)
@@ -54,6 +55,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, recording.Name, recording
 	return recording, nil
 }
 
+// Recordings lists retained recording sessions for an environment.
 func (s *Store) Recordings(ctx context.Context, selector string) ([]model.Recording, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -77,6 +79,7 @@ FROM recordings WHERE environment_key = ? ORDER BY started_at DESC`, environment
 	return result, rows.Err()
 }
 
+// Recording returns one recording session by name.
 func (s *Store) Recording(ctx context.Context, selector, name string) (model.Recording, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -88,6 +91,7 @@ FROM recordings WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environm
 	return recording, mapSQLError(err)
 }
 
+// ActiveRecordings returns non-expired recording sessions currently accepting events.
 func (s *Store) ActiveRecordings(ctx context.Context, selector string) ([]model.Recording, error) {
 	recordings, err := s.Recordings(ctx, selector)
 	if err != nil {
@@ -108,6 +112,7 @@ func (s *Store) ActiveRecordings(ctx context.Context, selector string) ([]model.
 	return active, nil
 }
 
+// StopRecording completes an active recording with the supplied terminal reason.
 func (s *Store) StopRecording(ctx context.Context, selector, name, reason string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -132,6 +137,7 @@ WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active'`, st
 	return nil
 }
 
+// DeleteRecording removes a recording and its captured traffic atomically.
 func (s *Store) DeleteRecording(ctx context.Context, selector, name string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -158,6 +164,7 @@ func (s *Store) DeleteRecording(ctx context.Context, selector, name string) erro
 	return tx.Commit()
 }
 
+// PersistTraffic appends an event to matching active recordings while enforcing bounds.
 func (s *Store) PersistTraffic(ctx context.Context, event model.TrafficEvent) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scopeFromFields(event.Project, event.Environment))
 	if err != nil {
@@ -192,6 +199,7 @@ WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active' AND 
 	return tx.Commit()
 }
 
+// MaxRecordedTrafficSequence returns the highest persisted traffic sequence for an environment.
 func (s *Store) MaxRecordedTrafficSequence(ctx context.Context, selector string) (int64, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -204,6 +212,7 @@ func (s *Store) MaxRecordedTrafficSequence(ctx context.Context, selector string)
 	return sequence, nil
 }
 
+// RecordedTraffic reads persisted traffic in reverse order, optionally for one recording.
 func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName string, limit int) ([]model.TrafficEvent, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -240,6 +249,7 @@ func (s *Store) RecordedTraffic(ctx context.Context, selector, recordingName str
 	return result, rows.Err()
 }
 
+// CreateFault persists a new enabled fault rule at revision one.
 func (s *Store) CreateFault(ctx context.Context, fault model.FaultRule) (model.FaultRule, error) {
 	scope := scopeFromFields(fault.Project, fault.Environment)
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scope)
@@ -276,6 +286,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)`, environmentKey, fault.N
 	return fault, nil
 }
 
+// Faults lists environment fault rules, optionally restricting results to enabled rules.
 func (s *Store) Faults(ctx context.Context, selector string, enabledOnly bool) ([]model.FaultRule, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -313,6 +324,7 @@ FROM fault_rules WHERE environment_key = ?`
 	return result, rows.Err()
 }
 
+// Fault returns one environment fault rule by name.
 func (s *Store) Fault(ctx context.Context, selector, name string) (model.FaultRule, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -325,6 +337,7 @@ FROM fault_rules WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environ
 	return fault, mapSQLError(err)
 }
 
+// DisableFault deactivates a rule and advances its revision.
 func (s *Store) DisableFault(ctx context.Context, selector, name string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -341,6 +354,7 @@ func (s *Store) DisableFault(ctx context.Context, selector, name string) error {
 	return nil
 }
 
+// EnableFault activates a rule and advances its revision.
 func (s *Store) EnableFault(ctx context.Context, selector, name string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -357,6 +371,7 @@ func (s *Store) EnableFault(ctx context.Context, selector, name string) error {
 	return nil
 }
 
+// DeleteFault permanently removes a fault rule.
 func (s *Store) DeleteFault(ctx context.Context, selector, name string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -373,6 +388,7 @@ func (s *Store) DeleteFault(ctx context.Context, selector, name string) error {
 	return nil
 }
 
+// DisableAllFaults deactivates every enabled rule and returns the affected count.
 func (s *Store) DisableAllFaults(ctx context.Context, selector string) (int64, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -385,6 +401,7 @@ func (s *Store) DisableAllFaults(ctx context.Context, selector string) (int64, e
 	return result.RowsAffected()
 }
 
+// IncrementFaultMatch records one request matched by a fault rule.
 func (s *Store) IncrementFaultMatch(ctx context.Context, selector, name string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {

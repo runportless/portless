@@ -8,6 +8,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// DaemonInstance records one daemon process and the build that owns its runtimes.
 type DaemonInstance struct {
 	InstanceID string
 	BuildID    string
@@ -29,6 +30,7 @@ type EnvironmentRuntimeInventory struct {
 	Services    []ServiceRuntimeRecord
 }
 
+// RuntimeInventory builds a schema-tolerant ownership view for reset and reconciliation.
 func (s *Store) RuntimeInventory(ctx context.Context) ([]EnvironmentRuntimeInventory, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT p.name, e.name, e.status
@@ -70,6 +72,7 @@ ORDER BY p.name COLLATE NOCASE, e.name COLLATE NOCASE`)
 	return result, nil
 }
 
+// ServiceRuntimes lists persisted runtime ownership records for an environment.
 func (s *Store) ServiceRuntimes(ctx context.Context, selector string) ([]ServiceRuntimeRecord, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -117,6 +120,7 @@ FROM service_runtime WHERE environment_key = ? ORDER BY service_name COLLATE NOC
 	return result, nil
 }
 
+// RecordDaemonInstance inserts or refreshes the current daemon ownership record.
 func (s *Store) RecordDaemonInstance(ctx context.Context, instance DaemonInstance) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO daemon_instances(instance_id, build_id, pid, state, started_at)
@@ -127,6 +131,7 @@ ON CONFLICT(instance_id) DO UPDATE SET build_id = excluded.build_id, pid = exclu
 	return err
 }
 
+// SetDaemonInstanceState updates daemon lifecycle state and optional stop time.
 func (s *Store) SetDaemonInstanceState(ctx context.Context, instanceID, state string, stopped bool) error {
 	var stoppedAt any
 	if stopped {
@@ -136,6 +141,7 @@ func (s *Store) SetDaemonInstanceState(ctx context.Context, instanceID, state st
 	return err
 }
 
+// ConnectionRuntime records ownership and listener state for one dependency proxy.
 type ConnectionRuntime struct {
 	Source           string
 	Target           string
@@ -150,6 +156,7 @@ type ConnectionRuntime struct {
 	ObservedAt       *time.Time
 }
 
+// ConnectionRuntime returns the persisted runtime state for one dependency edge.
 func (s *Store) ConnectionRuntime(ctx context.Context, selector, source, target string) (ConnectionRuntime, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -171,6 +178,7 @@ FROM connection_runtime WHERE environment_key = ? AND source_name = ? COLLATE NO
 	return result, nil
 }
 
+// ConnectionRuntimes lists all persisted dependency proxy runtimes for an environment.
 func (s *Store) ConnectionRuntimes(ctx context.Context, selector string) ([]ConnectionRuntime, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -199,6 +207,7 @@ FROM connection_runtime WHERE environment_key = ? ORDER BY source_name COLLATE N
 	return result, rows.Err()
 }
 
+// SaveConnectionRuntime inserts or replaces the runtime record for a dependency edge.
 func (s *Store) SaveConnectionRuntime(ctx context.Context, selector string, runtime ConnectionRuntime) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -221,6 +230,7 @@ ON CONFLICT(environment_key, source_name, target_name) DO UPDATE SET protocol = 
 	return err
 }
 
+// DeleteConnectionRuntimes removes all dependency proxy ownership records for an environment.
 func (s *Store) DeleteConnectionRuntimes(ctx context.Context, selector string) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -230,6 +240,7 @@ func (s *Store) DeleteConnectionRuntimes(ctx context.Context, selector string) e
 	return err
 }
 
+// InterruptRunningOperations fails operations left running across a daemon restart.
 func (s *Store) InterruptRunningOperations(ctx context.Context, message string) error {
 	now := nowText()
 	_, err := s.db.ExecContext(ctx, `

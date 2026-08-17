@@ -42,6 +42,8 @@ func validateOwnership(status InstallationStatus, requestingUID int) error {
 	return nil
 }
 
+// ValidateOwnership verifies that status describes a relay owned by
+// requestingUID.
 func ValidateOwnership(status InstallationStatus, requestingUID int) error {
 	return validateOwnership(status, requestingUID)
 }
@@ -56,6 +58,8 @@ func validateUninstallOwnership(status InstallationStatus, requestingUID int, fo
 	return nil
 }
 
+// ValidateUninstallOwnership verifies removal ownership, allowing force to
+// explicitly override an owner mismatch.
 func ValidateUninstallOwnership(status InstallationStatus, requestingUID int, force bool) error {
 	return validateUninstallOwnership(status, requestingUID, force)
 }

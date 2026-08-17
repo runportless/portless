@@ -37,6 +37,7 @@ type detector struct {
 	explanation       string
 }
 
+// NestJS returns a detector for NestJS application packages.
 func NestJS() spec.ServiceDetector {
 	return detector{
 		descriptor:   spec.Descriptor{ID: "nestjs", RootMarkers: []string{"package.json"}, Supersedes: []string{"express", "fastify"}, PrimaryOrder: 100},
@@ -49,6 +50,7 @@ func NestJS() spec.ServiceDetector {
 	}
 }
 
+// Express returns a detector for Express application packages.
 func Express() spec.ServiceDetector {
 	return detector{
 		descriptor:   spec.Descriptor{ID: "express", RootMarkers: []string{"package.json"}, PrimaryOrder: 80},
@@ -57,6 +59,7 @@ func Express() spec.ServiceDetector {
 	}
 }
 
+// Fastify returns a detector for Fastify application packages.
 func Fastify() spec.ServiceDetector {
 	return detector{
 		descriptor:   spec.Descriptor{ID: "fastify", RootMarkers: []string{"package.json"}, PrimaryOrder: 80},
@@ -65,6 +68,7 @@ func Fastify() spec.ServiceDetector {
 	}
 }
 
+// NextJS returns a detector for Next.js application packages.
 func NextJS() spec.ServiceDetector {
 	return detector{
 		descriptor:   spec.Descriptor{ID: "nextjs", RootMarkers: []string{"package.json"}, Supersedes: []string{"express", "fastify"}, PrimaryOrder: 90},
@@ -73,10 +77,12 @@ func NextJS() spec.ServiceDetector {
 	}
 }
 
+// Descriptor returns this Node framework detector's registration metadata.
 func (d detector) Descriptor() spec.Descriptor {
 	return d.descriptor
 }
 
+// Detect finds matching Node packages and their safe run and debug scripts.
 func (d detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Findings, error) {
 	packages, err := loadPackages(ctx, workspace)
 	if err != nil {

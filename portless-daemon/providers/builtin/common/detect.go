@@ -13,6 +13,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/providers"
 )
 
+// Detection configures shared marker-based resource discovery.
 type Detection struct {
 	Name                string
 	Explanation         string
@@ -21,6 +22,7 @@ type Detection struct {
 	ExplicitEnvironment func(string, providers.Consumer) string
 }
 
+// Detect scans topology files for resource markers and assigns consumer binding claims.
 func Detect(ctx context.Context, workspace providers.Workspace, consumers []providers.Consumer, config Detection) (providers.Findings, error) {
 	var evidence []model.Evidence
 	type detectedBinding struct {
@@ -87,6 +89,7 @@ func Detect(ctx context.Context, workspace providers.Workspace, consumers []prov
 	return providers.Findings{Candidates: []providers.Candidate{{Key: ".", Name: config.Name, Evidence: evidence, Bindings: claims}}}, nil
 }
 
+// TopologyFile reports whether a source file is safe and useful for dependency discovery.
 func TopologyFile(file string) bool {
 	base := path.Base(file)
 	switch base {
@@ -104,6 +107,7 @@ func TopologyFile(file string) bool {
 	return strings.HasSuffix(base, ".example") || strings.HasSuffix(base, ".sample") || strings.HasSuffix(base, ".template")
 }
 
+// ContainsMarker reports whether lowercased content contains any configured marker.
 func ContainsMarker(content string, markers []string) bool {
 	for _, marker := range markers {
 		if strings.Contains(content, strings.ToLower(marker)) {
@@ -113,6 +117,7 @@ func ContainsMarker(content string, markers []string) bool {
 	return false
 }
 
+// FirstEnvironment returns the first environment-variable name present in content.
 func FirstEnvironment(content string, names ...string) string {
 	upper := strings.ToUpper(content)
 	for _, name := range names {
@@ -123,6 +128,7 @@ func FirstEnvironment(content string, names ...string) string {
 	return ""
 }
 
+// OwningConsumer returns the nearest service directory containing file.
 func OwningConsumer(file string, consumers []providers.Consumer) *providers.Consumer {
 	directory := path.Dir(file)
 	best := -1
@@ -141,6 +147,7 @@ func OwningConsumer(file string, consumers []providers.Consumer) *providers.Cons
 	return owner
 }
 
+// FrameworkEnvironment selects a Spring-specific variable or the generic fallback.
 func FrameworkEnvironment(consumer providers.Consumer, spring, fallback string) string {
 	if consumer.Framework == "spring-boot" {
 		return spring

@@ -18,12 +18,15 @@ import (
 	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
 )
 
+// Detector discovers runnable Go HTTP services.
 type Detector struct{}
 
+// New returns a Go service detector.
 func New() spec.ServiceDetector {
 	return Detector{}
 }
 
+// Descriptor returns Go detector registration metadata.
 func (Detector) Descriptor() spec.Descriptor {
 	return spec.Descriptor{ID: "go", RootMarkers: []string{"go.mod", "go.work"}, PrimaryOrder: 70}
 }
@@ -57,6 +60,7 @@ var moduleServerSignals = []string{
 
 var portEnvironmentPattern = regexp.MustCompile("(?:Getenv|LookupEnv)\\s*\\(\\s*(?:\"PORT\"|`PORT`)")
 
+// Detect finds module-owned main packages that exhibit HTTP server behavior.
 func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Findings, error) {
 	modules, err := loadModules(ctx, workspace)
 	if err != nil {

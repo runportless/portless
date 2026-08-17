@@ -9,6 +9,7 @@ type Commands struct {
 	*command.Context
 }
 
+// New returns the environment command collection backed by context.
 func New(context *command.Context) *Commands {
 	return &Commands{Context: context}
 }

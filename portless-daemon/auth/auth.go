@@ -16,6 +16,7 @@ import (
 	"time"
 )
 
+// SessionCookie is the HTTP-only browser-session cookie name.
 const SessionCookie = "portless_session"
 
 const sessionsFile = "browser-sessions.json"
@@ -30,12 +31,15 @@ type session struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// Principal is an authenticated CLI or browser actor and its mutation token.
 type Principal struct {
 	Actor   string
 	Session bool
 	CSRF    string
 }
 
+// Manager owns CLI bearer authentication, one-use browser claims, persisted
+// browser sessions, and CSRF validation.
 type Manager struct {
 	mu          sync.Mutex
 	token       string
@@ -45,6 +49,8 @@ type Manager struct {
 	now         func() time.Time
 }
 
+// LoadOrCreate loads or securely creates the CLI bearer token and restores
+// unexpired browser sessions beside tokenPath.
 func LoadOrCreate(tokenPath string) (*Manager, error) {
 	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o700); err != nil {
 		return nil, err
@@ -84,8 +90,10 @@ func LoadOrCreate(tokenPath string) (*Manager, error) {
 	return manager, nil
 }
 
+// Token returns the daemon's CLI bearer token.
 func (m *Manager) Token() string { return m.token }
 
+// Authenticate validates a CLI bearer token or persisted browser session.
 func (m *Manager) Authenticate(request *http.Request) (Principal, bool) {
 	authorization := request.Header.Get("Authorization")
 	if strings.HasPrefix(authorization, "Bearer ") {
@@ -108,6 +116,8 @@ func (m *Manager) Authenticate(request *http.Request) (Principal, bool) {
 	return Principal{Actor: "UI", Session: true, CSRF: current.CSRF}, true
 }
 
+// ValidateMutation enforces CSRF and same-origin protections for browser
+// principals. CLI principals do not require CSRF validation.
 func (m *Manager) ValidateMutation(request *http.Request, principal Principal) error {
 	if !principal.Session {
 		return nil
@@ -125,6 +135,7 @@ func (m *Manager) ValidateMutation(request *http.Request, principal Principal) e
 	return nil
 }
 
+// IssueClaim creates a short-lived, single-use browser authentication claim.
 func (m *Manager) IssueClaim(next string) (string, time.Time, error) {
 	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
 		next = "/"
@@ -141,6 +152,8 @@ func (m *Manager) IssueClaim(next string) (string, time.Time, error) {
 	return code, expiresAt, nil
 }
 
+// ConsumeClaim exchanges a valid claim for a persisted browser session and
+// removes the claim so it cannot be reused.
 func (m *Manager) ConsumeClaim(code string) (sessionToken, csrf, next string, expiresAt time.Time, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -169,6 +182,7 @@ func (m *Manager) ConsumeClaim(code string) (sessionToken, csrf, next string, ex
 	return
 }
 
+// Logout removes the browser session identified by request, if one exists.
 func (m *Manager) Logout(request *http.Request) error {
 	cookie, err := request.Cookie(SessionCookie)
 	if err != nil {

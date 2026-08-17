@@ -19,6 +19,8 @@ const (
 	rootGroupOther     = "other"
 )
 
+// Run executes one CLI invocation and returns its process exit code without
+// terminating the calling process.
 func (c *CLI) Run(ctx context.Context, args []string) int {
 	c.context.CompletionCache = nil
 	c.context.JSONOutput = shared.BoolFlagRequested(args, "json")

@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// InstallationStatus is the complete inspectable state of the platform relay,
+// including ownership, installed artifacts, and end-to-end health.
 type InstallationStatus struct {
 	Platform             string     `json:"platform"`
 	Service              string     `json:"service"`
@@ -39,6 +41,7 @@ type InstallationStatus struct {
 	Problem              string     `json:"problem,omitempty"`
 }
 
+// State returns the aggregate human-readable relay installation state.
 func (status InstallationStatus) State() string {
 	switch {
 	case !status.Installed:
@@ -61,6 +64,8 @@ type platformInstallation struct {
 	ResolverPath      string
 }
 
+// Inspect discovers installed relay artifacts, ownership, service state,
+// endpoint-pool readiness, and HTTP and DNS health without changing the host.
 func Inspect(ctx context.Context) (InstallationStatus, error) {
 	details := currentPlatformInstallation()
 	status := InstallationStatus{

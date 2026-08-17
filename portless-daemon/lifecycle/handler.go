@@ -12,6 +12,8 @@ import (
 	"github.com/portless-run/portless/portless-daemon/auth"
 )
 
+// HandlerConfig supplies daemon identity, authentication, active-state probes,
+// and shutdown hooks to a lifecycle handler.
 type HandlerConfig struct {
 	Next               http.Handler
 	Auth               *auth.Manager
@@ -22,6 +24,8 @@ type HandlerConfig struct {
 	Replace            func()
 }
 
+// Handler serves authenticated identity and shutdown routes before delegating
+// ordinary requests to the next HTTP handler.
 type Handler struct {
 	next               http.Handler
 	auth               *auth.Manager
@@ -32,6 +36,7 @@ type Handler struct {
 	replace            func()
 }
 
+// NewHandler constructs a lifecycle handler from config.
 func NewHandler(config HandlerConfig) *Handler {
 	return &Handler{
 		next: config.Next, auth: config.Auth, identity: config.Identity,
@@ -40,8 +45,10 @@ func NewHandler(config HandlerConfig) *Handler {
 	}
 }
 
+// SetNext replaces the handler used for non-lifecycle requests.
 func (h *Handler) SetNext(next http.Handler) { h.next = next }
 
+// ServeHTTP authenticates lifecycle requests and delegates every other route.
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.URL.Path != IdentityPath && request.URL.Path != ShutdownPath {
 		if h.next == nil {
@@ -136,6 +143,7 @@ func (h *Handler) Identity(ctx context.Context) Identity {
 	return identity
 }
 
+// Status returns live identity, active environments, and handoff readiness.
 func (h *Handler) Status(ctx context.Context) (Identity, error) {
 	active, err := h.currentActiveEnvironments(ctx)
 	if err != nil {
@@ -155,6 +163,8 @@ func (h *Handler) Status(ctx context.Context) (Identity, error) {
 	return identity, nil
 }
 
+// Restart requests replacement of instanceID after proving that active runtime
+// state can be handed off safely.
 func (h *Handler) Restart(ctx context.Context, instanceID string) (ShutdownResponse, error) {
 	identity, err := h.Status(ctx)
 	if err != nil {

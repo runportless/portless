@@ -16,6 +16,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
 )
 
+// Limits bounds filesystem indexing and content reads during discovery.
 type Limits struct {
 	MaxFiles      int
 	MaxDepth      int
@@ -23,6 +24,7 @@ type Limits struct {
 	MaxTotalBytes int64
 }
 
+// DefaultLimits returns conservative bounds for local source discovery.
 func DefaultLimits() Limits {
 	return Limits{
 		MaxFiles:      50_000,
@@ -89,18 +91,22 @@ func openWorkspace(ctx context.Context, root string, limits Limits) (*workspace,
 	return result, nil
 }
 
+// Close releases the workspace's root directory handle.
 func (w *workspace) Close() error {
 	return w.rootHandle.Close()
 }
 
+// Root returns the canonical absolute workspace root.
 func (w *workspace) Root() string {
 	return w.root
 }
 
+// Files returns a defensive copy of sorted indexed file paths.
 func (w *workspace) Files() []string {
 	return append([]string(nil), w.files...)
 }
 
+// Exists reports whether an indexed regular file exists at relativePath.
 func (w *workspace) Exists(relativePath string) bool {
 	cleaned, ok := spec.CleanRelative(relativePath)
 	if !ok {
@@ -110,6 +116,7 @@ func (w *workspace) Exists(relativePath string) bool {
 	return exists
 }
 
+// IsDir reports whether an indexed directory exists at relativePath.
 func (w *workspace) IsDir(relativePath string) bool {
 	cleaned, ok := spec.CleanRelative(relativePath)
 	if !ok {
@@ -166,6 +173,7 @@ func (w *workspace) indexFiles(ctx context.Context) error {
 	return nil
 }
 
+// ReadFile safely reads an unchanged indexed file within configured byte limits.
 func (w *workspace) ReadFile(ctx context.Context, relativePath string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

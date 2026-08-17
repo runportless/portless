@@ -8,6 +8,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// ServiceRuntimeUpdate contains the complete mutable runtime state for a service.
 type ServiceRuntimeUpdate struct {
 	Status           model.ServiceStatus
 	Reason           string
@@ -28,6 +29,7 @@ type ServiceRuntimeUpdate struct {
 	Debugger         *model.DebuggerRuntime
 }
 
+// ServiceRuntimeRecord is the durable runtime and ownership record for a service.
 type ServiceRuntimeRecord struct {
 	ServiceName      string
 	Status           model.ServiceStatus
@@ -49,6 +51,7 @@ type ServiceRuntimeRecord struct {
 	Debugger         *model.DebuggerRuntime
 }
 
+// SetServiceRuntime replaces the complete runtime state for an existing service row.
 func (s *Store) SetServiceRuntime(ctx context.Context, selector, serviceName string, update ServiceRuntimeUpdate) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -91,6 +94,7 @@ WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, update.Status, u
 	return nil
 }
 
+// ServiceRuntime returns the durable runtime state for one service.
 func (s *Store) ServiceRuntime(ctx context.Context, selector, serviceName string) (ServiceRuntimeRecord, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -124,6 +128,7 @@ FROM service_runtime WHERE environment_key = ? AND service_name = ? COLLATE NOCA
 	return result, nil
 }
 
+// SetServiceStatus updates only the observed status and reason for a service.
 func (s *Store) SetServiceStatus(ctx context.Context, selector, serviceName string, status model.ServiceStatus, reason string) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -142,6 +147,7 @@ WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, status, reason, 
 	return nil
 }
 
+// SetServiceLaunch updates launch mode and debugger endpoint metadata.
 func (s *Store) SetServiceLaunch(ctx context.Context, selector, serviceName string, mode model.LaunchMode, debugger *model.DebuggerRuntime) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -167,6 +173,7 @@ WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, mode, debugAdapt
 	return nil
 }
 
+// SetServiceDebuggerState updates the state of an existing debugger listener.
 func (s *Store) SetServiceDebuggerState(ctx context.Context, selector, serviceName, state string) error {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -185,6 +192,7 @@ WHERE environment_key = ? AND service_name = ? COLLATE NOCASE AND debug_adapter 
 	return nil
 }
 
+// PrivateEnvironmentKey resolves public names to the opaque environment storage key.
 func (s *Store) PrivateEnvironmentKey(ctx context.Context, projectName, environmentName string) (string, error) {
 	var key string
 	err := s.db.QueryRowContext(ctx, `
@@ -197,6 +205,7 @@ WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, env
 	return key, nil
 }
 
+// PrivateEnvironmentKeyForSelector resolves a project/environment selector to its storage key.
 func (s *Store) PrivateEnvironmentKeyForSelector(ctx context.Context, selector string) (string, error) {
 	project, environment, err := model.ParseEnvironmentSelector(selector)
 	if err != nil {
@@ -205,6 +214,7 @@ func (s *Store) PrivateEnvironmentKeyForSelector(ctx context.Context, selector s
 	return s.PrivateEnvironmentKey(ctx, project, environment)
 }
 
+// ServiceLogPath returns the managed log file recorded for a service runtime.
 func (s *Store) ServiceLogPath(ctx context.Context, selector, serviceName string) (string, error) {
 	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {

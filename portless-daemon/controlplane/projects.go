@@ -13,11 +13,13 @@ import (
 	"github.com/portless-run/portless/portless-daemon/projects/compiler"
 )
 
+// SourceInput identifies a named filesystem source used to create a project.
 type SourceInput struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 }
 
+// Discover resolves a path to an existing environment or creates a single-source project.
 func (s *Service) Discover(ctx context.Context, path, requestedName string) (model.Project, model.Environment, []string, error) {
 	result, err := s.discoverer.Discover(ctx, path)
 	if err != nil {
@@ -45,6 +47,7 @@ func (s *Service) Discover(ctx context.Context, path, requestedName string) (mod
 	return s.CreateProject(ctx, name, []SourceInput{{Name: sourceName, Path: result.Root}})
 }
 
+// CreateProject discovers the supplied sources and creates a project with its local environment.
 func (s *Service) CreateProject(ctx context.Context, name string, inputs []SourceInput) (model.Project, model.Environment, []string, error) {
 	name = model.NormalizeDNSName(name)
 	if err := model.ValidateProjectName(name); err != nil {
@@ -97,6 +100,7 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 	return s.decorateProject(project), s.decorateEnvironment(environment), warnings, nil
 }
 
+// AddProjectSource discovers and atomically adds a source to a project and one environment.
 func (s *Service) AddProjectSource(ctx context.Context, projectName, environmentName, sourceName, path string) (model.Project, model.Environment, []string, error) {
 	sourceName = model.NormalizeDNSName(sourceName)
 	if err := model.ValidateSourceName(sourceName); err != nil {
@@ -154,6 +158,7 @@ func (s *Service) AddProjectSource(ctx context.Context, projectName, environment
 	return s.decorateProject(project), s.decorateEnvironment(updated), result.Warnings, nil
 }
 
+// Rescan refreshes a stopped environment from its currently bound filesystem sources.
 func (s *Service) Rescan(ctx context.Context, projectName, environmentName string) (model.Environment, []string, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -196,6 +201,7 @@ func (s *Service) Rescan(ctx context.Context, projectName, environmentName strin
 	return s.decorateEnvironment(updated), warnings, nil
 }
 
+// Rename changes a project name using optimistic concurrency.
 func (s *Service) Rename(ctx context.Context, projectName, newName string, revision int64, actor string) (model.Project, error) {
 	newName = model.NormalizeDNSName(newName)
 	if err := model.ValidateProjectName(newName); err != nil {
@@ -208,10 +214,12 @@ func (s *Service) Rename(ctx context.Context, projectName, newName string, revis
 	return s.decorateProject(project), nil
 }
 
+// Forget removes a stopped project and all of its application state.
 func (s *Service) Forget(ctx context.Context, projectName string) error {
 	return s.database.ForgetProject(ctx, projectName)
 }
 
+// Projects lists all known projects with dashboard links and environment summaries.
 func (s *Service) Projects(ctx context.Context) ([]model.Project, error) {
 	projects, err := s.database.ListProjects(ctx)
 	if err != nil {
@@ -223,6 +231,7 @@ func (s *Service) Projects(ctx context.Context) ([]model.Project, error) {
 	return projects, nil
 }
 
+// Project returns one project with its decorated public representation.
 func (s *Service) Project(ctx context.Context, name string) (model.Project, error) {
 	project, err := s.database.Project(ctx, name)
 	if err != nil {
@@ -231,6 +240,7 @@ func (s *Service) Project(ctx context.Context, name string) (model.Project, erro
 	return s.decorateProject(project), nil
 }
 
+// Environments lists environments, optionally restricted to one project.
 func (s *Service) Environments(ctx context.Context, projectName string) ([]model.Environment, error) {
 	environments, err := s.database.ListEnvironments(ctx, projectName)
 	if err != nil {
@@ -252,6 +262,7 @@ func (s *Service) Environments(ctx context.Context, projectName string) ([]model
 	return environments, nil
 }
 
+// Environment returns one environment with current configuration issues and endpoints.
 func (s *Service) Environment(ctx context.Context, projectName, environmentName string) (model.Environment, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -264,6 +275,7 @@ func (s *Service) Environment(ctx context.Context, projectName, environmentName 
 	return s.decorateEnvironment(environment), nil
 }
 
+// CloneEnvironment creates a stopped environment from another environment's bindings.
 func (s *Service) CloneEnvironment(ctx context.Context, projectName, from, name string) (model.Environment, error) {
 	created, err := s.database.CloneEnvironment(ctx, projectName, from, name)
 	if err != nil {
@@ -272,10 +284,12 @@ func (s *Service) CloneEnvironment(ctx context.Context, projectName, from, name 
 	return s.decorateEnvironment(created), nil
 }
 
+// ForgetEnvironment removes a stopped environment and its retained application state.
 func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmentName string) error {
 	return s.database.ForgetEnvironment(ctx, projectName, environmentName)
 }
 
+// SetBinding selects the local, container, or remote provider for an environment service.
 func (s *Service) SetBinding(ctx context.Context, projectName, environmentName, serviceName string, binding model.ComponentBinding) (model.Environment, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -344,6 +358,7 @@ func (s *Service) SetBinding(ctx context.Context, projectName, environmentName, 
 	return s.decorateEnvironment(updated), nil
 }
 
+// SetSource rebinds one environment source to a newly discovered filesystem path.
 func (s *Service) SetSource(ctx context.Context, projectName, environmentName, sourceName, path string) (model.Environment, []string, error) {
 	if !filepath.IsAbs(path) {
 		return model.Environment{}, nil, errors.New("source path must be absolute")
@@ -422,14 +437,17 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 	return s.decorateEnvironment(updated), result.Warnings, nil
 }
 
+// SelectEnvironment persists the environment explicitly selected for a checkout path.
 func (s *Service) SelectEnvironment(ctx context.Context, path, projectName, environmentName string) error {
 	return s.database.SetContextSelection(ctx, path, projectName, environmentName)
 }
 
+// ClearEnvironmentSelection removes the explicit environment selection for a checkout path.
 func (s *Service) ClearEnvironmentSelection(ctx context.Context, path string) (bool, error) {
 	return s.database.ClearContextSelection(ctx, path)
 }
 
+// EnvironmentContext resolves a path through explicit selection or source-path inference.
 func (s *Service) EnvironmentContext(ctx context.Context, path string) (EnvironmentContext, error) {
 	selected, err := s.database.ContextSelection(ctx, path)
 	if err == nil {
@@ -459,6 +477,7 @@ func (s *Service) EnvironmentContext(ctx context.Context, path string) (Environm
 	return result, nil
 }
 
+// EnvironmentsForPath returns the selected environment or all inferred candidates for a path.
 func (s *Service) EnvironmentsForPath(ctx context.Context, path string) ([]model.Environment, error) {
 	resolved, err := s.EnvironmentContext(ctx, path)
 	if err != nil {
@@ -470,6 +489,7 @@ func (s *Service) EnvironmentsForPath(ctx context.Context, path string) ([]model
 	return resolved.Candidates, nil
 }
 
+// ProjectModel returns the reusable discovered topology for a project.
 func (s *Service) ProjectModel(ctx context.Context, name string) (model.ProjectModel, error) {
 	return s.database.ProjectModel(ctx, name)
 }

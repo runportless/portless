@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+// InspectLauncher builds a conservative uninstall plan for the launcher used
+// to invoke the current process.
 func InspectLauncher() LauncherPlan {
 	invocation, err := ResolveInvocationPath(os.Args[0])
 	if err != nil {
@@ -21,6 +23,8 @@ func InspectLauncher() LauncherPlan {
 	return ClassifyLauncher(invocation, executable, RecognizedLauncherDirectories())
 }
 
+// ResolveInvocationPath converts an argv[0]-style executable name or path into
+// an absolute launcher path.
 func ResolveInvocationPath(argument string) (string, error) {
 	path := argument
 	if !strings.ContainsRune(path, filepath.Separator) {
@@ -33,6 +37,8 @@ func ResolveInvocationPath(argument string) (string, error) {
 	return filepath.Abs(path)
 }
 
+// ClassifyLauncher determines whether invocation is a verified Portless
+// launcher that can be removed without deleting a source-tree build.
 func ClassifyLauncher(invocation, executable string, installDirectories []string) LauncherPlan {
 	plan := LauncherPlan{Path: invocation, Kind: "unknown", Action: "preserve", Reason: "launcher identity could not be verified"}
 	invocation, invocationErr := filepath.Abs(invocation)
@@ -99,6 +105,8 @@ func ClassifyLauncher(invocation, executable string, installDirectories []string
 	return plan
 }
 
+// RemoveLauncher revalidates and removes a launcher approved by plan. It
+// refuses removal when the launcher changed after inspection.
 func RemoveLauncher(plan LauncherPlan) (bool, error) {
 	if plan.Action != "remove" || plan.Path == "" {
 		return false, nil
@@ -116,6 +124,8 @@ func RemoveLauncher(plan LauncherPlan) (bool, error) {
 	return true, nil
 }
 
+// RecognizedLauncherDirectories returns conventional binary installation
+// directories in which a verified regular Portless launcher may be removed.
 func RecognizedLauncherDirectories() []string {
 	directories := make([]string, 0, 8)
 	if value := os.Getenv("GOBIN"); value != "" {
@@ -133,6 +143,8 @@ func RecognizedLauncherDirectories() []string {
 	return directories
 }
 
+// DirectoryRecognized reports whether directory exactly matches one of the
+// recognized installation directories after absolute-path normalization.
 func DirectoryRecognized(directory string, recognized []string) bool {
 	directory, err := filepath.Abs(directory)
 	if err != nil {
@@ -147,6 +159,8 @@ func DirectoryRecognized(directory string, recognized []string) bool {
 	return false
 }
 
+// SameFile reports whether two paths identify the same existing filesystem
+// object.
 func SameFile(left, right string) bool {
 	leftInfo, leftErr := os.Stat(left)
 	rightInfo, rightErr := os.Stat(right)

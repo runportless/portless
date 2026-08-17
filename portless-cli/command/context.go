@@ -20,13 +20,27 @@ import (
 // DaemonController is the CLI's narrow out-of-process daemon lifecycle
 // boundary. Ordinary product operations use the typed daemon API client.
 type DaemonController interface {
+	// Ensure returns a compatible daemon identity, starting the daemon when
+	// necessary.
 	Ensure(context.Context) (identity.Record, error)
+	// ReadRecord reads the persisted daemon control record without starting a
+	// process.
 	ReadRecord() (identity.Record, error)
+	// Inspect returns the current daemon lifecycle state without changing it.
 	Inspect(context.Context) (control.Inspection, error)
+	// Connect returns an authenticated API client, starting a compatible daemon
+	// when necessary.
 	Connect(context.Context) (*apiclient.Client, identity.Record, error)
+	// ConnectExisting returns an authenticated API client only when a compatible
+	// daemon is already running.
 	ConnectExisting(context.Context) (*apiclient.Client, identity.Record, error)
+	// Stop terminates the owned daemon according to the supplied safety options.
 	Stop(context.Context, control.StopOptions) (control.StopResult, error)
+	// ResetApplicationState clears Portless application state while applying the
+	// requested active-runtime policy.
 	ResetApplicationState(context.Context, bool) (installation.ResetStateResult, identity.Record, error)
+	// RemoveInstallationState removes daemon-owned installation state while
+	// applying the requested active-runtime policy.
 	RemoveInstallationState(context.Context, bool) (installation.StateRemoval, error)
 }
 
@@ -83,6 +97,8 @@ type Context struct {
 	CompletionCache     map[string][]string
 }
 
+// ActionOutput is the shared machine-readable result for a completed CLI
+// mutation.
 type ActionOutput struct {
 	Action      string `json:"action"`
 	Project     string `json:"project,omitempty"`
@@ -92,6 +108,7 @@ type ActionOutput struct {
 	Status      string `json:"status,omitempty"`
 }
 
+// BrowserOutput describes a URL that the CLI attempted to open.
 type BrowserOutput struct {
 	URL     string `json:"url"`
 	Service string `json:"service,omitempty"`
@@ -104,6 +121,8 @@ type relayStatusOutput struct {
 	relay.InstallationStatus
 }
 
+// EnvironmentContextOutput explains which environment was selected for a
+// filesystem path and how the selection was resolved.
 type EnvironmentContextOutput struct {
 	Path        string            `json:"path"`
 	Selector    string            `json:"selector"`

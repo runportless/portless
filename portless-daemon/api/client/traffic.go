@@ -32,18 +32,22 @@ func trafficValues(query contract.TrafficQuery) url.Values {
 	return values
 }
 
+// Traffic returns captured traffic matching query.
 func (c *Client) Traffic(ctx context.Context, project, environment string, query contract.TrafficQuery) (contract.TrafficList, error) {
 	var result contract.TrafficList
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic?"+trafficValues(query).Encode(), nil, &result)
 	return result, err
 }
 
+// TrafficEvent returns one captured traffic event by sequence number.
 func (c *Client) TrafficEvent(ctx context.Context, project, environment string, sequence int64) (contract.TrafficEvent, error) {
 	var result contract.TrafficEvent
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/"+strconv.FormatInt(sequence, 10), nil, &result)
 	return result, err
 }
 
+// OpenEventStream opens an authenticated server-sent event stream for the
+// requested environment topics. The caller must close the returned body.
 func (c *Client) OpenEventStream(ctx context.Context, project, environment string, topics ...string) (io.ReadCloser, error) {
 	query := url.Values{}
 	for _, topic := range topics {
@@ -81,58 +85,68 @@ func (c *Client) OpenEventStream(ctx context.Context, project, environment strin
 	return nil, &ClientError{Status: response.StatusCode, Code: envelope.Error.Code, Message: message, Subject: envelope.Error.Subject, Details: envelope.Error.Details, Remediation: envelope.Error.Remediation}
 }
 
+// ListRecordings returns retained recordings for an environment.
 func (c *Client) ListRecordings(ctx context.Context, project, environment string, limit int) (contract.RecordingList, error) {
 	var result contract.RecordingList
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/recordings?limit="+strconv.Itoa(limit), nil, &result)
 	return result, err
 }
 
+// Recording returns one named traffic recording.
 func (c *Client) Recording(ctx context.Context, project, environment, name string) (contract.Recording, error) {
 	var result contract.Recording
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/recordings/"+EscapePath(name), nil, &result)
 	return result, err
 }
 
+// StartRecording creates and activates a bounded traffic recording.
 func (c *Client) StartRecording(ctx context.Context, project, environment string, input contract.Recording) (contract.Recording, error) {
 	var result contract.Recording
 	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/recordings", input, &result)
 	return result, err
 }
 
+// StopRecording deactivates a recording while retaining captured events.
 func (c *Client) StopRecording(ctx context.Context, project, environment, name string) (contract.Recording, error) {
 	var result contract.Recording
 	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/recordings/"+EscapePath(name)+"/stop", nil, &result)
 	return result, err
 }
 
+// ExportRecording returns the portable JSON representation of a recording.
 func (c *Client) ExportRecording(ctx context.Context, project, environment, name string) ([]byte, error) {
 	var result []byte
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/recordings/"+EscapePath(name)+"/export", nil, &result)
 	return result, err
 }
 
+// DeleteRecording permanently removes one retained recording.
 func (c *Client) DeleteRecording(ctx context.Context, project, environment, name string) error {
 	return c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/recordings/"+EscapePath(name), nil, nil)
 }
 
+// ListFaults returns fault rules for an environment.
 func (c *Client) ListFaults(ctx context.Context, project, environment string, limit int) (contract.FaultList, error) {
 	var result contract.FaultList
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/faults?limit="+strconv.Itoa(limit), nil, &result)
 	return result, err
 }
 
+// Fault returns one named fault rule.
 func (c *Client) Fault(ctx context.Context, project, environment, name string) (contract.FaultRule, error) {
 	var result contract.FaultRule
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/faults/"+EscapePath(name), nil, &result)
 	return result, err
 }
 
+// CreateFault creates and enables a scoped fault rule.
 func (c *Client) CreateFault(ctx context.Context, project, environment string, input contract.FaultRule) (contract.FaultRule, error) {
 	var result contract.FaultRule
 	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/faults", input, &result)
 	return result, err
 }
 
+// SetFaultEnabled enables or disables one fault rule.
 func (c *Client) SetFaultEnabled(ctx context.Context, project, environment, name string, enabled bool) (contract.FaultRule, error) {
 	action := "disable"
 	if enabled {
@@ -143,10 +157,12 @@ func (c *Client) SetFaultEnabled(ctx context.Context, project, environment, name
 	return result, err
 }
 
+// DeleteFault permanently removes one fault rule.
 func (c *Client) DeleteFault(ctx context.Context, project, environment, name string) error {
 	return c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/faults/"+EscapePath(name), nil, nil)
 }
 
+// DisableAllFaults disables every active fault rule in an environment.
 func (c *Client) DisableAllFaults(ctx context.Context, project, environment string) (contract.DisableFaultsResponse, error) {
 	var result contract.DisableFaultsResponse
 	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/faults/disable-all", nil, &result)

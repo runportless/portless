@@ -115,6 +115,51 @@ func TestCLIRootIsOnlyComposition(t *testing.T) {
 	}
 }
 
+func TestProductPublicDeclarationsHaveGoDoc(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, product := range []string{"portless-cli", "portless-daemon", "portless-relay"} {
+		walkGoFiles(t, filepath.Join(root, product), func(path, _ string, parsed *ast.File) {
+			if strings.HasSuffix(path, "_test.go") {
+				return
+			}
+			for _, declaration := range parsed.Decls {
+				switch value := declaration.(type) {
+				case *ast.FuncDecl:
+					if value.Name.IsExported() && !goDocStartsWith(value.Doc, value.Name.Name) {
+						t.Errorf("%s exports %s without a GoDoc comment beginning with its name", relativePath(root, path), value.Name.Name)
+					}
+				case *ast.GenDecl:
+					for _, item := range value.Specs {
+						switch spec := item.(type) {
+						case *ast.TypeSpec:
+							if spec.Name.IsExported() && !goDocStartsWith(firstGoDoc(spec.Doc, value.Doc), spec.Name.Name) {
+								t.Errorf("%s exports %s without a GoDoc comment beginning with its name", relativePath(root, path), spec.Name.Name)
+							}
+							contract, ok := spec.Type.(*ast.InterfaceType)
+							if !ok || !spec.Name.IsExported() {
+								continue
+							}
+							for _, field := range contract.Methods.List {
+								for _, name := range field.Names {
+									if name.IsExported() && !goDocStartsWith(firstGoDoc(field.Doc, field.Comment), name.Name) {
+										t.Errorf("%s exports interface method %s without a GoDoc comment beginning with its name", relativePath(root, path), name.Name)
+									}
+								}
+							}
+						case *ast.ValueSpec:
+							for _, name := range spec.Names {
+								if name.IsExported() && !goDocStartsWith(firstGoDoc(spec.Doc, value.Doc), name.Name) {
+									t.Errorf("%s exports %s without a GoDoc comment beginning with its name", relativePath(root, path), name.Name)
+								}
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestCLIFeaturesDependOnSharedCommandPrimitivesNotEachOther(t *testing.T) {
 	root := repositoryRoot(t)
 	features := []string{"administration", "environment", "observe", "projects", "traffic"}
@@ -278,6 +323,17 @@ func matchesAny(path string, prefixes ...string) bool {
 	return false
 }
 
+func firstGoDoc(primary, fallback *ast.CommentGroup) *ast.CommentGroup {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
+func goDocStartsWith(documentation *ast.CommentGroup, name string) bool {
+	return documentation != nil && strings.HasPrefix(strings.TrimSpace(documentation.Text()), name+" ")
+}
+
 func walkGoFiles(t *testing.T, directory string, visit func(path, packagePath string, parsed *ast.File)) {
 	t.Helper()
 	root := repositoryRoot(t)
@@ -292,7 +348,7 @@ func walkGoFiles(t *testing.T, directory string, visit func(path, packagePath st
 		if err != nil {
 			return err
 		}
-		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments)
 		if err != nil {
 			return err
 		}

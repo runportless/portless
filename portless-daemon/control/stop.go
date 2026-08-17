@@ -20,12 +20,15 @@ import (
 	"github.com/portless-run/portless/portless-daemon/system/installation"
 )
 
+// StopOptions controls forced shutdown, runtime handoff, and wait duration.
 type StopOptions struct {
 	Force   bool
 	Handoff bool
 	Timeout time.Duration
 }
 
+// StopResult describes how daemon shutdown was performed and which active
+// environments were involved.
 type StopResult struct {
 	WasRunning         bool     `json:"wasRunning"`
 	Stopped            bool     `json:"stopped"`
@@ -36,10 +39,12 @@ type StopResult struct {
 	ActiveEnvironments []string `json:"activeEnvironments"`
 }
 
+// ActiveEnvironmentsError reports environments that prevent a safe daemon stop.
 type ActiveEnvironmentsError struct {
 	Environments []string
 }
 
+// Error returns the active-environment refusal with explicit recovery commands.
 func (e *ActiveEnvironmentsError) Error() string {
 	return fmt.Sprintf("daemon is managing active environments: %s; stop them first with `portless down --all`, or use `portless daemon restart --force` (or `stop --force`) to leave their processes and containers unmanaged", strings.Join(e.Environments, ", "))
 }

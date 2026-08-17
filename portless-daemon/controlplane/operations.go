@@ -15,6 +15,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/projects/compiler"
 )
 
+// Up validates and asynchronously starts an environment.
 func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, idempotencyKey string, options UpOptions) (model.Operation, error) {
 	s.resetGate.RLock()
 	defer s.resetGate.RUnlock()
@@ -61,6 +62,7 @@ func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, i
 	return operation, nil
 }
 
+// Down asynchronously stops an environment and optionally removes managed volumes.
 func (s *Service) Down(ctx context.Context, projectName, environmentName, actor, idempotencyKey string, removeVolumes bool) (model.Operation, error) {
 	if _, err := s.database.Environment(ctx, projectName, environmentName); err != nil {
 		return model.Operation{}, err
@@ -77,10 +79,12 @@ func (s *Service) Down(ctx context.Context, projectName, environmentName, actor,
 	return operation, nil
 }
 
+// Operation returns one durable environment operation by number.
 func (s *Service) Operation(ctx context.Context, projectName, environmentName string, number int64) (model.Operation, error) {
 	return s.database.Operation(ctx, model.EnvironmentSelector(projectName, environmentName), number)
 }
 
+// Operations lists recent operations together with their ordered events.
 func (s *Service) Operations(ctx context.Context, projectName, environmentName string, limit int) ([]model.Operation, error) {
 	scope := model.EnvironmentSelector(projectName, environmentName)
 	operations, err := s.database.Operations(ctx, scope, limit)
@@ -97,6 +101,7 @@ func (s *Service) Operations(ctx context.Context, projectName, environmentName s
 	return operations, nil
 }
 
+// Connections resolves declared service edges to their effective runtime endpoints.
 func (s *Service) Connections(ctx context.Context, projectName, environmentName string) ([]model.EffectiveConnection, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -159,6 +164,7 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 	return result, nil
 }
 
+// ServiceConfiguration returns the effective, safely redacted launch configuration for a service.
 func (s *Service) ServiceConfiguration(ctx context.Context, projectName, environmentName, serviceName string) (model.ServiceConfiguration, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
@@ -195,10 +201,12 @@ func (s *Service) ServiceConfiguration(ctx context.Context, projectName, environ
 	}, nil
 }
 
+// StartService asynchronously starts one stopped service after checking its dependencies.
 func (s *Service) StartService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
 	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, false)
 }
 
+// RestartService asynchronously replaces one running service.
 func (s *Service) RestartService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
 	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, true)
 }
@@ -343,6 +351,7 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 	return operation, nil
 }
 
+// StopService asynchronously stops one locally managed service.
 func (s *Service) StopService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {

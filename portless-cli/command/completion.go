@@ -13,16 +13,27 @@ import (
 )
 
 const (
-	CompletionProjects     = "projects"
+	// CompletionProjects identifies project-name completion candidates.
+	CompletionProjects = "projects"
+	// CompletionEnvironments identifies project/environment completion candidates.
 	CompletionEnvironments = "environments"
-	CompletionServices     = "services"
-	CompletionConnections  = "connections"
-	CompletionRecordings   = "recordings"
-	CompletionFaults       = "faults"
-	CompletionTraffic      = "traffic"
-	CompletionSources      = "sources"
+	// CompletionServices identifies service-name completion candidates.
+	CompletionServices = "services"
+	// CompletionConnections identifies source:target connection completion candidates.
+	CompletionConnections = "connections"
+	// CompletionRecordings identifies recording-name completion candidates.
+	CompletionRecordings = "recordings"
+	// CompletionFaults identifies fault-rule-name completion candidates.
+	CompletionFaults = "faults"
+	// CompletionTraffic identifies captured-traffic-sequence completion candidates.
+	CompletionTraffic = "traffic"
+	// CompletionSources identifies project-source-name completion candidates.
+	CompletionSources = "sources"
 )
 
+// Complete returns a Cobra completion function for a Portless resource type.
+// It performs case-insensitive prefix filtering and never requests file-name
+// completion from the shell.
 func (c *Context) Complete(resource string) cobra.CompletionFunc {
 	return func(cmd *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		values := c.CompletionValues(cmd.Context(), resource)
@@ -36,6 +47,9 @@ func (c *Context) Complete(resource string) cobra.CompletionFunc {
 	}
 }
 
+// CompletionValues queries the existing daemon for sorted completion
+// candidates. It uses a short timeout, caches results for the invocation, and
+// returns no candidates when the daemon or selected environment is unavailable.
 func (c *Context) CompletionValues(parent context.Context, resource string) []string {
 	if parent == nil {
 		parent = context.Background()
@@ -134,6 +148,8 @@ func (c *Context) CompletionValues(parent context.Context, resource string) []st
 	return values
 }
 
+// CompleteEnvironmentNames returns environment-name completions, restricted
+// to the project selected by --env when one is present.
 func (c *Context) CompleteEnvironmentNames() cobra.CompletionFunc {
 	return func(cmd *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		selectors := c.CompletionValues(cmd.Context(), CompletionEnvironments)

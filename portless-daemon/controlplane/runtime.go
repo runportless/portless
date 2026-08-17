@@ -2,8 +2,10 @@ package controlplane
 
 import "github.com/portless-run/portless/portless-daemon/runtime/container"
 
+// RuntimeName is the application-facing name of a container runtime choice.
 type RuntimeName string
 
+// RuntimeProbe reports availability details for one runtime candidate.
 type RuntimeProbe struct {
 	Name    RuntimeName
 	State   string
@@ -11,6 +13,7 @@ type RuntimeProbe struct {
 	Reason  string
 }
 
+// RuntimeStatus describes runtime preference, selection, and all candidates.
 type RuntimeStatus struct {
 	Preference RuntimeName
 	Selected   RuntimeName
@@ -20,6 +23,7 @@ type RuntimeStatus struct {
 	Candidates []RuntimeProbe
 }
 
+// RuntimeResetResult counts installation-owned artifacts removed from one runtime.
 type RuntimeResetResult struct {
 	Runtime    RuntimeName
 	Containers int

@@ -15,12 +15,15 @@ import (
 	"github.com/portless-run/portless/portless-daemon/api/contract"
 )
 
+// Client is an authenticated typed client for one Portless daemon API.
 type Client struct {
 	baseURL string
 	token   string
 	http    *http.Client
 }
 
+// New constructs a daemon API client. A nil httpClient uses
+// http.DefaultClient.
 func New(baseURL, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -28,6 +31,8 @@ func New(baseURL, token string, httpClient *http.Client) *Client {
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, http: httpClient}
 }
 
+// ClientError is a non-success daemon API response with its structured error
+// metadata preserved.
 type ClientError struct {
 	Status      int
 	Code        string
@@ -37,6 +42,7 @@ type ClientError struct {
 	Remediation []contract.Remediation
 }
 
+// Error returns the daemon's error code and message.
 func (e *ClientError) Error() string {
 	if e.Code == "" {
 		return e.Message
@@ -103,6 +109,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, 
 	return nil
 }
 
+// EscapePath URL-escapes path segments and joins them with slashes.
 func EscapePath(values ...string) string {
 	encoded := make([]string, len(values))
 	for index, value := range values {

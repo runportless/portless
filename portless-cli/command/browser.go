@@ -10,6 +10,8 @@ import (
 	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
 )
 
+// BrowserURL creates a single-use browser claim and returns its authenticated
+// URL, with next used as the post-claim application path.
 func (c *Context) BrowserURL(ctx context.Context, client *apiclient.Client, next string) (string, error) {
 	result, err := client.CreateBrowserClaim(ctx, next)
 	if err != nil {
@@ -18,6 +20,8 @@ func (c *Context) BrowserURL(ctx context.Context, client *apiclient.Client, next
 	return result.URL, nil
 }
 
+// RequireIngress verifies that clean HTTP and TCP endpoints are routed to the
+// current user's Portless installation.
 func (c *Context) RequireIngress(ctx context.Context) error {
 	if e2ePrivateIngress {
 		if err := c.Local.CheckRelaySocket(ctx, c.Paths.IngressSocket); err != nil {
@@ -60,6 +64,8 @@ func (c *Context) RequireIngress(ctx context.Context) error {
 	return fmt.Errorf("clean local endpoints are not configured for this Portless installation; run `portless relay install` or `portless setup`, then retry: %s", detail)
 }
 
+// LaunchBrowser asks the operating system to open targetURL in the default
+// browser without waiting for that browser to exit.
 func LaunchBrowser(targetURL string) error {
 	var command *exec.Cmd
 	switch runtime.GOOS {

@@ -21,6 +21,7 @@ type persistedSelection struct {
 	Used       []RuntimeName `json:"used"`
 }
 
+// Manager selects a runtime, persists that choice, and delegates resource operations.
 type Manager struct {
 	mu         sync.Mutex
 	statePath  string
@@ -32,6 +33,7 @@ type Manager struct {
 	resources  *providers.Registry
 }
 
+// NewManager constructs a runtime selector from registered engines and persisted preference.
 func NewManager(statePath string, resources *providers.Registry, runtimes ...Runtime) *Manager {
 	manager := &Manager{statePath: statePath, preference: RuntimeAuto, used: make(map[RuntimeName]bool), runtimes: make(map[RuntimeName]Runtime), resources: resources}
 	for _, runtime := range runtimes {
@@ -48,6 +50,7 @@ func NewManager(statePath string, resources *providers.Registry, runtimes ...Run
 	return manager
 }
 
+// Status probes candidates and reports the effective runtime selection.
 func (m *Manager) Status(ctx context.Context) Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -60,6 +63,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 	return Status{Preference: m.preference, Selected: runtime.Name(), State: probe.State, Version: probe.Version, Reason: probe.Reason, Candidates: probes}
 }
 
+// StartHost attempts to activate the preferred available runtime host.
 func (m *Manager) StartHost(ctx context.Context) Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -85,6 +89,7 @@ func (m *Manager) StartHost(ctx context.Context) Status {
 	return Status{Preference: m.preference, Selected: runtime.Name(), State: result.State, Version: result.Version, Reason: result.Reason, Candidates: probes}
 }
 
+// SetPreference persists an automatic or explicit runtime selection.
 func (m *Manager) SetPreference(value RuntimeName) error {
 	if _, err := ParseRuntimeName(string(value)); err != nil {
 		return err
@@ -109,6 +114,7 @@ func (m *Manager) SetPreference(value RuntimeName) error {
 	return nil
 }
 
+// Start validates a resource plan and starts it with the selected runtime.
 func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
 	plan, err := m.resourcePlan(service)
 	if err != nil {
@@ -124,6 +130,7 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	return runtime.Start(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
 }
 
+// Adopt resumes management of a verified resource container after daemon replacement.
 func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
 	plan, err := m.resourcePlan(service)
 	if err != nil {
@@ -143,6 +150,7 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	return adopter.Adopt(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
 }
 
+// Verify checks persisted container identity and ownership through the selected runtime.
 func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) error {
 	plan, err := m.resourcePlan(service)
 	if err != nil {
@@ -169,6 +177,7 @@ func (m *Manager) resourcePlan(service model.ServiceDefinition) (providers.Conta
 	return m.resources.Plan(service)
 }
 
+// Close releases background resources held by every configured runtime.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	runtimes := make([]Runtime, 0, len(m.runtimes))
@@ -183,6 +192,7 @@ func (m *Manager) Close() {
 	}
 }
 
+// StopEnvironment removes managed resources for an environment through the selected runtime.
 func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
@@ -191,6 +201,7 @@ func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, re
 	return runtime.StopEnvironment(ctx, environmentKey, removeVolumes)
 }
 
+// StopService removes one managed resource container through the selected runtime.
 func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName string) error {
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
@@ -199,6 +210,7 @@ func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName s
 	return runtime.StopService(ctx, environmentKey, serviceName)
 }
 
+// ResetInstallations removes Portless-owned artifacts from every runtime used by this installation.
 func (m *Manager) ResetInstallations(ctx context.Context) ([]ResetResult, error) {
 	m.mu.Lock()
 	names := make([]RuntimeName, 0, len(m.used))
@@ -379,4 +391,5 @@ func replaceProbe(probes []ProbeResult, replacement ProbeResult) {
 	}
 }
 
+// IsUnavailable reports whether err means no container runtime is ready.
 func IsUnavailable(err error) bool { return errors.Is(err, ErrRuntimeUnavailable) }

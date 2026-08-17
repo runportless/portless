@@ -10,6 +10,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// Result contains an effective environment model, normalized bindings, and configuration issues.
 type Result struct {
 	Definition model.ProjectModel
 	Bindings   []model.ComponentBinding
@@ -94,6 +95,7 @@ func AddSource(project model.ProjectModel, projectSources []model.ProjectSource,
 	return definition, sources, defaults, nil
 }
 
+// InitialProject combines discovered sources into reusable topology and default local bindings.
 func InitialProject(name string, sources []model.SourceBinding) (model.ProjectModel, []model.ProjectSource, []model.ComponentBinding, error) {
 	definition := model.ProjectModel{SuggestedName: name}
 	serviceOwner := map[string]string{}
@@ -153,6 +155,7 @@ func InitialProject(name string, sources []model.SourceBinding) (model.ProjectMo
 	return definition, projectSources, bindings, nil
 }
 
+// Compile resolves a logical project through environment-specific sources and providers.
 func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) Result {
 	result := Result{Definition: project}
 	sourceByName := make(map[string]model.SourceBinding, len(sources))
@@ -313,6 +316,7 @@ func pruneUnusedResources(services []model.ServiceDefinition, connections []mode
 	return result
 }
 
+// ValidateRemote verifies the URL and explicit safety policy for an external provider.
 func ValidateRemote(remote *model.RemoteTarget) error {
 	if remote == nil {
 		return errors.New("remote target configuration is missing")
@@ -352,10 +356,12 @@ func ValidateRemote(remote *model.RemoteTarget) error {
 	return nil
 }
 
+// ConfigurationError exposes one or more invalid environment configuration issues.
 type ConfigurationError struct {
 	Issues []model.ConfigurationIssue
 }
 
+// Error summarizes the contained configuration issues.
 func (e ConfigurationError) Error() string {
 	if len(e.Issues) == 1 {
 		return e.Issues[0].Message

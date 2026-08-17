@@ -9,6 +9,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
 )
 
+// Detectors returns the built-in framework detectors in registry order.
 func Detectors() []spec.ServiceDetector {
 	return []spec.ServiceDetector{
 		springboot.New(),
@@ -21,6 +22,7 @@ func Detectors() []spec.ServiceDetector {
 	}
 }
 
+// Analyzers returns the built-in service topology analyzers.
 func Analyzers() []spec.TopologyAnalyzer {
 	return []spec.TopologyAnalyzer{topology.New()}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// Event is a sequenced live control-plane notification.
 type Event struct {
 	ID          int64     `json:"id"`
 	Type        string    `json:"type"`
@@ -18,11 +19,13 @@ type Event struct {
 	Data        any       `json:"data"`
 }
 
+// Subscription exposes an event channel and owns its broker registration.
 type Subscription struct {
 	C      <-chan Event
 	cancel func()
 }
 
+// Close unregisters the subscription and closes its event channel.
 func (s Subscription) Close() { s.cancel() }
 
 type subscriber struct {
@@ -31,6 +34,8 @@ type subscriber struct {
 	channel chan Event
 }
 
+// Broker distributes non-blocking live events and retains a bounded in-memory
+// traffic window for each environment.
 type Broker struct {
 	mu               sync.RWMutex
 	subscribers      map[int64]subscriber
@@ -41,6 +46,7 @@ type Broker struct {
 	trafficLimit     int
 }
 
+// NewBroker constructs an empty event broker.
 func NewBroker() *Broker {
 	return &Broker{
 		subscribers:     make(map[int64]subscriber),
@@ -50,6 +56,8 @@ func NewBroker() *Broker {
 	}
 }
 
+// Publish assigns missing metadata and offers event to matching subscribers
+// without blocking on slow consumers.
 func (b *Broker) Publish(event Event) {
 	if event.ID == 0 {
 		event.ID = b.globalSequence.Add(1)
@@ -76,6 +84,8 @@ func (b *Broker) Publish(event Event) {
 	}
 }
 
+// Subscribe registers a bounded subscription filtered by environment scope and
+// topics. Cancellation of ctx closes the subscription.
 func (b *Broker) Subscribe(ctx context.Context, scope string, topics []string) Subscription {
 	channel := make(chan Event, 128)
 	topicSet := make(map[string]struct{}, len(topics))
@@ -105,6 +115,8 @@ func (b *Broker) Subscribe(ctx context.Context, scope string, topics []string) S
 	return Subscription{C: channel, cancel: cancel}
 }
 
+// AddTraffic assigns an environment-local sequence, retains the event, and
+// publishes it on the protocol-specific topic.
 func (b *Broker) AddTraffic(event model.TrafficEvent) model.TrafficEvent {
 	scope := eventScope(event.Project, event.Environment)
 	b.mu.Lock()
@@ -135,6 +147,7 @@ func (b *Broker) EnsureTrafficSequence(scope string, sequence int64) {
 	b.mu.Unlock()
 }
 
+// RecentTraffic returns newest-first retained traffic for scope.
 func (b *Broker) RecentTraffic(scope string, limit int) []model.TrafficEvent {
 	b.mu.RLock()
 	items := b.traffic[scope]

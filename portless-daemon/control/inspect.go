@@ -16,6 +16,8 @@ import (
 	"github.com/portless-run/portless/portless-daemon/system/installation"
 )
 
+// Inspection compares an authenticated running daemon with its discovery
+// record, current installation, protocol, API, and executable build.
 type Inspection struct {
 	Record          identity.Record
 	Identity        lifecycle.Identity
@@ -25,6 +27,8 @@ type Inspection struct {
 	Problems        []string
 }
 
+// ErrLegacyDaemon indicates that a daemon record predates authenticated
+// lifecycle identity metadata.
 var ErrLegacyDaemon = errors.New("daemon predates the authenticated lifecycle protocol")
 
 // inspectDaemon authenticates the daemon and verifies that its response matches

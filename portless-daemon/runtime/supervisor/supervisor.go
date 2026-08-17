@@ -23,11 +23,13 @@ import (
 )
 
 const (
+	// ProtocolVersion is the semantic version of the private runner control protocol.
 	ProtocolVersion = "2.0.0"
 	statusPath      = "/v1/status"
 	stopPath        = "/v1/stop"
 )
 
+// Manifest contains private ownership and launch data consumed by a service runner.
 type Manifest struct {
 	SocketPath  string                  `json:"socketPath"`
 	StatePath   string                  `json:"statePath"`
@@ -43,6 +45,7 @@ type Manifest struct {
 	LogsRoot    string                  `json:"logsRoot"`
 }
 
+// Status is the authenticated live or durable state of a supervised service run.
 type Status struct {
 	ProtocolVersion string                 `json:"protocolVersion"`
 	Scope           string                 `json:"scope"`
@@ -70,6 +73,7 @@ type runner struct {
 	stop     chan struct{}
 }
 
+// Run consumes a private manifest and supervises the service until exit or shutdown.
 func Run(ctx context.Context, manifestPath string) error {
 	manifest, err := readManifest(manifestPath)
 	if err != nil {
@@ -258,6 +262,7 @@ func (r *runner) current() Status {
 
 func (r *runner) persist() error { return writePrivateJSON(r.manifest.StatePath, r.current()) }
 
+// StatusFor returns authenticated live status or falls back to validated durable terminal state.
 func StatusFor(ctx context.Context, socketPath, statePath, runKey string) (Status, error) {
 	status, err := LiveStatus(ctx, socketPath, runKey)
 	if err == nil {
@@ -273,6 +278,7 @@ func StatusFor(ctx context.Context, socketPath, statePath, runKey string) (Statu
 	return status, validateStatus(status)
 }
 
+// LiveStatus reads authenticated status from a running supervisor's private socket.
 func LiveStatus(ctx context.Context, socketPath, runKey string) (Status, error) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
@@ -301,6 +307,7 @@ func LiveStatus(ctx context.Context, socketPath, runKey string) (Status, error) 
 	return status, validateStatus(status)
 }
 
+// Stop requests authenticated shutdown and waits for a terminal supervisor state.
 func Stop(ctx context.Context, socketPath, statePath, runKey string) (Status, error) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
@@ -332,8 +339,10 @@ func Stop(ctx context.Context, socketPath, statePath, runKey string) (Status, er
 	}
 }
 
+// WriteManifest persists a private, atomic supervisor launch manifest.
 func WriteManifest(path string, manifest Manifest) error { return writePrivateJSON(path, manifest) }
 
+// StatePath derives the default durable status path from a supervisor socket path.
 func StatePath(socketPath string) string { return strings.TrimSuffix(socketPath, ".sock") + ".json" }
 
 func terminal(state string) bool { return state == "stopped" || state == "exited" || state == "failed" }

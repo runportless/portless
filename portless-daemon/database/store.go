@@ -17,26 +17,36 @@ import (
 )
 
 var (
-	ErrNotFound          = errors.New("not found")
-	ErrNameTaken         = errors.New("name already exists")
-	ErrPathTaken         = errors.New("source path already registered")
-	ErrConflict          = errors.New("revision conflict")
-	ErrAlreadyExists     = errors.New("resource already exists")
+	// ErrNotFound indicates that no persisted row matches the requested public identity.
+	ErrNotFound = errors.New("not found")
+	// ErrNameTaken indicates that a case-insensitive public name is already registered.
+	ErrNameTaken = errors.New("name already exists")
+	// ErrPathTaken indicates that a source path is already bound where uniqueness is required.
+	ErrPathTaken = errors.New("source path already registered")
+	// ErrConflict indicates that an optimistic-concurrency revision no longer matches.
+	ErrConflict = errors.New("revision conflict")
+	// ErrAlreadyExists indicates that an addressed artifact already exists.
+	ErrAlreadyExists = errors.New("resource already exists")
+	// ErrIncompatibleState indicates that stored state cannot be decoded by this build.
 	ErrIncompatibleState = errors.New("stored project model is incompatible with this Portless build")
 )
 
+// ActiveProjectEnvironmentsError lists environments blocking a project topology change.
 type ActiveProjectEnvironmentsError struct {
 	Environments []string `json:"environments"`
 }
 
+// Error describes the environments that must first be stopped.
 func (e ActiveProjectEnvironmentsError) Error() string {
 	return "all project environments must be stopped before the project topology changes: " + strings.Join(e.Environments, ", ")
 }
 
+// Store owns the daemon's durable SQLite application and runtime state.
 type Store struct {
 	db *sql.DB
 }
 
+// Open creates or migrates a Portless state database at path.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
@@ -67,8 +77,11 @@ func Open(path string) (*Store, error) {
 	return result, nil
 }
 
+// Close releases the underlying database connection pool.
 func (s *Store) Close() error { return s.db.Close() }
-func (s *Store) DB() *sql.DB  { return s.db }
+
+// DB exposes the underlying SQL handle for infrastructure integrations and tests.
+func (s *Store) DB() *sql.DB { return s.db }
 
 func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {

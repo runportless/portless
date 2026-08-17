@@ -11,6 +11,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// CreateOperation starts a numbered operation or returns the existing idempotent operation.
 func (s *Store) CreateOperation(ctx context.Context, selector, operationType, actor, idempotencyKey string) (model.Operation, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -48,6 +49,7 @@ VALUES(?, ?, ?, 'running', ?, ?, ?)`, environmentKey, number, operationType, act
 	return model.Operation{Project: project, Environment: environment, Number: number, Type: operationType, State: "running", Actor: actor, StartedAt: parseTime(started)}, nil
 }
 
+// AddOperationEvent appends the next ordered event to an operation.
 func (s *Store) AddOperationEvent(ctx context.Context, selector string, operationNumber int64, event model.OperationEvent) (model.OperationEvent, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -79,6 +81,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, operationNumber, event.Sequence
 	return event, nil
 }
 
+// CompleteOperation sets the terminal state, timestamp, and optional error for an operation.
 func (s *Store) CompleteOperation(ctx context.Context, selector string, operationNumber int64, state, operationError string) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -97,6 +100,7 @@ WHERE environment_key = ? AND number = ?`, state, nowText(), operationError, env
 	return nil
 }
 
+// Operation returns one operation and its ordered events.
 func (s *Store) Operation(ctx context.Context, selector string, number int64) (model.Operation, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -124,6 +128,7 @@ FROM operations WHERE environment_key = ? AND number = ?`, environmentKey, numbe
 	return result, nil
 }
 
+// Operations lists recent environment operations without hydrating their events.
 func (s *Store) Operations(ctx context.Context, selector string, limit int) ([]model.Operation, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -156,6 +161,7 @@ FROM operations WHERE environment_key = ? ORDER BY number DESC LIMIT ?`, environ
 	return result, rows.Err()
 }
 
+// RunningOperationScopes lists environments with non-terminal operations.
 func (s *Store) RunningOperationScopes(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT p.name, e.name
@@ -180,6 +186,7 @@ ORDER BY p.name COLLATE NOCASE, e.name COLLATE NOCASE`)
 	return result, rows.Err()
 }
 
+// OperationEvents returns the ordered event stream for an operation.
 func (s *Store) OperationEvents(ctx context.Context, selector string, number int64) ([]model.OperationEvent, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
@@ -209,6 +216,7 @@ FROM operation_events WHERE environment_key = ? AND operation_number = ? ORDER B
 	return result, rows.Err()
 }
 
+// AddTimelineEvent appends a durable event to an environment timeline.
 func (s *Store) AddTimelineEvent(ctx context.Context, event model.TimelineEvent) (model.TimelineEvent, error) {
 	scope := scopeFromFields(event.Project, event.Environment)
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, scope)
@@ -240,6 +248,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, event.Sequence, event.Timest
 	return event, nil
 }
 
+// Timeline returns recent user-visible environment history in reverse order.
 func (s *Store) Timeline(ctx context.Context, selector string, limit int) ([]model.TimelineEvent, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {

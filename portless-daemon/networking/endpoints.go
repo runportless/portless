@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	// DNSZone is the authoritative suffix for clean TCP endpoint names.
 	DNSZone = "portless.test"
 
 	// EndpointPoolSize is deliberately bounded. Linux accepts the entire IPv4
@@ -17,10 +18,14 @@ const (
 	// on lo0 by the installed relay before it drops privileges.
 	EndpointPoolSize = 64
 
-	AllocationPublic     = "public"
+	// AllocationPublic identifies a host-accessible service endpoint.
+	AllocationPublic = "public"
+	// AllocationConnection identifies a source-scoped dependency endpoint.
 	AllocationConnection = "connection"
 )
 
+// EndpointLoopbackIP returns the stable loopback address at index, or an empty
+// string when index is outside the managed pool.
 func EndpointLoopbackIP(index int) string {
 	if index < 0 || index >= EndpointPoolSize {
 		return ""
@@ -28,6 +33,7 @@ func EndpointLoopbackIP(index int) string {
 	return fmt.Sprintf("127.77.0.%d", index+2)
 }
 
+// EndpointLoopbackAddresses returns every address in the managed endpoint pool.
 func EndpointLoopbackAddresses() []string {
 	addresses := make([]string, EndpointPoolSize)
 	for index := range addresses {
@@ -36,6 +42,8 @@ func EndpointLoopbackAddresses() []string {
 	return addresses
 }
 
+// AllocationSpec describes one stable DNS name, loopback address allocation,
+// and advertised port requirement.
 type AllocationSpec struct {
 	Kind     string
 	Source   string
@@ -113,6 +121,7 @@ func serviceTCPProtocol(service model.ServiceDefinition) (model.Protocol, bool) 
 	return "", false
 }
 
+// AdvertisedPort validates and returns a service's client-facing TCP port.
 func AdvertisedPort(service model.ServiceDefinition, protocol model.Protocol) (int, error) {
 	port := service.Port
 	if port == 0 {
@@ -129,14 +138,17 @@ func AdvertisedPort(service model.ServiceDefinition, protocol model.Protocol) (i
 	return port, nil
 }
 
+// PublicDNSName returns the canonical host-accessible TCP name for a service.
 func PublicDNSName(service, environment, project string) string {
 	return strings.ToLower(strings.Join([]string{service, environment, project, DNSZone}, "."))
 }
 
+// ConnectionDNSName returns the canonical source-scoped TCP dependency name.
 func ConnectionDNSName(source, target, environment, project string) string {
 	return strings.ToLower(strings.Join([]string{target, "via-" + source, environment, project, DNSZone}, "."))
 }
 
+// EndpointURL formats a host and port as an HTTP or TCP endpoint URL.
 func EndpointURL(protocol model.Protocol, host string, port int) string {
 	address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	switch protocol {
@@ -147,10 +159,12 @@ func EndpointURL(protocol model.Protocol, host string, port int) string {
 	}
 }
 
+// HTTPURL returns the clean localhost URL for an application service.
 func HTTPURL(service, environment, project string) string {
 	return "http://" + strings.ToLower(strings.Join([]string{service, environment, project, "localhost"}, "."))
 }
 
+// ValidateDNSName verifies lowercase-compatible DNS length and label rules.
 func ValidateDNSName(name string) error {
 	name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
 	if name == "" || len(name) > 253 {

@@ -14,12 +14,16 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
+// ColorPreference controls when the CLI emits ANSI color sequences.
 type ColorPreference string
 
 const (
-	ColorAuto   ColorPreference = "auto"
+	// ColorAuto enables color only for an interactive terminal.
+	ColorAuto ColorPreference = "auto"
+	// ColorAlways enables color for human-readable output even when redirected.
 	ColorAlways ColorPreference = "always"
-	ColorNever  ColorPreference = "never"
+	// ColorNever disables color for every invocation.
+	ColorNever ColorPreference = "never"
 )
 
 const (
@@ -45,6 +49,8 @@ type colorConfigOutput struct {
 	Path       string          `json:"path"`
 }
 
+// ParseColorPreference normalizes and validates a persisted or user-supplied
+// color preference.
 func ParseColorPreference(value string) (ColorPreference, error) {
 	preference := ColorPreference(strings.ToLower(strings.TrimSpace(value)))
 	switch preference {
@@ -55,6 +61,9 @@ func ParseColorPreference(value string) (ColorPreference, error) {
 	}
 }
 
+// LoadPreferences loads the current user's CLI preferences into the context.
+// Missing preferences select defaults; existing paths are ownership-checked
+// and repaired to private permissions before they are read.
 func (c *Context) LoadPreferences() error {
 	c.ColorPreference = ColorAuto
 	c.ColorSource = "default"
@@ -99,6 +108,8 @@ func (c *Context) LoadPreferences() error {
 	return nil
 }
 
+// SaveColorPreference atomically persists preference in a private file and
+// updates the active context.
 func (c *Context) SaveColorPreference(preference ColorPreference) error {
 	if err := ensurePreferencesDirectory(c.Paths.Root); err != nil {
 		return err
@@ -148,6 +159,8 @@ func (c *Context) SaveColorPreference(preference ColorPreference) error {
 	return nil
 }
 
+// ResetPreferences removes the current user's preference file and restores
+// the in-memory defaults. Repeated resets are successful.
 func (c *Context) ResetPreferences() error {
 	path := c.PreferencesPath()
 	info, err := os.Lstat(path)
@@ -176,6 +189,8 @@ func (c *Context) ResetPreferences() error {
 	return c.PrintPreferencesReset(true)
 }
 
+// PrintPreferencesReset writes the human-readable or JSON result of a
+// preference reset.
 func (c *Context) PrintPreferencesReset(removed bool) error {
 	status := "already-default"
 	if removed {
@@ -215,10 +230,13 @@ func ensurePreferencesDirectory(path string) error {
 	return nil
 }
 
+// PreferencesPath returns the preference-file path for this CLI installation.
 func (c *Context) PreferencesPath() string {
 	return filepath.Join(c.Paths.Root, preferencesFile)
 }
 
+// ColorConfig returns the configured color preference and its effective state
+// for the current output writer.
 func (c *Context) ColorConfig() colorConfigOutput {
 	effective, reason := c.ColorDecision(c.Out)
 	return colorConfigOutput{
@@ -230,6 +248,8 @@ func (c *Context) ColorConfig() colorConfigOutput {
 	}
 }
 
+// PrintColorConfig writes the active color configuration in the selected
+// output format.
 func (c *Context) PrintColorConfig() error {
 	status := c.ColorConfig()
 	if c.JSONOutput {
@@ -248,6 +268,8 @@ func (c *Context) PrintColorConfig() error {
 	return nil
 }
 
+// ColorDecision reports whether color is enabled for writer and explains the
+// highest-priority rule that made the decision.
 func (c *Context) ColorDecision(writer io.Writer) (bool, string) {
 	if c.JSONOutput {
 		return false, "JSON output"
@@ -284,6 +306,7 @@ func isTerminalWriter(writer io.Writer) bool {
 	return isatty.IsTerminal(file.Fd()) || isatty.IsCygwinTerminal(file.Fd())
 }
 
+// Styled wraps value in an ANSI sequence when color is enabled for writer.
 func (c *Context) Styled(writer io.Writer, sequence, value string) string {
 	enabled, _ := c.ColorDecision(writer)
 	if !enabled || value == "" {
@@ -292,30 +315,38 @@ func (c *Context) Styled(writer io.Writer, sequence, value string) string {
 	return sequence + value + ansiReset
 }
 
+// Heading styles value as a CLI heading when color is enabled.
 func (c *Context) Heading(writer io.Writer, value string) string {
 	return c.Styled(writer, ansiBoldCyan, value)
 }
 
+// Accent styles value with the CLI accent color when color is enabled.
 func (c *Context) Accent(writer io.Writer, value string) string {
 	return c.Styled(writer, ansiCyan, value)
 }
 
+// Muted styles value as secondary text when color is enabled.
 func (c *Context) Muted(writer io.Writer, value string) string {
 	return c.Styled(writer, ansiDim, value)
 }
 
+// Success styles value with the CLI success color when color is enabled.
 func (c *Context) Success(writer io.Writer, value string) string {
 	return c.Styled(writer, ansiGreen, value)
 }
 
+// Warning styles value with the CLI warning color when color is enabled.
 func (c *Context) Warning(writer io.Writer, value string) string {
 	return c.Styled(writer, ansiYellow, value)
 }
 
+// Failure styles value with the CLI failure color when color is enabled.
 func (c *Context) Failure(writer io.Writer, value string) string {
 	return c.Styled(writer, ansiRed, value)
 }
 
+// State applies the semantic success, warning, failure, muted, or informational
+// style associated with a textual state value.
 func (c *Context) State(writer io.Writer, value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "healthy", "development", "ready", "attached", "running", "active", "succeeded", "passed", "pass", "selected":
@@ -333,6 +364,8 @@ func (c *Context) State(writer io.Writer, value string) string {
 	}
 }
 
+// BoolFlagRequested resolves the last explicit value of a boolean long flag
+// before the argument separator.
 func BoolFlagRequested(args []string, name string) bool {
 	requested := false
 	flag := "--" + name
@@ -352,6 +385,8 @@ func BoolFlagRequested(args []string, name string) bool {
 	return requested
 }
 
+// IsCompletionRequest reports whether args invoke public or internal shell
+// completion handling.
 func IsCompletionRequest(args []string) bool {
 	for _, argument := range args {
 		if argument == "completion" || argument == "__complete" || argument == "__completeNoDesc" {
@@ -361,6 +396,8 @@ func IsCompletionRequest(args []string) bool {
 	return false
 }
 
+// IsConfigResetRequest reports whether args target config reset, which must
+// remain usable even when the saved preference file is malformed.
 func IsConfigResetRequest(args []string) bool {
 	positionals := make([]string, 0, 2)
 	for _, argument := range args {
@@ -375,6 +412,8 @@ func IsConfigResetRequest(args []string) bool {
 	return len(positionals) == 2 && positionals[0] == "config" && positionals[1] == "reset"
 }
 
+// UsageTemplate returns the Cobra usage template with headings styled through
+// the active presentation settings.
 func (c *Context) UsageTemplate() string {
 	Heading := func(value string) string { return c.Heading(c.Out, value) }
 	return Heading("Usage:") + `{{if .Runnable}}

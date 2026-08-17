@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	CommandInstall   = "install"
-	CommandRestart   = "restart"
+	// CommandInstall identifies the private privileged installation action.
+	CommandInstall = "install"
+	// CommandRestart identifies the private privileged restart action.
+	CommandRestart = "restart"
+	// CommandUninstall identifies the private privileged removal action.
 	CommandUninstall = "uninstall"
 )
 

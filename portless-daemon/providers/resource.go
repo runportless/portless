@@ -32,13 +32,17 @@ const (
 	maxPlanVolumes          = 16
 )
 
+// Severity classifies a resource discovery diagnostic.
 type Severity string
 
 const (
-	SeverityInfo    Severity = "info"
+	// SeverityInfo is a non-actionable resource discovery detail.
+	SeverityInfo Severity = "info"
+	// SeverityWarning identifies a recoverable resource discovery concern.
 	SeverityWarning Severity = "warning"
 )
 
+// Diagnostic is a structured message returned by a resource plugin.
 type Diagnostic struct {
 	Severity Severity
 	Code     string
@@ -49,13 +53,19 @@ type Diagnostic struct {
 // Workspace is the root-confined, read-only source capability supplied by the
 // discovery engine.
 type Workspace interface {
+	// Root returns the canonical absolute discovery root.
 	Root() string
+	// Files returns sorted source-relative regular-file paths.
 	Files() []string
+	// Exists reports whether a regular file exists in the indexed snapshot.
 	Exists(relativePath string) bool
+	// IsDir reports whether a directory exists in the indexed snapshot.
 	IsDir(relativePath string) bool
+	// ReadFile returns a bounded read of an indexed regular file.
 	ReadFile(context.Context, string) ([]byte, error)
 }
 
+// Consumer describes an application service that may depend on a resource.
 type Consumer struct {
 	Key       string
 	Directory string
@@ -63,12 +73,14 @@ type Consumer struct {
 	Framework string
 }
 
+// BindingClaim proposes an environment-variable connection from a consumer.
 type BindingClaim struct {
 	ConsumerKey string
 	Environment string
 	Required    bool
 }
 
+// Candidate is a managed resource proposed from source evidence.
 type Candidate struct {
 	Key      string
 	Name     string
@@ -77,28 +89,33 @@ type Candidate struct {
 	Bindings []BindingClaim
 }
 
+// Findings contains resource candidates and diagnostics returned by a plugin.
 type Findings struct {
 	Candidates  []Candidate
 	Diagnostics []Diagnostic
 }
 
+// Descriptor declares a resource plugin's canonical ID, aliases, and default version.
 type Descriptor struct {
 	ID             string
 	Aliases        []string
 	DefaultVersion string
 }
 
+// EnvironmentVariable declares a container setting or generated secret.
 type EnvironmentVariable struct {
 	Name        string
 	Value       string
 	SecretBytes int
 }
 
+// Volume declares an installation-owned persistent mount for a resource.
 type Volume struct {
 	Key  string
 	Path string
 }
 
+// Readiness describes the TCP or exec probe for a managed container.
 type Readiness struct {
 	Kind     string
 	Command  []string
@@ -106,6 +123,7 @@ type Readiness struct {
 	Interval time.Duration
 }
 
+// ContainerPlan is a validated declarative recipe for a resource container.
 type ContainerPlan struct {
 	Image       string
 	ClientPort  int
@@ -115,6 +133,7 @@ type ContainerPlan struct {
 	Readiness   Readiness
 }
 
+// BindingContext contains the endpoint and generated settings used to bind a consumer.
 type BindingContext struct {
 	Environment       string
 	Host              string
@@ -131,13 +150,19 @@ type BindingResult struct {
 	SafeValues map[string]string
 }
 
+// Plugin discovers, plans, and binds one managed resource type.
 type Plugin interface {
+	// Descriptor returns immutable registration metadata for the plugin.
 	Descriptor() Descriptor
+	// Detect examines source evidence for resource candidates and consumer bindings.
 	Detect(context.Context, Workspace, []Consumer) (Findings, error)
+	// Plan returns a declarative container recipe for a resource version.
 	Plan(model.ResourceDefinition) (ContainerPlan, error)
+	// Bind constructs active and safely inspectable consumer environment values.
 	Bind(BindingContext) (BindingResult, error)
 }
 
+// Registry validates and coordinates trusted in-process resource plugins.
 type Registry struct {
 	plugins     map[string]Plugin
 	descriptors map[string]Descriptor
@@ -147,6 +172,7 @@ type Registry struct {
 	plans       map[string]ContainerPlan
 }
 
+// NewRegistry validates plugins and eagerly caches each default container plan.
 func NewRegistry(plugins ...Plugin) (*Registry, error) {
 	registry := &Registry{
 		plugins: make(map[string]Plugin), descriptors: make(map[string]Descriptor), aliases: make(map[string]string), plans: make(map[string]ContainerPlan),
@@ -196,6 +222,7 @@ func NewRegistry(plugins ...Plugin) (*Registry, error) {
 	return registry, nil
 }
 
+// MustRegistry constructs a registry or panics when plugin contracts are invalid.
 func MustRegistry(plugins ...Plugin) *Registry {
 	registry, err := NewRegistry(plugins...)
 	if err != nil {
@@ -204,6 +231,7 @@ func MustRegistry(plugins ...Plugin) *Registry {
 	return registry
 }
 
+// Plugins returns registered plugins in canonical ID order.
 func (r *Registry) Plugins() []Plugin {
 	if r == nil {
 		return nil
@@ -215,6 +243,7 @@ func (r *Registry) Plugins() []Plugin {
 	return result
 }
 
+// IDs returns registered canonical resource IDs in sorted order.
 func (r *Registry) IDs() []string {
 	if r == nil {
 		return nil
@@ -222,6 +251,7 @@ func (r *Registry) IDs() []string {
 	return append([]string(nil), r.order...)
 }
 
+// Descriptor returns registration metadata for a canonical ID or alias.
 func (r *Registry) Descriptor(resourceType string) (Descriptor, bool) {
 	_, canonical, ok := r.lookup(resourceType)
 	if !ok {
@@ -253,6 +283,7 @@ func (r *Registry) Resolve(resourceType, version string) (model.ResourceDefiniti
 	return definition, plan.ClientPort, nil
 }
 
+// Plan validates a resource service and returns its cached declarative container plan.
 func (r *Registry) Plan(service model.ServiceDefinition) (ContainerPlan, error) {
 	if service.Kind != model.ServiceResource || service.Resource == nil {
 		return ContainerPlan{}, fmt.Errorf("service %s is not a resource", service.Name)
@@ -275,6 +306,7 @@ func (r *Registry) Plan(service model.ServiceDefinition) (ContainerPlan, error) 
 	return plan, nil
 }
 
+// Detect invokes one canonical resource plugin against a bounded workspace.
 func (r *Registry) Detect(ctx context.Context, resourceType string, workspace Workspace, consumers []Consumer) (Findings, error) {
 	plugin, canonical, ok := r.lookup(resourceType)
 	if !ok || canonical != resourceType {
@@ -283,6 +315,7 @@ func (r *Registry) Detect(ctx context.Context, resourceType string, workspace Wo
 	return callDetect(ctx, plugin, workspace, append([]Consumer(nil), consumers...))
 }
 
+// Bind validates a resource edge and returns secret-bearing and safe consumer settings.
 func (r *Registry) Bind(service model.ServiceDefinition, connection model.Connection, context BindingContext) (BindingResult, error) {
 	if service.Kind != model.ServiceResource || service.Resource == nil {
 		return BindingResult{}, fmt.Errorf("connection target %s is not a resource", service.Name)

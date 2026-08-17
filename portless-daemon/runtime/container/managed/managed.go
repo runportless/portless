@@ -39,15 +39,23 @@ const (
 	labelResourceVolume  = "dev.portless.resource.volume"
 )
 
+// Engine abstracts Docker- and Podman-specific host commands used by the managed runtime.
 type Engine interface {
+	// Name returns the engine's canonical runtime name.
 	Name() container.RuntimeName
+	// Binary returns the executable used for engine commands.
 	Binary() string
+	// Probe reports whether the engine is ready.
 	Probe(context.Context) container.ProbeResult
+	// StartHost attempts to activate the engine host.
 	StartHost(context.Context) container.ProbeResult
+	// ResourceExists reports whether a named engine resource exists.
 	ResourceExists(context.Context, string, string) bool
+	// VolumeMount formats a named-volume mount argument for this engine.
 	VolumeMount(string, string) string
 }
 
+// Manager implements ownership-safe managed resources for one container engine.
 type Manager struct {
 	engine          Engine
 	installationKey string
@@ -61,18 +69,23 @@ type logCollector struct {
 	cancel context.CancelFunc
 }
 
+// New constructs a managed-resource runtime for a concrete container engine.
 func New(engine Engine, installationKey, temporaryRoot string) *Manager {
 	return &Manager{engine: engine, installationKey: installationKey, temporaryRoot: temporaryRoot, credentialsRoot: filepath.Join(filepath.Dir(temporaryRoot), "secrets"), collectors: make(map[string]*logCollector)}
 }
 
+// Name returns the underlying container engine name.
 func (m *Manager) Name() container.RuntimeName { return m.engine.Name() }
 
+// Probe reports whether the underlying container engine is ready.
 func (m *Manager) Probe(ctx context.Context) container.ProbeResult { return m.engine.Probe(ctx) }
 
+// StartHost attempts to activate the underlying container engine host.
 func (m *Manager) StartHost(ctx context.Context) container.ProbeResult {
 	return m.engine.StartHost(ctx)
 }
 
+// Start creates or safely replaces the owned resource container for a service generation.
 func (m *Manager) Start(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, logsRoot string) (container.StartResult, error) {
 	if service.Kind != model.ServiceResource || service.Resource == nil {
 		return container.StartResult{}, errors.New("container runtime only starts resource services")
@@ -162,6 +175,7 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC(), LogDirectory: logDirectory}, nil
 }
 
+// Adopt verifies an existing container and resumes health and log observation.
 func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, logsRoot string) (container.StartResult, error) {
 	if service.Kind != model.ServiceResource || service.Resource == nil {
 		return container.StartResult{}, errors.New("only resource services can be adopted")
@@ -190,6 +204,7 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	}, nil
 }
 
+// Verify checks an existing container's ownership, resource identity, generation, and port.
 func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, containerName string) error {
 	_, _, err := m.verifyAdoptableContainer(ctx, environmentKey, service, plan, generation, containerName)
 	return err
@@ -278,6 +293,7 @@ func (m *Manager) verifiedContainerID(ctx context.Context, name, environmentKey,
 	return containerID, nil
 }
 
+// StopEnvironment removes owned containers, networks, and optionally volumes and credentials.
 func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, removeVolumes bool) error {
 	containers, err := m.ownedContainers(ctx, environmentKey)
 	if err != nil {
@@ -315,6 +331,7 @@ func (m *Manager) StopEnvironment(ctx context.Context, environmentKey string, re
 	return nil
 }
 
+// ResetInstallation removes every container, volume, network, and credential owned by this installation.
 func (m *Manager) ResetInstallation(ctx context.Context) (container.ResetResult, error) {
 	result := container.ResetResult{Runtime: m.Name()}
 	if probe := m.Probe(ctx); probe.State != "ready" {
@@ -357,6 +374,7 @@ func (m *Manager) ResetInstallation(ctx context.Context) (container.ResetResult,
 	return result, nil
 }
 
+// StopService verifies and removes all owned containers for one service.
 func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName string) error {
 	output, err := m.output(ctx, "ps", "-a", "--filter", "label="+labelOwner+"=true",
 		"--filter", "label="+labelInstall+"="+m.installationKey,
@@ -375,6 +393,7 @@ func (m *Manager) StopService(ctx context.Context, environmentKey, serviceName s
 	return nil
 }
 
+// Close stops all active container log collectors.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	collectors := make([]*logCollector, 0, len(m.collectors))

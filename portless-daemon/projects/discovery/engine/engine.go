@@ -21,12 +21,14 @@ var (
 	environmentPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 )
 
+// Config sets discovery resource plugins, scan deadline, and workspace limits.
 type Config struct {
 	Limits      Limits
 	ScanTimeout time.Duration
 	Resources   *providers.Registry
 }
 
+// Result contains a canonical root, discovered topology, and user-facing diagnostics.
 type Result struct {
 	Root        string             `json:"root"`
 	Model       model.ProjectModel `json:"model"`
@@ -34,6 +36,7 @@ type Result struct {
 	Warnings    []string           `json:"warnings,omitempty"`
 }
 
+// Engine coordinates bounded workspace indexing, service detectors, and topology analyzers.
 type Engine struct {
 	config      Config
 	detectors   []detectorEntry
@@ -54,6 +57,7 @@ type analyzerEntry struct {
 	descriptor spec.Descriptor
 }
 
+// New validates and constructs a deterministic discovery engine.
 func New(config Config, detectors []spec.ServiceDetector, analyzers []spec.TopologyAnalyzer) (*Engine, error) {
 	if len(detectors) == 0 {
 		return nil, errors.New("at least one discovery detector is required")
@@ -173,6 +177,7 @@ func (e *Engine) buildSupersedence() error {
 	return nil
 }
 
+// FindRoot walks upward from start to the nearest registered project marker.
 func (e *Engine) FindRoot(ctx context.Context, start string) (string, error) {
 	absolute, err := filepath.Abs(start)
 	if err != nil {
@@ -223,6 +228,7 @@ func (e *Engine) hasRootMarker(directory string) (bool, error) {
 	return false, nil
 }
 
+// Discover indexes the project, resolves service candidates, and analyzes its topology.
 func (e *Engine) Discover(ctx context.Context, start string) (Result, error) {
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
@@ -765,6 +771,7 @@ func callAnalyzer(ctx context.Context, analyzer spec.TopologyAnalyzer, workspace
 	return analyzer.Analyze(ctx, workspace, services)
 }
 
+// Validate checks names, service definitions, resources, and connection references.
 func Validate(definition model.ProjectModel, resources *providers.Registry) error {
 	if resources == nil {
 		var err error

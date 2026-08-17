@@ -17,8 +17,10 @@ import (
 	"github.com/portless-run/portless/portless-daemon/networking"
 )
 
+// ControlOrigin is the clean control-plane origin used for relay health checks.
 const ControlOrigin = "http://portless.localhost"
 
+// Check verifies end-to-end HTTP access through the default privileged relay.
 func Check(ctx context.Context) error {
 	return checkAt(ctx, DefaultListenAddress, ControlOrigin)
 }
@@ -35,6 +37,8 @@ func CheckSocket(ctx context.Context, socketPath string) error {
 	})
 }
 
+// WaitUntilReady polls HTTP, DNS, and resolver health until every relay path is
+// ready, the timeout elapses, or ctx is canceled.
 func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastError error
@@ -57,6 +61,8 @@ func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
 	}
 }
 
+// CheckDNS verifies the privileged UDP DNS listener using the Portless health
+// record.
 func CheckDNS(ctx context.Context) error {
 	queryID := uint16(rand.Uint32())
 	query, err := portlessdns.Query(networking.DNSZone, portlessdns.TypeA, queryID)

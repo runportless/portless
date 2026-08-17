@@ -11,6 +11,8 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// InvocationKey returns a cryptographically random idempotency key prefixed
+// for the operation that will use it.
 func InvocationKey(prefix string) (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -19,6 +21,8 @@ func InvocationKey(prefix string) (string, error) {
 	return prefix + "-" + hex.EncodeToString(random[:]), nil
 }
 
+// WaitOperation polls an operation until it reaches a terminal state. New
+// operation events are printed as they arrive unless jsonOutput is true.
 func (c *Context) WaitOperation(ctx context.Context, client *apiclient.Client, operation model.Operation, jsonOutput bool) (model.Operation, error) {
 	seen := 0
 	for {

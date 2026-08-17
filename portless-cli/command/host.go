@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+// ResolvedExecutable returns the current executable path after resolving any
+// symbolic links.
 func ResolvedExecutable() (string, error) {
 	executable, err := os.Executable()
 	if err != nil {

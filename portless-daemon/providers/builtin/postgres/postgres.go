@@ -14,14 +14,18 @@ import (
 	"github.com/portless-run/portless/portless-daemon/providers/builtin/common"
 )
 
+// Plugin provides PostgreSQL discovery, container planning, and connection binding.
 type Plugin struct{}
 
+// New returns the built-in PostgreSQL resource plugin.
 func New() providers.Plugin { return Plugin{} }
 
+// Descriptor returns PostgreSQL plugin registration metadata and aliases.
 func (Plugin) Descriptor() providers.Descriptor {
 	return providers.Descriptor{ID: "postgres", Aliases: []string{"postgresql"}, DefaultVersion: "17"}
 }
 
+// Detect finds PostgreSQL dependencies and their consumer environment variables.
 func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consumers []providers.Consumer) (providers.Findings, error) {
 	return common.Detect(ctx, workspace, consumers, common.Detection{
 		Name: "postgres", Explanation: "PostgreSQL configuration or dependency found",
@@ -35,6 +39,7 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 	})
 }
 
+// Plan returns the managed PostgreSQL container, credentials, volume, and readiness recipe.
 func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan, error) {
 	return providers.ContainerPlan{
 		Image: "docker.io/library/postgres:" + definition.Version, ClientPort: 5432,
@@ -48,6 +53,7 @@ func (Plugin) Plan(definition model.ResourceDefinition) (providers.ContainerPlan
 	}, nil
 }
 
+// Bind creates a PostgreSQL or Spring JDBC configuration with masked safe values.
 func (Plugin) Bind(context providers.BindingContext) (providers.BindingResult, error) {
 	if !context.Active {
 		return inactive(context.Environment, strings.HasPrefix(context.Environment, "SPRING_DATASOURCE")), nil

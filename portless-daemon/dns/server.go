@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// Serve accepts length-prefixed DNS queries on listener and serves them with
+// resolver until ctx is canceled.
 func Serve(ctx context.Context, listener net.Listener, resolver Resolver) error {
 	go func() {
 		<-ctx.Done()

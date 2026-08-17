@@ -16,6 +16,8 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
+// Server routes authenticated control API, embedded UI, and application-host
+// requests for one daemon.
 type Server struct {
 	app           *controlplane.Service
 	auth          *auth.Manager
@@ -26,11 +28,15 @@ type Server struct {
 	inspectRelay  func(context.Context) (contract.RelayStatus, error)
 }
 
+// DaemonControl exposes process lifecycle operations to the authenticated API.
 type DaemonControl interface {
+	// Status returns the current daemon identity, compatibility, and recovery state.
 	Status(context.Context) (contract.DaemonStatus, error)
+	// Restart requests replacement of the identified daemon instance.
 	Restart(context.Context, string) (contract.DaemonRestart, error)
 }
 
+// Dependencies contains the control-plane services required by Server.
 type Dependencies struct {
 	Application   *controlplane.Service
 	Auth          *auth.Manager
@@ -39,6 +45,7 @@ type Dependencies struct {
 	InspectRelay  func(context.Context) (contract.RelayStatus, error)
 }
 
+// New validates dependencies and constructs an HTTP server with embedded UI assets.
 func New(dependencies Dependencies) (*Server, error) {
 	index, err := fs.ReadFile(dependencies.Assets, "index.html")
 	if err != nil {
@@ -51,6 +58,8 @@ func New(dependencies Dependencies) (*Server, error) {
 	}, nil
 }
 
+// ServeHTTP dispatches control hosts to the UI and API and application hosts to
+// the environment ingress proxy.
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	setSecurityHeaders(writer.Header())
 	host := normalizedHost(request.Host)

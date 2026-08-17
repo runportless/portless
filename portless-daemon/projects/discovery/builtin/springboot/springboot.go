@@ -13,12 +13,15 @@ import (
 	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
 )
 
+// Detector discovers Gradle and Maven Spring Boot applications.
 type Detector struct{}
 
+// New returns a Spring Boot service detector.
 func New() spec.ServiceDetector {
 	return Detector{}
 }
 
+// Descriptor returns Spring Boot detector registration metadata.
 func (Detector) Descriptor() spec.Descriptor {
 	return spec.Descriptor{
 		ID: "spring-boot", RootMarkers: []string{"settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "pom.xml"},
@@ -39,6 +42,7 @@ type pomProject struct {
 	} `xml:"build>plugins>plugin"`
 }
 
+// Detect finds Spring Boot modules and their framework-specific run and debug commands.
 func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Findings, error) {
 	result := spec.Findings{}
 	seen := make(map[string]string)
