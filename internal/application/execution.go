@@ -274,6 +274,9 @@ func (s *Service) startContainer(ctx context.Context, environment model.Environm
 }
 
 func (s *Service) ensurePublicTCPProxies(ctx context.Context, environment model.Environment) error {
+	if s.privateTCPIngress {
+		return nil
+	}
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	allocations, err := s.store.NetworkAllocations(ctx, scope)
 	if err != nil {
@@ -400,7 +403,7 @@ func (s *Service) prepareProcessEnvironment(ctx context.Context, environment mod
 		if persistedErr != nil && !errors.Is(persistedErr, store.ErrNotFound) {
 			return nil, persistedErr
 		}
-		if connection.Protocol != model.ProtocolHTTP {
+		if connection.Protocol != model.ProtocolHTTP && !s.privateTCPIngress {
 			allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
 			if allocationErr != nil {
 				return nil, fmt.Errorf("load stable endpoint for %s:%s: %w", connection.Source, connection.Target, allocationErr)

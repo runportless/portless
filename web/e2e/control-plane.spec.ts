@@ -123,6 +123,9 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
   expect(debugService).toMatchObject({ launchMode: 'debug', debugger: { host: '127.0.0.1', state: 'listening' } })
   expect(debugService?.pid).toBeGreaterThan(0)
   expect(debugService?.debugger?.port).toBeGreaterThan(0)
+  await expect(page.getByRole('heading', { name: state.environment, exact: true }).locator('..')).toContainText('healthy')
+  await expect(page.locator('body')).not.toContainText('development')
+  await expect(page.locator('body')).not.toContainText('debug services are ready')
 
   await drawer.getByRole('button', { name: 'RUN NORMALLY' }).click()
   await expect(drawer.getByRole('button', { name: 'DEBUG' })).toBeVisible({ timeout: 30_000 })
@@ -209,6 +212,164 @@ test('stops and starts the environment from the UI', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { name: 'local', exact: true }).locator('..')).toContainText('healthy')
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
+})
+
+test('only edits providers while stopped and persists a remote binding', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page, environmentPath('bindings'))
+
+  await expect(page.getByRole('button', { name: 'SAVE PROVIDER' })).toBeDisabled()
+  await expect(page.getByText('Stop the environment before changing providers.')).toBeVisible()
+
+  const clonePath = `/environments/${state.project}/qa-ui?tab=bindings`
+  await page.goto(`${state.baseURL}${clonePath}`)
+  await expect(page).toHaveURL(new RegExp(`${clonePath.replace('?', '\\?')}$`))
+  await expect(page.getByRole('heading', { name: 'qa-ui', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'qa-ui', exact: true }).locator('..')).toContainText('stopped')
+
+  const providerForm = page.locator('.bindings-layout .experiment-form')
+  await providerForm.locator('label').filter({ hasText: /^SERVICE/ }).locator('select').selectOption('inventory')
+  await providerForm.locator('label').filter({ hasText: /^PROVIDER/ }).locator('select').selectOption('remote')
+  await providerForm.locator('label').filter({ hasText: /^REMOTE URL/ }).locator('input').fill('https://inventory.qa.example.test')
+  await providerForm.locator('label').filter({ hasText: /^CLASSIFICATION/ }).locator('select').selectOption('staging')
+  await providerForm.locator('label').filter({ hasText: /^WRITE POLICY/ }).locator('select').selectOption('read-write')
+  await providerForm.locator('label').filter({ hasText: /^HEALTH PATH/ }).locator('input').fill('/ready')
+  await providerForm.getByRole('button', { name: 'SAVE PROVIDER' }).click()
+  await expect(page.getByText('inventory now uses the remote provider')).toBeVisible()
+
+  type Binding = { service: string; provider: string; source?: string; remote?: { url: string; classification: string; writePolicy: string; healthPath: string } }
+  const remote = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
+  expect(remote.bindings.find((binding) => binding.service === 'inventory')).toMatchObject({
+    provider: 'remote',
+    remote: { url: 'https://inventory.qa.example.test', classification: 'staging', writePolicy: 'read-write', healthPath: '/ready' },
+  })
+
+  await providerForm.locator('label').filter({ hasText: /^PROVIDER/ }).locator('select').selectOption('local')
+  const source = providerForm.locator('label').filter({ hasText: /^SOURCE/ }).locator('select')
+  const firstSource = await source.locator('option').first().evaluate((option: HTMLOptionElement) => option.value)
+  await source.selectOption(firstSource)
+  await providerForm.getByRole('button', { name: 'SAVE PROVIDER' }).click()
+  await expect(page.getByText('inventory now uses the local provider')).toBeVisible()
+  const restored = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
+  expect(restored.bindings.find((binding) => binding.service === 'inventory')).toMatchObject({ provider: 'local', source: firstSource })
+})
+
+test('renders durable lifecycle events from the environment timeline', async ({ page }) => {
+  await authenticate(page, environmentPath('timeline'))
+  type TimelineEvent = { sequence: number; type: string; summary: string }
+  const result = await controlAPI<{ timeline: TimelineEvent[] }>('/api/v1/environments/ui-e2e/local/timeline?limit=1000')
+  expect(result.timeline.length).toBeGreaterThan(0)
+  expect(result.timeline.some((event) => event.type === 'environment.healthy')).toBe(true)
+  expect(result.timeline.some((event) => event.type === 'environment.stopped')).toBe(true)
+
+  const rows = page.locator('.timeline-event')
+  await expect(rows).toHaveCount(Math.min(25, result.timeline.length))
+  await expect(rows.first()).toContainText(result.timeline[0].summary)
+  await expect(rows.first()).toContainText(result.timeline[0].type)
+
+  await page.getByLabel('Timeline rows per page').selectOption('50')
+  await expect(rows).toHaveCount(Math.min(50, result.timeline.length))
+  await page.reload()
+  await expect(page.getByText('ENVIRONMENT TIMELINE')).toBeVisible()
+  await expect(page.locator('.timeline-event').filter({ hasText: result.timeline[0].summary }).first()).toBeVisible()
+})
+
+test('filters, pauses, resumes, and switches live traffic protocols', async ({ page }) => {
+  await authenticate(page, environmentPath('traffic'))
+  expect((await applicationRequest('/')).status).toBe(404)
+  expect((await applicationRequest('/checkout?sku=traffic-controls&quantity=1')).status).toBe(200)
+
+  const filter = page.getByPlaceholder('filter method, path, edge…')
+  const rows = page.locator('button.traffic-row')
+  await filter.fill('/checkout')
+  await expect(rows.first()).toBeVisible()
+  expect((await rows.allTextContents()).every((text) => text.includes('/checkout'))).toBe(true)
+
+  const marker = `/paused-e2e-${Date.now()}`
+  await filter.fill(marker)
+  await page.getByRole('button', { name: 'PAUSE' }).click()
+  await expect(page.locator('.live-count')).toContainText('PAUSED')
+  expect((await applicationRequest(marker)).status).toBe(404)
+  await expect.poll(async () => {
+    const snapshot = await controlAPI<{ traffic: Array<{ path: string }> }>('/api/v1/environments/ui-e2e/local/traffic?protocol=http&limit=500')
+    return snapshot.traffic.some((event) => event.path === marker)
+  }).toBe(true)
+  await expect(rows).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'RESUME' }).click()
+  await expect(page.locator('.live-count')).toContainText('STREAMING')
+  await expect(rows.first()).toContainText(marker)
+
+  await filter.fill('')
+  const protocol = page.getByRole('group', { name: 'Traffic protocol' })
+  await protocol.getByRole('button', { name: 'TCP' }).click()
+  await expect(page.getByText('LIVE TCP TRAFFIC')).toBeVisible()
+  await expect(protocol.getByRole('button', { name: 'TCP' })).toHaveClass(/is-active/)
+  await protocol.getByRole('button', { name: 'HTTP' }).click()
+  await expect(page.getByText('LIVE HTTP TRAFFIC')).toBeVisible()
+  await expect(protocol.getByRole('button', { name: 'HTTP' })).toHaveClass(/is-active/)
+})
+
+test('supports keyboard topology inspection and command palette navigation', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page, environmentPath('topology'))
+
+  const edge = page.getByRole('button', { name: 'Inspect traffic from external to checkout' })
+  await edge.focus()
+  await expect(edge).toBeFocused()
+  await edge.press('Enter')
+  await expect(page).toHaveURL(new RegExp(`/environments/${state.project}/${state.environment}\\?tab=traffic&edge=external%3Acheckout&protocol=http$`))
+  await expect(page.getByPlaceholder('filter method, path, edge…')).toHaveValue('external:checkout')
+
+  await page.keyboard.press('Control+K')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  const input = palette.getByPlaceholder('jump to a project or environment')
+  await expect(input).toBeFocused()
+  await input.fill('Settings')
+  await input.press('Enter')
+  await expect(page).toHaveURL(new RegExp('/settings$'))
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByText('CONTAINER RUNTIME')).toBeVisible()
+  expect(await page.locator('.runtime-candidate').count()).toBeGreaterThan(0)
+
+  await page.keyboard.press('Control+K')
+  await palette.getByPlaceholder('jump to a project or environment').fill('nothing-matches-this-command')
+  await expect(palette).toContainText('No matching project, environment, or action.')
+  await page.keyboard.press('Escape')
+  await expect(palette).toHaveCount(0)
+})
+
+test('shows useful not-found routes and returns to projects', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page, '/projects')
+
+  await page.goto(`${state.baseURL}/projects/not-a-portless-project`)
+  await expect(page.getByText('PROJECT NOT FOUND')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'not-a-portless-project' })).toBeVisible()
+  await page.getByRole('button', { name: 'ALL PROJECTS' }).click()
+  await expect(page).toHaveURL(new RegExp('/projects$'))
+
+  await page.goto(`${state.baseURL}/environments/${state.project}/not-an-environment`)
+  await expect(page.getByText('ENVIRONMENT NOT FOUND')).toBeVisible()
+  await expect(page.getByRole('heading', { name: `${state.project}/not-an-environment` })).toBeVisible()
+  await page.getByRole('button', { name: 'ALL PROJECTS' }).click()
+  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+})
+
+test('surfaces a failed control-plane refresh and reconnects automatically', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+  const environmentsEndpoint = `${state.baseURL}/api/v1/environments`
+  await page.route(environmentsEndpoint, (route) => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: { code: 'E2E_UNAVAILABLE', message: 'temporary test outage' } }),
+  }))
+
+  await expect(page.getByRole('button', { name: 'daemon reconnecting' })).toBeVisible({ timeout: 8_000 })
+  await page.unroute(environmentsEndpoint)
+  await expect(page.getByRole('button', { name: 'daemon ready' })).toBeVisible({ timeout: 8_000 })
+  expect((await applicationRequest('/checkout?sku=reconnected&quantity=1')).status).toBe(200)
 })
 
 test('shows semver daemon details and reconnects after restart', async ({ page }) => {

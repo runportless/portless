@@ -380,9 +380,15 @@ make
 make install-e2e-browser
 make test-e2e
 
+# Optional: provision real PostgreSQL, Valkey, MySQL, and NATS containers.
+make test-e2e-resources
+
 # Explicitly destructive: replaces and restores the machine-wide relay.
 # Stop every Portless environment first.
 make test-e2e-relay-destructive
+
+# Also exercise a clean TCP/DNS endpoint backed by a real Valkey container.
+make test-e2e-relay-destructive-resources
 
 # Exercise discovery against the included small environment:
 cd examples/store
@@ -390,12 +396,19 @@ portless up --no-open
 portless ui
 ```
 
-Tests cover the Cobra command tree and completion, naming and non-leakage, multi-source compilation, isolated environment state, provider and worktree switching, SQLite idempotency, browser claims and CSRF, dependency pruning and ordering, process lifecycle, control/application host isolation, remote read-only enforcement, lossless proxy traffic capture, recording persistence, and fault application.
+Tests cover the Cobra command tree and completion, framework and resource
+discovery plugins, precedence and rescan behavior, naming and non-leakage,
+multi-source compilation, isolated environment state, provider and worktree
+switching, SQLite idempotency, browser claims and CSRF, dependency pruning and
+ordering, process and daemon crash recovery, executable replacement, bulk
+shutdown, control/application host isolation, remote read-only enforcement,
+lossless proxy traffic capture, recording persistence, and fault application.
 
 The E2E suites run the compiled CLI, real daemon and supervisors, real fixture
 services, edge proxies, and embedded UI in an isolated `PORTLESS_HOME`.
-`make test-e2e-cli` and `make test-e2e-ui` run either half independently. See
-[docs/e2e-testing.md](docs/e2e-testing.md) for the covered journeys, test-only
+`make test-e2e-cli` and `make test-e2e-ui` run either default half
+independently; `make test-e2e-resources` adds real container lifecycle tests.
+See [docs/e2e-testing.md](docs/e2e-testing.md) for the covered journeys, test-only
 private-ingress boundary, failure artifacts, and the separate privileged
 machine-integration boundary.
 

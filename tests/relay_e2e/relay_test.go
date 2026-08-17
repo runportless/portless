@@ -11,10 +11,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +31,7 @@ import (
 )
 
 const destructiveRelayOptIn = "PORTLESS_DESTRUCTIVE_RELAY_E2E"
+const destructiveRelayResourceOptIn = "PORTLESS_DESTRUCTIVE_RELAY_RESOURCE_E2E"
 
 var relayMachine *machineHarness
 
@@ -82,7 +86,19 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 		}
 	}
 
-	up := harness.runTest("up", "--name", "relay-e2e", "--no-open", "--timeout", "2m")
+	if os.Getenv(destructiveRelayResourceOptIn) == "1" {
+		appendRelayResourceMarker(t, harness.checkout)
+		if preference := strings.TrimSpace(os.Getenv("PORTLESS_MANAGED_RESOURCE_RUNTIME")); preference != "" {
+			if result := harness.runTest("runtime", "use", preference); result.Err != nil {
+				t.Fatalf("select relay resource runtime %s: %v\n%s", preference, result.Err, result.Output())
+			}
+		}
+	}
+	upTimeout := "2m"
+	if os.Getenv(destructiveRelayResourceOptIn) == "1" {
+		upTimeout = "4m"
+	}
+	up := harness.runTest("up", "--name", "relay-e2e", "--no-open", "--timeout", upTimeout)
 	if up.Err != nil {
 		t.Fatalf("production portless up did not accept the installed relay: %v\nstdout:\n%s\nstderr:\n%s\ndaemon log:\n%s", up.Err, up.Stdout, up.Stderr, harness.daemonLog())
 	}
@@ -97,6 +113,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 	if ui.StatusCode != http.StatusOK || !strings.Contains(uiBody, `id="root"`) {
 		t.Fatalf("embedded UI did not load through the clean control URL: %s: %s", ui.Status, uiBody)
 	}
+	assertProductionBrowserSession(t, harness)
 	application := relayRequest(t, "checkout.local.relay-e2e.localhost", "/checkout?sku=coffee-mug&quantity=2")
 	applicationBody := readResponse(t, application)
 	if application.StatusCode != http.StatusOK || !strings.Contains(applicationBody, `"checkout":"accepted"`) {
@@ -115,6 +132,9 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 	}
 	if err := relay.CheckResolver(dnsContext); err != nil {
 		t.Fatalf("system resolver did not use the installed Portless route: %v", err)
+	}
+	if os.Getenv(destructiveRelayResourceOptIn) == "1" {
+		assertCleanValkeyEndpoint(t, harness)
 	}
 
 	restartResult := harness.runTest("--json", "relay", "restart")
@@ -150,17 +170,65 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 		t.Fatalf("application route did not recover with the daemon: %s: %s", application.Status, body)
 	}
 
-	uninstallResult := harness.runTest("--json", "relay", "uninstall")
+	previewResult := harness.runTest("--json", "uninstall")
+	if previewResult.Err != nil {
+		t.Fatalf("full uninstall preview failed: %v\nstdout:\n%s\nstderr:\n%s", previewResult.Err, previewResult.Stdout, previewResult.Stderr)
+	}
+	var preview struct {
+		Action       string `json:"action"`
+		Confirmed    bool   `json:"confirmed"`
+		Changed      bool   `json:"changed"`
+		Projects     int    `json:"projects"`
+		Environments int    `json:"environments"`
+		Relay        struct {
+			Installed bool `json:"installed"`
+		} `json:"relay"`
+		Data struct {
+			Present bool `json:"present"`
+		} `json:"data"`
+		Launcher struct {
+			Action string `json:"action"`
+		} `json:"launcher"`
+	}
+	decodeJSON(t, previewResult.Stdout, &preview)
+	if preview.Action != "uninstall" || preview.Confirmed || preview.Changed || preview.Projects != 1 || preview.Environments != 1 || !preview.Relay.Installed || !preview.Data.Present || preview.Launcher.Action != "preserve" {
+		t.Fatalf("unexpected full uninstall preview: %#v", preview)
+	}
+	if status := mustRelayStatus(t, harness.runTest("--json", "relay", "status")); !status.Healthy {
+		t.Fatalf("uninstall preview changed relay state: %#v", status)
+	}
+
+	uninstallResult := harness.runTest("--json", "uninstall", "--force", "--yes")
 	if uninstallResult.Err != nil {
-		t.Fatalf("relay uninstall failed: %v\nstdout:\n%s\nstderr:\n%s", uninstallResult.Err, uninstallResult.Stdout, uninstallResult.Stderr)
+		t.Fatalf("full uninstall failed: %v\nstdout:\n%s\nstderr:\n%s", uninstallResult.Err, uninstallResult.Stdout, uninstallResult.Stderr)
 	}
 	var uninstalled struct {
-		Action string `json:"action"`
-		Status string `json:"status"`
+		Action           string `json:"action"`
+		Confirmed        bool   `json:"confirmed"`
+		Forced           bool   `json:"forced"`
+		Changed          bool   `json:"changed"`
+		Complete         bool   `json:"complete"`
+		ProcessesStopped int    `json:"processesStopped"`
+		Relay            struct {
+			Removed bool `json:"removed"`
+		} `json:"relay"`
+		Data struct {
+			Removed bool `json:"removed"`
+		} `json:"data"`
+		Launcher struct {
+			Action  string `json:"action"`
+			Removed bool   `json:"removed"`
+		} `json:"launcher"`
 	}
 	decodeJSON(t, uninstallResult.Stdout, &uninstalled)
-	if uninstalled.Action != "uninstall" || uninstalled.Status != "removed" {
+	if uninstalled.Action != "uninstall" || !uninstalled.Confirmed || !uninstalled.Forced || !uninstalled.Changed || !uninstalled.Complete || uninstalled.ProcessesStopped < 3 || !uninstalled.Relay.Removed || !uninstalled.Data.Removed || uninstalled.Launcher.Action != "preserve" || uninstalled.Launcher.Removed {
 		t.Fatalf("unexpected uninstall result: %#v", uninstalled)
+	}
+	if _, err := os.Stat(harness.binary); err != nil {
+		t.Fatalf("full uninstall removed the source-tree test binary: %v", err)
+	}
+	if _, err := os.Lstat(harness.home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("full uninstall retained test installation data: %v", err)
 	}
 	assertRelayAbsent(t, mustRelayStatus(t, harness.runTest("--json", "relay", "status")))
 	waitForNoTCPListener(t, relay.DefaultListenAddress)
@@ -169,13 +237,13 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondUninstall := harness.runTest("--json", "relay", "uninstall")
+	secondUninstall := harness.runTest("--json", "uninstall", "--force", "--yes")
 	if secondUninstall.Err != nil {
-		t.Fatalf("idempotent relay uninstall failed: %v\n%s\n%s", secondUninstall.Err, secondUninstall.Stdout, secondUninstall.Stderr)
+		t.Fatalf("idempotent full uninstall failed: %v\n%s\n%s", secondUninstall.Err, secondUninstall.Stdout, secondUninstall.Stderr)
 	}
 	decodeJSON(t, secondUninstall.Stdout, &uninstalled)
-	if uninstalled.Status != "not-installed" {
-		t.Fatalf("second relay uninstall status = %q", uninstalled.Status)
+	if !uninstalled.Complete || uninstalled.Relay.Removed || uninstalled.Launcher.Removed {
+		t.Fatalf("second full uninstall was not idempotent: %#v", uninstalled)
 	}
 
 	if result := harness.runTest("reset", "--force", "--yes"); result.Err != nil {
@@ -592,6 +660,135 @@ func relayRequest(t *testing.T, host, path string) *http.Response {
 		t.Fatal(err)
 	}
 	return response
+}
+
+func newRelayClient(t *testing.T) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", relay.DefaultListenAddress)
+		},
+		DisableKeepAlives: true,
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport, Jar: jar, Timeout: 5 * time.Second}
+}
+
+func assertProductionBrowserSession(t *testing.T, harness *machineHarness) {
+	t.Helper()
+	token, err := os.ReadFile(filepath.Join(harness.home, "install.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newRelayClient(t)
+	request, err := http.NewRequest(http.MethodPost, "http://portless.localhost/api/v1/browser-claims", strings.NewReader(`{"next":"/projects"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claim struct {
+		URL string `json:"url"`
+	}
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create browser claim through relay returned %s: %s", response.Status, readResponse(t, response))
+	}
+	if err := json.NewDecoder(response.Body).Decode(&claim); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	claimURL, err := url.Parse(claim.URL)
+	if err != nil || claimURL.Path == "" {
+		t.Fatalf("invalid browser claim URL %q: %v", claim.URL, err)
+	}
+	claimURL.Scheme, claimURL.Host = "http", "portless.localhost"
+	claimed, err := client.Get(claimURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimedBody := readResponse(t, claimed)
+	if claimed.StatusCode != http.StatusOK || claimed.Request.URL.Path != "/projects" || !strings.Contains(claimedBody, `id="root"`) {
+		t.Fatalf("browser claim did not establish a production relay session: status=%s url=%s body=%s", claimed.Status, claimed.Request.URL, claimedBody)
+	}
+	projects, err := client.Get("http://portless.localhost/api/v1/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectsBody := readResponse(t, projects)
+	if projects.StatusCode != http.StatusOK || !strings.Contains(projectsBody, `"name":"relay-e2e"`) {
+		t.Fatalf("browser session did not authenticate API through relay: %s: %s", projects.Status, projectsBody)
+	}
+	reused, err := newRelayClient(t).Get(claimURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reusedBody := readResponse(t, reused)
+	if reused.StatusCode != http.StatusUnauthorized || !strings.Contains(reusedBody, "INVALID_BROWSER_CLAIM") {
+		t.Fatalf("browser claim was reusable through production relay: %s: %s", reused.Status, reusedBody)
+	}
+}
+
+func appendRelayResourceMarker(t *testing.T, checkout string) {
+	t.Helper()
+	path := filepath.Join(checkout, "apps", "checkout", ".env.example")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(content, []byte("REDIS_URL=redis://redis\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertCleanValkeyEndpoint(t *testing.T, harness *machineHarness) {
+	t.Helper()
+	result := harness.runTest("--env", "relay-e2e/local", "--json", "status")
+	if result.Err != nil {
+		t.Fatalf("inspect relay resource environment: %v\n%s", result.Err, result.Output())
+	}
+	var environment model.Environment
+	decodeJSON(t, result.Stdout, &environment)
+	var endpoint *model.Endpoint
+	for _, service := range environment.Services {
+		if service.Name != "redis" || service.Status != model.ServiceReady {
+			continue
+		}
+		for index := range service.Endpoints {
+			if service.Endpoints[index].Kind == model.EndpointPublic && service.Endpoints[index].Protocol == model.ProtocolTCP {
+				endpoint = &service.Endpoints[index]
+			}
+		}
+	}
+	if endpoint == nil {
+		t.Fatalf("ready Valkey clean endpoint not found: %#v", environment.Services)
+	}
+	addresses, err := net.LookupHost(endpoint.Host)
+	if err != nil || len(addresses) == 0 {
+		t.Fatalf("resolve clean Valkey host %s: addresses=%v err=%v", endpoint.Host, addresses, err)
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port)), 5*time.Second)
+	if err != nil {
+		t.Fatalf("connect to clean Valkey endpoint %s: %v", endpoint.URL, err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(connection, "*1\r\n$4\r\nPING\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 7)
+	if _, err := io.ReadFull(connection, response); err != nil || string(response) != "+PONG\r\n" {
+		t.Fatalf("clean Valkey PING response = %q, err=%v", response, err)
+	}
 }
 
 func waitForRelayStatus(t *testing.T, status int) *http.Response {

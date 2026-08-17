@@ -70,12 +70,13 @@ func (e NameConflictError) Error() string {
 }
 
 type Config struct {
-	DataDirectory    string
-	InstallationKey  string
-	DaemonInstanceID string
-	Executable       string
-	Discoverer       discovery.Discoverer
-	Resources        *resource.Registry
+	DataDirectory     string
+	InstallationKey   string
+	DaemonInstanceID  string
+	Executable        string
+	PrivateTCPIngress bool
+	Discoverer        discovery.Discoverer
+	Resources         *resource.Registry
 }
 
 type Service struct {
@@ -87,6 +88,7 @@ type Service struct {
 	dataDirectory        string
 	installationKey      string
 	daemonInstanceID     string
+	privateTCPIngress    bool
 	mu                   sync.RWMutex
 	resetGate            sync.RWMutex
 	resetting            bool
@@ -112,7 +114,7 @@ func New(controlStore *store.Store, broker *events.Broker, config Config) *Servi
 	}
 	service := &Service{
 		store: controlStore, broker: broker, dataDirectory: config.DataDirectory,
-		installationKey: config.InstallationKey, daemonInstanceID: config.DaemonInstanceID,
+		installationKey: config.InstallationKey, daemonInstanceID: config.DaemonInstanceID, privateTCPIngress: config.PrivateTCPIngress,
 		projectLocks: make(map[string]*sync.Mutex), containerEnvironment: make(map[string]map[string]string), sourceLeases: make(map[string]string),
 		discoverer: discoverer, resources: resources,
 	}

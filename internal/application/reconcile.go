@@ -44,13 +44,15 @@ func (s *Service) environmentRuntimeVerified(ctx context.Context, environment mo
 			return false
 		}
 	}
-	allocations, err := s.store.NetworkAllocations(ctx, scope)
-	if err != nil {
-		return false
-	}
-	for _, allocation := range allocations {
-		if allocation.Kind == networking.AllocationPublic && !s.proxy.HasEdgeAtAddress(scope, "external", allocation.Target, allocation.Address()) {
+	if !s.privateTCPIngress {
+		allocations, err := s.store.NetworkAllocations(ctx, scope)
+		if err != nil {
 			return false
+		}
+		for _, allocation := range allocations {
+			if allocation.Kind == networking.AllocationPublic && !s.proxy.HasEdgeAtAddress(scope, "external", allocation.Target, allocation.Address()) {
+				return false
+			}
 		}
 	}
 	return true
@@ -205,7 +207,7 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		if persisted.ListenIP == "" {
 			listenAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(persisted.ListenPort))
 		}
-		if connection.Protocol != model.ProtocolHTTP {
+		if connection.Protocol != model.ProtocolHTTP && !s.privateTCPIngress {
 			allocation, allocationErr := s.store.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
 			if allocationErr != nil {
 				s.markConnectionRecoveryFailure(ctx, scope, connection, allocationErr.Error())
@@ -541,13 +543,15 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 				reasons = append(reasons, scope+"/"+connection.Source+":"+connection.Target+": dependency proxy is not listening on its saved endpoint")
 			}
 		}
-		allocations, allocationErr := s.store.NetworkAllocations(ctx, scope)
-		if allocationErr != nil {
-			reasons = append(reasons, scope+": stable endpoint allocations are unavailable")
-		} else {
-			for _, allocation := range allocations {
-				if allocation.Kind == networking.AllocationPublic && !s.proxy.HasEdgeAtAddress(scope, "external", allocation.Target, allocation.Address()) {
-					reasons = append(reasons, scope+"/external:"+allocation.Target+": public TCP endpoint is not listening")
+		if !s.privateTCPIngress {
+			allocations, allocationErr := s.store.NetworkAllocations(ctx, scope)
+			if allocationErr != nil {
+				reasons = append(reasons, scope+": stable endpoint allocations are unavailable")
+			} else {
+				for _, allocation := range allocations {
+					if allocation.Kind == networking.AllocationPublic && !s.proxy.HasEdgeAtAddress(scope, "external", allocation.Target, allocation.Address()) {
+						reasons = append(reasons, scope+"/external:"+allocation.Target+": public TCP endpoint is not listening")
+					}
 				}
 			}
 		}

@@ -124,7 +124,7 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 			}
 		}
 		var endpoint *model.Endpoint
-		if connection.Protocol == model.ProtocolHTTP {
+		if connection.Protocol == model.ProtocolHTTP || s.privateTCPIngress {
 			if proxyAddress != "" {
 				host, encodedPort, splitErr := net.SplitHostPort(proxyAddress)
 				port, portErr := strconv.Atoi(encodedPort)

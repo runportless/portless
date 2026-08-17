@@ -102,6 +102,7 @@ func Run(ctx context.Context, config Config) error {
 	defer controlStore.SetDaemonInstanceState(context.Background(), instanceID, "stopped", true)
 	app := application.New(controlStore, broker, application.Config{
 		DataDirectory: paths.Root, InstallationKey: ownershipKey, DaemonInstanceID: instanceID, Executable: executable,
+		PrivateTCPIngress: e2ePrivateTCPIngress,
 	})
 	defer app.Close(context.Background())
 	reconciliation, err := app.Reconcile(ctx)

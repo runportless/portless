@@ -12,6 +12,7 @@ import (
 
 	"github.com/portless-run/portless/internal/events"
 	"github.com/portless-run/portless/internal/model"
+	"github.com/portless-run/portless/internal/networking"
 	"github.com/portless-run/portless/internal/store"
 )
 
@@ -348,5 +349,75 @@ func TestStableTCPServiceAndConnectionEndpointsAreExposedBeforeStartup(t *testin
 	}
 	if connections[0].InjectedEnvironment["DATABASE_URL"] != "not active" {
 		t.Fatalf("stopped connection was reported as injected: %#v", connections[0])
+	}
+}
+
+func TestPrivateTCPIngressUsesEphemeralLoopbackWithoutPublishingStableEndpoints(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := store.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "store", PrimaryService: "orders",
+		Services: []model.ServiceDefinition{
+			{Name: "orders", Kind: model.ServiceProcess},
+			{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432},
+		},
+		Connections: []model.Connection{{Source: "orders", Target: "postgres", Protocol: model.ProtocolTCP, Environment: "DATABASE_ADDRESS", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "store", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "store", "local", definition, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", PrivateTCPIngress: true})
+	defer app.Close(ctx)
+	app.proxy.SetTargetProvider("store/local", "postgres", 49152, model.ProviderContainer)
+
+	environment, err := controlStore.Environment(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := app.prepareProcessEnvironment(ctx, environment, definition.Services[0], 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, encodedPort, err := net.SplitHostPort(values["DATABASE_ADDRESS"])
+	if err != nil || host != "127.0.0.1" {
+		t.Fatalf("private TCP binding = %q: host=%q err=%v", values["DATABASE_ADDRESS"], host, err)
+	}
+	port, err := strconv.Atoi(encodedPort)
+	if err != nil || port == 0 {
+		t.Fatalf("private TCP port = %q: %v", encodedPort, err)
+	}
+	runtime, err := controlStore.ConnectionRuntime(ctx, "store/local", "orders", "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.ListenIP != "127.0.0.1" || runtime.ListenPort != port || runtime.DNSName != "" {
+		t.Fatalf("private TCP runtime = %#v", runtime)
+	}
+	if err := app.ensurePublicTCPProxies(ctx, environment); err != nil {
+		t.Fatal(err)
+	}
+	allocations, err := controlStore.NetworkAllocations(ctx, "store/local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, allocation := range allocations {
+		if allocation.Kind == networking.AllocationPublic && app.proxy.HasEdgeAtAddress("store/local", "external", allocation.Target, allocation.Address()) {
+			t.Fatalf("private E2E mode published stable endpoint %s", allocation.Address())
+		}
+	}
+	connections, err := app.Connections(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connections) != 1 || connections[0].Endpoint == nil || connections[0].Endpoint.Address != net.JoinHostPort(host, encodedPort) || connections[0].InjectedEnvironment["DATABASE_ADDRESS"] != values["DATABASE_ADDRESS"] {
+		t.Fatalf("private effective connection = %#v", connections)
 	}
 }

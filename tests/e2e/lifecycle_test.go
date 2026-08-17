@@ -387,6 +387,7 @@ type e2eDaemonStatus struct {
 	State            string   `json:"state"`
 	Compatible       bool     `json:"compatible"`
 	CurrentBuild     bool     `json:"currentBuild"`
+	BuildID          string   `json:"buildId"`
 	PID              int      `json:"pid"`
 	InstanceID       string   `json:"instanceId"`
 	RuntimeState     string   `json:"runtimeState"`

@@ -6,10 +6,11 @@ NPM ?= npm
 BINARY ?= bin/portless
 E2E_BINARY ?= bin/portless-e2e
 RELAY_E2E_BINARY ?= bin/portless-relay-e2e
+RESOURCE_E2E_RUNTIME ?= auto
 WEB_DEPENDENCIES := web/node_modules/.package-lock.json
 WEB_MANIFESTS := web/package.json web/package-lock.json
 
-.PHONY: build web test test-go test-web e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-relay-destructive install-e2e-browser install clean reinstall-web-dependencies
+.PHONY: build web test test-go test-web e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install clean reinstall-web-dependencies
 
 build: web
 	@mkdir -p "$(dir $(BINARY))"
@@ -48,8 +49,21 @@ test-e2e-cli: e2e-binary
 test-e2e-ui: e2e-binary
 	PORTLESS_E2E_BINARY="$(abspath $(E2E_BINARY))" $(NPM) --prefix web run test:e2e
 
+test-e2e-resources: e2e-binary
+	PORTLESS_MANAGED_RESOURCE_E2E=1 \
+	PORTLESS_MANAGED_RESOURCE_RUNTIME="$(RESOURCE_E2E_RUNTIME)" \
+	PORTLESS_E2E_BINARY="$(abspath $(E2E_BINARY))" \
+	$(GO) test -count=1 -tags=e2e ./tests/e2e -run '^TestCLIManagedResource' -v
+
 test-e2e-relay-destructive: relay-e2e-binary
 	@PORTLESS_DESTRUCTIVE_RELAY_E2E=1 \
+	PORTLESS_RELAY_E2E_BINARY="$(abspath $(RELAY_E2E_BINARY))" \
+	$(GO) test -count=1 -tags=relay_e2e ./tests/relay_e2e -v
+
+test-e2e-relay-destructive-resources: relay-e2e-binary
+	@PORTLESS_DESTRUCTIVE_RELAY_E2E=1 \
+	PORTLESS_DESTRUCTIVE_RELAY_RESOURCE_E2E=1 \
+	PORTLESS_MANAGED_RESOURCE_RUNTIME="$(RESOURCE_E2E_RUNTIME)" \
 	PORTLESS_RELAY_E2E_BINARY="$(abspath $(RELAY_E2E_BINARY))" \
 	$(GO) test -count=1 -tags=relay_e2e ./tests/relay_e2e -v
 
