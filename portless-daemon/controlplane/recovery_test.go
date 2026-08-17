@@ -150,35 +150,35 @@ func TestIndividualServiceStartHonorsCrossEnvironmentSourceLeases(t *testing.T) 
 	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "local"), "checkout", time.Second)
 	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "experiment"), "checkout", time.Second)
 
-	local, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	local, err := app.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if local = waitForOperation(t, app, local); local.State != "succeeded" {
 		t.Fatalf("local start = %#v", local)
 	}
-	experiment, err := app.StartService(ctx, "billing", "experiment", "checkout", "test")
+	experiment, err := app.StartService(ctx, "billing", "experiment", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if experiment = waitForOperation(t, app, experiment); experiment.State != "failed" || !strings.Contains(experiment.Error, "already running") {
 		t.Fatalf("shared-checkout start = %#v", experiment)
 	}
-	stopped, err := app.StopService(ctx, "billing", "local", "checkout", "test")
+	stopped, err := app.StopService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stopped = waitForOperation(t, app, stopped); stopped.State != "succeeded" {
 		t.Fatalf("local stop = %#v", stopped)
 	}
-	experiment, err = app.StartService(ctx, "billing", "experiment", "checkout", "test")
+	experiment, err = app.StartService(ctx, "billing", "experiment", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if experiment = waitForOperation(t, app, experiment); experiment.State != "succeeded" {
 		t.Fatalf("experiment start after lease release = %#v", experiment)
 	}
-	stopped, err = app.StopService(ctx, "billing", "experiment", "checkout", "test")
+	stopped, err = app.StopService(ctx, "billing", "experiment", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestIndividualServiceStartPreparesRequiredRemoteDependency(t *testing.T) {
 	defer app.Close(ctx)
 	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "hybrid"), "checkout", time.Second)
 
-	operation, err := app.StartService(ctx, "billing", "hybrid", "checkout", "test")
+	operation, err := app.StartService(ctx, "billing", "hybrid", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestIndividualServiceStartPreparesRequiredRemoteDependency(t *testing.T) {
 	if runtimeFor(environment, "checkout").Status != model.ServiceReady || runtimeFor(environment, "payments").Status != model.ServiceReady {
 		t.Fatalf("remote dependency was not prepared: %#v", environment.Services)
 	}
-	stopped, err := app.StopService(ctx, "billing", "hybrid", "checkout", "test")
+	stopped, err := app.StopService(ctx, "billing", "hybrid", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestDaemonRestartRecoversSupervisedProcessIngressAndDependencyProxy(t *test
 	first := New(controlStore, events.NewBroker(), Config{
 		DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-one", Executable: os.Args[0],
 	})
-	operation, err := first.StartService(ctx, "billing", "local", "checkout", "test")
+	operation, err := first.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		first.Close(ctx)
 		t.Fatal(err)
@@ -365,14 +365,14 @@ func TestDaemonRestartRecoversSupervisedProcessIngressAndDependencyProxy(t *test
 	if ready, problems := third.CanHandoff(ctx); !ready || len(problems) != 0 {
 		t.Fatalf("reconciled terminal runtime is not handoff-ready: ready=%v problems=%v", ready, problems)
 	}
-	restarted, err := third.StartService(ctx, "billing", "local", "checkout", "test")
+	restarted, err := third.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if restarted = waitForOperation(t, third, restarted); restarted.State != "succeeded" {
 		t.Fatalf("restart after recovered exit = %#v", restarted)
 	}
-	stopped, err := third.StopService(ctx, "billing", "local", "checkout", "test")
+	stopped, err := third.StopService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

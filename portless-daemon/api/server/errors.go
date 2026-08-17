@@ -24,6 +24,9 @@ func (s *Server) writeError(writer http.ResponseWriter, err error, subject map[s
 	case controlplane.ErrorRevisionConflict:
 		status = http.StatusConflict
 		apiError.Code = "REVISION_CONFLICT"
+	case controlplane.ErrorIdempotencyConflict:
+		status = http.StatusConflict
+		apiError.Code = "IDEMPOTENCY_CONFLICT"
 	case controlplane.ErrorAlreadyExists:
 		status = http.StatusConflict
 		apiError.Code = "RESOURCE_ALREADY_EXISTS"

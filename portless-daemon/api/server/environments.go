@@ -323,17 +323,18 @@ func (s *Server) handleServices(writer http.ResponseWriter, request *http.Reques
 	if len(segments) == 6 && request.Method == http.MethodPost {
 		var operation model.Operation
 		var actionErr error
+		idempotencyKey := request.Header.Get("Idempotency-Key")
 		switch segments[5] {
 		case "start":
-			operation, actionErr = s.app.StartService(request.Context(), project, environment, serviceName, principal.Actor)
+			operation, actionErr = s.app.StartService(request.Context(), project, environment, serviceName, principal.Actor, idempotencyKey)
 		case "restart":
-			operation, actionErr = s.app.RestartService(request.Context(), project, environment, serviceName, principal.Actor)
+			operation, actionErr = s.app.RestartService(request.Context(), project, environment, serviceName, principal.Actor, idempotencyKey)
 		case "stop":
-			operation, actionErr = s.app.StopService(request.Context(), project, environment, serviceName, principal.Actor)
+			operation, actionErr = s.app.StopService(request.Context(), project, environment, serviceName, principal.Actor, idempotencyKey)
 		case "manage":
-			operation, actionErr = s.app.ManageService(request.Context(), project, environment, serviceName, principal.Actor)
+			operation, actionErr = s.app.ManageService(request.Context(), project, environment, serviceName, principal.Actor, idempotencyKey)
 		case "debug":
-			operation, actionErr = s.app.DebugService(request.Context(), project, environment, serviceName, principal.Actor)
+			operation, actionErr = s.app.DebugService(request.Context(), project, environment, serviceName, principal.Actor, idempotencyKey)
 		default:
 			writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "service action not found"})
 			return

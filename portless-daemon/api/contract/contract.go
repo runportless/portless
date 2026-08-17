@@ -3,7 +3,20 @@
 package contract
 
 // APIVersion is the semantic version of the daemon HTTP contract.
-const APIVersion = "8.0.0"
+const APIVersion = "8.2.0"
+
+// ClientKindHeader identifies the authenticated Portless client category.
+const ClientKindHeader = "Portless-Client-Kind"
+
+// ClientKind identifies a fixed authenticated Portless API client category.
+type ClientKind string
+
+const (
+	// ClientKindCLI identifies the native command-line client.
+	ClientKindCLI ClientKind = "cli"
+	// ClientKindMCP identifies the local Model Context Protocol server.
+	ClientKindMCP ClientKind = "mcp"
+)
 
 // ErrorEnvelope is the stable top-level JSON shape for API failures.
 type ErrorEnvelope struct {

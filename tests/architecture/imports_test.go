@@ -17,12 +17,13 @@ const (
 	modulePath = "github.com/portless-run/portless"
 	cliRoot    = modulePath + "/portless-cli"
 	daemonRoot = modulePath + "/portless-daemon"
+	mcpRoot    = modulePath + "/portless-mcp"
 	relayRoot  = modulePath + "/portless-relay"
 )
 
 func TestProductDependencyDirection(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, product := range []string{"portless-cli", "portless-daemon", "portless-relay", "portless-web"} {
+	for _, product := range []string{"portless-cli", "portless-daemon", "portless-mcp", "portless-relay", "portless-web"} {
 		walkGoFiles(t, filepath.Join(root, product), func(path, packagePath string, parsed *ast.File) {
 			for _, spec := range parsed.Imports {
 				importPath, err := strconv.Unquote(spec.Path.Value)
@@ -40,7 +41,7 @@ func TestProductDependencyDirection(t *testing.T) {
 
 func TestProductRootsReplaceGenericInternalTree(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, directory := range []string{"portless-cli", "portless-daemon", "portless-relay", "portless-web"} {
+	for _, directory := range []string{"portless-cli", "portless-daemon", "portless-mcp", "portless-relay", "portless-web"} {
 		info, err := os.Stat(filepath.Join(root, directory))
 		if err != nil {
 			t.Errorf("product root %s is missing: %v", directory, err)
@@ -67,7 +68,7 @@ func TestProductPackagesUseOwnershipNames(t *testing.T) {
 		"instance":    "identity",
 		"diagnostics": "doctor",
 	}
-	for _, product := range []string{"portless-cli", "portless-daemon", "portless-relay"} {
+	for _, product := range []string{"portless-cli", "portless-daemon", "portless-mcp", "portless-relay"} {
 		walkGoFiles(t, filepath.Join(root, product), func(path, _ string, parsed *ast.File) {
 			replacement, obsolete := retired[parsed.Name.Name]
 			if obsolete {
@@ -117,7 +118,7 @@ func TestCLIRootIsOnlyComposition(t *testing.T) {
 
 func TestProductPublicDeclarationsHaveGoDoc(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, product := range []string{"portless-cli", "portless-daemon", "portless-relay"} {
+	for _, product := range []string{"portless-cli", "portless-daemon", "portless-mcp", "portless-relay"} {
 		walkGoFiles(t, filepath.Join(root, product), func(path, _ string, parsed *ast.File) {
 			if strings.HasSuffix(path, "_test.go") {
 				return
@@ -265,6 +266,17 @@ func forbiddenProductImport(source, target string) string {
 	controlplane := daemonRoot + "/controlplane"
 	database := daemonRoot + "/database"
 	installation := daemonRoot + "/system/installation"
+	mcpSDK := "github.com/modelcontextprotocol/go-sdk"
+
+	if matchesAny(target, mcpRoot) && source != cliRoot+"/administration" && !matchesAny(source, mcpRoot) {
+		return "the MCP product is consumed only by the CLI administration adapter"
+	}
+	if matchesAny(source, mcpRoot) && strings.HasPrefix(target, modulePath+"/") && target != client && target != contract {
+		return "the MCP product may depend only on the typed daemon API client and contract"
+	}
+	if matchesAny(target, mcpSDK) && !matchesAny(source, mcpRoot) {
+		return "the official MCP SDK is confined to the portless-mcp product"
+	}
 
 	if source == contract && strings.HasPrefix(target, modulePath+"/") && target != daemonRoot+"/model" {
 		return "daemon API contracts may depend only on stable daemon model values"

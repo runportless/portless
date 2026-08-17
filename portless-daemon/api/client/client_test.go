@@ -9,12 +9,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/portless-run/portless/portless-daemon/api/contract"
 )
 
 func TestDoAuthenticatesAndEncodesJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("Authorization = %q", request.Header.Get("Authorization"))
+		}
+		if request.Header.Get(contract.ClientKindHeader) != string(contract.ClientKindMCP) {
+			t.Fatalf("%s = %q", contract.ClientKindHeader, request.Header.Get(contract.ClientKindHeader))
 		}
 		if request.Header.Get("Content-Type") != "application/json" || request.Header.Get("Accept") != "application/json" {
 			t.Fatalf("unexpected headers: %#v", request.Header)
@@ -31,7 +36,7 @@ func TestDoAuthenticatesAndEncodesJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL, "secret", server.Client())
+	client := New(server.URL, "secret", server.Client()).WithClientKind(contract.ClientKindMCP)
 	var result struct {
 		Accepted bool `json:"accepted"`
 	}

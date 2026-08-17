@@ -16,6 +16,19 @@ import (
 )
 
 func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if len(segments) == 4 {
+		if request.Method != http.MethodDelete {
+			methodNotAllowed(writer, http.MethodDelete)
+			return
+		}
+		if _, err := s.app.Environment(request.Context(), project, environment); err != nil {
+			s.writeError(writer, err, environmentSubject(project, environment))
+			return
+		}
+		cleared, throughSequence := s.app.ClearTraffic(project, environment)
+		writeJSON(writer, http.StatusOK, contract.TrafficClearResponse{Cleared: cleared, ThroughSequence: throughSequence})
+		return
+	}
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
 		return

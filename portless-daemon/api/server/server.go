@@ -119,6 +119,23 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 		writeAPIError(writer, http.StatusUnauthorized, contract.APIError{Code: "AUTHENTICATION_REQUIRED", Message: "authenticate with the Portless CLI or open a browser session with `portless ui`"})
 		return
 	}
+	clientKind := request.Header.Get(contract.ClientKindHeader)
+	if principal.Session {
+		if clientKind != "" {
+			writeAPIError(writer, http.StatusForbidden, contract.APIError{Code: "REQUEST_FORBIDDEN", Message: "browser sessions cannot select an API client kind"})
+			return
+		}
+	} else {
+		switch contract.ClientKind(clientKind) {
+		case "", contract.ClientKindCLI:
+			principal.Actor = "CLI"
+		case contract.ClientKindMCP:
+			principal.Actor = "MCP"
+		default:
+			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_CLIENT_KIND", Message: "Portless-Client-Kind must be cli or mcp"})
+			return
+		}
+	}
 	if isMutation(request.Method) {
 		if err := s.auth.ValidateMutation(request, principal); err != nil {
 			writeAPIError(writer, http.StatusForbidden, contract.APIError{Code: "REQUEST_FORBIDDEN", Message: err.Error()})

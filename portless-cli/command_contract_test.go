@@ -61,6 +61,8 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless daemon status":   runAction,
 		"portless daemon stop":     runAction,
 		"portless daemon restart":  runAction,
+		"portless mcp":             showHelp,
+		"portless mcp serve":       runAction,
 		"portless doctor":          runAction,
 		"portless reset":           runAction,
 		"portless uninstall":       runAction,

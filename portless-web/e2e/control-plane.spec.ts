@@ -78,6 +78,10 @@ test('persists the selected browser theme', async ({ page }) => {
 
 test('renders real services, endpoints, topology, and service details', async ({ page }) => {
   await authenticate(page)
+  const bindingsCard = page.locator('.state-panel').filter({ hasText: 'BINDINGS' })
+  await expect(bindingsCard).toContainText('LOCAL')
+  await expect(bindingsCard).toContainText('3 services local')
+  await expect(page.locator('.state-panel').filter({ hasText: 'REVISION' })).toHaveCount(0)
   const services = page.locator('.service-row--interactive')
   await expect(services).toHaveCount(3)
   for (const name of ['checkout', 'inventory', 'orders']) {
@@ -307,6 +311,43 @@ test('renders durable lifecycle events from the environment timeline', async ({ 
   await expect(page.locator('.timeline-event').filter({ hasText: result.timeline[0].summary }).first()).toBeVisible()
 })
 
+test('paginates traces and exchanges at 25 rows', async ({ page }) => {
+  await authenticate(page, environmentPath('traffic'))
+  const marker = `/pagination-e2e-${Date.now()}`
+  const responses = await Promise.all(Array.from({ length: 26 }, (_, index) => applicationRequest(`${marker}-${index}`)))
+  expect(responses.every((response) => response.status === 404)).toBe(true)
+
+  const filter = page.getByPlaceholder('filter path, service, edge, status…')
+  await filter.fill(marker)
+  const traceRows = page.locator('button.trace-row')
+  const tracePagination = page.getByLabel('traces pagination')
+  await expect(traceRows).toHaveCount(25)
+  await expect(tracePagination).toContainText('1–25 of 26')
+  await tracePagination.getByRole('button', { name: 'Next traces page' }).click()
+  await expect(traceRows).toHaveCount(1)
+  await expect(tracePagination).toContainText('26–26 of 26')
+
+  await page.getByRole('tab', { name: 'EXCHANGES' }).click()
+  const exchangeRows = page.locator('button.traffic-row')
+  const exchangePagination = page.getByLabel('exchanges pagination')
+  await expect(exchangeRows).toHaveCount(25)
+  await expect(exchangePagination).toContainText('1–25 of 26')
+  await exchangePagination.getByRole('button', { name: 'Next exchanges page' }).click()
+  await expect(exchangeRows).toHaveCount(1)
+  await expect(exchangePagination).toContainText('26–26 of 26')
+
+  await page.getByRole('button', { name: 'CLEAR', exact: true }).click()
+  await expect(page.getByText('No matching exchanges yet.')).toBeVisible()
+  await expect(exchangeRows).toHaveCount(0)
+  await expect.poll(async () => {
+    const snapshot = await controlAPI<{ exchanges: unknown[] }>('/api/v1/environments/ui-e2e/local/traffic/exchanges?protocol=all&limit=1000')
+    return snapshot.exchanges.length
+  }).toBe(0)
+  await page.getByRole('tab', { name: 'TRACES' }).click()
+  await expect(page.getByText('No matching traces yet. Open an application endpoint or exercise a service connection to capture one.')).toBeVisible()
+  await expect(traceRows).toHaveCount(0)
+})
+
 test('filters, pauses, resumes, and switches live traffic protocols', async ({ page }) => {
   await authenticate(page, environmentPath('traffic'))
   expect((await applicationRequest('/')).status).toBe(404)
@@ -425,7 +466,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
   await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-	await expect(drawer.getByText(/^8\.0\.0$/)).toBeVisible()
+	await expect(drawer.getByText(/^8\.2\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   await drawer.getByRole('button', { name: 'FULL SCREEN' }).click()

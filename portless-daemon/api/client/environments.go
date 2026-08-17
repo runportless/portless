@@ -85,9 +85,9 @@ func (c *Client) UpEnvironment(ctx context.Context, project, environment string,
 }
 
 // DownEnvironment stops an environment and optionally removes managed volumes.
-func (c *Client) DownEnvironment(ctx context.Context, project, environment string, removeVolumes bool) (contract.Operation, error) {
+func (c *Client) DownEnvironment(ctx context.Context, project, environment string, removeVolumes bool, idempotencyKey string) (contract.Operation, error) {
 	var result contract.Operation
-	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/down", contract.DownRequest{RemoveVolumes: removeVolumes}, &result)
+	err := c.doWithHeaders(ctx, http.MethodPost, environmentPath(project, environment)+"/down", contract.DownRequest{RemoveVolumes: removeVolumes}, &result, map[string]string{"Idempotency-Key": idempotencyKey})
 	return result, err
 }
 
@@ -109,6 +109,13 @@ func (c *Client) SetSource(ctx context.Context, project, environment, source, pa
 func (c *Client) Operation(ctx context.Context, project, environment string, number int64) (contract.Operation, error) {
 	var result contract.Operation
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/operations/"+strconv.FormatInt(number, 10), nil, &result)
+	return result, err
+}
+
+// ListOperations returns recent durable operations for one environment.
+func (c *Client) ListOperations(ctx context.Context, project, environment string, limit int) (contract.OperationList, error) {
+	var result contract.OperationList
+	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/operations?limit="+strconv.Itoa(limit), nil, &result)
 	return result, err
 }
 

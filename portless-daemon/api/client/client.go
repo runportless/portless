@@ -17,9 +17,10 @@ import (
 
 // Client is an authenticated typed client for one Portless daemon API.
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL    string
+	token      string
+	http       *http.Client
+	clientKind contract.ClientKind
 }
 
 // New constructs a daemon API client. A nil httpClient uses
@@ -29,6 +30,14 @@ func New(baseURL, token string, httpClient *http.Client) *Client {
 		httpClient = http.DefaultClient
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, http: httpClient}
+}
+
+// WithClientKind returns a shallow client clone that identifies its fixed
+// authenticated caller category to the daemon.
+func (c *Client) WithClientKind(kind contract.ClientKind) *Client {
+	clone := *c
+	clone.clientKind = kind
+	return &clone
 }
 
 // ClientError is a non-success daemon API response with its structured error
@@ -69,6 +78,9 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, 
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Accept", "application/json")
+	if c.clientKind != "" {
+		request.Header.Set(contract.ClientKindHeader, string(c.clientKind))
+	}
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

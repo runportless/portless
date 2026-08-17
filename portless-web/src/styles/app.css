@@ -496,7 +496,9 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 }
 
 @media (max-width: 760px) {
-  .traffic-header { min-height:54px; }
+  .traffic-header { min-height:54px; padding:7px 10px; flex-wrap:wrap; gap:0 12px; }
+  .traffic-modes,.traffic-stream-controls { min-height:39px; }
+  .traffic-stream-controls { margin-left:auto; }
   .traffic-summary > span { width:100%; }
   .traffic-filters { align-items:stretch; }
   .traffic-filters input { width:100%; }

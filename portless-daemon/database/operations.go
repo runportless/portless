@@ -11,20 +11,21 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
-// CreateOperation starts a numbered operation or returns the existing idempotent operation.
-func (s *Store) CreateOperation(ctx context.Context, selector, operationType, actor, idempotencyKey string) (model.Operation, error) {
+// CreateOperation starts a numbered operation or returns the existing
+// idempotent operation when its request fingerprint matches.
+func (s *Store) CreateOperation(ctx context.Context, selector, operationType, actor, idempotencyKey, requestFingerprint string) (model.Operation, error) {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return model.Operation{}, err
 	}
 	if idempotencyKey != "" {
-		var number int64
-		err := s.db.QueryRowContext(ctx, `SELECT number FROM operations WHERE environment_key = ? AND idempotency_key = ?`, environmentKey, idempotencyKey).Scan(&number)
-		if err == nil {
-			return s.Operation(ctx, selector, number)
+		if operation, found, lookupErr := s.idempotentOperation(ctx, environmentKey, selector, idempotencyKey, requestFingerprint); lookupErr != nil {
+			return model.Operation{}, lookupErr
+		} else if found {
+			return operation, nil
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return model.Operation{}, err
+		if requestFingerprint == "" {
+			return model.Operation{}, errors.New("idempotent operation requires a request fingerprint")
 		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -38,8 +39,17 @@ func (s *Store) CreateOperation(ctx context.Context, selector, operationType, ac
 	}
 	started := nowText()
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO operations(environment_key, number, type, state, actor, started_at, idempotency_key)
-VALUES(?, ?, ?, 'running', ?, ?, ?)`, environmentKey, number, operationType, actor, started, idempotencyKey); err != nil {
+INSERT INTO operations(environment_key, number, type, state, actor, started_at, idempotency_key, request_fingerprint)
+VALUES(?, ?, ?, 'running', ?, ?, ?, ?)`, environmentKey, number, operationType, actor, started, idempotencyKey, requestFingerprint); err != nil {
+		if idempotencyKey == "" {
+			return model.Operation{}, err
+		}
+		_ = tx.Rollback()
+		if operation, found, lookupErr := s.idempotentOperation(ctx, environmentKey, selector, idempotencyKey, requestFingerprint); lookupErr != nil {
+			return model.Operation{}, lookupErr
+		} else if found {
+			return operation, nil
+		}
 		return model.Operation{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -47,6 +57,25 @@ VALUES(?, ?, ?, 'running', ?, ?, ?)`, environmentKey, number, operationType, act
 	}
 	project, environment := publicScope(selector)
 	return model.Operation{Project: project, Environment: environment, Number: number, Type: operationType, State: "running", Actor: actor, StartedAt: parseTime(started)}, nil
+}
+
+func (s *Store) idempotentOperation(ctx context.Context, environmentKey, selector, idempotencyKey, requestFingerprint string) (model.Operation, bool, error) {
+	var number int64
+	var storedFingerprint string
+	err := s.db.QueryRowContext(ctx, `
+SELECT number, request_fingerprint FROM operations
+WHERE environment_key = ? AND idempotency_key = ?`, environmentKey, idempotencyKey).Scan(&number, &storedFingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Operation{}, false, nil
+	}
+	if err != nil {
+		return model.Operation{}, false, err
+	}
+	if storedFingerprint != requestFingerprint {
+		return model.Operation{}, false, fmt.Errorf("%w: key was already used for a different request", ErrIdempotencyConflict)
+	}
+	operation, err := s.Operation(ctx, selector, number)
+	return operation, true, err
 }
 
 // AddOperationEvent appends the next ordered event to an operation.
@@ -199,7 +228,7 @@ FROM operation_events WHERE environment_key = ? AND operation_number = ? ORDER B
 		return nil, err
 	}
 	defer rows.Close()
-	var result []model.OperationEvent
+	result := make([]model.OperationEvent, 0)
 	for rows.Next() {
 		var event model.OperationEvent
 		var timestamp string

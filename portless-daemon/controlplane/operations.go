@@ -51,11 +51,17 @@ func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, i
 		options.DebugServices[index] = definition.Name
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	operation, err := s.database.CreateOperation(ctx, scope, "up", actor, idempotencyKey)
+	debugServices := append([]string(nil), options.DebugServices...)
+	sort.Strings(debugServices)
+	fingerprint := operationFingerprint("up", "", struct {
+		DebugServices []string `json:"debugServices"`
+		Managed       bool     `json:"managed"`
+	}{DebugServices: debugServices, Managed: options.Managed})
+	operation, err := s.database.CreateOperation(ctx, scope, "up", actor, idempotencyKey, fingerprint)
 	if err != nil {
 		return model.Operation{}, err
 	}
-	if operation.State != "running" || len(operation.Events) > 0 {
+	if operation.Events != nil {
 		return operation, nil
 	}
 	go s.runUp(scope, operation, options)
@@ -68,11 +74,14 @@ func (s *Service) Down(ctx context.Context, projectName, environmentName, actor,
 		return model.Operation{}, err
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	operation, err := s.database.CreateOperation(ctx, scope, "down", actor, idempotencyKey)
+	fingerprint := operationFingerprint("down", "", struct {
+		RemoveVolumes bool `json:"removeVolumes"`
+	}{RemoveVolumes: removeVolumes})
+	operation, err := s.database.CreateOperation(ctx, scope, "down", actor, idempotencyKey, fingerprint)
 	if err != nil {
 		return model.Operation{}, err
 	}
-	if operation.State != "running" || len(operation.Events) > 0 {
+	if operation.Events != nil {
 		return operation, nil
 	}
 	go s.runDown(scope, operation, removeVolumes)
@@ -202,16 +211,16 @@ func (s *Service) ServiceConfiguration(ctx context.Context, projectName, environ
 }
 
 // StartService asynchronously starts one stopped service after checking its dependencies.
-func (s *Service) StartService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
-	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, false)
+func (s *Service) StartService(ctx context.Context, projectName, environmentName, serviceName, actor, idempotencyKey string) (model.Operation, error) {
+	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, idempotencyKey, false)
 }
 
 // RestartService asynchronously replaces one running service.
-func (s *Service) RestartService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
-	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, true)
+func (s *Service) RestartService(ctx context.Context, projectName, environmentName, serviceName, actor, idempotencyKey string) (model.Operation, error) {
+	return s.beginServiceStart(ctx, projectName, environmentName, serviceName, actor, idempotencyKey, true)
 }
 
-func (s *Service) beginServiceStart(ctx context.Context, projectName, environmentName, serviceName, actor string, restart bool) (model.Operation, error) {
+func (s *Service) beginServiceStart(ctx context.Context, projectName, environmentName, serviceName, actor, idempotencyKey string, restart bool) (model.Operation, error) {
 	s.resetGate.RLock()
 	defer s.resetGate.RUnlock()
 	if s.resetting {
@@ -254,9 +263,12 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 	if restart {
 		operationType = "restart-service"
 	}
-	operation, err := s.database.CreateOperation(ctx, scope, operationType, actor, "")
+	operation, err := s.database.CreateOperation(ctx, scope, operationType, actor, idempotencyKey, operationFingerprint(operationType, serviceName, nil))
 	if err != nil {
 		return model.Operation{}, err
+	}
+	if operation.Events != nil {
+		return operation, nil
 	}
 	_ = s.operationServiceTarget(scope, operation, serviceName)
 	if !restart && runtimeFor(environment, serviceName).Status == model.ServiceReady {
@@ -352,7 +364,7 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 }
 
 // StopService asynchronously stops one locally managed service.
-func (s *Service) StopService(ctx context.Context, projectName, environmentName, serviceName, actor string) (model.Operation, error) {
+func (s *Service) StopService(ctx context.Context, projectName, environmentName, serviceName, actor, idempotencyKey string) (model.Operation, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
 		return model.Operation{}, err
@@ -365,9 +377,12 @@ func (s *Service) StopService(ctx context.Context, projectName, environmentName,
 		return model.Operation{}, fmt.Errorf("remote service %s is not managed by Portless; change its environment binding before using lifecycle commands", serviceName)
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	operation, err := s.database.CreateOperation(ctx, scope, "stop-service", actor, "")
+	operation, err := s.database.CreateOperation(ctx, scope, "stop-service", actor, idempotencyKey, operationFingerprint("stop-service", serviceName, nil))
 	if err != nil {
 		return model.Operation{}, err
+	}
+	if operation.Events != nil {
+		return operation, nil
 	}
 	_ = s.operationServiceTarget(scope, operation, serviceName)
 	runtime := runtimeFor(environment, serviceName)

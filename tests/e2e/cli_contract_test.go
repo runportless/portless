@@ -21,9 +21,10 @@ func TestCLIHelpContracts(t *testing.T) {
 			name: "root",
 			expected: []string{
 				"Usage:\n  portless [flags]", "Environment:", "Observe:", "Projects:",
-				"Traffic:", "Administration:", "Help:", "--env string", "--json", "--no-color",
+				"Traffic:", "Administration:", "Help:", "mcp", "--env string", "--json", "--no-color",
 			},
 		},
+		{name: "mcp group", args: []string{"mcp"}, expected: []string{"Expose the local Portless control plane to MCP clients", "portless mcp [command]", "serve"}},
 		{name: "traffic group", args: []string{"traffic"}, expected: []string{"Inspect local application traffic", "portless traffic [command]", "list", "show", "traces", "trace"}},
 		{name: "fault group", args: []string{"fault"}, expected: []string{"Introduce scoped failures", "portless fault [command]", "add", "delete", "disable", "enable", "list"}},
 		{name: "record group", args: []string{"record"}, expected: []string{"Capture bounded local traffic recordings", "portless record [command]", "start", "stop", "export", "delete"}},

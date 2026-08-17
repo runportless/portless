@@ -66,6 +66,25 @@ func (s *Store) EnsureSequence(scope string, sequence int64) {
 	s.mu.Unlock()
 }
 
+// Clear removes the live exchange window for an environment while preserving
+// its sequence high-water mark and any separately persisted recordings.
+func (s *Store) Clear(project, environment string) (int, int64) {
+	scope := model.EnvironmentSelector(project, environment)
+	s.mu.Lock()
+	cleared := len(s.exchanges[scope])
+	throughSequence := s.sequences[scope]
+	delete(s.exchanges, scope)
+	s.mu.Unlock()
+
+	if s.broker != nil {
+		s.broker.Publish(events.Event{
+			Type: "traffic.cleared", Project: project, Environment: environment,
+			Data: map[string]any{"cleared": cleared, "throughSequence": throughSequence},
+		})
+	}
+	return cleared, throughSequence
+}
+
 // RecentExchanges returns newest-completed-first retained exchanges for scope.
 func (s *Store) RecentExchanges(scope string, limit int) []model.TrafficExchange {
 	s.mu.RLock()

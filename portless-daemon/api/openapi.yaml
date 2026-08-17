@@ -1,12 +1,15 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 8.0.0
+  version: 8.2.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
     and runnable instances. Public routes use readable project, environment,
     service, and artifact names; private ownership keys are never exposed.
+    Authenticated native clients may send Portless-Client-Kind as `cli` or
+    `mcp`; the daemon records that fixed actor category on durable operations.
+    Browser sessions cannot claim a native client kind.
 servers:
   - url: http://portless.localhost/api/v1
 security:
@@ -27,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.2.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -405,9 +408,7 @@ paths:
     post:
       operationId: up
       parameters:
-        - in: header
-          name: Idempotency-Key
-          schema: { type: string, maxLength: 200 }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         content:
           application/json:
@@ -422,10 +423,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/down:
     parameters: *environmentParameters
     post:
       operationId: down
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         content:
           application/json:
@@ -439,6 +443,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/bindings/{serviceName}:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
@@ -510,52 +515,67 @@ paths:
     parameters: *serviceParameters
     post:
       operationId: startService
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202':
           description: Idempotent service-start operation accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services/{serviceName}/stop:
     parameters: *serviceParameters
     post:
       operationId: stopService
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202':
           description: Idempotent service-stop operation accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services/{serviceName}/restart:
     parameters: *serviceParameters
     post:
       operationId: restartService
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202':
           description: Service-restart operation accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services/{serviceName}/manage:
     parameters: *serviceParameters
     post:
       operationId: manageService
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202':
           description: Service restart in normal managed mode accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services/{serviceName}/debug:
     parameters: *serviceParameters
     post:
       operationId: debugService
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202':
           description: Service restart with its discovered debugger enabled accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services/{serviceName}/configuration:
     parameters: *serviceParameters
     get:
@@ -625,6 +645,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LogEntries' }
+  /environments/{projectName}/{environmentName}/traffic:
+    parameters: *environmentParameters
+    delete:
+      operationId: clearTraffic
+      description: Clears the live exchange buffer and derived traces without deleting durable recordings or resetting sequence numbers.
+      responses:
+        '200':
+          description: Live traffic was cleared through the reported environment-local sequence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficClearResponse' }
   /environments/{projectName}/{environmentName}/traffic/exchanges:
     parameters: *environmentParameters
     get:
@@ -925,6 +956,21 @@ components:
       name: portless_session
       description: SameSite=Strict browser session; mutations also require X-Portless-CSRF.
   parameters:
+    PortlessClientKind:
+      in: header
+      name: Portless-Client-Kind
+      description: >-
+        Optional authenticated native-client category. Accepted only with
+        bearer authentication; browser sessions must not send this header.
+      schema: { type: string, enum: [cli, mcp] }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      description: >-
+        Optional stable key for a durable lifecycle request. Reusing a key with
+        the same request returns the original operation; reusing it for a
+        different request returns IDEMPOTENCY_CONFLICT.
+      schema: { type: string, maxLength: 200 }
     ProjectName:
       in: path
       name: projectName
@@ -1034,7 +1080,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.2.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1282,6 +1328,12 @@ components:
         responseBody: { type: string, description: Bounded inspectable response-body prefix. }
         requestBodyTruncated: { type: boolean }
         responseBodyTruncated: { type: boolean }
+    TrafficClearResponse:
+      type: object
+      required: [cleared, throughSequence]
+      properties:
+        cleared: { type: integer, minimum: 0, description: Number of live exchanges removed. }
+        throughSequence: { type: integer, format: int64, minimum: 0, description: Highest environment-local sequence covered by the clear. }
     TrafficTraceSpan:
       type: object
       required: [exchange, depth, startOffsetMs, correlation]

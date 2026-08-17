@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
+import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { duration } from '../../components/Status'
 import type { Environment, TrafficExchange, TrafficTrace } from '../../types'
 import { TrafficDetail } from './TrafficDetail'
@@ -8,6 +9,8 @@ import { TraceWaterfall } from './TraceWaterfall'
 import { filterExchanges, filterTraces, mergeExchanges, mergeTraces, reconcileExchanges, reconcileTraces, trafficWindowSummary, type TrafficProtocolFilter, type TrafficResultFilter } from './trafficState'
 
 type TrafficMode = 'traces' | 'exchanges'
+type TrafficClearResult = { cleared: number; throughSequence: number }
+const trafficPageSize = 25
 
 function traceRequest(trace: TrafficTrace) {
   const value = `${trace.method || ''} ${trace.requestTarget || ''}`.trim()
@@ -44,6 +47,9 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     return value === 'http' || value === 'tcp' ? value : 'all'
   })
   const [includeBackground, setIncludeBackground] = useState(false)
+  const [tracePage, setTracePage] = useState(0)
+  const [exchangePage, setExchangePage] = useState(0)
+  const [clearing, setClearing] = useState(false)
   const [paused, setPaused] = useState(false)
   const [bufferedCount, setBufferedCount] = useState(0)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
@@ -53,12 +59,25 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   const traceBuffer = useRef(new Map<number, TrafficTrace>())
   const expandedRef = useRef<number | null>(null)
 
+  const applyTrafficClear = (throughSequence: number) => {
+    setExchanges((current) => current.filter((exchange) => exchange.sequence > throughSequence))
+    setTraces((current) => current.filter((trace) => trace.lastSequence > throughSequence))
+    setSelectedExchange((current) => current && current.sequence <= throughSequence ? null : current)
+    setExpandedTrace((current) => current !== null && current <= throughSequence ? null : current)
+    for (const sequence of knownExchanges.current) if (sequence <= throughSequence) knownExchanges.current.delete(sequence)
+    for (const sequence of exchangeBuffer.current.keys()) if (sequence <= throughSequence) exchangeBuffer.current.delete(sequence)
+    for (const [number, trace] of traceBuffer.current) if (trace.lastSequence <= throughSequence) traceBuffer.current.delete(number)
+    setBufferedCount(exchangeBuffer.current.size)
+    setTracePage(0); setExchangePage(0)
+  }
+
   useEffect(() => { knownExchanges.current = new Set(exchanges.map((exchange) => exchange.sequence)) }, [exchanges])
   useEffect(() => { expandedRef.current = expandedTrace }, [expandedTrace])
 
   useEffect(() => {
     let active = true
     setTraces([]); setExchanges([]); setSelectedExchange(null); setExpandedTrace(null); setError(null)
+    setTracePage(0); setExchangePage(0)
     pausedRef.current = false; setPaused(false); knownExchanges.current.clear()
     exchangeBuffer.current.clear(); traceBuffer.current.clear(); setBufferedCount(0)
     const traceQuery = `/traffic/traces?background=include&limit=1000${edgeFilter ? `&edge=${encodeURIComponent(edgeFilter)}` : ''}`
@@ -83,7 +102,11 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
       }
     }
     void load()
-    const disconnect = connectEvents(environment, ['traffic.exchange', 'traffic.trace'], (type, value) => {
+    const disconnect = connectEvents(environment, ['traffic.exchange', 'traffic.trace', 'traffic.cleared'], (type, value) => {
+      if (type === 'traffic.cleared') {
+        applyTrafficClear((value as TrafficClearResult).throughSequence)
+        return
+      }
       if (type === 'traffic.exchange') {
         const exchange = value as TrafficExchange
         if (pausedRef.current) {
@@ -121,6 +144,18 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     setBufferedCount(0); setPaused(false)
   }
 
+  const clearTraffic = async () => {
+    setClearing(true); setError(null)
+    try {
+      const result = await api<TrafficClearResult>(environmentPath(environment, '/traffic'), { method: 'DELETE' })
+      applyTrafficClear(result.throughSequence)
+    } catch (value) {
+      setError(actionError("Traffic couldn't be cleared", value))
+    } finally {
+      setClearing(false)
+    }
+  }
+
   const inspectExchange = async (exchange: TrafficExchange) => {
     try {
       setError(null)
@@ -145,6 +180,14 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   const windowSummary = useMemo(() => trafficWindowSummary(exchanges), [exchanges])
   const visibleTraces = useMemo(() => filterTraces(traces, search, resultFilter, includeBackground), [traces, search, resultFilter, includeBackground])
   const visibleExchanges = useMemo(() => filterExchanges(exchanges.filter((exchange) => exchangeHasEdge(exchange, edgeFilter)), search, resultFilter, protocol), [exchanges, edgeFilter, search, resultFilter, protocol])
+  const tracePagination = useMemo(() => paginateItems(visibleTraces, tracePage, trafficPageSize), [visibleTraces, tracePage])
+  const exchangePagination = useMemo(() => paginateItems(visibleExchanges, exchangePage, trafficPageSize), [visibleExchanges, exchangePage])
+
+  useEffect(() => { setTracePage(0); setExchangePage(0) }, [search, resultFilter, edgeFilter])
+  useEffect(() => { setTracePage(0) }, [includeBackground])
+  useEffect(() => { setExchangePage(0) }, [protocol])
+  useEffect(() => { if (tracePage !== tracePagination.page) setTracePage(tracePagination.page) }, [tracePage, tracePagination.page])
+  useEffect(() => { if (exchangePage !== exchangePagination.page) setExchangePage(exchangePagination.page) }, [exchangePage, exchangePagination.page])
 
   return <div className="traffic-view">
     {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
@@ -154,30 +197,32 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
           <button role="tab" aria-selected={mode === 'traces'} className={mode === 'traces' ? 'is-active' : ''} onClick={() => setMode('traces')}>TRACES</button>
           <button role="tab" aria-selected={mode === 'exchanges'} className={mode === 'exchanges' ? 'is-active' : ''} onClick={() => setMode('exchanges')}>EXCHANGES</button>
         </div>
-        <div className="traffic-stream-controls"><span className={`live-count${paused ? ' is-paused' : ''}`}>{paused ? <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="3" height="8" /><rect x="6" y="1" width="3" height="8" /></svg> : <i />}{paused ? `PAUSED${bufferedCount ? ` · ${bufferedCount} BUFFERED` : ''}` : 'STREAMING'}</span><button className="button button--small" type="button" onClick={togglePaused}>{paused ? 'RESUME' : 'PAUSE'}</button></div>
+        <div className="traffic-stream-controls"><span className={`live-count${paused ? ' is-paused' : ''}`}>{paused ? <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="3" height="8" /><rect x="6" y="1" width="3" height="8" /></svg> : <i />}{paused ? `PAUSED${bufferedCount ? ` · ${bufferedCount} BUFFERED` : ''}` : 'STREAMING'}</span><button className="button button--small button--quiet" type="button" title="Clear retained traces and exchanges" disabled={clearing || (exchanges.length === 0 && traces.length === 0 && bufferedCount === 0)} onClick={() => void clearTraffic()}>{clearing ? 'CLEARING…' : 'CLEAR'}</button><button className="button button--small" type="button" disabled={clearing} onClick={togglePaused}>{paused ? 'RESUME' : 'PAUSE'}</button></div>
       </div>
       <div className="traffic-summary" aria-label="Traffic in the last 60 seconds"><span>LAST 60S</span><strong>{windowSummary.exchanges} exchanges</strong><strong>{windowSummary.requestsPerSecond.toFixed(1)} rps</strong><strong className={windowSummary.errors ? 'danger-text' : ''}>{windowSummary.errors} errors</strong><strong>p50 {duration(windowSummary.p50)}</strong><strong>p95 {duration(windowSummary.p95)}</strong></div>
       <div className="traffic-filters">
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="filter path, service, edge, status…" aria-label="Filter traffic" />
         <select value={resultFilter} onChange={(event) => setResultFilter(event.target.value as TrafficResultFilter)} aria-label="Traffic result filter"><option value="all">All results</option><option value="errors">Errors</option><option value="slow">Slow · 500ms+</option><option value="faulted">Faulted</option></select>
         {mode === 'exchanges' && <div className="traffic-protocol" role="group" aria-label="Traffic protocol">{(['all', 'http', 'tcp'] as const).map((value) => <button key={value} className={protocol === value ? 'is-active' : ''} onClick={() => setProtocol(value)}>{value.toUpperCase()}</button>)}</div>}
-        {mode === 'traces' && <button className={`traffic-background${includeBackground ? ' is-active' : ''}`} type="button" aria-pressed={includeBackground} onClick={() => setIncludeBackground((value) => !value)}>BACKGROUND</button>}
+        {mode === 'traces' && <button className={`traffic-background${includeBackground ? ' is-active' : ''}`} type="button" aria-pressed={includeBackground} onClick={() => setIncludeBackground((value) => !value)}>SHOW SUBRESOURCES</button>}
         {edgeFilter && <button className="traffic-filter-chip" type="button" onClick={() => setEdgeFilter('')}><span>EDGE</span>{edgeFilter.replace(':', ' → ')} ×</button>}
       </div>
 
       {mode === 'traces' ? <div className="trace-list">
         <div className="trace-row trace-row--header"><span>When</span><span>Root request</span><span>Result</span><span>Duration</span><span>Spans</span><span>Correlation</span></div>
-        {visibleTraces.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
+        {tracePagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
           <button className="trace-row" type="button" onClick={() => void toggleTrace(trace)} aria-expanded={expandedTrace === trace.number}>
             <span><code>#{trace.number}</code>{new Date(trace.startedAt).toLocaleTimeString()}</span><strong className="truncate">{traceRequest(trace)}</strong><span className={resultTone(trace.error, trace.status)}>{trace.error ? 'ERR' : trace.status || 'OK'}</span><span>{duration(trace.durationMs)}</span><span>{trace.spanCount}</span><span className={`correlation-badge correlation-badge--${trace.correlation}`}>{trace.correlation}</span>
           </button>
           {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onExchange={(exchange) => void inspectExchange(exchange)} /> : <div className="trace-loading">Loading trace spans…</div>)}
         </div>)}
         {visibleTraces.length === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
+        <PanelPagination label="traces" pagination={tracePagination} onPage={setTracePage} />
       </div> : <div className="exchange-list">
         <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Protocol</span><span>Request / session</span><span>Edge</span><span>Result</span><span>Duration</span><span>Fault / recording</span></div>
-        {visibleExchanges.map((exchange) => <button className="table-row traffic-row" key={exchange.sequence} onClick={() => void inspectExchange(exchange)}><code>#{exchange.sequence}</code><span>{new Date(exchange.startedAt).toLocaleTimeString()}</span><strong>{exchange.protocol.toUpperCase()}</strong><code className="truncate">{exchange.protocol === 'http' ? `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}` : 'TCP session'}</code><span>{exchange.source}<i className="edge-arrow">→</i>{exchange.target}</span><span className={resultTone(exchange.error, exchange.status)}>{exchange.error ? 'ERR' : exchange.status || 'OK'}</span><span>{duration(exchange.durationMs)}</span><span>{exchange.fault ? <b className="fault-chip">▲ {exchange.fault}</b> : exchange.recording ? <b className="record-chip">● {exchange.recording}</b> : '—'}</span></button>)}
+        {exchangePagination.items.map((exchange) => <button className="table-row traffic-row" key={exchange.sequence} onClick={() => void inspectExchange(exchange)}><code>#{exchange.sequence}</code><span>{new Date(exchange.startedAt).toLocaleTimeString()}</span><strong>{exchange.protocol.toUpperCase()}</strong><code className="truncate">{exchange.protocol === 'http' ? `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}` : 'TCP session'}</code><span>{exchange.source}<i className="edge-arrow">→</i>{exchange.target}</span><span className={resultTone(exchange.error, exchange.status)}>{exchange.error ? 'ERR' : exchange.status || 'OK'}</span><span>{duration(exchange.durationMs)}</span><span>{exchange.fault ? <b className="fault-chip">▲ {exchange.fault}</b> : exchange.recording ? <b className="record-chip">● {exchange.recording}</b> : '—'}</span></button>)}
         {visibleExchanges.length === 0 && <div className="empty-row">No matching exchanges yet.</div>}
+        <PanelPagination label="exchanges" pagination={exchangePagination} onPage={setExchangePage} />
       </div>}
     </section>
     {selectedExchange && <TrafficDetail exchange={selectedExchange} onClose={() => setSelectedExchange(null)} />}

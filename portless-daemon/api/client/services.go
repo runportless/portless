@@ -30,9 +30,9 @@ func (c *Client) ServiceConfiguration(ctx context.Context, project, environment,
 }
 
 // ServiceAction starts an asynchronous lifecycle action for one service.
-func (c *Client) ServiceAction(ctx context.Context, project, environment, name, action string) (contract.Operation, error) {
+func (c *Client) ServiceAction(ctx context.Context, project, environment, name, action, idempotencyKey string) (contract.Operation, error) {
 	var result contract.Operation
-	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/services/"+EscapePath(name)+"/"+EscapePath(action), nil, &result)
+	err := c.doWithHeaders(ctx, http.MethodPost, environmentPath(project, environment)+"/services/"+EscapePath(name)+"/"+EscapePath(action), nil, &result, map[string]string{"Idempotency-Key": idempotencyKey})
 	return result, err
 }
 

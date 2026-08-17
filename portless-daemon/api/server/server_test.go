@@ -67,6 +67,14 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if projects.Code != http.StatusOK || !strings.Contains(projects.Body.String(), `"name":"billing"`) || !strings.Contains(projects.Body.String(), `"environments":[`) || !strings.Contains(projects.Body.String(), `"total":1`) {
 		t.Fatalf("projects response code=%d body=%s", projects.Code, projects.Body.String())
 	}
+	mcpSession := requestClientKind(server, authManager, http.MethodGet, "/api/v1/session", "", string(contract.ClientKindMCP))
+	if mcpSession.Code != http.StatusOK || !strings.Contains(mcpSession.Body.String(), `"actor":"MCP"`) {
+		t.Fatalf("MCP session response code=%d body=%s", mcpSession.Code, mcpSession.Body.String())
+	}
+	invalidClient := requestClientKind(server, authManager, http.MethodGet, "/api/v1/session", "", "automation")
+	if invalidClient.Code != http.StatusBadRequest || !strings.Contains(invalidClient.Body.String(), `"code":"INVALID_CLIENT_KIND"`) {
+		t.Fatalf("invalid client kind response code=%d body=%s", invalidClient.Code, invalidClient.Body.String())
+	}
 	environment := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local", "", true)
 	if environment.Code != http.StatusOK || !strings.Contains(environment.Body.String(), `"project":"billing"`) || !strings.Contains(environment.Body.String(), `"name":"local"`) ||
 		!strings.Contains(environment.Body.String(), `"dashboardUrl":"http://portless.localhost/environments/billing/local"`) ||
@@ -104,6 +112,14 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	traceDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces/"+strconv.FormatInt(httpExchange.Sequence, 10), "", true)
 	if traceDetail.Code != http.StatusOK || !strings.Contains(traceDetail.Body.String(), `"spans":[`) || !strings.Contains(traceDetail.Body.String(), `"requestTarget":"/orders?state=open"`) {
 		t.Fatalf("trace detail response code=%d body=%s", traceDetail.Code, traceDetail.Body.String())
+	}
+	clearedTraffic := request(server, authManager, http.MethodDelete, "/api/v1/environments/billing/local/traffic", "", true)
+	if clearedTraffic.Code != http.StatusOK || !strings.Contains(clearedTraffic.Body.String(), `"cleared":2`) || !strings.Contains(clearedTraffic.Body.String(), `"throughSequence":2`) {
+		t.Fatalf("clear traffic response code=%d body=%s", clearedTraffic.Code, clearedTraffic.Body.String())
+	}
+	afterClear := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=all", "", true)
+	if afterClear.Code != http.StatusOK || afterClear.Body.String() != "{\"exchanges\":[]}\n" {
+		t.Fatalf("traffic after clear response code=%d body=%s", afterClear.Code, afterClear.Body.String())
 	}
 	invalidTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=udp", "", true)
 	if invalidTraffic.Code != http.StatusBadRequest || !strings.Contains(invalidTraffic.Body.String(), `"code":"INVALID_TRAFFIC_PROTOCOL"`) {
@@ -352,6 +368,16 @@ func TestEnvironmentContextSelectionCanBeInspectedAndCleared(t *testing.T) {
 
 func request(server *Server, authManager *auth.Manager, method, path, body string, authenticated bool) *httptest.ResponseRecorder {
 	return requestHost(server, authManager, method, path, body, authenticated, "localhost:7331")
+}
+
+func requestClientKind(server *Server, authManager *auth.Manager, method, path, body, clientKind string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, "http://localhost:7331"+path, strings.NewReader(body))
+	request.Host = "localhost:7331"
+	request.Header.Set("Authorization", "Bearer "+authManager.Token())
+	request.Header.Set(contract.ClientKindHeader, clientKind)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
 }
 
 func requestHost(server *Server, authManager *auth.Manager, method, path, body string, authenticated bool, host string) *httptest.ResponseRecorder {

@@ -3,6 +3,7 @@ import { api, connectEvents, jsonBody, environmentPath } from '../api'
 import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
+import { paginateItems, PanelPagination } from '../components/PanelPagination'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 import { TrafficPanel } from './traffic'
 
@@ -93,8 +94,9 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
   const [activityPage, setActivityPage] = useState(0)
   const [copiedEndpoint, setCopiedEndpoint] = useState('')
   const copyReset = useRef<number | undefined>(undefined)
-  const services = paginateOverview(environment.services, servicePage)
-  const activities = paginateOverview(timeline, activityPage)
+  const services = paginateItems(environment.services, servicePage, overviewPageSize)
+  const activities = paginateItems(timeline, activityPage, overviewPageSize)
+  const bindingSummary = summarizeEnvironmentBindings(environment)
   useEffect(() => {
     setServicePage(0)
     setActivityPage(0)
@@ -115,7 +117,7 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
       <StatePanel title="TRAFFIC" value={trafficCount} detail="recent requests" />
       <StatePanel title="RECORDING" value={activeRecording ? 'ON' : 'OFF'} tone={activeRecording ? 'danger' : undefined} detail={activeRecording?.name || 'capture disabled'} />
       <StatePanel title="FAULTS" value={faults.length} tone={faults.length ? 'warning' : undefined} detail={faults.length ? 'affecting local traffic' : 'none active'} />
-      <StatePanel title="REVISION" value={environment.revision} detail={`updated · ${relativeTime(environment.updatedAt)} ago`} />
+      <StatePanel title="BINDINGS" value={bindingSummary.value} tone={bindingSummary.tone} detail={bindingSummary.detail} />
     </div>
     <section className="panel services-panel">
       <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} workloads</small></div>
@@ -144,6 +146,26 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
       </section>
     </div>
   </>
+}
+
+export function summarizeEnvironmentBindings(environment: Environment): { value: 'LOCAL' | 'HYBRID' | 'REMOTE'; detail: string; tone?: 'warning' } {
+  const bindingServices = new Set((environment.bindings || []).map((binding) => binding.service))
+  const remoteBindings = (environment.bindings || []).filter((binding) => binding.provider === 'remote')
+  const remoteServices = new Set(remoteBindings.map((binding) => binding.service))
+  const total = Math.max(environment.services.length, bindingServices.size)
+  const remote = remoteServices.size
+  const local = Math.max(0, total - remote)
+
+  if (remote === 0) {
+    return { value: 'LOCAL', detail: `${total} ${total === 1 ? 'service' : 'services'} local` }
+  }
+  if (local === 0) {
+    return { value: 'REMOTE', detail: `${remote} remote ${remote === 1 ? 'service' : 'services'}`, tone: 'warning' }
+  }
+
+  const classifications = new Set(remoteBindings.map((binding) => binding.remote?.classification).filter((classification) => classification && classification !== 'unknown'))
+  const remoteDetail = classifications.size === 1 ? `${remote} ${[...classifications][0]!.toUpperCase()}` : `${remote} remote`
+  return { value: 'HYBRID', detail: `${local} local · ${remoteDetail}`, tone: 'warning' }
 }
 
 export function overviewServiceEndpoint(environment: Environment, service: Service) {
@@ -186,28 +208,6 @@ function TopologyLiveButton({ paused, onToggle }: { paused: boolean; onToggle: (
 }
 
 const overviewPageSize = 8
-
-type OverviewPagination<T> = { items: T[]; page: number; pageCount: number; start: number; end: number; total: number }
-
-export function paginateOverview<T>(items: T[], requestedPage: number, pageSize = overviewPageSize): OverviewPagination<T> {
-  const pageCount = Math.max(1, Math.ceil(items.length/pageSize))
-  const page = Math.min(Math.max(0, requestedPage), pageCount-1)
-  const start = page*pageSize
-  const end = Math.min(items.length, start+pageSize)
-  return { items: items.slice(start, end), page, pageCount, start, end, total: items.length }
-}
-
-function PanelPagination<T>({ label, pagination, onPage }: { label: string; pagination: OverviewPagination<T>; onPage: (page: number) => void }) {
-  if (pagination.pageCount <= 1) return null
-  return <footer className="panel-pagination" aria-label={`${label} pagination`}>
-    <span>{pagination.start+1}–{pagination.end} of {pagination.total}</span>
-    <div>
-      <button type="button" aria-label={`Previous ${label} page`} disabled={pagination.page === 0} onClick={() => onPage(pagination.page-1)}>← PREV</button>
-      <small>{pagination.page+1} / {pagination.pageCount}</small>
-      <button type="button" aria-label={`Next ${label} page`} disabled={pagination.page === pagination.pageCount-1} onClick={() => onPage(pagination.page+1)}>NEXT →</button>
-    </div>
-  </footer>
-}
 
 type TopologyItem = { kind: 'client'; key: 'external' } | { kind: 'service'; key: string; service: Service }
 type TopologySignal = TrafficExchange | TrafficActivity
@@ -829,7 +829,7 @@ const timelinePageSizes = [25, 50, 100] as const
 export function TimelinePanel({ timeline }: { timeline: TimelineEvent[] }) {
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(timelinePageSizes[0])
-  const pagination = useMemo(() => paginateOverview(timeline, page, pageSize), [timeline, page, pageSize])
+  const pagination = useMemo(() => paginateItems(timeline, page, pageSize), [timeline, page, pageSize])
   const groups = useMemo(() => pagination.items.reduce<Record<string, TimelineEvent[]>>((result, event) => {
     const key = new Date(event.timestamp).toLocaleDateString()
     ;(result[key] ||= []).push(event)

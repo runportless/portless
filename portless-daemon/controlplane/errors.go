@@ -24,6 +24,8 @@ const (
 	ErrorNotFound ErrorKind = "not-found"
 	// ErrorRevisionConflict identifies an optimistic-concurrency conflict.
 	ErrorRevisionConflict ErrorKind = "revision-conflict"
+	// ErrorIdempotencyConflict identifies reuse of a key for a different request.
+	ErrorIdempotencyConflict ErrorKind = "idempotency-conflict"
 	// ErrorNameTaken identifies a project or resource name collision.
 	ErrorNameTaken ErrorKind = "name-taken"
 	// ErrorAlreadyExists identifies an attempt to recreate an existing resource.
@@ -62,6 +64,8 @@ func ClassifyError(err error) ErrorClassification {
 		classification.Kind = ErrorNotFound
 	case errors.Is(err, database.ErrConflict):
 		classification.Kind = ErrorRevisionConflict
+	case errors.Is(err, database.ErrIdempotencyConflict):
+		classification.Kind = ErrorIdempotencyConflict
 	case errors.Is(err, database.ErrNameTaken):
 		classification.Kind = ErrorNameTaken
 	case errors.Is(err, database.ErrAlreadyExists):

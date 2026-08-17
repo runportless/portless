@@ -75,7 +75,7 @@ func TestUpStartsFocusedServiceUnderPortlessWithDebugger(t *testing.T) {
 		t.Fatalf("debugger status = %s", response.Status)
 	}
 	debugPort := service.Debugger.Port
-	managed, err := app.ManageService(ctx, "billing", "local", "checkout", "test")
+	managed, err := app.ManageService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,11 +184,11 @@ func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
 	defer app.Close(ctx)
 	defer app.processes.Stop(context.Background(), model.EnvironmentSelector("billing", "local"), "checkout", time.Second)
 
-	started, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	started, err := app.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	concurrent, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	concurrent, err := app.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
 		t.Fatalf("started service = %#v", service)
 	}
 
-	again, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	again, err := app.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
 		t.Fatalf("idempotent start changed the running generation: %#v", again)
 	}
 
-	restarted, err := app.RestartService(ctx, "billing", "local", "checkout", "test")
+	restarted, err := app.RestartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
 		t.Fatalf("restarted service = %#v, operation = %#v", service, restarted)
 	}
 
-	stopped, err := app.StopService(ctx, "billing", "local", "checkout", "test")
+	stopped, err := app.StopService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestIndividualServiceLifecycleIsIdempotentAndCountsRestarts(t *testing.T) {
 		t.Fatalf("stopped service = %#v, operation = %#v", service, stopped)
 	}
 
-	stoppedAgain, err := app.StopService(ctx, "billing", "local", "checkout", "test")
+	stoppedAgain, err := app.StopService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -223,3 +223,36 @@ func TestRuntimeAndUninstallCommandSurfaces(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPCommandDocumentsCapabilityGates(t *testing.T) {
+	application, output, _ := newTestCommands(t)
+	root := application.mcpCommand()
+	root.SetOut(output)
+	root.SetUsageTemplate(application.UsageTemplate())
+	serve, _, err := root.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serve.Help(); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"--all-environments", "--allow-lifecycle", "--allow-traffic-control", "--allow-sensitive-traffic", "stdin and stdout"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("mcp serve help does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
+func TestMCPServeRejectsJSONBeforeStartingDaemon(t *testing.T) {
+	application, _, _ := newTestCommands(t)
+	application.JSONOutput = true
+	root := application.mcpCommand()
+	root.SetArgs([]string{"serve"})
+	err := root.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--json cannot be used with mcp serve") {
+		t.Fatalf("unexpected mcp JSON error: %v", err)
+	}
+	if _, statErr := os.Stat(application.Paths.Control); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid mcp invocation contacted or started the daemon: %v", statErr)
+	}
+}

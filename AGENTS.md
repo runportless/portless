@@ -54,7 +54,7 @@ all callers, tests, generated assets, and documentation instead.
 
 ## Product and package ownership
 
-There are four top-level product roots but one Go module and one distributed
+There are five top-level product roots but one Go module and one distributed
 `portless` executable:
 
 - `portless-cli`: Cobra command tree, current-checkout selection, human and
@@ -66,6 +66,9 @@ There are four top-level product roots but one Go module and one distributed
   restart, ownership, and removal.
 - `portless-web`: React/TypeScript control plane and the assets embedded by the
   daemon.
+- `portless-mcp`: local stdio MCP runtime, capability policy, scoped tool
+  registry, redaction, limits, and MCP result mapping. It is consumed by the
+  CLI and is not a separate executable or daemon API.
 
 Place behavior in the product that owns it and then in a domain-oriented
 package. Do not create a generic top-level or nested `internal`, `pkg`,
@@ -82,6 +85,9 @@ Important dependency rules are enforced by `tests/architecture`:
   shared command context and typed daemon API.
 - CLI commands use `portless-daemon/api/client`; they do not construct API
   paths or import the API server, control plane, or database.
+- Only `portless-cli/administration` consumes `portless-mcp`.
+  `portless-mcp` depends on the official MCP SDK and only the daemon API client
+  and contract; it does not import CLI or daemon implementation packages.
 - `portless-daemon/api/contract` owns wire types. The API client depends only on
   that contract, and the server adapts the contract to injected capabilities.
 - `portless-daemon/control` owns out-of-process daemon inspection, startup,
@@ -97,7 +103,7 @@ exporting declarations.
 
 ## API and contract changes
 
-There is no fifth API product. The wire boundary lives under
+There is no standalone API product. The wire boundary lives under
 `portless-daemon/api`:
 
 1. Change `contract` types first.

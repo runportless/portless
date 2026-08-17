@@ -1,6 +1,7 @@
 # Portless MCP integration plan
 
-Status: proposed on 2026-08-17.
+Status: initial tools implementation completed on 2026-08-17; optional MCP
+resources, subscriptions, and Tasks remain deferred as described below.
 
 ## Executive decision
 

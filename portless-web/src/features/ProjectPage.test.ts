@@ -2,7 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficExchange } from '../types'
-import { buildTopology, EnvironmentPage, overviewServiceEndpoint, paginateOverview, serviceEndpoints, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { paginateItems } from '../components/PanelPagination'
+import { buildTopology, EnvironmentPage, overviewServiceEndpoint, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -61,6 +62,9 @@ describe('environment topology', () => {
     expect(markup).toContain('title="Pause live topology"')
     expect(markup).toContain('class="topology__pan-surface"')
     expect(markup).not.toContain('>MAXIMIZE<')
+    expect(markup).toContain('>BINDINGS<')
+    expect(markup).toContain('>LOCAL<')
+    expect(markup).not.toContain('>REVISION<')
     expect(markup.indexOf('>SERVICES<')).toBeLessThan(markup.indexOf('>TOPOLOGY<'))
   })
 
@@ -111,22 +115,42 @@ describe('environment topology', () => {
     expect(markup).toContain('class="service-copy-button"')
   })
 
+  it('summarizes local, hybrid, and remote environment bindings', () => {
+    const services = ['checkout', 'orders', 'postgres'].map((name) => ({ name } as Service))
+    const environment = { services, bindings: [
+      { service: 'checkout', provider: 'local' },
+      { service: 'orders', provider: 'local' },
+      { service: 'postgres', provider: 'container' },
+    ] } as Environment
+
+    expect(summarizeEnvironmentBindings(environment)).toEqual({ value: 'LOCAL', detail: '3 services local' })
+    expect(summarizeEnvironmentBindings({ ...environment, bindings: [
+      { service: 'checkout', provider: 'local' },
+      { service: 'orders', provider: 'remote', remote: { url: 'https://orders.qa.example.test', classification: 'qa', writePolicy: 'read-only' } },
+      { service: 'postgres', provider: 'container' },
+    ] })).toEqual({ value: 'HYBRID', detail: '2 local · 1 QA', tone: 'warning' })
+    expect(summarizeEnvironmentBindings({ ...environment, services: services.slice(0, 2), bindings: [
+      { service: 'checkout', provider: 'remote' },
+      { service: 'orders', provider: 'remote' },
+    ] })).toEqual({ value: 'REMOTE', detail: '2 remote services', tone: 'warning' })
+  })
+
   it('translates pointer movement into scroll-based panning', () => {
     expect(topologyPanPosition({ clientX: 300, clientY: 180, scrollLeft: 160, scrollTop: 120 }, 220, 130)).toEqual({ scrollLeft: 240, scrollTop: 170 })
     expect(topologyPanPosition({ clientX: 300, clientY: 180, scrollLeft: 160, scrollTop: 120 }, 360, 230)).toEqual({ scrollLeft: 100, scrollTop: 70 })
   })
 
-  it('paginates overview collections at nine items', () => {
-    expect(paginateOverview(Array.from({ length: 8 }, (_, index) => index), 0)).toMatchObject({ page: 0, pageCount: 1, start: 0, end: 8, total: 8 })
-    expect(paginateOverview(Array.from({ length: 17 }, (_, index) => index), 1)).toMatchObject({ items: [8, 9, 10, 11, 12, 13, 14, 15], page: 1, pageCount: 3, start: 8, end: 16, total: 17 })
-    expect(paginateOverview(Array.from({ length: 17 }, (_, index) => index), 99)).toMatchObject({ items: [16], page: 2, start: 16, end: 17 })
+  it('paginates overview collections at eight items', () => {
+    expect(paginateItems(Array.from({ length: 8 }, (_, index) => index), 0, 8)).toMatchObject({ page: 0, pageCount: 1, start: 0, end: 8, total: 8 })
+    expect(paginateItems(Array.from({ length: 17 }, (_, index) => index), 1, 8)).toMatchObject({ items: [8, 9, 10, 11, 12, 13, 14, 15], page: 1, pageCount: 3, start: 8, end: 16, total: 17 })
+    expect(paginateItems(Array.from({ length: 17 }, (_, index) => index), 99, 8)).toMatchObject({ items: [16], page: 2, start: 16, end: 17 })
   })
 
   it('paginates timeline records using the selected page size', () => {
     const records = Array.from({ length: 126 }, (_, index) => index)
-    expect(paginateOverview(records, 0, 25)).toMatchObject({ items: records.slice(0, 25), page: 0, pageCount: 6, start: 0, end: 25, total: 126 })
-    expect(paginateOverview(records, 1, 50)).toMatchObject({ items: records.slice(50, 100), page: 1, pageCount: 3, start: 50, end: 100, total: 126 })
-    expect(paginateOverview(records, 1, 100)).toMatchObject({ items: records.slice(100), page: 1, pageCount: 2, start: 100, end: 126, total: 126 })
+    expect(paginateItems(records, 0, 25)).toMatchObject({ items: records.slice(0, 25), page: 0, pageCount: 6, start: 0, end: 25, total: 126 })
+    expect(paginateItems(records, 1, 50)).toMatchObject({ items: records.slice(50, 100), page: 1, pageCount: 3, start: 50, end: 100, total: 126 })
+    expect(paginateItems(records, 1, 100)).toMatchObject({ items: records.slice(100), page: 1, pageCount: 2, start: 100, end: 126, total: 126 })
   })
 
   it('renders 25 timeline records by default with page-size choices', () => {

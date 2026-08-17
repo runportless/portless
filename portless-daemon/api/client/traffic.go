@@ -77,6 +77,13 @@ func (c *Client) TrafficTrace(ctx context.Context, project, environment string, 
 	return result, err
 }
 
+// ClearTraffic removes live exchanges and trace projections for an environment.
+func (c *Client) ClearTraffic(ctx context.Context, project, environment string) (contract.TrafficClearResponse, error) {
+	var result contract.TrafficClearResponse
+	err := c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/traffic", nil, &result)
+	return result, err
+}
+
 // OpenEventStream opens an authenticated server-sent event stream for the
 // requested environment topics. The caller must close the returned body.
 func (c *Client) OpenEventStream(ctx context.Context, project, environment string, topics ...string) (io.ReadCloser, error) {
@@ -90,6 +97,9 @@ func (c *Client) OpenEventStream(ctx context.Context, project, environment strin
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Accept", "text/event-stream")
+	if c.clientKind != "" {
+		request.Header.Set(contract.ClientKindHeader, string(c.clientKind))
+	}
 	streamClient := *c.http
 	streamClient.Timeout = 0
 	response, err := streamClient.Do(request)

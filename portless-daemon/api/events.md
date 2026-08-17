@@ -3,7 +3,7 @@
 Environment live events are exposed at:
 
 ```text
-GET /api/v1/environments/{projectName}/{environmentName}/stream?topic=service.state&topic=traffic.exchange&topic=traffic.trace
+GET /api/v1/environments/{projectName}/{environmentName}/stream?topic=service.state&topic=traffic.exchange&topic=traffic.trace&topic=traffic.cleared
 ```
 
 The endpoint uses the browser session cookie or CLI bearer token. Topic filters
@@ -25,12 +25,15 @@ Current topics:
 - `fault.state`
 - `traffic.exchange`
 - `traffic.trace`
+- `traffic.cleared`
 - `traffic.tcp.activity`
 
 `traffic.exchange` carries a completed HTTP or TCP summary. Request and response
 headers and bodies are omitted from this notification; clients load the full
 exchange on demand. `traffic.trace` carries an updated trace summary whenever a
-newly completed exchange changes that projection.
+newly completed exchange changes that projection. `traffic.cleared` reports the
+environment-local sequence through which live exchanges and derived traces were
+removed. Durable recordings remain available.
 
 `traffic.tcp.activity` is an ephemeral live signal for open TCP connections. It
 reports `open`, `data`, `heartbeat`, and `close` phases with the current active
@@ -59,6 +62,7 @@ GET /api/v1/environments/{projectName}/{environmentName}/traffic/exchanges?proto
 GET /api/v1/environments/{projectName}/{environmentName}/traffic/exchanges/308
 GET /api/v1/environments/{projectName}/{environmentName}/traffic/traces?edge=checkout:orders
 GET /api/v1/environments/{projectName}/{environmentName}/traffic/traces/307
+DELETE /api/v1/environments/{projectName}/{environmentName}/traffic
 ```
 
 Exchange detail preserves the exact request target, repeated non-sensitive

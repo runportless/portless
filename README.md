@@ -45,6 +45,7 @@ Processes and managed resource containers still receive private dynamic runtime 
 - Named, bounded local recordings and JSON export.
 - Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and optional expiry.
 - SQLite WAL state, project timeline, CLI bearer auth, one-use browser claims, session cookies, CSRF, Origin checks, and strict control/application Host separation.
+- A workspace-scoped, read-only-by-default MCP server launched as `portless mcp serve`, with separately gated lifecycle, traffic-control, and sensitive-traffic capabilities.
 - An embedded React/TypeScript control plane styled as a dense local operations console.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for the explicit boundary of this initial implementation.
@@ -63,9 +64,12 @@ layout:
   installation and removal.
 - `portless-web` owns the React control plane and the assets embedded into the
   daemon.
+- `portless-mcp` owns the local stdio MCP runtime, scoped tool registry,
+  capability policy, redaction, and result limits. The CLI consumes it through
+  `portless mcp serve`; it is not a separate executable or daemon API.
 
 There is no standalone API product: `portless-daemon/api` is the daemon's wire
-boundary shared by the CLI and browser. See the
+boundary shared by the CLI, browser, and MCP adapter. See the
 [product structure](docs/plans/package-structure-refactor.md) for ownership and
 dependency rules.
 
@@ -184,7 +188,37 @@ portless fault clear
 portless down
 portless down --all
 portless down --volumes --yes
+
+portless mcp serve
+portless --env billing/local mcp serve
+portless mcp serve --allow-lifecycle
 ```
+
+## Connect an MCP client
+
+The default server is read-only and can see only environments associated with
+the workspace where the MCP process starts:
+
+```json
+{
+  "mcpServers": {
+    "portless": {
+      "command": "portless",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Pin access to one environment with `--env billing/local`, or explicitly grant
+machine-wide visibility with `--all-environments`. Mutating tools are absent
+unless the process starts with `--allow-lifecycle` or
+`--allow-traffic-control`. Detailed headers and body prefixes are separately
+gated by `--allow-sensitive-traffic`; summaries remain available without it.
+These permissions are immutable for the lifetime of the MCP process.
+
+See [docs/mcp.md](docs/mcp.md) for the complete tool inventory, permission
+model, client configurations, data-sensitivity boundaries, and troubleshooting.
 
 Every command and subcommand has generated help, for example `portless env bind --help`. Cobra also generates completion scripts for Bash, Zsh, Fish, and PowerShell:
 
@@ -367,6 +401,8 @@ SQLite and the selected container engine keep ownership details private so proje
 ```mermaid
 flowchart LR
   CLI["portless CLI"] -->|"Bearer token · private dynamic port"| API["Loopback control API"]
+  HOST["LLM host"] -->|"stdio MCP"| MCP["portless mcp serve"]
+  MCP -->|"MCP-attributed bearer client"| API
   UI["Embedded React UI"] -->|"Session + CSRF"| API
   API --> APP["Application service"]
   APP --> DB["SQLite WAL"]
@@ -386,19 +422,15 @@ flowchart LR
 
 The control API is served only for `localhost`, `127.0.0.1`, `::1`, and `portless.localhost`. An application Host is routed directly to ingress and receives `421` for `/api/...`, even on the same listener.
 
-The code follows these process boundaries under `internal`: `api/contract`
-owns wire types, `api/client` owns authenticated client transport, and
-`api/server` owns HTTP routing. `daemon` is the per-user composition root;
-`daemon/instance` owns the private process-discovery record,
-`daemon/control` discovers and controls that process, and `daemon/lifecycle`
-owns its authenticated identity and shutdown protocol. `relay` owns the
-privileged HTTP/DNS data plane, `relay/install` owns its machine-wide
-installation, and `installation` owns data-root safety using only the Go
-standard library. Ordinary CLI commands and the embedded UI both use the
-daemon API. The CLI composes its unavoidable host operations behind narrow,
-injectable dependencies; only process bootstrap/recovery, relay
-administration, local checkout resolution, completion, and browser launch
-remain local responsibilities.
+The source follows explicit product boundaries. `portless-daemon/api/contract`
+owns wire types, its `client` package owns authenticated transport, and its
+`server` package owns HTTP routing. `portless-daemon` is the per-user
+composition root; `control`, `identity`, and `lifecycle` own safe out-of-process
+daemon management. `portless-relay` owns the privileged HTTP/DNS data plane
+and installation. `portless-mcp` is a narrow adapter over the typed daemon API;
+it neither imports the control-plane implementation nor exposes a daemon MCP
+route. Ordinary CLI commands, the embedded UI, and MCP tools all converge on
+the same daemon contract and policy enforcement.
 
 State defaults to `~/.portless`. Set `PORTLESS_HOME` to isolate development or test instances.
 

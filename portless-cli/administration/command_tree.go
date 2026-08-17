@@ -145,5 +145,5 @@ func (c *Commands) uninstallCommand() *cobra.Command {
 
 // RootCommands returns the administration commands mounted directly under portless.
 func (c *Commands) RootCommands() []*cobra.Command {
-	return []*cobra.Command{c.runtimeCommand(), c.setupCommand(), c.relayCommand(), c.daemonCommand(), c.doctorCommand(), c.configCommand(), c.resetCommand(), c.uninstallCommand()}
+	return []*cobra.Command{c.runtimeCommand(), c.setupCommand(), c.relayCommand(), c.daemonCommand(), c.mcpCommand(), c.doctorCommand(), c.configCommand(), c.resetCommand(), c.uninstallCommand()}
 }

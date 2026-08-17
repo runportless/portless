@@ -147,7 +147,7 @@ func (c *Commands) serviceAction(ctx context.Context, action, name string, optio
 	if err != nil {
 		return err
 	}
-	operation, err := client.ServiceAction(ctx, environment.Project, environment.Name, name, action)
+	operation, err := client.ServiceAction(ctx, environment.Project, environment.Name, name, action, "")
 	if err != nil {
 		return err
 	}

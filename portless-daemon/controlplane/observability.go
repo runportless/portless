@@ -56,6 +56,12 @@ func (s *Service) TrafficTrace(project, environment string, number int64) (model
 	return model.TrafficTrace{}, database.ErrNotFound
 }
 
+// ClearTraffic removes the environment's live exchanges and derived traces.
+// Durable recording contents and the sequence high-water mark are preserved.
+func (s *Service) ClearTraffic(project, environment string) (int, int64) {
+	return s.traffic.Clear(project, environment)
+}
+
 // Timeline returns durable environment events in reverse chronological order.
 func (s *Service) Timeline(ctx context.Context, project, environment string, limit int) ([]model.TimelineEvent, error) {
 	return s.database.Timeline(ctx, model.EnvironmentSelector(project, environment), limit)

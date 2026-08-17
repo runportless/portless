@@ -12,7 +12,7 @@ func TestCobraRootHelpShowsCommandTree(t *testing.T) {
 	if code := application.Run(context.Background(), []string{"--help"}); code != 0 {
 		t.Fatalf("Run returned %d; stderr: %s", code, errorsOutput.String())
 	}
-	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "project", "record", "relay", "reset", "runtime", "uninstall", "--env", "--json", "--no-color"} {
+	for _, expected := range []string{"Environment:", "Observe:", "Projects:", "Traffic:", "Administration:", "Help:", "completion", "config", "daemon", "doctor", "env", "mcp", "project", "record", "relay", "reset", "runtime", "uninstall", "--env", "--json", "--no-color"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help does not contain %q:\n%s", expected, output.String())
 		}
@@ -41,7 +41,7 @@ func TestCobraRootCommandsAreGroupedByTask(t *testing.T) {
 		"service": rootGroupInspect, "connection": rootGroupInspect,
 		"project": rootGroupConfigure, "env": rootGroupConfigure,
 		"record": rootGroupTest, "fault": rootGroupTest,
-		"runtime": rootGroupSystem, "setup": rootGroupSystem, "relay": rootGroupSystem, "daemon": rootGroupSystem,
+		"runtime": rootGroupSystem, "setup": rootGroupSystem, "relay": rootGroupSystem, "daemon": rootGroupSystem, "mcp": rootGroupSystem,
 		"doctor": rootGroupSystem, "config": rootGroupSystem, "reset": rootGroupSystem, "uninstall": rootGroupSystem,
 		"completion": rootGroupOther, "help": rootGroupOther,
 	}

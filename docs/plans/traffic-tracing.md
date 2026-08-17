@@ -27,6 +27,8 @@ The raw exchange list remains available for debugging and as the source of truth
 - Let selecting any span open the full existing request, response, fault, provider, and recording details.
 - Label correlation as `exact`, `inferred`, `partial`, or `ambiguous`. The UI must not present timing inference as certainty.
 - Pausing the live view buffers new exchanges and applies them on resume; it must not lose them merely because rendering is paused.
+- Clearing removes the live exchanges and derived traces for one environment,
+  preserves monotonic sequence allocation, and never deletes durable recordings.
 
 ## Capture semantics
 
@@ -109,6 +111,8 @@ The generic event broker should publish notifications, not own traffic storage o
 - Publish trace changes through a trace-oriented event such as `traffic.trace` so the UI can update an existing trace when a later child completes.
 - Keep topology-oriented TCP activity separate from completed TCP exchanges.
 - Define one deterministic snapshot-plus-stream merge rule so reconnects do not duplicate or omit exchanges.
+- Clear the live window through the environment traffic resource and publish the
+  cleared sequence high-water mark so concurrent clients retain newer traffic.
 
 Because this is version 1, the implementation may replace the current traffic response and event contracts cleanly rather than maintaining a compatibility layer.
 
@@ -160,7 +164,8 @@ portless-web/src/features/traffic/
 - Credential-bearing headers remain redacted in detail responses and recordings;
   repeated safe headers, query values, and bounded bodies remain inspectable.
 - Incoming exchanges update an existing trace without duplicating it.
-- Traces/Exchanges switching, expansion, filtering, background grouping, span detail, pause/resume, empty state, and narrow layouts work.
+- Traces/Exchanges switching, expansion, filtering, pagination, background
+  grouping, span detail, pause/resume, clear, empty state, and narrow layouts work.
 - The detail panel says `HEADERS`, never `HEADERS · REDACTED`.
 
 ### End-to-end test

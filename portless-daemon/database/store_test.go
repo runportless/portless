@@ -48,13 +48,16 @@ func TestProjectAndEnvironmentStateAreSeparated(t *testing.T) {
 	}
 
 	scope := model.EnvironmentSelector("billing", "local")
-	operation, err := controlStore.CreateOperation(ctx, scope, "up", "CLI", "same-request")
+	operation, err := controlStore.CreateOperation(ctx, scope, "up", "CLI", "same-request", `{"type":"up"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repeated, err := controlStore.CreateOperation(ctx, scope, "up", "CLI", "same-request")
+	repeated, err := controlStore.CreateOperation(ctx, scope, "up", "CLI", "same-request", `{"type":"up"}`)
 	if err != nil || repeated.Number != operation.Number {
 		t.Fatalf("idempotent operation = %#v, err = %v", repeated, err)
+	}
+	if _, err := controlStore.CreateOperation(ctx, scope, "down", "CLI", "same-request", `{"type":"down"}`); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("mismatched idempotent request error = %v, want ErrIdempotencyConflict", err)
 	}
 	running, err := controlStore.RunningOperationScopes(ctx)
 	if err != nil || len(running) != 1 || running[0] != scope {

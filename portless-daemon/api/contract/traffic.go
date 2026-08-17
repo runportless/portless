@@ -29,6 +29,13 @@ type TrafficTraceList struct {
 	Traces []TrafficTrace `json:"traces"`
 }
 
+// TrafficClearResponse reports the live traffic window removed through an
+// environment-local exchange sequence. Durable recordings are not affected.
+type TrafficClearResponse struct {
+	Cleared         int   `json:"cleared"`
+	ThroughSequence int64 `json:"throughSequence"`
+}
+
 // RecordingList is a collection of retained traffic recordings.
 type RecordingList struct {
 	Recordings []Recording `json:"recordings"`

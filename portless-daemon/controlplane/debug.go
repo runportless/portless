@@ -14,16 +14,16 @@ import (
 // DebugService restarts a local process under the Portless supervisor with its
 // discovered debugger enabled. The application and debugger ports remain
 // private implementation details exposed through the environment status.
-func (s *Service) DebugService(ctx context.Context, project, environment, service, actor string) (model.Operation, error) {
-	return s.beginServiceModeChange(ctx, project, environment, service, actor, model.LaunchDebug)
+func (s *Service) DebugService(ctx context.Context, project, environment, service, actor, idempotencyKey string) (model.Operation, error) {
+	return s.beginServiceModeChange(ctx, project, environment, service, actor, idempotencyKey, model.LaunchDebug)
 }
 
 // ManageService restarts a debug process with its normal discovered command.
-func (s *Service) ManageService(ctx context.Context, project, environment, service, actor string) (model.Operation, error) {
-	return s.beginServiceModeChange(ctx, project, environment, service, actor, model.LaunchManaged)
+func (s *Service) ManageService(ctx context.Context, project, environment, service, actor, idempotencyKey string) (model.Operation, error) {
+	return s.beginServiceModeChange(ctx, project, environment, service, actor, idempotencyKey, model.LaunchManaged)
 }
 
-func (s *Service) beginServiceModeChange(ctx context.Context, projectName, environmentName, serviceName, actor string, targetMode model.LaunchMode) (model.Operation, error) {
+func (s *Service) beginServiceModeChange(ctx context.Context, projectName, environmentName, serviceName, actor, idempotencyKey string, targetMode model.LaunchMode) (model.Operation, error) {
 	s.resetGate.RLock()
 	defer s.resetGate.RUnlock()
 	if s.resetting {
@@ -55,9 +55,12 @@ func (s *Service) beginServiceModeChange(ctx context.Context, projectName, envir
 		operationType, verb = "debug-service", "debug"
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	operation, err := s.database.CreateOperation(ctx, scope, operationType, actor, "")
+	operation, err := s.database.CreateOperation(ctx, scope, operationType, actor, idempotencyKey, operationFingerprint(operationType, serviceName, nil))
 	if err != nil {
 		return model.Operation{}, err
+	}
+	if operation.Events != nil {
+		return operation, nil
 	}
 	_ = s.operationServiceTarget(scope, operation, serviceName)
 	current := runtimeFor(environment, serviceName)

@@ -113,3 +113,31 @@ func TestStoreClonesRepeatedHeaders(t *testing.T) {
 		t.Fatalf("stored headers were not isolated: %#v", stored.RequestHeaders)
 	}
 }
+
+func TestStoreClearPreservesSequenceAndPublishesScopeUpdate(t *testing.T) {
+	broker := events.NewBroker()
+	store := NewStore(broker)
+	scope := model.EnvironmentSelector("billing", "local")
+	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.cleared"})
+	defer subscription.Close()
+
+	store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local"})
+	store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local"})
+	cleared, throughSequence := store.Clear("billing", "local")
+	if cleared != 2 || throughSequence != 2 || len(store.RecentExchanges(scope, 10)) != 0 || len(store.Traces(scope, 10)) != 0 {
+		t.Fatalf("clear result = (%d, %d), exchanges=%d traces=%d", cleared, throughSequence, len(store.RecentExchanges(scope, 10)), len(store.Traces(scope, 10)))
+	}
+	if next := store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local"}); next.Sequence != 3 {
+		t.Fatalf("sequence after clear = %d, want 3", next.Sequence)
+	}
+
+	select {
+	case event := <-subscription.C:
+		payload, ok := event.Data.(map[string]any)
+		if event.Type != "traffic.cleared" || !ok || payload["cleared"] != 2 || payload["throughSequence"] != int64(2) {
+			t.Fatalf("clear event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for traffic.cleared")
+	}
+}

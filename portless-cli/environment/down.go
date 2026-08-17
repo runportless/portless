@@ -36,7 +36,7 @@ type pendingDown struct {
 }
 
 func (c *Commands) startDown(ctx context.Context, client *apiclient.Client, environment model.Environment, removeVolumes bool) (model.Operation, error) {
-	operation, err := client.DownEnvironment(ctx, environment.Project, environment.Name, removeVolumes)
+	operation, err := client.DownEnvironment(ctx, environment.Project, environment.Name, removeVolumes, "")
 	if err != nil {
 		return model.Operation{}, err
 	}

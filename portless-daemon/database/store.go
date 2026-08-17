@@ -25,6 +25,8 @@ var (
 	ErrPathTaken = errors.New("source path already registered")
 	// ErrConflict indicates that an optimistic-concurrency revision no longer matches.
 	ErrConflict = errors.New("revision conflict")
+	// ErrIdempotencyConflict indicates that a key was reused for a different request.
+	ErrIdempotencyConflict = errors.New("idempotency key conflict")
 	// ErrAlreadyExists indicates that an addressed artifact already exists.
 	ErrAlreadyExists = errors.New("resource already exists")
 	// ErrIncompatibleState indicates that stored state cannot be decoded by this build.
@@ -88,28 +90,26 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("create sqlite schema: %w", err)
 	}
 	for _, column := range []struct {
+		table      string
 		name       string
 		definition string
 	}{
-		{"owner_instance_id", "TEXT NOT NULL DEFAULT ''"},
-		{"supervisor_socket", "TEXT NOT NULL DEFAULT ''"},
-		{"supervisor_state", "TEXT NOT NULL DEFAULT ''"},
-		{"supervisor_pid", "INTEGER NOT NULL DEFAULT 0"},
-		{"container_name", "TEXT NOT NULL DEFAULT ''"},
-		{"observed_at", "TEXT"},
-		{"launch_mode", "TEXT NOT NULL DEFAULT 'managed'"},
-		{"debug_adapter", "TEXT NOT NULL DEFAULT ''"},
-		{"debug_host", "TEXT NOT NULL DEFAULT ''"},
-		{"debug_port", "INTEGER NOT NULL DEFAULT 0"},
-		{"debug_state", "TEXT NOT NULL DEFAULT ''"},
-		{"listen_ip", "TEXT NOT NULL DEFAULT '127.0.0.1'"},
-		{"dns_name", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "owner_instance_id", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "supervisor_socket", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "supervisor_state", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "supervisor_pid", "INTEGER NOT NULL DEFAULT 0"},
+		{"service_runtime", "container_name", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "observed_at", "TEXT"},
+		{"service_runtime", "launch_mode", "TEXT NOT NULL DEFAULT 'managed'"},
+		{"service_runtime", "debug_adapter", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "debug_host", "TEXT NOT NULL DEFAULT ''"},
+		{"service_runtime", "debug_port", "INTEGER NOT NULL DEFAULT 0"},
+		{"service_runtime", "debug_state", "TEXT NOT NULL DEFAULT ''"},
+		{"connection_runtime", "listen_ip", "TEXT NOT NULL DEFAULT '127.0.0.1'"},
+		{"connection_runtime", "dns_name", "TEXT NOT NULL DEFAULT ''"},
+		{"operations", "request_fingerprint", "TEXT NOT NULL DEFAULT ''"},
 	} {
-		table := "service_runtime"
-		if column.name == "listen_ip" || column.name == "dns_name" {
-			table = "connection_runtime"
-		}
-		if err := s.ensureColumn(ctx, table, column.name, column.definition); err != nil {
+		if err := s.ensureColumn(ctx, column.table, column.name, column.definition); err != nil {
 			return err
 		}
 	}
@@ -120,6 +120,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -293,6 +296,7 @@ CREATE TABLE IF NOT EXISTS operations (
   completed_at TEXT,
   error TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL DEFAULT '',
+  request_fingerprint TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(environment_key, number)
 );
 

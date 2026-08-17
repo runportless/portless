@@ -2,15 +2,16 @@
 
 Status: implemented on 2026-08-17.
 
-Portless is organized around the four things a contributor can identify in the
-running product: the CLI, daemon, privileged relay, and web control plane. The
-repository no longer puts the implementation below a generic `internal` tree,
-and it does not pretend that the daemon's HTTP API is a fifth product.
+Portless is organized around the five things a contributor can identify in the
+running product: the CLI, daemon, privileged relay, web control plane, and
+client-launched MCP runtime. The repository no longer puts the implementation
+below a generic `internal` tree,
+and it does not pretend that the daemon's HTTP API is a separate product.
 
 ## Decisions
 
-- Use four explicit top-level product roots: `portless-cli`,
-  `portless-daemon`, `portless-relay`, and `portless-web`.
+- Use five explicit top-level product roots: `portless-cli`,
+  `portless-daemon`, `portless-relay`, `portless-web`, and `portless-mcp`.
 - Keep one Go module and one distributable `portless` executable. These are
   source ownership boundaries, not separate repositories or release units.
 - Put the HTTP API contract, client, and server in `portless-daemon/api`. The
@@ -25,6 +26,9 @@ and it does not pretend that the daemon's HTTP API is a fifth product.
   facade.
 - Keep generated frontend assets in `portless-web/dist` and embed them from
   the `portless-web` Go package.
+- Keep the client-launched stdio MCP runtime in `portless-mcp`. The CLI owns
+  command construction and streams; MCP uses only the typed daemon API and is
+  not independently distributed.
 - Do not retain compatibility packages or forwarding imports. Portless is
   greenfield, so all callers move to the new contracts at once.
 
@@ -38,7 +42,7 @@ portless-cli/
   projects/                 projects, sources, environments, and bindings
   observe/                  logs, services, connections, and timeline
   traffic/                  traffic inspection, recordings, and faults
-  administration/           daemon, relay, runtime, doctor, config, reset, and uninstall
+  administration/           daemon, relay, runtime, doctor, config, MCP, reset, and uninstall
   doctor/                   read-only installation diagnostics engine
   app.go                    dependency composition
   commands.go               Cobra root and global execution policy
@@ -73,6 +77,13 @@ portless-web/
   public/                   static source assets
   dist/                     generated embedded assets
   assets.go                 Go embed facade consumed by the daemon
+
+portless-mcp/
+  mcp.go                    injected serving facade and stdio transport
+  server.go                 protocol server, limits, and tool registry
+  scope.go                  immutable workspace, pinned, or installation scope
+  *_tools.go                typed inspection and explicitly gated mutation tools
+  results.go                MCP-owned safe result mapping and size caps
 
 tests/
   architecture/             import and source-layout guardrails
@@ -139,6 +150,15 @@ and built assets. `npm --prefix portless-web run build` writes to
 `portless-web/dist`; `assets.go` embeds that directory into the Go executable.
 The browser uses the same daemon HTTP API as the CLI.
 
+### `portless-mcp`
+
+Owns the long-lived stdio MCP runtime launched by `portless mcp serve`, its
+immutable startup scope and capability gates, tool schemas, concurrency/rate
+limits, redaction, and MCP result mapping. Only
+`portless-cli/administration` imports its facade. It calls
+`portless-daemon/api/client` and uses `portless-daemon/api/contract`; it does
+not import the CLI, daemon server, control plane, database, runtimes, or relay.
+
 ## Dependency rules
 
 ```text
@@ -155,6 +175,11 @@ portless-cli
   -> portless-daemon container probes       read-only doctor checks
   -> portless-daemon/system/installation
   -> portless-relay
+  -> portless-mcp                           administration adapter only
+
+portless-mcp
+  -> portless-daemon/api/client + contract
+  -> official Go MCP SDK
 
 portless-daemon
   -> portless-daemon/api/server
@@ -183,6 +208,9 @@ Forbidden directions are enforced in `tests/architecture`:
 - the API client cannot import anything except the API contract;
 - the API server receives lifecycle and relay control through interfaces;
 - the relay cannot import CLI or daemon control-plane implementations;
+- only CLI administration may import `portless-mcp`, and `portless-mcp` may
+  import only the daemon API client/contract plus the official MCP SDK;
+- the official MCP SDK cannot leak into another product;
 - installation safety primitives use only the Go standard library;
 - the executable entry point imports product facades, not implementation
   subpackages.
@@ -244,7 +272,8 @@ make test-e2e-relay-destructive
 Start with the product that owns the behavior, then choose a domain name inside
 that product. A Cobra concern belongs in `portless-cli`; an environment or
 runtime concern belongs in `portless-daemon`; machine-wide clean-ingress work
-belongs in `portless-relay`; browser presentation belongs in `portless-web`.
-Create a new top-level product only if it has an independent runtime and a
-clear user-facing lifecycle. Do not recreate a generic `internal`, `pkg`,
-`common`, or standalone `api` dumping ground.
+belongs in `portless-relay`; browser presentation belongs in `portless-web`;
+MCP protocol, capability, and result-adapter behavior belongs in
+`portless-mcp`. Create a new top-level product only if it has an independent
+runtime and a clear user-facing lifecycle. Do not recreate a generic
+`internal`, `pkg`, `common`, or standalone `api` dumping ground.

@@ -212,7 +212,7 @@ func TestPrepareResetRequiresStoppedIdleEnvironmentsAndBlocksNewStarts(t *testin
 	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentStopped, ""); err != nil {
 		t.Fatal(err)
 	}
-	operation, err := controlStore.CreateOperation(ctx, "billing/local", "up", "test", "")
+	operation, err := controlStore.CreateOperation(ctx, "billing/local", "up", "test", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestPrepareResetStopsAuthenticatedLingeringSupervisor(t *testing.T) {
 	}
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-test", Executable: os.Args[0]})
 	defer app.Close(ctx)
-	operation, err := app.StartService(ctx, "billing", "local", "checkout", "test")
+	operation, err := app.StartService(ctx, "billing", "local", "checkout", "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
