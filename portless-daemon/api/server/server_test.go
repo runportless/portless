@@ -78,7 +78,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	environment := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local", "", true)
 	if environment.Code != http.StatusOK || !strings.Contains(environment.Body.String(), `"project":"billing"`) || !strings.Contains(environment.Body.String(), `"name":"local"`) ||
 		!strings.Contains(environment.Body.String(), `"dashboardUrl":"http://portless.localhost/environments/billing/local"`) ||
-		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
+		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || !strings.Contains(environment.Body.String(), `"modifiedAt":`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
 		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
 	inventorySource := t.TempDir()

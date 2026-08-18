@@ -84,7 +84,7 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
       <div className="page-heading__summary"><span>{counts.failed ?? 0} failed</span><b>·</b><span>{counts.degraded ?? 0} degraded</span><b>·</b><span>{counts.recovering ?? 0} recovering</span><b>·</b><span>{counts.starting ?? 0} starting</span><b>·</b><span>{counts.healthy ?? 0} healthy</span></div>
     </div>
     {selectedProject ? shown.length > 0 ? <section className="panel environments-table">
-      <div className="panel-title"><span>ENVIRONMENTS</span><button ref={createButton} className="button button--primary button--small create-environment-button" type="button" aria-haspopup="dialog" onClick={openCreate}>CREATE ENVIRONMENT</button></div>
+      <div className="panel-title"><span>ENVIRONMENTS</span><button ref={createButton} className="button button--primary button--small panel-create-button create-environment-button" type="button" aria-haspopup="dialog" onClick={openCreate}>CREATE ENVIRONMENT</button></div>
       <div className="table-row table-row--header environment-row"><span>Status</span><span>Project</span><span>Environment</span><span>Ready</span><span>Remote</span><span>Age</span><span>Why</span></div>
       {shown.map((environment) => {
         const ready = environment.services.filter((service) => service.status === 'ready').length
@@ -114,12 +114,12 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
         <span className="muted truncate" title={source.services?.join(', ')}>{source.services?.join(', ') || '—'}</span>
       </div>)}
     </section>}
-    {createOpen && selectedProject && <div className="modal-backdrop create-environment-backdrop" role="presentation" onMouseDown={closeCreate}>
-      <section className="create-environment-modal" role="dialog" aria-modal="true" aria-labelledby="create-environment-title" aria-describedby="create-environment-description" onMouseDown={(event) => event.stopPropagation()}>
+    {createOpen && selectedProject && <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={closeCreate}>
+      <section className="form-modal create-environment-modal" role="dialog" aria-modal="true" aria-labelledby="create-environment-title" aria-describedby="create-environment-description" onMouseDown={(event) => event.stopPropagation()}>
         <header><div><div className="eyebrow">NEW ENVIRONMENT</div><h2 id="create-environment-title">Create environment</h2></div><button className="icon-button" type="button" aria-label="Close create environment" disabled={creating} onClick={closeCreate}>×</button></header>
         <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void clone() }}>
           <p id="create-environment-description">Clone providers and source bindings, then customize the result.</p>
-          <div className="create-environment-form__fields">
+          <div className="form-modal__fields create-environment-form__fields">
             <label><span>NAME</span><input ref={nameInput} name="portless-environment-name" value={cloneName} placeholder="qa-local" required autoComplete="off" spellCheck="false" disabled={creating} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => setCloneName(event.target.value)} /></label>
             <label><span>CLONE FROM</span><select value={cloneFrom} disabled={creating} onChange={(event) => setCloneFrom(event.target.value)}>{shown.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
           </div>

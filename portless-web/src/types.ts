@@ -175,6 +175,7 @@ export interface ComponentBinding {
   provider: ProviderKind
   source?: string
   remote?: RemoteTarget
+  modifiedAt?: string
 }
 
 export interface ConfigurationIssue { code: string; subject?: string; message: string; remediation?: string }

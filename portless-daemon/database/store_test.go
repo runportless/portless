@@ -163,12 +163,19 @@ func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	localModifiedAt := local.Bindings[0].ModifiedAt
+	if localModifiedAt.IsZero() {
+		t.Fatal("initial provider binding has no modification time")
+	}
 	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentHealthy, ""); err != nil {
 		t.Fatal(err)
 	}
 	qa, err := controlStore.CloneEnvironment(ctx, "billing", "local", "qa-local")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if qa.Bindings[0].ModifiedAt.IsZero() {
+		t.Fatal("cloned provider binding has no modification time")
 	}
 	qa, err = controlStore.SetEnvironmentBinding(ctx, "billing", "qa-local", model.ComponentBinding{Service: "checkout", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: "https://checkout.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly}})
 	if err != nil {
@@ -177,6 +184,55 @@ func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	local, _ = controlStore.Environment(ctx, "billing", "local")
 	if local.Bindings[0].Provider != model.ProviderLocal || qa.Bindings[0].Provider != model.ProviderRemote {
 		t.Fatalf("bindings were not isolated: local=%#v qa=%#v", local.Bindings, qa.Bindings)
+	}
+	if qa.Bindings[0].ModifiedAt.IsZero() {
+		t.Fatal("changed provider binding has no modification time")
+	}
+	if !local.Bindings[0].ModifiedAt.Equal(localModifiedAt) {
+		t.Fatalf("unchanged provider modification time changed from %s to %s", localModifiedAt, local.Bindings[0].ModifiedAt)
+	}
+}
+
+func TestOpenBackfillsProviderBindingModificationTimes(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "portless.db")
+	controlStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := testDefinition()
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "checkout")
+	environment, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition,
+		[]model.SourceBinding{{Name: "checkout", Path: sourcePath, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.DB().ExecContext(ctx, `UPDATE environment_bindings SET modified_at = ''`); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	controlStore, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	reloaded, err := controlStore.Environment(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Bindings) != 1 || reloaded.Bindings[0].ModifiedAt.IsZero() {
+		t.Fatalf("backfilled bindings = %#v", reloaded.Bindings)
+	}
+	if !reloaded.Bindings[0].ModifiedAt.Equal(environment.UpdatedAt) {
+		t.Fatalf("backfilled modification time = %s, want environment update time %s", reloaded.Bindings[0].ModifiedAt, environment.UpdatedAt)
 	}
 }
 

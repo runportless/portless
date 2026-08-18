@@ -322,8 +322,45 @@ test('only edits providers while stopped and persists a remote binding', async (
   const state = readE2EState()
   await authenticate(page, environmentPath('bindings'))
 
-  await expect(page.getByRole('button', { name: 'SAVE PROVIDER' })).toBeDisabled()
-  await expect(page.getByText('Stop the environment before changing providers.')).toBeVisible()
+  const providerHeader = page.locator('.provider-row--header')
+  await expect(providerHeader).toContainText('Service')
+  await expect(providerHeader).toContainText('Provider')
+  await expect(providerHeader).toContainText('Configuration')
+  await expect(providerHeader).toContainText('Modified')
+  await expect(providerHeader).toContainText('Actions')
+  const firstProviderRow = page.locator('.configured-providers-panel .provider-row:not(.provider-row--header)').first()
+  await expect(firstProviderRow.getByRole('cell').first()).toContainText('checkout')
+  await expect(firstProviderRow.getByRole('cell').first().locator('.status__mark')).toHaveText('●')
+  await expect(firstProviderRow.getByRole('cell').first()).not.toContainText('healthy')
+  const modified = firstProviderRow.locator('time')
+  await expect(modified).toHaveAttribute('datetime', /\d{4}-\d{2}-\d{2}T/)
+  await expect(modified).toContainText(/\w{3} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M/)
+  await expect(modified).not.toContainText('ago')
+  const headerColumns = await providerHeader.getByRole('columnheader').evaluateAll((columns) => columns.map((column) => Math.round(column.getBoundingClientRect().x)))
+  const providerCells = await firstProviderRow.getByRole('cell').evaluateAll((cells) => cells.map((cell) => Math.round(cell.getBoundingClientRect().x)))
+  expect(providerCells).toEqual(headerColumns)
+
+  await expect(page.getByRole('button', { name: 'CONFIGURE PROVIDER', exact: true })).toBeVisible()
+  const firstChange = firstProviderRow.getByRole('button', { name: 'CHANGE', exact: true })
+  await firstChange.click()
+  let providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  const providerSelect = providerDialog.getByLabel('Provider', { exact: true })
+  await expect(providerSelect).toBeFocused()
+  await expect(providerDialog.getByLabel('Service', { exact: true })).toBeDisabled()
+  await expect(providerDialog.getByRole('button', { name: 'SAVE CHANGES', exact: true })).toBeDisabled()
+  await expect(providerDialog.getByText('Stop the environment before changing providers.')).toBeVisible()
+  let environmentRefreshes = 0
+  page.on('response', (response) => {
+    if (response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/environments') environmentRefreshes++
+  })
+  const refreshesBeforeEdit = environmentRefreshes
+  await providerSelect.selectOption('remote')
+  await page.mouse.move(0, 0)
+  await expect.poll(() => environmentRefreshes, { timeout: 6_000 }).toBeGreaterThan(refreshesBeforeEdit)
+  await expect(providerSelect).toHaveValue('remote')
+  await page.keyboard.press('Escape')
+  await expect(providerDialog).toHaveCount(0)
+  await expect(firstChange).toBeFocused()
 
   const clonePath = `/environments/${state.project}/qa-ui?tab=bindings`
   await page.goto(`${state.baseURL}${clonePath}`)
@@ -331,31 +368,38 @@ test('only edits providers while stopped and persists a remote binding', async (
   await expect(page.getByRole('heading', { name: 'qa-ui', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'qa-ui', exact: true }).locator('..')).toContainText('stopped')
 
-  const providerForm = page.locator('.bindings-layout .experiment-form')
-  await providerForm.locator('label').filter({ hasText: /^SERVICE/ }).locator('select').selectOption('inventory')
-  await providerForm.locator('label').filter({ hasText: /^PROVIDER/ }).locator('select').selectOption('remote')
-  await providerForm.locator('label').filter({ hasText: /^REMOTE URL/ }).locator('input').fill('https://inventory.qa.example.test')
-  await providerForm.locator('label').filter({ hasText: /^CLASSIFICATION/ }).locator('select').selectOption('staging')
-  await providerForm.locator('label').filter({ hasText: /^WRITE POLICY/ }).locator('select').selectOption('read-write')
-  await providerForm.locator('label').filter({ hasText: /^HEALTH PATH/ }).locator('input').fill('/ready')
-  await providerForm.getByRole('button', { name: 'SAVE PROVIDER' }).click()
-  await expect(page.getByText('inventory now uses the remote provider')).toBeVisible()
+  const inventoryRow = page.locator('.configured-providers-panel .provider-row:not(.provider-row--header)').filter({ hasText: 'inventory' })
+  await inventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await providerDialog.getByLabel('Provider', { exact: true }).selectOption('remote')
+  await providerDialog.getByLabel('Remote URL', { exact: true }).fill('https://inventory.qa.example.test')
+  await providerDialog.getByLabel('Classification', { exact: true }).selectOption('staging')
+  await providerDialog.getByLabel('Write policy', { exact: true }).selectOption('read-write')
+  await providerDialog.getByLabel('Health path', { exact: true }).fill('/ready')
+  await providerDialog.getByRole('button', { name: 'SAVE CHANGES', exact: true }).click()
+  await expect(providerDialog).toHaveCount(0)
+  await expect(page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' })).toContainText('https://inventory.qa.example.test')
 
-  type Binding = { service: string; provider: string; source?: string; remote?: { url: string; classification: string; writePolicy: string; healthPath: string } }
+  type Binding = { service: string; provider: string; source?: string; modifiedAt?: string; remote?: { url: string; classification: string; writePolicy: string; healthPath: string } }
   const remote = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
-  expect(remote.bindings.find((binding) => binding.service === 'inventory')).toMatchObject({
+  const remoteInventory = remote.bindings.find((binding) => binding.service === 'inventory')
+  expect(remoteInventory).toMatchObject({
     provider: 'remote',
     remote: { url: 'https://inventory.qa.example.test', classification: 'staging', writePolicy: 'read-write', healthPath: '/ready' },
   })
+  expect(remoteInventory?.modifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
 
-  await providerForm.locator('label').filter({ hasText: /^PROVIDER/ }).locator('select').selectOption('local')
-  const source = providerForm.locator('label').filter({ hasText: /^SOURCE/ }).locator('select')
-  const firstSource = await source.locator('option').first().evaluate((option: HTMLOptionElement) => option.value)
-  await source.selectOption(firstSource)
-  await providerForm.getByRole('button', { name: 'SAVE PROVIDER' }).click()
-  await expect(page.getByText('inventory now uses the local provider')).toBeVisible()
+  await inventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await expect(providerDialog.getByRole('button', { name: 'RESET TO DEFAULT', exact: true })).toBeVisible()
+  await providerDialog.getByRole('button', { name: 'RESET TO DEFAULT', exact: true }).click()
+  await expect(providerDialog).toHaveCount(0)
+  const localInventory = page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' })
+  await expect(localInventory).toContainText('source checkout')
   const restored = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
-  expect(restored.bindings.find((binding) => binding.service === 'inventory')).toMatchObject({ provider: 'local', source: firstSource })
+  const restoredInventory = restored.bindings.find((binding) => binding.service === 'inventory')
+  expect(restoredInventory?.provider).toBe('local')
+  expect(restoredInventory?.source).toBeTruthy()
 })
 
 test('renders durable lifecycle events from the environment timeline', async ({ page }) => {
@@ -561,7 +605,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
   await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-	await expect(drawer.getByText(/^8\.2\.0$/)).toBeVisible()
+	await expect(drawer.getByText(/^8\.3\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })

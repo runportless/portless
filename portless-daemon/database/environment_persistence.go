@@ -143,7 +143,7 @@ FROM environment_sources WHERE environment_key = ? ORDER BY source_name COLLATE 
 
 func (s *Store) environmentBindings(ctx context.Context, environmentKey string) ([]model.ComponentBinding, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT service_name, provider, source_name, config_json
+SELECT service_name, provider, source_name, config_json, modified_at
 FROM environment_bindings WHERE environment_key = ? ORDER BY service_name COLLATE NOCASE`, environmentKey)
 	if err != nil {
 		return nil, err
@@ -154,10 +154,12 @@ FROM environment_bindings WHERE environment_key = ? ORDER BY service_name COLLAT
 		var binding model.ComponentBinding
 		var provider string
 		var config []byte
-		if err := rows.Scan(&binding.Service, &provider, &binding.Source, &config); err != nil {
+		var modifiedAt string
+		if err := rows.Scan(&binding.Service, &provider, &binding.Source, &config, &modifiedAt); err != nil {
 			return nil, err
 		}
 		binding.Provider = model.ProviderKind(provider)
+		binding.ModifiedAt = parseTime(modifiedAt)
 		if binding.Provider == model.ProviderRemote {
 			var remote model.RemoteTarget
 			if err := json.Unmarshal(config, &remote); err != nil {
@@ -229,9 +231,13 @@ func insertBinding(ctx context.Context, executor sqlExecutor, environmentKey str
 			return err
 		}
 	}
+	modifiedAt := binding.ModifiedAt
+	if modifiedAt.IsZero() {
+		modifiedAt = time.Now().UTC()
+	}
 	_, err = executor.ExecContext(ctx, `
-INSERT INTO environment_bindings(environment_key, service_name, provider, source_name, config_json)
-VALUES(?, ?, ?, ?, ?)`, environmentKey, binding.Service, binding.Provider, binding.Source, config)
+INSERT INTO environment_bindings(environment_key, service_name, provider, source_name, config_json, modified_at)
+VALUES(?, ?, ?, ?, ?, ?)`, environmentKey, binding.Service, binding.Provider, binding.Source, config, modifiedAt.UTC().Format(time.RFC3339Nano))
 	return err
 }
 

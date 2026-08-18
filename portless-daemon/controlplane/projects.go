@@ -335,6 +335,7 @@ func (s *Service) SetBinding(ctx context.Context, projectName, environmentName, 
 		return model.Environment{}, database.ErrNotFound
 	}
 	binding.Service = serviceName
+	binding.ModifiedAt = time.Now().UTC()
 	replaced := false
 	for index := range environment.Bindings {
 		if strings.EqualFold(environment.Bindings[index].Service, serviceName) {

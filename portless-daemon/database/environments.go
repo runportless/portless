@@ -33,6 +33,11 @@ func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentN
 		return model.Environment{}, err
 	}
 	now := nowText()
+	createdAt := parseTime(now)
+	initialBindings := append([]model.ComponentBinding{}, bindings...)
+	for index := range initialBindings {
+		initialBindings[index].ModifiedAt = createdAt
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Environment{}, err
@@ -47,7 +52,7 @@ VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?)`, key, projectKey, environmentName, model.
 		}
 		return model.Environment{}, err
 	}
-	if err := replaceEnvironmentChildren(ctx, tx, key, definition, sources, bindings); err != nil {
+	if err := replaceEnvironmentChildren(ctx, tx, key, definition, sources, initialBindings); err != nil {
 		return model.Environment{}, err
 	}
 	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
@@ -347,6 +352,7 @@ func (s *Store) SetEnvironmentBinding(ctx context.Context, projectName, environm
 	if environment.Status != model.EnvironmentStopped {
 		return model.Environment{}, errors.New("environment must be stopped before a binding changes")
 	}
+	binding.ModifiedAt = parseTime(nowText())
 	replaced := false
 	for index := range environment.Bindings {
 		if strings.EqualFold(environment.Bindings[index].Service, binding.Service) {

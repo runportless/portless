@@ -108,6 +108,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"connection_runtime", "listen_ip", "TEXT NOT NULL DEFAULT '127.0.0.1'"},
 		{"connection_runtime", "dns_name", "TEXT NOT NULL DEFAULT ''"},
 		{"operations", "request_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"environment_bindings", "modified_at", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.definition); err != nil {
 			return err
@@ -123,6 +124,15 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE environment_bindings
+SET modified_at = COALESCE((SELECT updated_at FROM environments WHERE private_key = environment_bindings.environment_key), ?)
+WHERE modified_at = ''`, nowText()); err != nil {
+		return fmt.Errorf("backfill environment binding modification times: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -210,6 +220,7 @@ CREATE TABLE IF NOT EXISTS environment_bindings (
   provider TEXT NOT NULL,
   source_name TEXT NOT NULL DEFAULT '',
   config_json BLOB NOT NULL DEFAULT '{}',
+  modified_at TEXT NOT NULL,
   PRIMARY KEY(environment_key, service_name)
 );
 

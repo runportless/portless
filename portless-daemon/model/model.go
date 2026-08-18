@@ -290,10 +290,11 @@ type RemoteTarget struct {
 
 // ComponentBinding selects a provider and source for one environment service.
 type ComponentBinding struct {
-	Service  string        `json:"service"`
-	Provider ProviderKind  `json:"provider"`
-	Source   string        `json:"source,omitempty"`
-	Remote   *RemoteTarget `json:"remote,omitempty"`
+	Service    string        `json:"service"`
+	Provider   ProviderKind  `json:"provider"`
+	Source     string        `json:"source,omitempty"`
+	Remote     *RemoteTarget `json:"remote,omitempty"`
+	ModifiedAt time.Time     `json:"modifiedAt,omitzero"`
 }
 
 // ConfigurationIssue describes an invalid or incomplete environment setting.

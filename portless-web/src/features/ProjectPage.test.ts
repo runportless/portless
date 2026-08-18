@@ -1,9 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficExchange } from '../types'
+import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, EnvironmentPage, overviewServiceEndpoint, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, defaultProviderBinding, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -141,6 +141,51 @@ describe('environment topology', () => {
       { service: 'checkout', provider: 'remote' },
       { service: 'orders', provider: 'remote' },
     ] })).toEqual({ value: 'REMOTE', detail: '2 remote services', tone: 'warning' })
+  })
+
+  it('keeps the provider table full width and configures each service from a modal action', () => {
+    const checkout = { name: 'checkout', kind: 'process', status: 'stopped' } as Service
+    const project = { name: 'billing', sources: [{ name: 'checkout', services: ['checkout'] }] } as Project
+    const environment = {
+      project: 'billing', name: 'local', status: 'stopped', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [checkout], connections: [],
+      sources: [{ name: 'checkout', path: '/workspace/checkout', status: 'ready', scannedAt: new Date(0).toISOString() }],
+      bindings: [{ service: 'checkout', provider: 'local', source: 'checkout', modifiedAt: '2026-08-18T18:30:00Z' }],
+    } as Environment
+
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment, project, tab: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+
+    expect(markup).toContain('class="experiment-layout bindings-layout"')
+    expect(markup).toContain('<span>CONFIGURED PROVIDERS</span><button')
+    expect(markup).toContain('role="table" aria-label="Configured providers"')
+    expect(markup).toContain('<span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader">Actions</span>')
+    expect(markup).toContain('class="provider-service"')
+    expect(markup).toContain('title="healthy"')
+    expect(markup).not.toContain('<span>healthy</span>')
+    expect(markup).toContain('>Local checkout</div>')
+    expect(markup).toContain('dateTime="2026-08-18T18:30:00Z"')
+    expect(markup).not.toContain(' ago</time>')
+    expect(markup).toContain('aria-haspopup="dialog"')
+    expect(markup).toContain('>CONFIGURE PROVIDER</button>')
+    expect(markup).toContain('>CHANGE</button>')
+    expect(markup).toContain('<span>SOURCE CHECKOUTS</span>')
+    expect(markup).not.toContain('class="form-modal configure-provider-modal"')
+    expect(markup).not.toContain('>REMOTE URL<')
+  })
+
+  it('derives and compares canonical provider defaults from the project topology', () => {
+    const project = { name: 'billing', sources: [{ name: 'checkout', services: ['checkout'] }] } as Project
+    const environment = { sources: [{ name: 'checkout' }] } as Environment
+    const checkout = { name: 'checkout', kind: 'process' } as Service
+    const postgres = { name: 'postgres', kind: 'resource' } as Service
+
+    expect(defaultProviderBinding(project, environment, checkout)).toEqual({ service: 'checkout', provider: 'local', source: 'checkout' })
+    expect(defaultProviderBinding(project, environment, postgres)).toEqual({ service: 'postgres', provider: 'container' })
+    expect(providerBindingMatches({ service: 'checkout', provider: 'local', source: 'checkout' }, { service: 'checkout', provider: 'local', source: 'CHECKOUT' })).toBe(true)
+    expect(providerBindingMatches({ service: 'checkout', provider: 'remote' }, { service: 'checkout', provider: 'local', source: 'checkout' })).toBe(false)
   })
 
   it('translates pointer movement into scroll-based panning', () => {
