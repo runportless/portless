@@ -3,6 +3,7 @@ import { api, connectEvents, jsonBody, environmentPath } from '../api'
 import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
+import { DrawerSizeButton } from '../components/DrawerSizeButton'
 import { paginateItems, PanelPagination } from '../components/PanelPagination'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 import { TrafficPanel } from './traffic'
@@ -90,6 +91,7 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
   environment: Environment; timeline: TimelineEvent[]; ready: number; faults: FaultRule[]; activeRecording?: Recording; trafficCount: number; onService: (service: Service) => void; onTab: (tab: Tab, edge?: string, protocol?: 'http' | 'tcp') => void
 }) {
   const [topologyPaused, setTopologyPaused] = useState(false)
+  const [topologyCenterRequest, setTopologyCenterRequest] = useState(0)
   const [servicePage, setServicePage] = useState(0)
   const [activityPage, setActivityPage] = useState(0)
   const [copiedEndpoint, setCopiedEndpoint] = useState('')
@@ -133,8 +135,8 @@ function Overview({ environment, timeline, ready, faults, activeRecording, traff
     </section>
     <div className="overview-grid">
       <section className="panel topology-panel topology-panel--preview" aria-label="Service topology">
-        <div className="panel-title topology-toolbar"><span>TOPOLOGY</span><div><TopologyLiveButton paused={topologyPaused} onToggle={() => setTopologyPaused((value) => !value)} /><button className="topology-size-button" type="button" title="Open topology" aria-label="Open topology" onClick={() => onTab('topology')}><TopologySizeIcon /></button></div></div>
-        <Topology environment={environment} faults={faults} paused={topologyPaused} onService={onService} onEdge={(edge) => onTab('traffic', `${edge.source}:${edge.target}`, edge.protocol === 'http' ? 'http' : 'tcp')} />
+        <div className="panel-title topology-toolbar"><span>TOPOLOGY</span><div><TopologyLiveButton paused={topologyPaused} onToggle={() => setTopologyPaused((value) => !value)} /><TopologyCenterButton onCenter={() => setTopologyCenterRequest((value) => value+1)} /><button className="topology-size-button" type="button" title="Open topology" aria-label="Open topology" onClick={() => onTab('topology')}><TopologySizeIcon /></button></div></div>
+        <Topology environment={environment} faults={faults} paused={topologyPaused} centerRequest={topologyCenterRequest} onService={onService} onEdge={(edge) => onTab('traffic', `${edge.source}:${edge.target}`, edge.protocol === 'http' ? 'http' : 'tcp')} />
       </section>
       <section className="panel activity-panel">
         <div className="panel-title"><span>RECENT ACTIVITY</span><button onClick={() => onTab('timeline')}>FULL TIMELINE</button></div>
@@ -182,6 +184,7 @@ function CopyIcon({ copied }: { copied: boolean }) {
 function TopologyView({ environment, faults, onService, onTab }: { environment: Environment; faults: FaultRule[]; onService: (service: Service) => void; onTab: (tab: Tab, edge?: string, protocol?: 'http' | 'tcp') => void }) {
   const [paused, setPaused] = useState(false)
   const [maximized, setMaximized] = useState(false)
+  const [centerRequest, setCenterRequest] = useState(0)
 
   useEffect(() => {
     if (!maximized) return
@@ -198,13 +201,17 @@ function TopologyView({ environment, faults, onService, onTab }: { environment: 
   }, [maximized])
 
   return <section className={`panel topology-panel topology-panel--page${maximized ? ' topology-panel--maximized' : ''}`} aria-label="Service topology">
-    <div className="panel-title topology-toolbar"><span>TOPOLOGY</span><div><TopologyLiveButton paused={paused} onToggle={() => setPaused((value) => !value)} /><button className={maximized ? 'icon-button' : 'topology-size-button'} type="button" title={`${maximized ? 'Restore' : 'Maximize'} topology`} aria-label={`${maximized ? 'Restore' : 'Maximize'} topology`} aria-pressed={maximized} onClick={() => setMaximized((value) => !value)}>{maximized ? '×' : <TopologySizeIcon />}</button></div></div>
-    <Topology environment={environment} faults={faults} paused={paused} onService={onService} onEdge={(edge) => onTab('traffic', `${edge.source}:${edge.target}`, edge.protocol === 'http' ? 'http' : 'tcp')} />
+    <div className="panel-title topology-toolbar"><span>TOPOLOGY</span><div><TopologyLiveButton paused={paused} onToggle={() => setPaused((value) => !value)} /><TopologyCenterButton onCenter={() => setCenterRequest((value) => value+1)} /><button className={maximized ? 'icon-button' : 'topology-size-button'} type="button" title={`${maximized ? 'Restore' : 'Maximize'} topology`} aria-label={`${maximized ? 'Restore' : 'Maximize'} topology`} aria-pressed={maximized} onClick={() => setMaximized((value) => !value)}>{maximized ? '×' : <TopologySizeIcon />}</button></div></div>
+    <Topology environment={environment} faults={faults} paused={paused} centerRequest={centerRequest} onService={onService} onEdge={(edge) => onTab('traffic', `${edge.source}:${edge.target}`, edge.protocol === 'http' ? 'http' : 'tcp')} />
   </section>
 }
 
 function TopologyLiveButton({ paused, onToggle }: { paused: boolean; onToggle: () => void }) {
   return <button className={`topology-live${paused ? ' is-paused' : ''}`} type="button" title={paused ? 'Resume live topology' : 'Pause live topology'} onClick={onToggle}>{paused ? <svg className="topology-live__pause" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="3" height="8" /><rect x="6" y="1" width="3" height="8" /></svg> : <i className="topology-live__dot" aria-hidden="true" />}{paused ? 'PAUSED' : 'LIVE'}</button>
+}
+
+function TopologyCenterButton({ onCenter }: { onCenter: () => void }) {
+  return <button className="topology-center-button" type="button" title="Center topology" aria-label="Center topology" onClick={onCenter}><TopologyCenterIcon /></button>
 }
 
 const overviewPageSize = 8
@@ -322,12 +329,24 @@ export function topologyPanPosition(origin: { clientX: number; clientY: number; 
   return { scrollLeft: origin.scrollLeft-(clientX-origin.clientX), scrollTop: origin.scrollTop-(clientY-origin.clientY) }
 }
 
+export function topologyCenterPosition(viewport: { scrollWidth: number; clientWidth: number; scrollHeight: number; clientHeight: number }) {
+  return {
+    scrollLeft: Math.max(0, (viewport.scrollWidth-viewport.clientWidth)/2),
+    scrollTop: Math.min(120, Math.max(0, (viewport.scrollHeight-viewport.clientHeight)/2)),
+  }
+}
+
+function TopologyCenterIcon() {
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" /><path d="M8 1v3M8 12v3M1 8h3M12 8h3" /></svg>
+}
+
 function TopologySizeIcon() {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2H2v4M10 2h4v4M2 10v4h4M14 10v4h-4" /></svg>
 }
 
-function Topology({ environment, faults, paused, onService, onEdge }: { environment: Environment; faults: FaultRule[]; paused: boolean; onService: (service: Service) => void; onEdge: (edge: TopologyEdge) => void }) {
+function Topology({ environment, faults, paused, centerRequest, onService, onEdge }: { environment: Environment; faults: FaultRule[]; paused: boolean; centerRequest: number; onService: (service: Service) => void; onEdge: (edge: TopologyEdge) => void }) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const handledCenterRequest = useRef(centerRequest)
   const pan = useRef<{ pointerId: number; clientX: number; clientY: number; scrollLeft: number; scrollTop: number; dragging: boolean } | null>(null)
   const suppressClick = useRef(false)
   const [isPanning, setIsPanning] = useState(false)
@@ -377,11 +396,21 @@ function Topology({ environment, faults, paused, onService, onEdge }: { environm
     const viewport = viewportRef.current
     if (!viewport) return
     const frame = requestAnimationFrame(() => {
-      viewport.scrollLeft = Math.max(0, (viewport.scrollWidth-viewport.clientWidth)/2)
-      viewport.scrollTop = Math.min(120, Math.max(0, (viewport.scrollHeight-viewport.clientHeight)/2))
+      const position = topologyCenterPosition(viewport)
+      viewport.scrollTo({ left: position.scrollLeft, top: position.scrollTop })
     })
     return () => cancelAnimationFrame(frame)
   }, [environment.project, environment.name])
+
+  useEffect(() => {
+    if (handledCenterRequest.current === centerRequest) return
+    handledCenterRequest.current = centerRequest
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const position = topologyCenterPosition(viewport)
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    viewport.scrollTo({ left: position.scrollLeft, top: position.scrollTop, behavior: reducedMotion ? 'auto' : 'smooth' })
+  }, [centerRequest])
 
   const startPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
@@ -585,7 +614,7 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
   const localProcess = service.kind === 'process' && bindingFor(environment, service.name)?.provider === 'local'
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
     <aside className={`drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
+      <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><DrawerSizeButton fullScreen={fullScreen} subject={`${service.name} service`} onToggle={() => setFullScreen((value) => !value)} /><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
       <div className="drawer-actions" aria-busy={!!busy}>{localProcess && service.debug && <button className="button button--primary" type="button" onClick={() => void action(service.launchMode === 'debug' ? 'manage' : 'debug')} disabled={!!busy}>{busy === 'debug' || busy === 'manage' ? serviceActionProgressLabel(busy) : service.launchMode === 'debug' ? 'RUN NORMALLY' : 'DEBUG'}</button>}<button className={`button${!localProcess || !service.debug ? ' button--primary' : ''}`} type="button" onClick={() => void action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy === 'restart' || busy === 'start' ? serviceActionProgressLabel(busy) : service.status === 'ready' ? 'RESTART' : 'START'}</button><button className="button" type="button" onClick={() => void action('stop')} disabled={!!busy || service.status === 'stopped'}>{busy === 'stop' ? serviceActionProgressLabel(busy) : 'STOP'}</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
       {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
       <nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>

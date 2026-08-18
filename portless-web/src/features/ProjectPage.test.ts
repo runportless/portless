@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, EnvironmentPage, overviewServiceEndpoint, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, EnvironmentPage, overviewServiceEndpoint, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -53,6 +53,8 @@ describe('environment topology', () => {
     }))
 
     expect(markup).toContain('class="panel topology-panel topology-panel--preview"')
+    expect(markup).toContain('aria-label="Center topology"')
+    expect(markup).toContain('class="topology-center-button"')
     expect(markup).toContain('aria-label="Open topology"')
     expect(markup).toContain('class="topology-size-button"')
     expect(markup).toContain('aria-label="Topology canvas; drag to pan"')
@@ -85,6 +87,7 @@ describe('environment topology', () => {
     }))
 
     expect(markup).toContain('class="panel topology-panel topology-panel--page"')
+    expect(markup).toContain('aria-label="Center topology"')
     expect(markup).toContain('aria-label="Maximize topology"')
     expect(markup).toContain('aria-pressed="false"')
     expect(markup).toContain('>topology<')
@@ -143,6 +146,11 @@ describe('environment topology', () => {
   it('translates pointer movement into scroll-based panning', () => {
     expect(topologyPanPosition({ clientX: 300, clientY: 180, scrollLeft: 160, scrollTop: 120 }, 220, 130)).toEqual({ scrollLeft: 240, scrollTop: 170 })
     expect(topologyPanPosition({ clientX: 300, clientY: 180, scrollLeft: 160, scrollTop: 120 }, 360, 230)).toEqual({ scrollLeft: 100, scrollTop: 70 })
+  })
+
+  it('calculates the initial and requested topology center consistently', () => {
+    expect(topologyCenterPosition({ scrollWidth: 1200, clientWidth: 800, scrollHeight: 900, clientHeight: 500 })).toEqual({ scrollLeft: 200, scrollTop: 120 })
+    expect(topologyCenterPosition({ scrollWidth: 600, clientWidth: 800, scrollHeight: 400, clientHeight: 500 })).toEqual({ scrollLeft: 0, scrollTop: 0 })
   })
 
   it('paginates overview collections at eight items', () => {

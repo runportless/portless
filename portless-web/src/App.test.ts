@@ -1,5 +1,7 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { environmentSessionKey, parseRoute } from './App'
+import { environmentSessionKey, LoadingScreen, parseRoute } from './App'
 
 describe('application routes', () => {
   it('recognizes the top-level settings page without inventing project scope', () => {
@@ -29,5 +31,12 @@ describe('application routes', () => {
     expect(environmentSessionKey(environment, null)).toBe('billing/local@daemon-pending')
     expect(environmentSessionKey(environment, { instanceId: 'daemon-a' })).toBe('billing/local@daemon-a')
     expect(environmentSessionKey(environment, { instanceId: 'daemon-b' })).toBe('billing/local@daemon-b')
+  })
+
+  it('renders a clear, accessible connecting state', () => {
+    const markup = renderToStaticMarkup(createElement(LoadingScreen))
+    expect(markup).toContain('class="splash__content" role="status" aria-live="polite"')
+    expect(markup).toContain('class="splash__spinner" aria-hidden="true"')
+    expect(markup).toContain('Connecting to the local control plane…')
   })
 })

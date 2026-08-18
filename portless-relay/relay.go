@@ -178,6 +178,7 @@ func closeWrite(connection net.Conn) {
 func writeUnavailable(connection net.Conn, message string) {
 	defer connection.Close()
 	_ = connection.SetWriteDeadline(time.Now().Add(time.Second))
-	response := fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(message), message)
+	body := renderUnavailablePage(message)
+	response := fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\nReferrer-Policy: no-referrer\r\nRetry-After: 2\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n%s", len(body), body)
 	_, _ = io.WriteString(connection, response)
 }

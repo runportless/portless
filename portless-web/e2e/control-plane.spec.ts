@@ -475,6 +475,22 @@ test('supports keyboard topology inspection and command palette navigation', asy
   const state = readE2EState()
   await authenticate(page, environmentPath('topology'))
 
+  const canvas = page.getByLabel('Topology canvas; drag to pan')
+  const topologyIsCentered = () => canvas.evaluate((element) => {
+    const viewport = element as HTMLElement
+    const targetLeft = Math.max(0, (viewport.scrollWidth-viewport.clientWidth)/2)
+    const targetTop = Math.min(120, Math.max(0, (viewport.scrollHeight-viewport.clientHeight)/2))
+    return Math.abs(viewport.scrollLeft-targetLeft) < 2 && Math.abs(viewport.scrollTop-targetTop) < 2
+  })
+  await expect.poll(topologyIsCentered).toBe(true)
+  await canvas.evaluate((element) => {
+    element.scrollLeft = 0
+    element.scrollTop = 0
+  })
+  await expect.poll(topologyIsCentered).toBe(false)
+  await page.getByRole('button', { name: 'Center topology' }).click()
+  await expect.poll(topologyIsCentered).toBe(true)
+
   const edge = page.getByRole('button', { name: 'Inspect traffic from external to checkout' })
   await edge.focus()
   await expect(edge).toBeFocused()
@@ -548,9 +564,15 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
 	await expect(drawer.getByText(/^8\.2\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
-  await drawer.getByRole('button', { name: 'FULL SCREEN' }).click()
+  const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })
+  await expect(fullScreenButton.locator('svg')).toBeVisible()
+  await expect(fullScreenButton).toHaveText('')
+  await fullScreenButton.click()
   await expect(drawer).toHaveClass(/drawer--fullscreen/)
-  await drawer.getByRole('button', { name: 'RESTORE' }).click()
+  const restoreButton = drawer.getByRole('button', { name: 'Restore Portless Daemon' })
+  await expect(restoreButton.locator('svg')).toBeVisible()
+  await expect(restoreButton).toHaveText('')
+  await restoreButton.click()
   await drawer.getByRole('button', { name: 'RESTART DAEMON' }).click()
   await page.getByRole('alertdialog', { name: 'Confirm daemon restart' }).getByRole('button', { name: 'RESTART AND RECONNECT' }).click()
   await expect(drawer).toContainText('Daemon restarted', { timeout: 30_000 })

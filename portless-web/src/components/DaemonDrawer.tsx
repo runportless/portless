@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { APIError } from '../api'
 import type { DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
+import { DrawerSizeButton } from './DrawerSizeButton'
 import { relativeTime, StatusMark } from './Status'
 
 type RestartPhase = 'idle' | 'confirm' | 'restarting' | 'reconnected' | 'failed'
@@ -79,7 +80,7 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
 
   return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
     <aside className={`drawer daemon-drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Portless Daemon" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div><div className="drawer-header-actions"><button className="drawer-size-button" type="button" aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>{fullScreen ? 'RESTORE' : 'FULL SCREEN'}</button><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
+      <header><div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div><div className="drawer-header-actions"><DrawerSizeButton fullScreen={fullScreen} subject="Portless Daemon" onToggle={() => setFullScreen((value) => !value)} /><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
       <div className="drawer-actions">
         <button className="button button--warning" onClick={() => setPhase('confirm')} disabled={!status || !live || !restartSafe || restarting}>RESTART DAEMON</button>
         <button className="button" onClick={() => void copyDiagnostics()} disabled={!status}>{copyState}</button>

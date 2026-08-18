@@ -67,8 +67,23 @@ func TestRelayReturnsServiceUnavailableWhenDaemonSocketIsAbsent(t *testing.T) {
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
-	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "portless up") {
+	if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(string(body), "portless up") {
 		t.Fatalf("status=%d body=%q", response.StatusCode, body)
+	}
+	for _, expected := range []string{`class="brand"`, `class="signal"`, `class="spinner"`, `<strong>portless</strong>`, `http-equiv="refresh" content="2"`} {
+		if !strings.Contains(string(body), expected) {
+			t.Fatalf("unavailable page does not contain %q", expected)
+		}
+	}
+	if response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Content-Security-Policy") == "" {
+		t.Fatalf("unavailable response is missing browser safety headers: %#v", response.Header)
+	}
+}
+
+func TestUnavailablePageEscapesMessage(t *testing.T) {
+	page := renderUnavailablePage(`<script>alert("unsafe")</script>`)
+	if strings.Contains(page, `<script>`) || !strings.Contains(page, `&lt;script&gt;`) {
+		t.Fatalf("unavailable page did not escape its message: %s", page)
 	}
 }
 

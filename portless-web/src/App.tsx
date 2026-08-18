@@ -179,8 +179,8 @@ function environmentUIPath(environment: Pick<Environment, 'project' | 'name'>, t
   return tab === 'overview' ? base : `${base}?tab=${tab}`
 }
 
-function LoadingScreen() {
-  return <div className="splash"><div className="brand brand--large"><span className="brand__signal"><i /><i /><i /></span><span>portless</span></div><p>Connecting to the local control plane…</p></div>
+export function LoadingScreen() {
+  return <div className="splash"><div className="splash__content" role="status" aria-live="polite"><div className="brand brand--large"><span className="brand__signal"><i /><i /><i /></span><span>portless</span></div><div className="splash__spinner" aria-hidden="true" /><p>Connecting to the local control plane…</p></div></div>
 }
 
 function AuthenticationScreen() {
