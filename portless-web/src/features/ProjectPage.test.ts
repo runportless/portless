@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Service, TimelineEvent, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, EnvironmentPage, overviewServiceEndpoint, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, EnvironmentPage, overviewServiceEndpoint, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -61,6 +61,11 @@ describe('environment topology', () => {
     expect(markup).toContain('topology-live__dot')
     expect(markup).toContain('title="Pause live topology"')
     expect(markup).toContain('class="topology__pan-surface"')
+    expect(markup).toContain('id="topology-arrow-inactive"')
+    expect(markup).toContain('id="topology-arrow-active"')
+    expect(markup.match(/markerUnits="userSpaceOnUse"/g)).toHaveLength(2)
+    expect(markup).toContain('markerWidth="6" markerHeight="6"')
+    expect(markup).toContain('markerWidth="10.62" markerHeight="10.62"')
     expect(markup).not.toContain('>MAXIMIZE<')
     expect(markup).toContain('>BINDINGS<')
     expect(markup).toContain('>LOCAL<')
@@ -200,6 +205,28 @@ describe('environment topology', () => {
     const motion = topologyParticleMotion(metric, now)
     expect(motion.count).toBe(1)
     expect(motion.durationSeconds).toBeCloseTo(10/3)
+  })
+
+  it('bolds an active edge once while particles communicate higher traffic', () => {
+    const now = Date.parse('2026-08-12T12:00:30Z')
+    const metricFor = (count: number) => summarizeTopologyTraffic(Array.from({ length: count }, (_, index) => ({
+      protocol: 'http', source: 'checkout', target: 'orders',
+      startedAt: new Date(now-index*100-10).toISOString(),
+      completedAt: new Date(now-index*100).toISOString(),
+      durationMs: 10, status: 200, sequence: index+1, requestBytes: 10, responseBytes: 20,
+    })) as TrafficExchange[], now).get(topologyEdgeKey('checkout', 'orders'))
+    const firstRequest = metricFor(1)
+    const heavyTraffic = metricFor(180)
+
+    const inactive = topologyEdgeVisualState(undefined, now, false)
+    const active = topologyEdgeVisualState(firstRequest, now, false)
+    expect(inactive).toEqual({ strokeWidth: 1, markerID: 'topology-arrow-inactive' })
+    expect(active.strokeWidth).toBeCloseTo(1.77)
+    expect(active.markerID).toBe('topology-arrow-active')
+    expect(topologyEdgeVisualState(heavyTraffic, now, false)).toBe(active)
+    expect(topologyEdgeVisualState(undefined, now, true)).toBe(active)
+    expect(topologyParticleMotion(firstRequest, now).count).toBe(1)
+    expect(topologyParticleMotion(heavyTraffic, now).count).toBe(4)
   })
 
   it('lays out services by their directed dependencies', () => {

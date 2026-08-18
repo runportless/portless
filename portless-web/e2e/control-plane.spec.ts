@@ -98,6 +98,25 @@ test('renders real services, endpoints, topology, and service details', async ({
   }
   await expect(topology.getByRole('button', { name: 'Inspect traffic from checkout to redis' })).toHaveCount(0)
 
+  const ingressEdge = topology.locator('.topology-edge').first()
+  const ingressLine = ingressEdge.locator('.topology-edge__line')
+  const edgeGeometry = () => ingressLine.evaluate((element) => {
+    const path = element as SVGPathElement
+    const markerID = path.style.markerEnd.match(/#([^)"]+)/)?.[1] || ''
+    const marker = document.getElementById(markerID) as SVGMarkerElement | null
+    return { strokeWidth: path.style.strokeWidth, markerID, markerWidth: marker?.markerWidth.baseVal.value, markerUnits: marker?.markerUnits.baseVal }
+  })
+  await expect.poll(edgeGeometry).toEqual({ strokeWidth: '1', markerID: 'topology-arrow-inactive', markerWidth: 6, markerUnits: 1 })
+
+  expect((await applicationRequest('/checkout?sku=topology-active&quantity=1')).status).toBe(200)
+  await expect.poll(async () => (await edgeGeometry()).markerID).toBe('topology-arrow-active')
+  const activeGeometry = await edgeGeometry()
+  expect(activeGeometry).toMatchObject({ strokeWidth: '1.77', markerID: 'topology-arrow-active', markerUnits: 1 })
+  expect(activeGeometry.markerWidth).toBeCloseTo(10.62)
+  await Promise.all(Array.from({ length: 24 }, (_, index) => applicationRequest(`/checkout?sku=topology-load-${index}&quantity=1`)))
+  await expect.poll(() => ingressEdge.locator('.topology-edge__pulse').count()).toBeGreaterThan(1)
+  expect(await edgeGeometry()).toEqual(activeGeometry)
+
   await services.filter({ hasText: 'checkout' }).getByRole('button', { name: 'INSPECT' }).click()
   const drawer = page.getByRole('dialog', { name: 'checkout service' })
   await expect(drawer).toContainText('http://checkout.local.ui-e2e.localhost')

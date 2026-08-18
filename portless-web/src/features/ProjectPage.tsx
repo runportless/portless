@@ -223,6 +223,11 @@ type TopologyEdgeMetric = {
 type TopologyEdge = ReturnType<typeof buildTopology>['edges'][number]
 
 const topologyWindowMilliseconds = 30_000
+const topologyActiveEdgeWidth = 1.77
+const topologyInactiveArrowSize = 6
+const topologyActiveArrowSize = 10.62
+const topologyInactiveEdgeVisual = { strokeWidth: 1, markerID: 'topology-arrow-inactive' } as const
+const topologyActiveEdgeVisual = { strokeWidth: topologyActiveEdgeWidth, markerID: 'topology-arrow-active' } as const
 
 export function topologyEdgeKey(source: string, target: string) { return `${source}\u0000${target}` }
 
@@ -296,11 +301,8 @@ function formatBytes(value: number) {
   return `${value} B`
 }
 
-function topologyEdgeWidth(metric: TopologyEdgeMetric | undefined, now: number, hasFault: boolean) {
-  if (hasFault) return 2
-  if (!metric || now-metric.lastSeen > topologyWindowMilliseconds) return 1
-  const volume = metric.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds).length || metric.activeConnections
-  return Math.min(3.2, 1.35+Math.log2(volume+1)*.42)
+export function topologyEdgeVisualState(metric: TopologyEdgeMetric | undefined, now: number, hasFault: boolean) {
+  return hasFault || (metric && now-metric.lastSeen <= topologyWindowMilliseconds) ? topologyActiveEdgeVisual : topologyInactiveEdgeVisual
 }
 
 export function topologyParticleMotion(metric: TopologyEdgeMetric | undefined, now: number) {
@@ -450,7 +452,10 @@ function Topology({ environment, faults, paused, onService, onEdge }: { environm
     onLostPointerCapture={stopPan}
   ><div className="topology__pan-surface"><div className="topology__canvas" style={{ width, height }}>
     <svg className="topology__edges" width={width} height={height} aria-hidden="true">
-      <defs><marker id="topology-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker></defs>
+      <defs>
+        <marker id={topologyInactiveEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyInactiveArrowSize} markerHeight={topologyInactiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
+        <marker id={topologyActiveEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyActiveArrowSize} markerHeight={topologyActiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
+      </defs>
       {edges.map((edge) => {
         const from = positions.get(edge.source)
         const to = positions.get(edge.target)
@@ -467,8 +472,9 @@ function Topology({ environment, faults, paused, onService, onEdge }: { environm
         const tone = topologyEdgeTone(metric, !!activeFault, now)
         const path = `M ${startX} ${startY} C ${middleX} ${startY}, ${middleX} ${endY}, ${endX} ${endY}`
         const particleMotion = topologyParticleMotion(metric, now)
+        const visualState = topologyEdgeVisualState(metric, now, !!activeFault)
         return <g key={`${edge.source}:${edge.target}`} className={`topology-edge topology-edge--${tone}`}>
-          <path className="topology-edge__line" d={path} style={{ strokeWidth: topologyEdgeWidth(metric, now, !!activeFault) }} />
+          <path className="topology-edge__line" d={path} style={{ strokeWidth: visualState.strokeWidth, markerEnd: `url(#${visualState.markerID})` }} />
           {!paused && Array.from({ length: particleMotion.count }, (_, index) => <circle key={index} className="topology-edge__pulse" r="3"><animateMotion dur={`${particleMotion.durationSeconds}s`} begin={`${-(index*particleMotion.durationSeconds/particleMotion.count)}s`} repeatCount="indefinite" path={path} /></circle>)}
           <text x={middleX} y={middleY-10}>{topologyEdgeLabel(edge, metric, now, activeFault)}</text>
         </g>
