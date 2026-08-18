@@ -22,6 +22,8 @@ describe('trace waterfall', () => {
 
     const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} onExchange={() => undefined} />)
     expect(markup).toContain('aria-label="Trace 11 waterfall"')
+    expect(markup).toContain('aria-label="Maximize trace 11"')
+    expect(markup).toContain('aria-pressed="false"')
     expect(markup).toContain('external <i>→</i> checkout')
     expect(markup).toContain('POST /checkout')
     expect(markup).toContain('class="trace-span is-tcp"')
