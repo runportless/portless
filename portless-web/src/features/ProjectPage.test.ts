@@ -163,7 +163,7 @@ describe('environment topology', () => {
     expect(markup).toContain('role="table" aria-label="Configured providers"')
     expect(markup).toContain('<span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader">Actions</span>')
     expect(markup).toContain('class="provider-service"')
-    expect(markup).toContain('title="healthy"')
+    expect(markup).toContain('title="stopped"')
     expect(markup).not.toContain('<span>healthy</span>')
     expect(markup).toContain('>Local checkout</div>')
     expect(markup).toContain('dateTime="2026-08-18T18:30:00Z"')

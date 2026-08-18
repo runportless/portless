@@ -256,6 +256,67 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	return s.Environment(ctx, projectName, environmentName)
 }
 
+// ApplyActiveBindingConfiguration updates one provider binding and the compiled
+// model without deleting runtime ownership, proxy, or source records for the
+// rest of an active environment.
+func (s *Store) ApplyActiveBindingConfiguration(ctx context.Context, projectName, environmentName string, expectedRevision int64, definition model.ProjectModel, binding model.ComponentBinding) (model.Environment, error) {
+	modelJSON, err := encodeProjectModel(definition)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	specs, err := networking.AllocationSpecs(projectName, environmentName, definition)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	defer tx.Rollback()
+	var key string
+	var revision int64
+	var status string
+	if err := tx.QueryRowContext(ctx, `
+SELECT e.private_key, e.revision, e.status FROM environments e
+JOIN projects p ON p.private_key = e.project_key
+WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, environmentName).Scan(&key, &revision, &status); err != nil {
+		return model.Environment{}, mapSQLError(err)
+	}
+	if expectedRevision > 0 && revision != expectedRevision {
+		return model.Environment{}, ErrConflict
+	}
+	if status == string(model.EnvironmentStopped) {
+		return model.Environment{}, errors.New("active binding configuration requires a running environment")
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE environments SET model_json = ?, primary_service = ?, revision = revision + 1, updated_at = ?
+WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key); err != nil {
+		return model.Environment{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM environment_bindings
+WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, key, binding.Service); err != nil {
+		return model.Environment{}, err
+	}
+	if err := insertBinding(ctx, tx, key, binding); err != nil {
+		return model.Environment{}, err
+	}
+	for _, service := range definition.Services {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO service_runtime(environment_key, service_name, status)
+VALUES(?, ?, ?)
+ON CONFLICT(environment_key, service_name) DO NOTHING`, key, service.Name, model.ServicePlanned); err != nil {
+			return model.Environment{}, err
+		}
+	}
+	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
+		return model.Environment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Environment{}, err
+	}
+	return s.Environment(ctx, projectName, environmentName)
+}
+
 // ReplaceProjectAndEnvironmentConfiguration atomically extends project topology and one stopped environment.
 func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environmentName string, expectedEnvironmentRevision int64, environmentDefinition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
 	projectDefinition.SuggestedName = projectName

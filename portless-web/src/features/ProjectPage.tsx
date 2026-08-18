@@ -802,6 +802,12 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
   const defaultBinding = selected ? defaultProviderBinding(project, environment, selected) : undefined
   const resetAvailable = !!currentBinding && !!defaultBinding && !providerBindingMatches(currentBinding, defaultBinding)
   const busy = busyAction !== ''
+  const transitionBlocked = ['starting', 'stopping', 'recovering', 'unknown'].includes(environment.status)
+  const providerUnchanged = !!currentBinding && currentBinding.provider === provider && (
+    provider === 'container' ||
+    (provider === 'local' && currentBinding.source?.toLowerCase() === source.toLowerCase()) ||
+    (provider === 'remote' && currentBinding.remote?.url === remoteURL && currentBinding.remote?.classification === classification && currentBinding.remote?.writePolicy === writePolicy && (currentBinding.remote?.healthPath || '') === healthPath)
+  )
 
   const initializeProviderForm = (serviceName: string) => {
     const target = environment.services.find((item) => item.name === serviceName)
@@ -855,9 +861,11 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
       const binding: ComponentBinding = { service, provider }
       if (provider === 'local') binding.source = source
       if (provider === 'remote') binding.remote = { url: remoteURL, classification, writePolicy, healthPath }
-      await api(environmentPath(environment, `/bindings/${encodeURIComponent(service)}`), {
-        method: 'PUT', ...jsonBody(binding),
+      const operation = await api<Operation>(environmentPath(environment, `/bindings/${encodeURIComponent(service)}`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(binding),
       })
+      const completed = await waitForServiceOperation(environment, operation)
+      if (completed.state !== 'succeeded') throw new Error(completed.error || `Provider change ${completed.state}`)
       await onChanged()
       setConfigureOpen(false)
       requestAnimationFrame(() => returnFocus.current?.focus())
@@ -873,9 +881,11 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
     setBusyAction('reset')
     setSaveError(null)
     try {
-      await api(environmentPath(environment, `/bindings/${encodeURIComponent(service)}`), {
-        method: 'PUT', ...jsonBody(defaultBinding),
+      const operation = await api<Operation>(environmentPath(environment, `/bindings/${encodeURIComponent(service)}`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(defaultBinding),
       })
+      const completed = await waitForServiceOperation(environment, operation)
+      if (completed.state !== 'succeeded') throw new Error(completed.error || `Provider reset ${completed.state}`)
       await onChanged()
       setConfigureOpen(false)
       requestAnimationFrame(() => returnFocus.current?.focus())
@@ -893,7 +903,7 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
         <div className="provider-table" role="table" aria-label="Configured providers">
           <div className="provider-row provider-row--header" role="row"><span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader">Actions</span></div>
           {(environment.bindings || []).map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>
-            <div className="provider-service" role="cell"><StatusMark status={binding.provider === 'remote' ? 'degraded' : 'healthy'} label={false} /><strong>{binding.service}</strong></div>
+            <div className="provider-service" role="cell"><StatusMark status={environment.services.find((item) => item.name === binding.service)?.status || 'planned'} label={false} /><strong>{binding.service}</strong></div>
             <div className="provider-kind" role="cell">{providerDisplayName(binding.provider)}</div>
             <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <><code>{binding.remote?.url}</code><small>{binding.remote?.classification} · {binding.remote?.writePolicy}</small></> : binding.provider === 'local' ? <><code>{binding.source}</code><small>source checkout</small></> : <><span>Portless managed</span><small>container runtime</small></>}</div>
             {binding.modifiedAt ? <time role="cell" dateTime={binding.modifiedAt} title={new Date(binding.modifiedAt).toLocaleString()}>{formatProviderTimestamp(binding.modifiedAt)}</time> : <time role="cell">—</time>}
@@ -923,10 +933,11 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
               <label className="provider-field--wide"><span>HEALTH PATH</span><input aria-label="Health path" value={healthPath} disabled={busy} onChange={(event) => { setHealthPath(event.target.value); setSaveError(null) }} placeholder="/health" /></label>
               <div className="scope-preview scope-preview--warning provider-field--wide"><span className="eyebrow">REMOTE BOUNDARY</span><p>Traffic still passes through Portless, so recordings and faults remain available. A read-only binding blocks POST, PUT, PATCH, and DELETE before they leave this machine.</p></div>
             </>}
-            {environment.status !== 'stopped' && <small className="provider-stop-note provider-field--wide">Stop the environment before changing providers.</small>}
+            {environment.status !== 'stopped' && !transitionBlocked && <small className="provider-stop-note provider-field--wide">Only {service || 'the selected service'} will switch providers. Other running services stay available.</small>}
+            {transitionBlocked && <small className="provider-stop-note provider-field--wide">Wait for the environment to finish {environment.status} before changing a provider.</small>}
           </div>
           {saveError && <ActionErrorNotice error={saveError} onDismiss={() => setSaveError(null)} />}
-          <footer>{resetAvailable && <button className="button button--quiet provider-reset-button" type="button" disabled={busy || environment.status !== 'stopped'} onClick={() => void reset()}>{busyAction === 'reset' ? 'RESETTING…' : 'RESET TO DEFAULT'}</button>}<button className="button button--quiet" type="button" disabled={busy} onClick={closeConfigure}>CANCEL</button><button className={provider === 'remote' ? 'button button--warning' : 'button button--primary'} type="submit" disabled={busy || !service || (provider === 'remote' && !remoteURL) || (provider === 'local' && !source) || environment.status !== 'stopped'}>{busyAction === 'save' ? 'SAVING…' : 'SAVE CHANGES'}</button></footer>
+          <footer>{resetAvailable && <button className="button button--quiet provider-reset-button" type="button" disabled={busy || transitionBlocked} onClick={() => void reset()}>{busyAction === 'reset' ? 'RESETTING…' : 'RESET TO DEFAULT'}</button>}<button className="button button--quiet" type="button" disabled={busy} onClick={closeConfigure}>CANCEL</button><button className={provider === 'remote' ? 'button button--warning' : 'button button--primary'} type="submit" disabled={busy || transitionBlocked || providerUnchanged || !service || (provider === 'remote' && !remoteURL) || (provider === 'local' && !source)}>{busyAction === 'save' ? 'SWITCHING…' : environment.status === 'stopped' ? 'SAVE CHANGES' : 'SWITCH PROVIDER'}</button></footer>
         </form>
       </section>
     </div>}

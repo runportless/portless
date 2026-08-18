@@ -91,10 +91,10 @@ func (c *Client) DownEnvironment(ctx context.Context, project, environment strin
 	return result, err
 }
 
-// SetBinding replaces one service provider binding in an environment.
-func (c *Client) SetBinding(ctx context.Context, project, environment, service string, binding contract.ComponentBinding) (contract.Environment, error) {
-	var result contract.Environment
-	err := c.do(ctx, http.MethodPut, environmentPath(project, environment)+"/bindings/"+EscapePath(service), binding, &result)
+// ChangeBinding starts a durable service-scoped provider transition.
+func (c *Client) ChangeBinding(ctx context.Context, project, environment, service string, binding contract.ComponentBinding, idempotencyKey string) (contract.Operation, error) {
+	var result contract.Operation
+	err := c.doWithHeaders(ctx, http.MethodPut, environmentPath(project, environment)+"/bindings/"+EscapePath(service), binding, &result, map[string]string{"Idempotency-Key": idempotencyKey})
 	return result, err
 }
 

@@ -83,8 +83,9 @@ The CLI E2E suite protects these product contracts:
   adding a source after cloning, and explicit remediation of the other
   environment;
 - a mixed environment with local services and a remote QA dependency,
-  including traffic attribution and local enforcement of its read-only write
-  policy;
+  including traffic attribution, local enforcement of its read-only write
+  policy, and active local/remote provider handoffs that preserve unrelated
+  service PIDs and generations;
 - forced reset when ordinary lifecycle state is from an incompatible model.
 
 The Playwright suite protects these browser journeys:
@@ -100,7 +101,8 @@ The Playwright suite protects these browser journeys:
 - captured request and response inspection with repeated headers and redacted credentials;
 - recording and fault workflows;
 - environment stop/start controls;
-- stopped-only provider editing with remote binding persistence and restore;
+- active service-scoped provider handoff with unrelated runtime preservation,
+  plus stopped-environment remote binding persistence and restore;
 - durable timeline rendering and pagination;
 - trace-first traffic expansion, raw exchange filtering, buffered pause/resume,
   and HTTP/TCP switching;

@@ -23,13 +23,15 @@ export default async function globalSetup() {
     runCLI(binary, home, checkout, ['up', '--name', 'ui-e2e', '--no-open', '--timeout', '2m'])
     runCLI(binary, home, debugCheckout, ['up', '--name', 'ui-debug', '--managed', '--no-open', '--timeout', '2m'])
     const control = JSON.parse(readFileSync(join(home, 'control.json'), 'utf8')) as { port: number }
+    const baseURL = `http://127.0.0.1:${control.port}`
+    const token = readFileSync(join(home, 'install.key'), 'utf8').trim()
     const state: E2EState = {
       root,
       home,
       checkout,
       binary,
-      baseURL: `http://127.0.0.1:${control.port}`,
-      token: readFileSync(join(home, 'install.key'), 'utf8').trim(),
+      baseURL,
+      token,
       project: 'ui-e2e',
       environment: 'local',
       applicationHost: 'checkout.local.ui-e2e.localhost',

@@ -48,6 +48,29 @@ func TestDoAuthenticatesAndEncodesJSON(t *testing.T) {
 	}
 }
 
+func TestChangeBindingSendsIdempotencyKeyAndDecodesOperation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPut || request.URL.Path != "/api/v1/environments/billing/local/bindings/orders" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if request.Header.Get("Idempotency-Key") != "provider-request" {
+			t.Fatalf("Idempotency-Key = %q", request.Header.Get("Idempotency-Key"))
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(writer, `{"project":"billing","environment":"local","number":7,"type":"change-provider","state":"running","actor":"CLI","startedAt":"2026-08-18T12:00:00Z"}`)
+	}))
+	defer server.Close()
+	client := New(server.URL, "secret", server.Client())
+	operation, err := client.ChangeBinding(context.Background(), "billing", "local", "orders", contract.ComponentBinding{Provider: "remote"}, "provider-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.Number != 7 || operation.Type != "change-provider" || operation.State != "running" {
+		t.Fatalf("operation = %#v", operation)
+	}
+}
+
 func TestDoDecodesStructuredErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusConflict)

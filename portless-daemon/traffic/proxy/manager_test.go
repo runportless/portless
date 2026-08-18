@@ -504,6 +504,42 @@ func TestRemoteTargetForwardsHTTPAndEnforcesReadOnlyPolicy(t *testing.T) {
 	}
 }
 
+func TestRemotePreflightDoesNotReplaceServingTarget(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	local := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("local"))
+	}))
+	defer local.Close()
+	localURL, _ := url.Parse(local.URL)
+	localPort, _ := strconv.Atoi(localURL.Port())
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/health" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = writer.Write([]byte("remote"))
+	}))
+	defer remote.Close()
+	manager := newManagerForTest(controlStore)
+	manager.SetTarget(scope, "payments", localPort)
+	if err := manager.CheckRemoteTarget(context.Background(), model.RemoteTarget{
+		URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, provider, targetEndpoint := manager.ConnectionRuntime(scope, "external", "payments")
+	if provider != model.ProviderLocal || targetEndpoint != net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)) {
+		t.Fatalf("preflight changed target: provider=%s endpoint=%s", provider, targetEndpoint)
+	}
+	response := httptest.NewRecorder()
+	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://payments.local.billing.localhost/charges", nil), scope, "payments")
+	if response.Code != http.StatusOK || response.Body.String() != "local" {
+		t.Fatalf("preflight interrupted local traffic: %d %q", response.Code, response.Body.String())
+	}
+}
+
 func environmentStore(t *testing.T) *database.Store {
 	t.Helper()
 	controlStore, err := database.Open(filepath.Join(t.TempDir(), "portless.db"))

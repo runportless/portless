@@ -366,6 +366,8 @@ portless up
 
 All HTTP traffic to the remote dependency still crosses the environment proxy, so traffic inspection, recording, and faults work across that boundary. A read-only binding blocks `POST`, `PUT`, `PATCH`, and `DELETE` locally. Restore the local implementation with `portless env bind payments --local payments`.
 
+Provider changes do not require an environment-wide stop. In an active environment, `env bind` creates a durable `change-provider` operation, probes a remote candidate before changing traffic, and hands off only the selected service. Existing source-scoped listeners stay in place, so callers keep the same injected endpoint while its upstream changes. Other services keep their PIDs, generations, debugger sessions, and endpoints. If the selected replacement cannot become ready, Portless restores its previous binding and runtime. Changing a checkout path with `portless env source` remains stopped-only because that operation can recompile several services at once.
+
 Two environments cannot safely launch processes from the same checkout simultaneously. Point one environment at a Git worktree, then run both:
 
 ```bash

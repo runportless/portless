@@ -2,7 +2,9 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/portless-run/portless/portless-cli/command"
 	"github.com/portless-run/portless/portless-daemon/api/contract"
@@ -68,12 +70,25 @@ func (c *Commands) bindProvider(ctx context.Context, service string, options bin
 	if options.provider == model.ProviderRemote {
 		binding.Remote = &remote
 	}
-	updated, err := client.SetBinding(ctx, environment.Project, environment.Name, service, binding)
+	idempotencyKey, err := command.InvocationKey("cli-change-provider")
 	if err != nil {
 		return err
 	}
+	operation, err := client.ChangeBinding(ctx, environment.Project, environment.Name, service, binding, idempotencyKey)
+	if err != nil {
+		return err
+	}
+	waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	operation, err = c.WaitOperation(waitContext, client, operation, c.JSONOutput)
+	if err != nil {
+		return err
+	}
+	if operation.State != "succeeded" {
+		return errors.New(operation.Error)
+	}
 	if c.JSONOutput {
-		return command.WriteJSON(c.Out, updated)
+		return command.WriteJSON(c.Out, operation)
 	}
 	detail := string(binding.Provider)
 	if options.provider == model.ProviderLocal {

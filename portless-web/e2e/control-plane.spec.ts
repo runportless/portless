@@ -318,8 +318,11 @@ test('stops and starts the environment from the UI', async ({ page }) => {
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })
 
-test('only edits providers while stopped and persists a remote binding', async ({ page }) => {
+test('switches one active provider and persists stopped-environment bindings', async ({ page }) => {
   const state = readE2EState()
+  type Binding = { service: string; provider: string; source?: string; modifiedAt?: string; remote?: { url: string; classification: string; writePolicy: string; healthPath: string } }
+  type Runtime = { name: string; pid?: number; upstreamPort?: number; generation: number; status: string }
+  type EnvironmentSnapshot = { status: string; bindings: Binding[]; services: Runtime[] }
   await authenticate(page, environmentPath('bindings'))
 
   const providerHeader = page.locator('.provider-row--header')
@@ -347,8 +350,8 @@ test('only edits providers while stopped and persists a remote binding', async (
   const providerSelect = providerDialog.getByLabel('Provider', { exact: true })
   await expect(providerSelect).toBeFocused()
   await expect(providerDialog.getByLabel('Service', { exact: true })).toBeDisabled()
-  await expect(providerDialog.getByRole('button', { name: 'SAVE CHANGES', exact: true })).toBeDisabled()
-  await expect(providerDialog.getByText('Stop the environment before changing providers.')).toBeVisible()
+  await expect(providerDialog.getByRole('button', { name: 'SWITCH PROVIDER', exact: true })).toBeDisabled()
+  await expect(providerDialog.getByText('Only checkout will switch providers. Other running services stay available.')).toBeVisible()
   let environmentRefreshes = 0
   page.on('response', (response) => {
     if (response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/environments') environmentRefreshes++
@@ -361,6 +364,42 @@ test('only edits providers while stopped and persists a remote binding', async (
   await page.keyboard.press('Escape')
   await expect(providerDialog).toHaveCount(0)
   await expect(firstChange).toBeFocused()
+
+  const before = await controlAPI<EnvironmentSnapshot>(`/api/v1/environments/${state.project}/local`)
+  const remoteProviderPort = before.services.find((service) => service.name === 'orders')?.upstreamPort
+  expect(remoteProviderPort).toBeTruthy()
+  const remoteProviderURL = `http://127.0.0.1:${remoteProviderPort}`
+  const stableBefore = Object.fromEntries(before.services.filter((service) => service.name === 'checkout' || service.name === 'orders').map((service) => [service.name, { pid: service.pid, generation: service.generation }]))
+  const activeInventoryRow = page.locator('.configured-providers-panel .provider-row:not(.provider-row--header)').filter({ hasText: 'inventory' })
+  await activeInventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await providerDialog.getByLabel('Provider', { exact: true }).selectOption('remote')
+  await providerDialog.getByLabel('Remote URL', { exact: true }).fill(remoteProviderURL)
+  await providerDialog.getByLabel('Classification', { exact: true }).selectOption('qa')
+  await providerDialog.getByLabel('Write policy', { exact: true }).selectOption('read-only')
+  await providerDialog.getByLabel('Health path', { exact: true }).fill('/health')
+  await providerDialog.getByRole('button', { name: 'SWITCH PROVIDER', exact: true }).click()
+  await expect(providerDialog).toHaveCount(0, { timeout: 30_000 })
+  await expect(activeInventoryRow).toContainText(remoteProviderURL)
+
+  const remoteActive = await controlAPI<EnvironmentSnapshot>(`/api/v1/environments/${state.project}/local`)
+  expect(remoteActive.status).toBe('healthy')
+  expect(remoteActive.bindings.find((binding) => binding.service === 'inventory')).toMatchObject({ provider: 'remote', remote: { url: remoteProviderURL } })
+  for (const serviceName of ['checkout', 'orders']) {
+    const runtime = remoteActive.services.find((service) => service.name === serviceName)
+    expect({ pid: runtime?.pid, generation: runtime?.generation }).toEqual(stableBefore[serviceName])
+  }
+
+  await activeInventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await providerDialog.getByRole('button', { name: 'RESET TO DEFAULT', exact: true }).click()
+  await expect(providerDialog).toHaveCount(0, { timeout: 30_000 })
+  const restoredActive = await controlAPI<EnvironmentSnapshot>(`/api/v1/environments/${state.project}/local`)
+  expect(restoredActive.bindings.find((binding) => binding.service === 'inventory')?.provider).toBe('local')
+  for (const serviceName of ['checkout', 'orders']) {
+    const runtime = restoredActive.services.find((service) => service.name === serviceName)
+    expect({ pid: runtime?.pid, generation: runtime?.generation }).toEqual(stableBefore[serviceName])
+  }
 
   const clonePath = `/environments/${state.project}/qa-ui?tab=bindings`
   await page.goto(`${state.baseURL}${clonePath}`)
@@ -380,7 +419,6 @@ test('only edits providers while stopped and persists a remote binding', async (
   await expect(providerDialog).toHaveCount(0)
   await expect(page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' })).toContainText('https://inventory.qa.example.test')
 
-  type Binding = { service: string; provider: string; source?: string; modifiedAt?: string; remote?: { url: string; classification: string; writePolicy: string; healthPath: string } }
   const remote = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
   const remoteInventory = remote.bindings.find((binding) => binding.service === 'inventory')
   expect(remoteInventory).toMatchObject({
@@ -605,7 +643,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
   await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-	await expect(drawer.getByText(/^8\.3\.0$/)).toBeVisible()
+  await expect(drawer.getByText(/^9\.0\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })

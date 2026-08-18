@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 8.3.0
+  version: 9.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.3.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '9.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -450,19 +450,22 @@ paths:
       - { $ref: '#/components/parameters/EnvironmentName' }
       - { $ref: '#/components/parameters/ServiceName' }
     put:
-      operationId: setComponentProvider
-      description: Environment must be stopped. The service field, if present, is replaced by the path service name.
+      operationId: changeComponentProvider
+      description: Changes one service provider. A stopped environment is reconfigured immediately; an active environment performs a service-scoped handoff while unrelated services remain running. The service field, if present, is replaced by the path service name.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ComponentBinding' }
       responses:
-        '200':
-          description: Recompiled environment
+        '202':
+          description: Durable provider-change operation
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Environment' }
+              schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/sources/{sourceName}:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
@@ -1080,7 +1083,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '8.3.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '9.0.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }

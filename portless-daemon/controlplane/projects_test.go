@@ -39,7 +39,14 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	remote := model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
 		URL: "https://checkout.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly,
 	}}
-	hybrid, err := app.SetBinding(ctx, "billing", "hybrid", "checkout", remote)
+	operation, err := app.ChangeBinding(ctx, "billing", "hybrid", "checkout", remote, "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("remote provider operation = %#v", operation)
+	}
+	hybrid, err := app.Environment(ctx, "billing", "hybrid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +57,14 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hybrid, err = app.SetBinding(ctx, "billing", "hybrid", "checkout", model.ComponentBinding{Provider: model.ProviderLocal, Source: "checkout"})
+	operation, err = app.ChangeBinding(ctx, "billing", "hybrid", "checkout", model.ComponentBinding{Provider: model.ProviderLocal, Source: "checkout"}, "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("local provider operation = %#v", operation)
+	}
+	hybrid, err = app.Environment(ctx, "billing", "hybrid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,9 +146,16 @@ func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *test
 		t.Fatal("selected-environment source path leaked into another environment")
 	}
 
-	remote, err := app.SetBinding(ctx, "store", "remote", "inventory", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
+	operation, err := app.ChangeBinding(ctx, "store", "remote", "inventory", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
 		URL: "https://inventory.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly,
-	}})
+	}}, "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("remote inventory operation = %#v", operation)
+	}
+	remote, err := app.Environment(ctx, "store", "remote")
 	if err != nil {
 		t.Fatal(err)
 	}

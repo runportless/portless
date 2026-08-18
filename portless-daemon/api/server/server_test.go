@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -216,8 +217,23 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	}
 
 	binding := request(server, authManager, http.MethodPut, "/api/v1/environments/billing/local/bindings/checkout", `{"provider":"remote","remote":{"url":"https://checkout.qa.example.test","classification":"qa","writePolicy":"read-only","healthPath":"/health"}}`, true)
-	if binding.Code != http.StatusOK || !strings.Contains(binding.Body.String(), `"provider":"remote"`) || !strings.Contains(binding.Body.String(), `"writePolicy":"read-only"`) {
+	if binding.Code != http.StatusAccepted || !strings.Contains(binding.Body.String(), `"type":"change-provider"`) || !strings.Contains(binding.Body.String(), `"state":"running"`) {
 		t.Fatalf("remote binding response code=%d body=%s", binding.Code, binding.Body.String())
+	}
+	var bindingOperation model.Operation
+	if err := json.Unmarshal(binding.Body.Bytes(), &bindingOperation); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for bindingOperation.State == "running" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		bindingOperation, err = app.Operation(context.Background(), "billing", "local", bindingOperation.Number)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if bindingOperation.State != "succeeded" {
+		t.Fatalf("remote binding operation = %#v", bindingOperation)
 	}
 	if err := controlStore.SetEnvironmentStatus(context.Background(), "billing", "local", model.EnvironmentHealthy, ""); err != nil {
 		t.Fatal(err)

@@ -137,7 +137,7 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 	case "down":
 		s.handleDown(writer, request, project, environment, principal)
 	case "bindings":
-		s.handleBindings(writer, request, project, environment, segments)
+		s.handleBindings(writer, request, project, environment, segments, principal)
 	case "sources":
 		s.handleSources(writer, request, project, environment, segments)
 	case "services":
@@ -236,7 +236,7 @@ func (s *Server) handleDown(writer http.ResponseWriter, request *http.Request, p
 	writeJSON(writer, http.StatusAccepted, operation)
 }
 
-func (s *Server) handleBindings(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+func (s *Server) handleBindings(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string, principal auth.Principal) {
 	if len(segments) != 5 || request.Method != http.MethodPut {
 		methodNotAllowed(writer, http.MethodPut)
 		return
@@ -246,12 +246,12 @@ func (s *Server) handleBindings(writer http.ResponseWriter, request *http.Reques
 		writeDecodeError(writer, err)
 		return
 	}
-	result, err := s.app.SetBinding(request.Context(), project, environment, segments[4], binding)
+	result, err := s.app.ChangeBinding(request.Context(), project, environment, segments[4], binding, principal.Actor, request.Header.Get("Idempotency-Key"))
 	if err != nil {
 		s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "service": segments[4]})
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	writeJSON(writer, http.StatusAccepted, result)
 }
 
 func (s *Server) handleSources(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {

@@ -160,7 +160,7 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		if runtimeErr != nil {
 			return runtimeErr
 		}
-		if runtime.Generation == 0 && (runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned) {
+		if binding.Provider != model.ProviderRemote && runtime.Generation == 0 && (runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned) {
 			continue
 		}
 		switch binding.Provider {

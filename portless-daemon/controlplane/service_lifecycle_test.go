@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,123 @@ import (
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/networking"
 )
+
+func TestActiveProviderChangeRestartsOnlySelectedService(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	source := t.TempDir()
+	process := func(name string) model.ServiceDefinition {
+		return model.ServiceDefinition{
+			Name: name, Kind: model.ServiceProcess, Required: true,
+			Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, WorkingDirectory: source, ServiceDirectory: source,
+			PortEnvironment: "PORT", Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+			Health: model.HealthCheck{Kind: "http", Path: "/health", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+		}
+	}
+	definition := model.ProjectModel{
+		SuggestedName: "billing", PrimaryService: "checkout",
+		Services:    []model.ServiceDefinition{process("checkout"), process("orders")},
+		Connections: []model.Connection{{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Environment: "ORDERS_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "app", Services: []string{"checkout", "orders"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition,
+		[]model.SourceBinding{{Name: "app", Path: source, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "app"}, {Service: "orders", Provider: model.ProviderLocal, Source: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	defer app.processes.Stop(context.Background(), "billing/local", "checkout", time.Second)
+	defer app.processes.Stop(context.Background(), "billing/local", "orders", time.Second)
+
+	up, err := app.Up(ctx, "billing", "local", "test", "provider-up", UpOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up = waitForOperation(t, app, up); up.State != "succeeded" {
+		t.Fatalf("up operation = %#v", up)
+	}
+	beforeCheckout := serviceSnapshot(t, app, "checkout")
+	beforeOrders := serviceSnapshot(t, app, "orders")
+	unavailable := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	unavailableURL := unavailable.URL
+	unavailable.Close()
+	failed, err := app.ChangeBinding(ctx, "billing", "local", "orders", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
+		URL: unavailableURL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health",
+	}}, "test", "orders-unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed = waitForOperation(t, app, failed); failed.State != "failed" {
+		t.Fatalf("unavailable remote operation = %#v", failed)
+	}
+	afterFailedCheckout := serviceSnapshot(t, app, "checkout")
+	afterFailedOrders := serviceSnapshot(t, app, "orders")
+	if afterFailedCheckout.PID != beforeCheckout.PID || afterFailedCheckout.Generation != beforeCheckout.Generation || afterFailedOrders.PID != beforeOrders.PID || afterFailedOrders.Generation != beforeOrders.Generation {
+		t.Fatalf("failed preflight changed runtimes: checkout=%#v orders=%#v", afterFailedCheckout, afterFailedOrders)
+	}
+	failedEnvironment, err := app.Environment(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindingForEnvironment(failedEnvironment, "orders").Provider != model.ProviderLocal || failedEnvironment.Status != model.EnvironmentHealthy {
+		t.Fatalf("failed preflight changed environment: %#v", failedEnvironment)
+	}
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/health" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = writer.Write([]byte("remote orders"))
+	}))
+	defer remote.Close()
+
+	change, err := app.ChangeBinding(ctx, "billing", "local", "orders", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
+		URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health",
+	}}, "test", "orders-remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change = waitForOperation(t, app, change); change.State != "succeeded" {
+		t.Fatalf("local-to-remote operation = %#v", change)
+	}
+	afterRemoteCheckout := serviceSnapshot(t, app, "checkout")
+	afterRemoteOrders := serviceSnapshot(t, app, "orders")
+	if afterRemoteCheckout.PID != beforeCheckout.PID || afterRemoteCheckout.Generation != beforeCheckout.Generation || afterRemoteCheckout.Status != model.ServiceReady {
+		t.Fatalf("unrelated checkout runtime changed: before=%#v after=%#v", beforeCheckout, afterRemoteCheckout)
+	}
+	if afterRemoteOrders.PID != 0 || afterRemoteOrders.Status != model.ServiceReady || afterRemoteOrders.Generation != beforeOrders.Generation {
+		t.Fatalf("remote orders runtime = %#v", afterRemoteOrders)
+	}
+	response := httptest.NewRecorder()
+	app.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://orders.local.billing.localhost/orders", nil), "billing/local", "orders")
+	if response.Code != http.StatusOK || response.Body.String() != "remote orders" {
+		t.Fatalf("remote ingress = %d %q", response.Code, response.Body.String())
+	}
+
+	change, err = app.ChangeBinding(ctx, "billing", "local", "orders", model.ComponentBinding{Provider: model.ProviderLocal, Source: "app"}, "test", "orders-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change = waitForOperation(t, app, change); change.State != "succeeded" {
+		t.Fatalf("remote-to-local operation = %#v", change)
+	}
+	afterLocalCheckout := serviceSnapshot(t, app, "checkout")
+	afterLocalOrders := serviceSnapshot(t, app, "orders")
+	if afterLocalCheckout.PID != beforeCheckout.PID || afterLocalCheckout.Generation != beforeCheckout.Generation || afterLocalCheckout.Status != model.ServiceReady {
+		t.Fatalf("checkout changed during remote-to-local handoff: before=%#v after=%#v", beforeCheckout, afterLocalCheckout)
+	}
+	if afterLocalOrders.PID == 0 || afterLocalOrders.Status != model.ServiceReady || afterLocalOrders.Generation != beforeOrders.Generation+1 {
+		t.Fatalf("restored local orders runtime = %#v", afterLocalOrders)
+	}
+}
 
 func TestUpStartsFocusedServiceUnderPortlessWithDebugger(t *testing.T) {
 	ctx := context.Background()

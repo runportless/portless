@@ -142,17 +142,25 @@ func (m *Manager) ConnectionRuntime(scope, source, targetName string) (proxyAddr
 
 // SetRemoteTarget validates and registers an HTTP or HTTPS external service target.
 func (m *Manager) SetRemoteTarget(scope, service string, remote model.RemoteTarget) error {
-	parsed, err := url.Parse(remote.URL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
-		return errors.New("remote target must be an http or https URL without credentials, query, or fragment")
-	}
-	if remote.WritePolicy != model.WriteReadOnly && remote.WritePolicy != model.WriteReadWrite {
-		return errors.New("remote target write policy must be read-only or read-write")
+	configured, err := buildRemoteTarget(remote)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
-	m.targets[targetKey(scope, service)] = target{provider: model.ProviderRemote, baseURL: parsed, classification: remote.Classification, writePolicy: remote.WritePolicy, healthPath: remote.HealthPath}
+	m.targets[targetKey(scope, service)] = configured
 	m.mu.Unlock()
 	return nil
+}
+
+func buildRemoteTarget(remote model.RemoteTarget) (target, error) {
+	parsed, err := url.Parse(remote.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return target{}, errors.New("remote target must be an http or https URL without credentials, query, or fragment")
+	}
+	if remote.WritePolicy != model.WriteReadOnly && remote.WritePolicy != model.WriteReadWrite {
+		return target{}, errors.New("remote target write policy must be read-only or read-write")
+	}
+	return target{provider: model.ProviderRemote, baseURL: parsed, classification: remote.Classification, writePolicy: remote.WritePolicy, healthPath: remote.HealthPath}, nil
 }
 
 // RemoveTarget unregisters a service upstream without closing its source edges.
@@ -696,6 +704,20 @@ func (m *Manager) CheckRemote(ctx context.Context, scope, service string) error 
 	if !ok || configured.provider != model.ProviderRemote || configured.baseURL == nil {
 		return errors.New("remote target is not configured")
 	}
+	return m.checkRemoteTarget(ctx, configured)
+}
+
+// CheckRemoteTarget validates and probes a remote target without changing the
+// target currently serving traffic.
+func (m *Manager) CheckRemoteTarget(ctx context.Context, remote model.RemoteTarget) error {
+	configured, err := buildRemoteTarget(remote)
+	if err != nil {
+		return err
+	}
+	return m.checkRemoteTarget(ctx, configured)
+}
+
+func (m *Manager) checkRemoteTarget(ctx context.Context, configured target) error {
 	checkURL := *configured.baseURL
 	if configured.healthPath != "" {
 		checkURL.Path = joinURLPath(checkURL.Path, configured.healthPath)

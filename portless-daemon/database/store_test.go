@@ -144,6 +144,89 @@ func TestRecoverableRuntimeOwnershipAndProxyPortsPersist(t *testing.T) {
 	}
 }
 
+func TestActiveBindingConfigurationPreservesRuntimeAndSourceState(t *testing.T) {
+	ctx := context.Background()
+	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "billing", PrimaryService: "checkout",
+		Services:    []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}, {Name: "orders", Kind: model.ServiceProcess, Required: true}},
+		Connections: []model.Connection{{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "app", Services: []string{"checkout", "orders"}}}); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := t.TempDir()
+	environment, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition,
+		[]model.SourceBinding{{Name: "app", Path: sourcePath, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "app"}, {Service: "orders", Provider: model.ProviderLocal, Source: "app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Round(0)
+	for index, service := range []string{"checkout", "orders"} {
+		if err := controlStore.SetServiceRuntime(ctx, "billing/local", service, ServiceRuntimeUpdate{
+			Status: model.ServiceReady, Generation: int64(index + 4), PID: 1200 + index,
+			UpstreamPort: 43000 + index, StartedAt: &started, OwnerInstanceID: "daemon-one",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observed := started.Add(time.Second)
+	if err := controlStore.SaveConnectionRuntime(ctx, "billing/local", ConnectionRuntime{
+		Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, SourceGeneration: 4,
+		ListenIP: "127.0.0.1", ListenPort: 45678, OwnerInstanceID: "daemon-one", State: "ready", ObservedAt: &observed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentHealthy, ""); err != nil {
+		t.Fatal(err)
+	}
+	remote := model.ComponentBinding{Service: "orders", Provider: model.ProviderRemote, Remote: &model.RemoteTarget{URL: "https://orders.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly}, ModifiedAt: time.Now().UTC()}
+	updated, err := controlStore.ApplyActiveBindingConfiguration(ctx, "billing", "local", environment.Revision, definition, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalSourcePath, err := filepath.EvalSymlinks(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Revision != environment.Revision+1 || len(updated.Sources) != 1 || updated.Sources[0].Path != canonicalSourcePath {
+		t.Fatalf("active configuration metadata = %#v", updated)
+	}
+	checkout, err := controlStore.ServiceRuntime(ctx, "billing/local", "checkout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders, err := controlStore.ServiceRuntime(ctx, "billing/local", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkout.PID != 1200 || checkout.Generation != 4 || checkout.OwnerInstanceID != "daemon-one" || orders.PID != 1201 || orders.Generation != 5 || orders.OwnerInstanceID != "daemon-one" {
+		t.Fatalf("service runtimes changed: checkout=%#v orders=%#v", checkout, orders)
+	}
+	connection, err := controlStore.ConnectionRuntime(ctx, "billing/local", "checkout", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.ListenPort != 45678 || connection.SourceGeneration != 4 || connection.OwnerInstanceID != "daemon-one" {
+		t.Fatalf("connection runtime changed: %#v", connection)
+	}
+	var binding model.ComponentBinding
+	for _, candidate := range updated.Bindings {
+		if candidate.Service == "orders" {
+			binding = candidate
+			break
+		}
+	}
+	if binding.Provider != model.ProviderRemote || binding.Remote == nil || binding.Remote.URL != remote.Remote.URL {
+		t.Fatalf("active binding was not saved: %#v", updated.Bindings)
+	}
+}
+
 func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	ctx := context.Background()
 	controlStore, err := Open(filepath.Join(t.TempDir(), "portless.db"))

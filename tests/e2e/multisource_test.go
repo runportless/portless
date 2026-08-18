@@ -174,6 +174,43 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 		t.Fatalf("read-only remote policy was not enforced: status=%s headers=%v requests=%d body=%s", blockedResponse.Status, blockedResponse.Header, remoteInventoryRequests.Load(), blockedBody)
 	}
 
+	stableRuntime := map[string]model.Service{}
+	for _, service := range qa.Services {
+		if service.Name == "checkout" || service.Name == "orders" {
+			stableRuntime[service.Name] = service
+		}
+	}
+	localOutput, err := runCLIAt(binary, home, checkout,
+		"--env", "distributed-store/qa-assisted", "env", "bind", "inventory", "--local", "inventory",
+	)
+	if err != nil {
+		t.Fatalf("switch active inventory to local: %v\n%s", err, localOutput)
+	}
+	if !strings.Contains(localOutput, "Starting inventory from inventory") || !strings.Contains(localOutput, "now uses local source inventory") {
+		t.Fatalf("active provider progress was not human-readable:\n%s", localOutput)
+	}
+	localEnvironment := explicitEnvironmentStatus(t, binary, home, checkout, "distributed-store/qa-assisted")
+	if binding := bindingByService(localEnvironment.Bindings, "inventory"); binding == nil || binding.Provider != model.ProviderLocal || binding.Source != "inventory" {
+		t.Fatalf("active local inventory binding = %#v", binding)
+	}
+	assertUnchangedServices(t, stableRuntime, localEnvironment, "checkout", "orders")
+
+	remoteOutput, err := runCLIAt(binary, home, checkout,
+		"--env", "distributed-store/qa-assisted", "env", "bind", "inventory",
+		"--remote", remote.URL, "--classification", "qa", "--write-policy", "read-only", "--health-path", "/health",
+	)
+	if err != nil {
+		t.Fatalf("switch active inventory back to QA: %v\n%s", err, remoteOutput)
+	}
+	if !strings.Contains(remoteOutput, "Remote target passed preflight") || !strings.Contains(remoteOutput, "now uses remote "+remote.URL) {
+		t.Fatalf("active remote provider progress was not human-readable:\n%s", remoteOutput)
+	}
+	restoredRemote := explicitEnvironmentStatus(t, binary, home, checkout, "distributed-store/qa-assisted")
+	if binding := bindingByService(restoredRemote.Bindings, "inventory"); binding == nil || binding.Provider != model.ProviderRemote || binding.Remote == nil || binding.Remote.URL != remote.URL {
+		t.Fatalf("restored remote inventory binding = %#v", binding)
+	}
+	assertUnchangedServices(t, stableRuntime, restoredRemote, "checkout", "orders")
+
 	projectOutput, err := runCLIAt(binary, home, checkout, "--json", "project", "show", "distributed-store")
 	if err != nil {
 		t.Fatalf("show final project: %v\n%s", err, projectOutput)
@@ -185,6 +222,23 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 	assertProjectSources(t, project, "catalog", "checkout", "inventory", "orders")
 	if len(project.Environments) != 2 {
 		t.Fatalf("project environments = %d, want 2: %#v", len(project.Environments), project.Environments)
+	}
+}
+
+func assertUnchangedServices(t *testing.T, before map[string]model.Service, after model.Environment, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		var current model.Service
+		for _, service := range after.Services {
+			if service.Name == name {
+				current = service
+				break
+			}
+		}
+		previous := before[name]
+		if current.PID != previous.PID || current.Generation != previous.Generation || current.Status != model.ServiceReady {
+			t.Fatalf("unrelated service %s changed: before=%#v after=%#v", name, previous, current)
+		}
 	}
 }
 
