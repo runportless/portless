@@ -3,7 +3,7 @@ import { api, APIError, environmentPath, jsonBody, setCSRF } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
-import { SettingsPage } from './features/SettingsPage'
+import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
 import type { DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
 
@@ -140,7 +140,7 @@ export function App() {
 
   let content
   if (parsed.settings) {
-    content = <SettingsPage preference={themePreference} resolvedTheme={resolvedTheme} runtime={runtimeStatus} onPreferenceChange={changeThemePreference} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} />
+    content = <SettingsPage tab={parsed.settingsTab} preference={themePreference} resolvedTheme={resolvedTheme} runtime={runtimeStatus} environments={environments} initialEnvironment={parsed.settingsEnvironment} onNavigate={navigate} onPreferenceChange={changeThemePreference} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} />
   } else if (parsed.environment) {
     content = activeEnvironment
       ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} tab={parsed.tab} onNavigate={navigate} onChanged={refresh} />
@@ -150,24 +150,28 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} runtime={runtimeStatus} daemon={daemonStatus} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {
   return `${environment.project}/${environment.name}@${daemon?.instanceId || 'daemon-pending'}`
 }
 
-export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; tab: Tab } {
+export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; tab: Tab } {
   const current = new URL(route, 'http://portless.localhost')
   const parts = current.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   let project: string | undefined
   let environment: string | undefined
   if (parts[0] === 'projects' && parts[1]) project = parts[1]
   if (parts[0] === 'environments' && parts[1] && parts[2]) { project = parts[1]; environment = parts[2] }
+  const settings = parts[0] === 'settings'
   const requested = current.searchParams.get('tab')
   const tabs: Tab[] = ['overview', 'topology', 'bindings', 'traffic', 'recordings', 'faults', 'timeline']
   const tab = tabs.includes(requested as Tab) ? requested as Tab : 'overview'
-  return { project, environment, settings: parts[0] === 'settings', tab }
+  const settingsTabs: SettingsTab[] = ['appearance', 'runtime', 'mcp']
+  const settingsTab = settings && settingsTabs.includes(requested as SettingsTab) ? requested as SettingsTab : 'appearance'
+  const requestedEnvironment = settings ? current.searchParams.get('env')?.trim() : undefined
+  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), tab }
 }
 
 function environmentUIPath(environment: Pick<Environment, 'project' | 'name'>, tab: Tab) {

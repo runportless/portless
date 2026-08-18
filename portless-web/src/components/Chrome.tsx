@@ -5,16 +5,18 @@ import { StatusMark } from './Status'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
 export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
+export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, runtime, daemon, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
   activeEnvironment?: Environment
   activeView: EnvironmentView
   settingsActive?: boolean
+  settingsView?: SettingsView
   runtime?: RuntimeStatus | null
   daemon: DaemonStatus | null
   relay?: RelayStatus | null
@@ -58,8 +60,9 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     ...projects.map((project) => ({ group: 'Projects', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onNavigate(`/projects/${encodeURIComponent(project.name)}`) })),
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
-    { group: 'System', label: 'Settings', detail: 'Appearance and runtime', run: () => onNavigate('/settings') },
-  ], [commands, environments, onNavigate, projects])
+    { group: 'System', label: 'Configure MCP', detail: activeEnvironment ? `${activeEnvironment.project}/${activeEnvironment.name}` : 'AI client access', run: () => onNavigate(mcpSettingsRoute(activeEnvironment)) },
+    { group: 'System', label: 'Settings', detail: 'Appearance, runtime, and MCP', run: () => onNavigate('/settings') },
+  ], [activeEnvironment, commands, environments, onNavigate, projects])
 
   const expandProject = (name: string) => {
     setExpandedProjects((current) => current.has(name) ? current : new Set([...current, name]))
@@ -80,7 +83,8 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     void onDaemonRefresh().catch(() => undefined)
   }
 
-  const daemonLabel = live ? `daemon ${daemon?.state === 'ready' ? 'ready' : daemon?.state ?? 'connected'}` : 'daemon reconnecting'
+  const daemonStateLabel = live ? daemon?.state ?? 'connected' : 'reconnecting'
+  const daemonLabel = `daemon ${daemonStateLabel}`
 
   return <div className="shell">
     <aside className="sidebar">
@@ -123,10 +127,10 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
       <nav className="sidebar__utility" aria-label="Application">
         <button type="button" className={settingsActive ? 'is-active' : ''} aria-current={settingsActive ? 'page' : undefined} onClick={() => onNavigate('/settings')}><SettingsIcon /><span>Settings</span></button>
       </nav>
-      <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonLabel}</span><small>DETAILS ›</small></button>
+      <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonStateLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
-      <header className="topbar"><TopbarBreadcrumbs settingsActive={settingsActive} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} /><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
+      <header className="topbar"><TopbarBreadcrumbs settingsActive={settingsActive} settingsView={settingsView} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} /><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
@@ -134,14 +138,15 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   </div>
 }
 
-function TopbarBreadcrumbs({ settingsActive, activeProject, activeEnvironment, onNavigate }: {
+function TopbarBreadcrumbs({ settingsActive, settingsView, activeProject, activeEnvironment, onNavigate }: {
   settingsActive: boolean
+  settingsView: SettingsView
   activeProject?: Project
   activeEnvironment?: Environment
   onNavigate: (path: string) => void
 }) {
   return <nav className="crumbs" aria-label="Breadcrumb">
-    {settingsActive ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><strong aria-current="page">settings</strong></>
+    {settingsActive ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><BreadcrumbLink path="/settings" onNavigate={onNavigate}>settings</BreadcrumbLink><b>/</b><strong aria-current="page">{settingsView}</strong></>
       : activeEnvironment ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><BreadcrumbLink path={`/projects/${encodeURIComponent(activeEnvironment.project)}`} onNavigate={onNavigate}>{activeEnvironment.project}</BreadcrumbLink><b>/</b><strong aria-current="page">{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></>
         : activeProject ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><strong aria-current="page">{activeProject.name}</strong></>
           : <strong aria-current="page">projects</strong>}
@@ -191,6 +196,7 @@ function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: (
 
 function environmentRoute(environment: Pick<Environment, 'project' | 'name'>) { return `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}` }
 function environmentViewRoute(environment: Pick<Environment, 'project' | 'name'>, view: EnvironmentView) { const base = environmentRoute(environment); return view === 'overview' ? base : `${base}?tab=${view}` }
+function mcpSettingsRoute(environment?: Pick<Environment, 'project' | 'name'>) { return environment ? `/settings?tab=mcp&env=${encodeURIComponent(`${environment.project}/${environment.name}`)}` : '/settings?tab=mcp' }
 function readExpandedProjects() {
   try {
     const stored = JSON.parse(window.sessionStorage.getItem(expandedProjectsKey) ?? '[]')

@@ -3,8 +3,25 @@ import { environmentSessionKey, parseRoute } from './App'
 
 describe('application routes', () => {
   it('recognizes the top-level settings page without inventing project scope', () => {
-    expect(parseRoute('/settings')).toEqual({ settings: true, tab: 'overview' })
-    expect(parseRoute('/projects/billing')).toEqual({ project: 'billing', settings: false, tab: 'overview' })
+    expect(parseRoute('/settings')).toEqual({ settings: true, settingsTab: 'appearance', tab: 'overview' })
+    expect(parseRoute('/projects/billing')).toEqual({ project: 'billing', settings: false, settingsTab: 'appearance', tab: 'overview' })
+  })
+
+  it('routes directly to a scoped MCP settings view', () => {
+    expect(parseRoute('/settings?tab=mcp&env=store%2Flocal')).toEqual({
+      settings: true,
+      settingsTab: 'mcp',
+      settingsEnvironment: 'store/local',
+      tab: 'overview',
+    })
+    expect(parseRoute('/settings?tab=not-a-setting')).toEqual({ settings: true, settingsTab: 'appearance', tab: 'overview' })
+    expect(parseRoute('/environments/store/local?tab=traffic')).toEqual({
+      project: 'store',
+      environment: 'local',
+      settings: false,
+      settingsTab: 'appearance',
+      tab: 'traffic',
+    })
   })
 
   it('replaces environment view state when the daemon instance changes', () => {

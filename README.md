@@ -196,6 +196,17 @@ portless mcp serve --allow-lifecycle
 
 ## Connect an MCP client
 
+Open the control plane with `portless ui`, then choose **Settings → MCP** to
+generate a client configuration. The screen can pin the server to one
+environment, scope it to a source checkout, or explicitly expose every local
+environment. It also shows the exact tool count and warnings for lifecycle,
+traffic-control, and sensitive-traffic access before you copy anything.
+
+The control plane does not start or own an MCP process. Your MCP client launches
+`portless mcp serve` over stdio from the generated configuration. Capability
+choices on the screen are intentionally not saved; access is fixed by the
+configuration for the lifetime of that client-owned process.
+
 The default server is read-only and can see only environments associated with
 the workspace where the MCP process starts:
 

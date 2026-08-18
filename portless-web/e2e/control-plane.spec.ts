@@ -76,6 +76,54 @@ test('persists the selected browser theme', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 })
 
+test('generates scoped MCP client configuration without persisting elevated access', async ({ page }) => {
+  const state = readE2EState()
+  const selector = `${state.project}/${state.environment}`
+  await authenticate(page)
+
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('tab', { name: 'MCP' }).click()
+  await expect(page).toHaveURL(/\/settings\?tab=mcp$/)
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByText('CONFIGURE CLIENT')).toBeVisible()
+
+  await page.getByLabel('MCP environment').selectOption(selector)
+  const preview = page.getByLabel('Generated MCP configuration')
+  await expect(preview).toContainText(selector)
+  expect(JSON.parse(await preview.textContent() || '')).toEqual({
+    mcpServers: {
+      [`portless-${state.project}-${state.environment}`]: {
+        command: 'portless',
+        args: ['--env', selector, 'mcp', 'serve'],
+      },
+    },
+  })
+
+  await page.getByRole('checkbox', { name: /^Lifecycle/ }).check()
+  await page.getByRole('checkbox', { name: /^Sensitive traffic/ }).check()
+  await expect(preview).toContainText('--allow-lifecycle')
+  await expect(preview).toContainText('--allow-sensitive-traffic')
+  await expect(page.locator('.mcp-preview')).toContainText('SENSITIVE · 19 TOOLS')
+
+  await page.getByRole('button', { name: 'COPY' }).click()
+  await expect(page.getByRole('button', { name: 'COPIED' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(await preview.textContent())
+
+  await page.goto(`${state.baseURL}${environmentPath()}`)
+  await expect(page.getByRole('heading', { name: state.environment, exact: true })).toBeVisible()
+  await page.keyboard.press('Control+K')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  const input = palette.getByPlaceholder('jump to a project or environment')
+  await input.fill('Configure MCP')
+  await input.press('Enter')
+  await expect(page).toHaveURL(new RegExp(`/settings\\?tab=mcp&env=${state.project}%2F${state.environment}$`))
+  await expect(page.getByLabel('MCP environment')).toHaveValue(selector)
+
+  await page.reload()
+  await expect(page.getByRole('checkbox', { name: /^Lifecycle/ })).not.toBeChecked()
+  await expect(page.getByRole('checkbox', { name: /^Sensitive traffic/ })).not.toBeChecked()
+})
+
 test('renders real services, endpoints, topology, and service details', async ({ page }) => {
   await authenticate(page)
   const bindingsCard = page.locator('.state-panel').filter({ hasText: 'BINDINGS' })
@@ -432,6 +480,8 @@ test('supports keyboard topology inspection and command palette navigation', asy
   await input.press('Enter')
   await expect(page).toHaveURL(new RegExp('/settings$'))
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('radiogroup', { name: 'Theme' })).toBeVisible()
+  await page.getByRole('tab', { name: 'RUNTIME' }).click()
   await expect(page.getByText('CONTAINER RUNTIME')).toBeVisible()
   expect(await page.locator('.runtime-candidate').count()).toBeGreaterThan(0)
 
@@ -469,9 +519,9 @@ test('surfaces a failed control-plane refresh and reconnects automatically', asy
     body: JSON.stringify({ error: { code: 'E2E_UNAVAILABLE', message: 'temporary test outage' } }),
   }))
 
-  await expect(page.getByRole('button', { name: 'daemon reconnecting' })).toBeVisible({ timeout: 8_000 })
+  await expect(page.locator('.sidebar__footer')).toContainText('reconnecting', { timeout: 8_000 })
   await page.unroute(environmentsEndpoint)
-  await expect(page.getByRole('button', { name: 'daemon ready' })).toBeVisible({ timeout: 8_000 })
+  await expect(page.locator('.sidebar__footer')).toContainText('ready', { timeout: 8_000 })
   expect((await applicationRequest('/checkout?sku=reconnected&quantity=1')).status).toBe(200)
 })
 

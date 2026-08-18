@@ -12,6 +12,25 @@ grant itself more access.
 
 ## Client configuration
 
+The easiest setup path is `portless ui`, followed by **Settings → MCP**. The
+control plane generates generic MCP client JSON or an equivalent shell command
+for one of three scopes:
+
+- a named `project/environment`;
+- a source checkout working directory; or
+- every environment in the current Portless installation.
+
+Lifecycle, traffic-control, and sensitive-traffic access are opt-in. The screen
+shows the resulting access level, tool count, and a warning for each elevated
+choice. Those choices are not persisted in browser storage and reset whenever
+the screen is reloaded.
+
+This is configuration, not a process manager. Copying the result does not start
+anything in Portless. The MCP host owns the child process and launches
+`portless mcp serve` over stdio when it needs the server. If a desktop host does
+not inherit the same `PATH` as the terminal, enter the absolute path to the
+`portless` executable in the generator.
+
 Use this configuration for read-only access to the current workspace:
 
 ```json
