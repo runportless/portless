@@ -162,6 +162,16 @@ describe('environment topology', () => {
     expect(displayLaunchMode(environment, inventory)).toBe('mock')
   })
 
+  it('shows container as the mode for resource services', () => {
+    const resources = ['postgres', 'redis'].map((name) => ({ name, kind: 'resource', resource: { type: name, version: 'latest' } } as Service))
+    const environment = {
+      services: resources,
+      bindings: resources.map((resource) => ({ service: resource.name, provider: 'container' })),
+    } as Environment
+
+    expect(resources.map((resource) => displayLaunchMode(environment, resource))).toEqual(['container', 'container'])
+  })
+
   it('keeps the provider table full width and configures each service from a modal action', () => {
     const checkout = { name: 'checkout', kind: 'process', status: 'stopped' } as Service
     const project = { name: 'billing', sources: [{ name: 'checkout', services: ['checkout'] }] } as Project
@@ -169,7 +179,7 @@ describe('environment topology', () => {
       project: 'billing', name: 'local', status: 'stopped', revision: 1,
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
       services: [checkout], connections: [],
-      sources: [{ name: 'checkout', path: '/workspace/checkout', status: 'ready', scannedAt: new Date(0).toISOString() }],
+      sources: [{ name: 'checkout', path: '/workspace/checkout', status: 'ready', createdAt: '2026-08-17T16:20:00Z', scannedAt: new Date(0).toISOString() }],
       bindings: [{ service: 'checkout', provider: 'local', source: 'checkout', modifiedAt: '2026-08-18T18:30:00Z' }],
     } as Environment
 
@@ -178,7 +188,7 @@ describe('environment topology', () => {
     }))
 
     expect(markup).toContain('class="experiment-layout bindings-layout"')
-    expect(markup).toContain('<span>CONFIGURED PROVIDERS</span><button')
+    expect(markup).toContain('<span>PROVIDERS</span><button')
     expect(markup).toContain('role="table" aria-label="Configured providers"')
     expect(markup).toContain('<span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader">Actions</span>')
     expect(markup).toContain('class="provider-service"')
@@ -190,9 +200,42 @@ describe('environment topology', () => {
     expect(markup).toContain('aria-haspopup="dialog"')
     expect(markup).toContain('>CONFIGURE PROVIDER</button>')
     expect(markup).toContain('>CHANGE</button>')
-    expect(markup).toContain('<span>SOURCE CHECKOUTS</span>')
+    expect(markup).toContain('<span>SOURCES</span><button')
+    expect(markup).toContain('>ADD SOURCE</button>')
+    expect(markup).toContain('<table class="source-table" aria-label="Sources">')
+    expect(markup).toContain('<th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col">Actions</th>')
+    expect(markup).toContain('<strong>checkout</strong>')
+    expect(markup).toContain('<code title="/workspace/checkout">/workspace/checkout</code>')
+    expect(markup).toContain('<time dateTime="2026-08-17T16:20:00Z"')
+    expect(markup).toContain('>EDIT</button>')
+    expect(markup).toContain('>DELETE</button>')
+    expect(markup).not.toContain('change a path to a Git worktree')
+    expect(markup).not.toContain('class="form-modal add-source-modal"')
     expect(markup).not.toContain('class="form-modal configure-provider-modal"')
     expect(markup).not.toContain('>REMOTE URL<')
+  })
+
+  it('paginates providers and sources independently after five rows', () => {
+    const services = Array.from({ length: 6 }, (_, index) => ({ name: `service-${index + 1}`, kind: 'process', status: 'stopped' } as Service))
+    const environment = {
+      project: 'billing', name: 'local', status: 'stopped', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services, connections: [],
+      sources: services.map((item, index) => ({ name: `source-${index + 1}`, path: `/workspace/source-${index + 1}`, status: 'ready', createdAt: new Date(0).toISOString(), scannedAt: new Date(0).toISOString() })),
+      bindings: services.map((item, index) => ({ service: item.name, provider: 'local', source: `source-${index + 1}` })),
+    } as Environment
+
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment, tab: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+
+    expect(markup).toContain('aria-label="providers pagination"')
+    expect(markup).toContain('aria-label="sources pagination"')
+    expect(markup).toContain('1–5 of 6')
+    expect(markup).toContain('service-5')
+    expect(markup).not.toContain('service-6')
+    expect(markup).toContain('/workspace/source-5')
+    expect(markup).not.toContain('/workspace/source-6')
   })
 
   it('derives and compares canonical provider defaults from the project topology', () => {

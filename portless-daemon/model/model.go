@@ -278,6 +278,7 @@ type SourceBinding struct {
 	Path       string       `json:"path"`
 	Status     string       `json:"status"`
 	Warnings   []string     `json:"warnings,omitempty"`
+	CreatedAt  time.Time    `json:"createdAt"`
 	ScannedAt  time.Time    `json:"scannedAt"`
 	Definition ProjectModel `json:"-"`
 }

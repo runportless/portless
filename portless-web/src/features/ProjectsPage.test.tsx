@@ -21,7 +21,7 @@ const environment = {
     restartCount: 0,
     recentRequests: 0,
   }],
-  sources: [{ name: 'store', path: '/Users/dev/workspace/store', status: 'ready', scannedAt: new Date().toISOString() }],
+  sources: [{ name: 'store', path: '/Users/dev/workspace/store', status: 'ready', createdAt: new Date().toISOString(), scannedAt: new Date().toISOString() }],
   bindings: [],
   connections: [],
   createdAt: new Date().toISOString(),

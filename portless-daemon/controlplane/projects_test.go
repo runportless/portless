@@ -53,6 +53,7 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	if hybrid.Bindings[0].Provider != model.ProviderRemote || local.Bindings[0].Provider != model.ProviderLocal {
 		t.Fatalf("provider changes leaked between environments: local=%#v hybrid=%#v", local.Bindings, hybrid.Bindings)
 	}
+	createdAt := hybrid.Sources[0].CreatedAt
 	hybrid, _, err = app.SetSource(ctx, "billing", "hybrid", "checkout", worktree)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +75,9 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	}
 	if hybrid.Bindings[0].Provider != model.ProviderLocal || hybrid.Sources[0].Path != canonicalWorktree {
 		t.Fatalf("hybrid environment did not use its worktree: %#v", hybrid)
+	}
+	if !hybrid.Sources[0].CreatedAt.Equal(createdAt) {
+		t.Fatalf("source path change replaced creation time: got %s, want %s", hybrid.Sources[0].CreatedAt, createdAt)
 	}
 }
 
@@ -99,7 +103,7 @@ func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *test
 		t.Fatal(err)
 	}
 	inventoryLocal := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory-local"), "inventory")
-	project, local, warnings, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventoryLocal)
+	project, local, warnings, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventoryLocal, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +191,7 @@ func TestProjectSourceAdditionRequiresEveryEnvironmentToBeStoppedAndRollsBack(t 
 		t.Fatal(err)
 	}
 	inventory := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory"), "inventory")
-	_, _, _, err = app.AddProjectSource(ctx, "store", "local", "inventory", inventory)
+	_, _, _, err = app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test")
 	var active database.ActiveProjectEnvironmentsError
 	if !errors.As(err, &active) || strings.Join(active.Environments, ",") != "store/qa" {
 		t.Fatalf("active environment error = %#v, %v", active, err)
@@ -202,6 +206,130 @@ func TestProjectSourceAdditionRequiresEveryEnvironmentToBeStoppedAndRollsBack(t 
 	}
 	if len(project.Sources) != 1 || len(local.Sources) != 1 {
 		t.Fatalf("source addition was partially committed: project=%#v local=%#v", project.Sources, local.Sources)
+	}
+}
+
+func TestProjectSourceRemovalUpdatesEveryStoppedEnvironmentAndDeletesOwnedMocks(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	checkout := nestNamedFixture(t, filepath.Join(t.TempDir(), "checkout"), "checkout")
+	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa"); err != nil {
+		t.Fatal(err)
+	}
+	inventory := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory"), "inventory")
+	if _, _, _, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := app.SetSource(ctx, "store", "qa", "inventory", inventory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CreateMockProfile(ctx, "store", "local", model.MockProfile{Name: "empty-inventory", Service: "inventory"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateFault(ctx, model.FaultRule{Project: "store", Environment: "local", Name: "inventory-timeout", Source: "checkout", Target: "inventory", Abort: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentHealthy, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.RemoveProjectSource(ctx, "store", "inventory", "test"); err == nil {
+		t.Fatal("active environment did not block source removal")
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentStopped, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := app.RemoveProjectSource(ctx, "store", "inventory", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(removed.RemovedServices, ",") != "inventory" || len(removed.Environments) != 2 {
+		t.Fatalf("removal = %#v", removed)
+	}
+	if len(removed.Project.Sources) != 1 || removed.Project.Sources[0].Name != "checkout" {
+		t.Fatalf("project sources = %#v", removed.Project.Sources)
+	}
+	for _, environment := range removed.Environments {
+		if sourcePath(environment.Sources, "inventory") != "" {
+			t.Fatalf("environment %s retained inventory source: %#v", environment.Name, environment.Sources)
+		}
+		if _, ok := bindingByName(environment.Bindings, "inventory"); ok {
+			t.Fatalf("environment %s retained inventory binding: %#v", environment.Name, environment.Bindings)
+		}
+		for _, service := range environment.Services {
+			if strings.EqualFold(service.Name, "inventory") {
+				t.Fatalf("environment %s retained inventory service: %#v", environment.Name, environment.Services)
+			}
+		}
+	}
+	mocks, err := app.MockProfiles(ctx, "store", "local")
+	if err != nil || len(mocks) != 0 {
+		t.Fatalf("owned mocks after source removal = %#v, err = %v", mocks, err)
+	}
+	fault, err := controlStore.Fault(ctx, "store/local", "inventory-timeout")
+	if err != nil || fault.Enabled || fault.Revision != 2 {
+		t.Fatalf("obsolete fault after source removal = %#v, err = %v", fault, err)
+	}
+	if _, err := app.RemoveProjectSource(ctx, "store", "checkout", "test"); err == nil || !strings.Contains(err.Error(), "retain at least one") {
+		t.Fatalf("last source removal error = %v", err)
+	}
+	if _, err := app.RemoveProjectSource(ctx, "store", "missing", "test"); !errors.Is(err, database.ErrNotFound) {
+		t.Fatalf("missing source removal error = %v", err)
+	}
+}
+
+func TestProjectSourceRemovalPersistsARequiredDependencyAsAnExplicitIssue(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "store", PrimaryService: "checkout",
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess, Required: true},
+			{Name: "inventory", Kind: model.ServiceProcess, Required: true},
+		},
+		Connections: []model.Connection{{Source: "checkout", Target: "inventory", Protocol: model.ProtocolHTTP, Environment: "INVENTORY_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "store", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}, {Name: "inventory", Services: []string{"inventory"}}}); err != nil {
+		t.Fatal(err)
+	}
+	checkoutDefinition := model.ProjectModel{Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}}, References: []model.ConnectionReference{{Source: "checkout", TargetHint: "inventory", Protocol: model.ProtocolHTTP, Environment: "INVENTORY_URL", Required: true}}}
+	inventoryDefinition := model.ProjectModel{Services: []model.ServiceDefinition{{Name: "inventory", Kind: model.ServiceProcess}}}
+	sources := []model.SourceBinding{
+		{Name: "checkout", Path: t.TempDir(), Definition: checkoutDefinition},
+		{Name: "inventory", Path: t.TempDir(), Definition: inventoryDefinition},
+	}
+	bindings := []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"},
+		{Service: "inventory", Provider: model.ProviderLocal, Source: "inventory"},
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "store", "local", definition, sources, bindings); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	removed, err := app.RemoveProjectSource(ctx, "store", "inventory", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed.RemovedConnections) != 1 || len(removed.Environments) != 1 || !containsProjectIssue(removed.Environments[0].Issues, "UNRESOLVED_CONNECTION", "checkout:inventory") {
+		t.Fatalf("source removal did not retain the required dependency issue: %#v", removed)
 	}
 }
 
@@ -576,4 +704,13 @@ func TestEnvironmentContextExplainsSelectionAndInference(t *testing.T) {
 	if err != nil || resolved.Resolution != "ambiguous" || len(resolved.Candidates) != 2 {
 		t.Fatalf("context after clear = %#v, err = %v", resolved, err)
 	}
+}
+
+func containsProjectIssue(issues []model.ConfigurationIssue, code, subject string) bool {
+	for _, issue := range issues {
+		if issue.Code == code && issue.Subject == subject {
+			return true
+		}
+	}
+	return false
 }

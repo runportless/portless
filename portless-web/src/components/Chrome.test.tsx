@@ -61,6 +61,7 @@ describe('application navigation', () => {
     expect(markup).toContain('<a href="/projects">projects</a>')
     expect(markup).toContain('<a href="/projects/billing">billing</a>')
     expect(markup).toContain('<strong aria-current="page">local</strong>')
+    expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><a href="/projects/billing">billing</a><b>/</b><strong aria-current="page">local</strong></nav>')
     expect(markup).toContain('<button class="is-active" aria-current="page"')
   })
 

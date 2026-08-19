@@ -6,6 +6,7 @@ func TestRequiredArgumentCountUsesCommandSyntax(t *testing.T) {
 	for use, expected := range map[string]int{
 		"env select <project/environment>": 1,
 		"project source add <name>":        1,
+		"project source delete <name>":     1,
 		"fault add <name> <source:target>": 2,
 		"logs [service]":                   0,
 		"doctor [daemon|relay|runtime]":    0,

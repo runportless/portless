@@ -210,6 +210,25 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 		t.Fatalf("restored remote inventory binding = %#v", binding)
 	}
 	assertUnchangedServices(t, stableRuntime, restoredRemote, "checkout", "orders")
+	if output, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "down"); err != nil {
+		t.Fatalf("stop mixed-provider environment before source deletion: %v\n%s", err, output)
+	}
+	deleteOutput, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/local", "--json", "project", "source", "delete", "catalog", "--yes")
+	if err != nil {
+		t.Fatalf("delete source from existing project: %v\n%s", err, deleteOutput)
+	}
+	var deleted struct {
+		Project         model.Project       `json:"project"`
+		Environments    []model.Environment `json:"environments"`
+		RemovedServices []string            `json:"removedServices"`
+	}
+	if err := json.Unmarshal([]byte(deleteOutput), &deleted); err != nil {
+		t.Fatalf("decode source deletion: %v\n%s", err, deleteOutput)
+	}
+	assertProjectSources(t, deleted.Project, "checkout", "inventory", "orders")
+	if strings.Join(deleted.RemovedServices, ",") != "catalog" || len(deleted.Environments) != 2 {
+		t.Fatalf("source deletion = %#v", deleted)
+	}
 
 	projectOutput, err := runCLIAt(binary, home, checkout, "--json", "project", "show", "distributed-store")
 	if err != nil {
@@ -219,7 +238,7 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 	if err := json.Unmarshal([]byte(projectOutput), &project); err != nil {
 		t.Fatalf("decode final project: %v\n%s", err, projectOutput)
 	}
-	assertProjectSources(t, project, "catalog", "checkout", "inventory", "orders")
+	assertProjectSources(t, project, "checkout", "inventory", "orders")
 	if len(project.Environments) != 2 {
 		t.Fatalf("project environments = %d, want 2: %#v", len(project.Environments), project.Environments)
 	}

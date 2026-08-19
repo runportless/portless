@@ -77,6 +77,31 @@ func (c *Commands) addProjectSource(ctx context.Context, source, pathValue strin
 	return nil
 }
 
+func (c *Commands) deleteProjectSource(ctx context.Context, source string) error {
+	client, environment, err := c.Current(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := client.DeleteProjectSource(ctx, environment.Project, source)
+	if err != nil {
+		return err
+	}
+	response.RemovedServices = command.NonNilStrings(response.RemovedServices)
+	if c.JSONOutput {
+		return command.WriteJSON(c.Out, response)
+	}
+	fmt.Fprintf(c.Out, "%s source %s from project %s\n", c.Success(c.Out, "deleted"), source, response.Project.Name)
+	if len(response.RemovedServices) > 0 {
+		fmt.Fprintf(c.Out, "removed services: %s\n", strings.Join(response.RemovedServices, ", "))
+	}
+	environmentLabel := "environments"
+	if len(response.Environments) == 1 {
+		environmentLabel = "environment"
+	}
+	fmt.Fprintf(c.Out, "updated %d %s\n", len(response.Environments), environmentLabel)
+	return nil
+}
+
 func (c *Commands) exportProject(ctx context.Context, output string) error {
 	client, environment, err := c.Current(ctx)
 	if err != nil {

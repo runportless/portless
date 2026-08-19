@@ -115,7 +115,7 @@ FROM service_runtime WHERE environment_key = ?`, row.key)
 
 func (s *Store) environmentSources(ctx context.Context, environmentKey string) ([]model.SourceBinding, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT source_name, path, status, warnings_json, discovery_json, scanned_at
+SELECT source_name, path, status, warnings_json, discovery_json, created_at, scanned_at
 FROM environment_sources WHERE environment_key = ? ORDER BY source_name COLLATE NOCASE`, environmentKey)
 	if err != nil {
 		return nil, err
@@ -125,8 +125,8 @@ FROM environment_sources WHERE environment_key = ? ORDER BY source_name COLLATE 
 	for rows.Next() {
 		var source model.SourceBinding
 		var warningsJSON, discoveryJSON []byte
-		var scannedAt string
-		if err := rows.Scan(&source.Name, &source.Path, &source.Status, &warningsJSON, &discoveryJSON, &scannedAt); err != nil {
+		var createdAt, scannedAt string
+		if err := rows.Scan(&source.Name, &source.Path, &source.Status, &warningsJSON, &discoveryJSON, &createdAt, &scannedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(warningsJSON, &source.Warnings)
@@ -135,6 +135,7 @@ FROM environment_sources WHERE environment_key = ? ORDER BY source_name COLLATE 
 			return nil, err
 		}
 		source.Definition = definition
+		source.CreatedAt = parseTime(createdAt)
 		source.ScannedAt = parseTime(scannedAt)
 		result = append(result, source)
 	}
@@ -214,17 +215,24 @@ func insertSource(ctx context.Context, executor sqlExecutor, environmentKey stri
 	if err != nil {
 		return err
 	}
-	scanned := source.ScannedAt
-	if scanned.IsZero() {
-		scanned = time.Now().UTC()
+	created := source.CreatedAt
+	if created.IsZero() {
+		created = source.ScannedAt
+	}
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	resolvedScanned := source.ScannedAt
+	if resolvedScanned.IsZero() {
+		resolvedScanned = created
 	}
 	status := source.Status
 	if status == "" {
 		status = "ready"
 	}
 	_, err = executor.ExecContext(ctx, `
-INSERT INTO environment_sources(environment_key, source_name, path, status, warnings_json, discovery_json, scanned_at)
-VALUES(?, ?, ?, ?, ?, ?, ?)`, environmentKey, source.Name, path, status, warningsJSON, discoveryJSON, scanned.Format(time.RFC3339Nano))
+INSERT INTO environment_sources(environment_key, source_name, path, status, warnings_json, discovery_json, created_at, scanned_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, source.Name, path, status, warningsJSON, discoveryJSON, created.Format(time.RFC3339Nano), resolvedScanned.Format(time.RFC3339Nano))
 	return err
 }
 

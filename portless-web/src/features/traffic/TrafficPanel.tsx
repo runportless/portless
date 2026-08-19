@@ -88,6 +88,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
           api<{ traces: TrafficTrace[] }>(environmentPath(environment, traceQuery)),
         ])
         if (!active) return
+        setError((current) => current?.code === 'DAEMON_UNAVAILABLE' ? null : current)
         if (pausedRef.current) {
           for (const exchange of exchangeResult.exchanges) if (!knownExchanges.current.has(exchange.sequence)) exchangeBuffer.current.set(exchange.sequence, exchange)
           for (const trace of traceResult.traces) traceBuffer.current.set(trace.number, trace)

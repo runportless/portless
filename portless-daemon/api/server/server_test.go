@@ -79,7 +79,8 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	environment := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local", "", true)
 	if environment.Code != http.StatusOK || !strings.Contains(environment.Body.String(), `"project":"billing"`) || !strings.Contains(environment.Body.String(), `"name":"local"`) ||
 		!strings.Contains(environment.Body.String(), `"dashboardUrl":"http://portless.localhost/environments/billing/local"`) ||
-		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || !strings.Contains(environment.Body.String(), `"modifiedAt":`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
+		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || !strings.Contains(environment.Body.String(), `"createdAt":`) ||
+		!strings.Contains(environment.Body.String(), `"modifiedAt":`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
 		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
 	mockBase := "/api/v1/environments/billing/local/mocks/checkout-empty"
@@ -219,6 +220,22 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	browserReset := requestBrowser(server, http.MethodPost, "/api/v1/runtime/reset", "", sessionToken, csrf)
 	if browserReset.Code != http.StatusForbidden || !strings.Contains(browserReset.Body.String(), `"code":"CLI_AUTH_REQUIRED"`) {
 		t.Fatalf("browser runtime reset returned %d body=%s", browserReset.Code, browserReset.Body.String())
+	}
+	browserSource := t.TempDir()
+	if err := os.WriteFile(filepath.Join(browserSource, "package.json"), []byte(`{"name":"catalog","scripts":{"start":"node server.js"},"dependencies":{"express":"1.0.0"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	browserAddedSource := requestBrowser(server, http.MethodPost, "/api/v1/projects/billing/sources", `{"name":"catalog","environment":"local","path":`+strconv.Quote(browserSource)+`}`, sessionToken, csrf)
+	if browserAddedSource.Code != http.StatusCreated || !strings.Contains(browserAddedSource.Body.String(), `"name":"catalog"`) {
+		t.Fatalf("browser project source response code=%d body=%s", browserAddedSource.Code, browserAddedSource.Body.String())
+	}
+	browserDeletedSource := requestBrowser(server, http.MethodDelete, "/api/v1/projects/billing/sources/catalog", "", sessionToken, csrf)
+	if browserDeletedSource.Code != http.StatusOK || !strings.Contains(browserDeletedSource.Body.String(), `"removedServices":["catalog"]`) || !strings.Contains(browserDeletedSource.Body.String(), `"environments":[`) {
+		t.Fatalf("browser project source delete response code=%d body=%s", browserDeletedSource.Code, browserDeletedSource.Body.String())
+	}
+	missingSource := requestBrowser(server, http.MethodDelete, "/api/v1/projects/billing/sources/missing", "", sessionToken, csrf)
+	if missingSource.Code != http.StatusNotFound || !strings.Contains(missingSource.Body.String(), `"code":"RESOURCE_NOT_FOUND"`) {
+		t.Fatalf("missing project source delete response code=%d body=%s", missingSource.Code, missingSource.Body.String())
 	}
 
 	privateKey, err := controlStore.PrivateEnvironmentKey(context.Background(), "billing", "local")

@@ -4,12 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/networking"
 )
+
+// ProjectEnvironmentConfiguration is one stopped environment configuration
+// participating in an atomic project topology replacement.
+type ProjectEnvironmentConfiguration struct {
+	Name       string
+	Revision   int64
+	Definition model.ProjectModel
+	Sources    []model.SourceBinding
+	Bindings   []model.ComponentBinding
+}
 
 // CreateEnvironment persists a new stopped environment and allocates its stable endpoints.
 func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentName string, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
@@ -410,6 +421,142 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 		return model.Environment{}, err
 	}
 	return s.Environment(ctx, projectName, environmentName)
+}
+
+// ReplaceProjectConfiguration atomically replaces one project's logical
+// topology and every stopped environment derived from it. Removed service
+// names are used to discard service-scoped mocks and disable obsolete faults.
+func (s *Store) ReplaceProjectConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environments []ProjectEnvironmentConfiguration, removedServices []string) ([]model.Environment, error) {
+	projectDefinition.SuggestedName = projectName
+	projectJSON, err := encodeProjectModel(logicalDefinition(projectDefinition))
+	if err != nil {
+		return nil, err
+	}
+	projectSourcesJSON, err := json.Marshal(projectSources)
+	if err != nil {
+		return nil, err
+	}
+	type preparedEnvironment struct {
+		configuration ProjectEnvironmentConfiguration
+		modelJSON     []byte
+		allocations   []networking.AllocationSpec
+	}
+	prepared := make(map[string]preparedEnvironment, len(environments))
+	for _, environment := range environments {
+		if err := model.ValidateEnvironmentName(environment.Name); err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(environment.Name)
+		if _, duplicate := prepared[key]; duplicate {
+			return nil, fmt.Errorf("environment %s is configured more than once", environment.Name)
+		}
+		encoded, err := encodeProjectModel(environment.Definition)
+		if err != nil {
+			return nil, err
+		}
+		allocations, err := networking.AllocationSpecs(projectName, environment.Name, environment.Definition)
+		if err != nil {
+			return nil, err
+		}
+		prepared[key] = preparedEnvironment{configuration: environment, modelJSON: encoded, allocations: allocations}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var projectKey string
+	var projectRevision int64
+	if err := tx.QueryRowContext(ctx, `SELECT private_key, revision FROM projects WHERE name = ? COLLATE NOCASE`, projectName).Scan(&projectKey, &projectRevision); err != nil {
+		return nil, mapSQLError(err)
+	}
+	if expectedProjectRevision > 0 && projectRevision != expectedProjectRevision {
+		return nil, ErrConflict
+	}
+	type storedEnvironment struct {
+		key      string
+		name     string
+		revision int64
+		status   string
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT private_key, name, revision, status FROM environments WHERE project_key = ? ORDER BY name COLLATE NOCASE`, projectKey)
+	if err != nil {
+		return nil, err
+	}
+	stored := map[string]storedEnvironment{}
+	var active []string
+	for rows.Next() {
+		var environment storedEnvironment
+		if err := rows.Scan(&environment.key, &environment.name, &environment.revision, &environment.status); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stored[strings.ToLower(environment.name)] = environment
+		if environment.status != string(model.EnvironmentStopped) {
+			active = append(active, model.EnvironmentSelector(projectName, environment.name))
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(active) > 0 {
+		return nil, ActiveProjectEnvironmentsError{Environments: active}
+	}
+	if len(prepared) != len(stored) {
+		return nil, errors.New("project topology replacement must include every environment")
+	}
+	for key, environment := range stored {
+		input, ok := prepared[key]
+		if !ok {
+			return nil, fmt.Errorf("project topology replacement is missing environment %s", environment.name)
+		}
+		if input.configuration.Revision > 0 && input.configuration.Revision != environment.revision {
+			return nil, ErrConflict
+		}
+	}
+
+	now := nowText()
+	if _, err := tx.ExecContext(ctx, `UPDATE projects SET model_json = ?, sources_json = ?, primary_service = ?, revision = revision + 1, updated_at = ? WHERE private_key = ?`, projectJSON, projectSourcesJSON, projectDefinition.PrimaryService, now, projectKey); err != nil {
+		return nil, err
+	}
+	for key, environment := range stored {
+		input := prepared[key]
+		if _, err := tx.ExecContext(ctx, `UPDATE environments SET model_json = ?, primary_service = ?, revision = revision + 1, updated_at = ? WHERE private_key = ?`, input.modelJSON, input.configuration.Definition.PrimaryService, now, environment.key); err != nil {
+			return nil, err
+		}
+		for _, table := range []string{"connection_runtime", "service_runtime", "environment_sources", "environment_bindings"} {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE environment_key = ?", environment.key); err != nil {
+				return nil, err
+			}
+		}
+		if err := replaceEnvironmentChildren(ctx, tx, environment.key, input.configuration.Definition, input.configuration.Sources, input.configuration.Bindings); err != nil {
+			return nil, err
+		}
+		if err := syncNetworkAllocationsTx(ctx, tx, environment.key, input.allocations); err != nil {
+			return nil, err
+		}
+		for _, service := range removedServices {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM mock_profiles WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, environment.key, service); err != nil {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE fault_rules SET enabled = 0, revision = revision + 1 WHERE environment_key = ? AND enabled = 1 AND (source = ? COLLATE NOCASE OR target = ? COLLATE NOCASE)`, environment.key, service, service); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	result := make([]model.Environment, 0, len(environments))
+	for _, environment := range environments {
+		updated, err := s.Environment(ctx, projectName, environment.Name)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, updated)
+	}
+	return result, nil
 }
 
 // SetEnvironmentBinding replaces one service provider binding in a stopped environment.

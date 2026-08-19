@@ -160,6 +160,7 @@ export interface SourceBinding {
   path: string
   status: string
   warnings?: string[]
+  createdAt: string
   scannedAt: string
 }
 

@@ -19,6 +19,15 @@ type SourceInput struct {
 	Path string `json:"path"`
 }
 
+// ProjectSourceRemoval describes the project-wide topology removed with one
+// logical source.
+type ProjectSourceRemoval struct {
+	Project            model.Project       `json:"project"`
+	Environments       []model.Environment `json:"environments"`
+	RemovedServices    []string            `json:"removedServices"`
+	RemovedConnections []model.Connection  `json:"removedConnections"`
+}
+
 // Discover resolves a path to an existing environment or creates a single-source project.
 func (s *Service) Discover(ctx context.Context, path, requestedName string) (model.Project, model.Environment, []string, error) {
 	result, err := s.discoverer.Discover(ctx, path)
@@ -71,7 +80,8 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 			return model.Project{}, model.Environment{}, warnings, fmt.Errorf("discover source %s: %w", input.Name, err)
 		}
 		warnings = append(warnings, result.Warnings...)
-		sources = append(sources, model.SourceBinding{Name: input.Name, Path: result.Root, Status: "ready", Warnings: result.Warnings, ScannedAt: time.Now().UTC(), Definition: result.Model})
+		now := time.Now().UTC()
+		sources = append(sources, model.SourceBinding{Name: input.Name, Path: result.Root, Status: "ready", Warnings: result.Warnings, CreatedAt: now, ScannedAt: now, Definition: result.Model})
 	}
 	definition, projectSources, bindings, err := compiler.InitialProject(name, sources)
 	if err != nil {
@@ -101,7 +111,7 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 }
 
 // AddProjectSource discovers and atomically adds a source to a project and one environment.
-func (s *Service) AddProjectSource(ctx context.Context, projectName, environmentName, sourceName, path string) (model.Project, model.Environment, []string, error) {
+func (s *Service) AddProjectSource(ctx context.Context, projectName, environmentName, sourceName, path, actor string) (model.Project, model.Environment, []string, error) {
 	sourceName = model.NormalizeDNSName(sourceName)
 	if err := model.ValidateSourceName(sourceName); err != nil {
 		return model.Project{}, model.Environment{}, nil, err
@@ -126,9 +136,10 @@ func (s *Service) AddProjectSource(ctx context.Context, projectName, environment
 	if err != nil {
 		return model.Project{}, model.Environment{}, nil, fmt.Errorf("discover source %s: %w", sourceName, err)
 	}
+	now := time.Now().UTC()
 	source := model.SourceBinding{
 		Name: sourceName, Path: result.Root, Status: "ready", Warnings: result.Warnings,
-		ScannedAt: time.Now().UTC(), Definition: result.Model,
+		CreatedAt: now, ScannedAt: now, Definition: result.Model,
 	}
 	projectDefinition, projectSources, defaults, err := compiler.AddSource(projectDefinition, project.Sources, source)
 	if err != nil {
@@ -154,8 +165,100 @@ func (s *Service) AddProjectSource(ctx context.Context, projectName, environment
 		return model.Project{}, model.Environment{}, result.Warnings, err
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	_, _ = s.timeline(ctx, scope, "CLI", "project.source_added", sourceName, "info", "Added project source "+sourceName, map[string]any{"path": result.Root})
+	_, _ = s.timeline(ctx, scope, actor, "project.source_added", sourceName, "info", "Added project source "+sourceName, map[string]any{"path": result.Root})
 	return s.decorateProject(project), s.decorateEnvironment(updated), result.Warnings, nil
+}
+
+// RemoveProjectSource removes one logical source and its owned topology from
+// every stopped environment in the project.
+func (s *Service) RemoveProjectSource(ctx context.Context, projectName, sourceName, actor string) (ProjectSourceRemoval, error) {
+	if err := model.ValidateSourceName(sourceName); err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	project, err := s.database.Project(ctx, projectName)
+	if err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	found := false
+	for _, source := range project.Sources {
+		if strings.EqualFold(source.Name, sourceName) {
+			sourceName = source.Name
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ProjectSourceRemoval{}, database.ErrNotFound
+	}
+	definition, err := s.database.ProjectModel(ctx, projectName)
+	if err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	definition, projectSources, removedServices, removedConnections, err := compiler.RemoveSource(definition, project.Sources, sourceName)
+	if err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	environments, err := s.database.ListEnvironments(ctx, projectName)
+	if err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	removed := make(map[string]struct{}, len(removedServices))
+	for _, service := range removedServices {
+		removed[strings.ToLower(service)] = struct{}{}
+	}
+	configurations := make([]database.ProjectEnvironmentConfiguration, 0, len(environments))
+	for _, environment := range environments {
+		sources := make([]model.SourceBinding, 0, len(environment.Sources))
+		for _, source := range environment.Sources {
+			if !strings.EqualFold(source.Name, sourceName) {
+				sources = append(sources, source)
+			}
+		}
+		bindings := make([]model.ComponentBinding, 0, len(environment.Bindings))
+		for _, binding := range environment.Bindings {
+			if _, discarded := removed[strings.ToLower(binding.Service)]; !discarded {
+				bindings = append(bindings, binding)
+			}
+		}
+		compiled := compiler.Compile(definition, sources, bindings)
+		if !sourceRemovalCanBeSaved(compiled.Issues) {
+			return ProjectSourceRemoval{}, compiler.ConfigurationError{Issues: compiled.Issues}
+		}
+		configurations = append(configurations, database.ProjectEnvironmentConfiguration{
+			Name: environment.Name, Revision: environment.Revision, Definition: compiled.Definition,
+			Sources: sources, Bindings: compiled.Bindings,
+		})
+	}
+	updatedEnvironments, err := s.database.ReplaceProjectConfiguration(ctx, projectName, project.Revision, definition, projectSources, configurations, removedServices)
+	if err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	for index := range updatedEnvironments {
+		compiled := compiler.Compile(definition, updatedEnvironments[index].Sources, updatedEnvironments[index].Bindings)
+		updatedEnvironments[index].Issues = compiled.Issues
+		updatedEnvironments[index] = s.decorateEnvironment(updatedEnvironments[index])
+		scope := model.EnvironmentSelector(projectName, updatedEnvironments[index].Name)
+		_, _ = s.timeline(ctx, scope, actor, "project.source_deleted", sourceName, "warning", "Deleted project source "+sourceName, map[string]any{"services": removedServices})
+	}
+	project, err = s.database.Project(ctx, projectName)
+	if err != nil {
+		return ProjectSourceRemoval{}, err
+	}
+	return ProjectSourceRemoval{
+		Project: s.decorateProject(project), Environments: updatedEnvironments,
+		RemovedServices: removedServices, RemovedConnections: removedConnections,
+	}, nil
+}
+
+func sourceRemovalCanBeSaved(issues []model.ConfigurationIssue) bool {
+	for _, issue := range issues {
+		switch issue.Code {
+		case "MISSING_BINDING", "MISSING_SOURCE", "UNRESOLVED_CONNECTION":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Rescan refreshes a stopped environment from its currently bound filesystem sources.
@@ -321,11 +424,13 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 		return model.Environment{}, nil, fmt.Errorf("discover source %s: %w", sourceName, err)
 	}
 	found := false
+	now := time.Now().UTC()
 	for index := range environment.Sources {
 		if strings.EqualFold(environment.Sources[index].Name, sourceName) {
+			createdAt := environment.Sources[index].CreatedAt
 			environment.Sources[index] = model.SourceBinding{
 				Name: sourceName, Path: result.Root, Status: "ready", Warnings: result.Warnings,
-				ScannedAt: time.Now().UTC(), Definition: result.Model,
+				CreatedAt: createdAt, ScannedAt: now, Definition: result.Model,
 			}
 			found = true
 			break
@@ -334,7 +439,7 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 	if !found {
 		environment.Sources = append(environment.Sources, model.SourceBinding{
 			Name: sourceName, Path: result.Root, Status: "ready", Warnings: result.Warnings,
-			ScannedAt: time.Now().UTC(), Definition: result.Model,
+			CreatedAt: now, ScannedAt: now, Definition: result.Model,
 		})
 	}
 	projectDefinition, err := s.database.ProjectModel(ctx, projectName)

@@ -29,6 +29,7 @@ describe('MocksPanel', () => {
     expect(html).toContain('aria-label="Close mock profile"')
     expect(html).toContain('PREVIEW REQUEST')
     expect(html).toContain('ADD ROUTE')
+    expect(html).toContain('class="mock-row-actions table-row-actions"')
     expect(html).toContain('GET /inventory/{sku}')
     expect(html).toContain('Inventory has no available stock')
   })

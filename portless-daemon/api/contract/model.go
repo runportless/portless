@@ -21,6 +21,9 @@ type OperationEvent = model.OperationEvent
 // ComponentBinding is the stable provider-binding wire model.
 type ComponentBinding = model.ComponentBinding
 
+// Connection is the stable logical service-connection wire model.
+type Connection = model.Connection
+
 // Service is the stable service wire model.
 type Service = model.Service
 

@@ -90,10 +90,6 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			methodNotAllowed(writer, http.MethodPost)
 			return
 		}
-		if principal.Session {
-			writeAPIError(writer, http.StatusForbidden, contract.APIError{Code: "CLI_AUTH_REQUIRED", Message: "project source discovery may only be requested by the local CLI"})
-			return
-		}
 		var input contract.AddProjectSourceRequest
 		if err := decodeJSON(request, &input); err != nil {
 			writeDecodeError(writer, err)
@@ -103,7 +99,7 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_ENVIRONMENT_NAME", Message: err.Error(), Subject: map[string]any{"project": project, "environment": input.Environment}})
 			return
 		}
-		updatedProject, environment, warnings, err := s.app.AddProjectSource(ctx, project, input.Environment, input.Name, input.Path)
+		updatedProject, environment, warnings, err := s.app.AddProjectSource(ctx, project, input.Environment, input.Name, input.Path, principal.Actor)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project, "environment": input.Environment, "source": input.Name})
 			return
@@ -123,6 +119,26 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 		writeJSON(writer, http.StatusCreated, contract.ProjectSourceMutation{
 			ProjectMutation:       contract.ProjectMutation{Project: updatedProject, Environment: environment, Warnings: nonNil(warnings)},
 			ConfigurationRequired: nonNil(configurationRequired),
+		})
+		return
+	}
+	if len(segments) == 4 && segments[2] == "sources" {
+		if request.Method != http.MethodDelete {
+			methodNotAllowed(writer, http.MethodDelete)
+			return
+		}
+		if err := model.ValidateSourceName(segments[3]); err != nil {
+			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_SOURCE_NAME", Message: err.Error(), Subject: map[string]any{"project": project, "source": segments[3]}})
+			return
+		}
+		removed, err := s.app.RemoveProjectSource(ctx, project, segments[3], principal.Actor)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project, "source": segments[3]})
+			return
+		}
+		writeJSON(writer, http.StatusOK, contract.ProjectSourceDeletion{
+			Project: removed.Project, Environments: nonNil(removed.Environments),
+			RemovedServices: nonNil(removed.RemovedServices), RemovedConnections: nonNil(removed.RemovedConnections),
 		})
 		return
 	}

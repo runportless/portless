@@ -46,7 +46,22 @@ func (c *Commands) projectCommand() *cobra.Command {
 	}
 	add.Flags().StringVar(&addPath, "path", "", "source checkout path")
 	_ = add.MarkFlagRequired("path")
-	sourceGroup.AddCommand(add)
+	deleteYes := false
+	deleteSource := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a source and the topology it owns from the current project",
+		Long:  "Delete a logical source from the current project. Every project environment must be stopped. Services owned by the source and resources used only by those services are removed from every environment.",
+		Args:  shared.UsageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !deleteYes {
+				return shared.UsageError("delete removes the source and its owned topology from every project environment; repeat with --yes")
+			}
+			return c.deleteProjectSource(cmd.Context(), args[0])
+		},
+	}
+	deleteSource.Flags().BoolVar(&deleteYes, "yes", false, "confirm project source removal")
+	deleteSource.ValidArgsFunction = c.Complete(shared.CompletionSources)
+	sourceGroup.AddCommand(add, deleteSource)
 	command.AddCommand(sourceGroup)
 
 	output := "portless.project.json"

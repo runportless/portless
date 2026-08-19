@@ -38,6 +38,9 @@ func TestProjectAndEnvironmentStateAreSeparated(t *testing.T) {
 	if environment.Project != "billing" || environment.Name != "local" || environment.Status != model.EnvironmentStopped {
 		t.Fatalf("unexpected environment: %#v", environment)
 	}
+	if len(environment.Sources) != 1 || environment.Sources[0].CreatedAt.IsZero() {
+		t.Fatalf("source creation time was not persisted: %#v", environment.Sources)
+	}
 	privateKey, err := controlStore.PrivateEnvironmentKey(ctx, "billing", "local")
 	if err != nil || privateKey == "" {
 		t.Fatalf("private key = %q, err = %v", privateKey, err)

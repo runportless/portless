@@ -85,6 +85,54 @@ func TestAddSourceAllowsCompatibleSharedContainer(t *testing.T) {
 	}
 }
 
+func TestRemoveSourcePrunesOwnedServicesConnectionsAndUnusedResources(t *testing.T) {
+	project := model.ProjectModel{
+		SuggestedName: "store", PrimaryService: "inventory",
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "inventory", Kind: model.ServiceProcess},
+			resourceService("postgres", "postgres", "17", 5432),
+			resourceService("redis", "valkey", "8", 6379),
+		},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "inventory"},
+			{Source: "checkout", Target: "postgres"},
+			{Source: "inventory", Target: "redis"},
+		},
+	}
+	definition, sources, services, connections, err := RemoveSource(project, []model.ProjectSource{
+		{Name: "store", Services: []string{"checkout"}},
+		{Name: "inventory", Services: []string{"inventory"}},
+	}, "inventory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].Name != "store" {
+		t.Fatalf("sources = %#v", sources)
+	}
+	if names := serviceNames(definition.Services); strings.Join(names, ",") != "checkout,postgres" {
+		t.Fatalf("remaining services = %v", names)
+	}
+	if strings.Join(services, ",") != "inventory,redis" {
+		t.Fatalf("removed services = %v", services)
+	}
+	if len(definition.Connections) != 1 || definition.Connections[0].Target != "postgres" || len(connections) != 2 {
+		t.Fatalf("remaining connections = %#v, removed = %#v", definition.Connections, connections)
+	}
+	if definition.PrimaryService != "checkout" {
+		t.Fatalf("primary service = %q", definition.PrimaryService)
+	}
+}
+
+func TestRemoveSourceRejectsTheOnlyOrUnknownSource(t *testing.T) {
+	if _, _, _, _, err := RemoveSource(model.ProjectModel{}, []model.ProjectSource{{Name: "store"}}, "store"); err == nil || !strings.Contains(err.Error(), "retain at least one") {
+		t.Fatalf("last source error = %v", err)
+	}
+	if _, _, _, _, err := RemoveSource(model.ProjectModel{}, []model.ProjectSource{{Name: "store"}, {Name: "inventory"}}, "missing"); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("unknown source error = %v", err)
+	}
+}
+
 func TestCompileAllowsRemoteHTTPProvider(t *testing.T) {
 	project := model.ProjectModel{Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}, {Name: "payments", Kind: model.ServiceProcess}}, Connections: []model.Connection{{Source: "checkout", Target: "payments", Protocol: model.ProtocolHTTP, Environment: "PAYMENTS_URL", Required: true}}}
 	sources := []model.SourceBinding{{Name: "checkout", Definition: model.ProjectModel{Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Command: []string{"node"}}}}}}
@@ -207,4 +255,12 @@ func TestRefreshDiscoveredTopologyReplacesStoredConnectionsFromCurrentSources(t 
 
 func resourceService(name, resourceType, version string, port int) model.ServiceDefinition {
 	return model.ServiceDefinition{Name: name, Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: resourceType, Version: version}, Port: port}
+}
+
+func serviceNames(services []model.ServiceDefinition) []string {
+	result := make([]string, 0, len(services))
+	for _, service := range services {
+		result = append(result, service.Name)
+	}
+	return result
 }

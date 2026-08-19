@@ -42,3 +42,14 @@ func TestEnvironmentHelpMakesCheckoutSelectionExplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectSourceDeleteRequiresExplicitConfirmation(t *testing.T) {
+	application, output, errorsOutput := newTestCommands(t)
+	root := application.projectCommand()
+	root.SetOut(output)
+	root.SetErr(errorsOutput)
+	root.SetArgs([]string{"source", "delete", "inventory"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "repeat with --yes") {
+		t.Fatalf("delete error = %v, want explicit confirmation", err)
+	}
+}

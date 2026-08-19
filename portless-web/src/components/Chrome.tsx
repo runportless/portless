@@ -148,7 +148,7 @@ function TopbarBreadcrumbs({ settingsActive, settingsView, activeProject, active
 }) {
   return <nav className="crumbs" aria-label="Breadcrumb">
     {settingsActive ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><BreadcrumbLink path="/settings" onNavigate={onNavigate}>settings</BreadcrumbLink><b>/</b><strong aria-current="page">{settingsView}</strong></>
-      : activeEnvironment ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><BreadcrumbLink path={`/projects/${encodeURIComponent(activeEnvironment.project)}`} onNavigate={onNavigate}>{activeEnvironment.project}</BreadcrumbLink><b>/</b><strong aria-current="page">{activeEnvironment.name}</strong><StatusMark status={activeEnvironment.status} /></>
+      : activeEnvironment ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><BreadcrumbLink path={`/projects/${encodeURIComponent(activeEnvironment.project)}`} onNavigate={onNavigate}>{activeEnvironment.project}</BreadcrumbLink><b>/</b><strong aria-current="page">{activeEnvironment.name}</strong></>
         : activeProject ? <><BreadcrumbLink path="/projects" onNavigate={onNavigate}>projects</BreadcrumbLink><b>/</b><strong aria-current="page">{activeProject.name}</strong></>
           : <strong aria-current="page">projects</strong>}
   </nav>

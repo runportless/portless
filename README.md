@@ -363,6 +363,19 @@ portless --env billing/qa-assisted env bind inventory \
 
 `portless up` refuses to start an environment until every newly declared component has a valid provider.
 
+Changing a checkout path affects only the selected environment. Deleting a
+logical source is a project-wide topology change, so every environment must be
+stopped and the project must retain at least one source:
+
+```bash
+portless --env billing/local env source inventory --path ../inventory-worktree
+portless --env billing/local project source delete inventory --yes
+```
+
+Deletion removes services owned by that source from every environment, prunes
+resources used only by those services, deletes their mock profiles, and
+disables fault rules that target the removed topology.
+
 Clone an environment when you want a different composition. Cloning copies configuration, not runtime state or data volumes, and does not require the source environment to stop:
 
 ```bash

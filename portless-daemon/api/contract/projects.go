@@ -41,6 +41,15 @@ type ProjectSourceMutation struct {
 	ConfigurationRequired []string `json:"configurationRequired"`
 }
 
+// ProjectSourceDeletion returns the project-wide topology remaining after a
+// logical source is deleted.
+type ProjectSourceDeletion struct {
+	Project            Project       `json:"project"`
+	Environments       []Environment `json:"environments"`
+	RemovedServices    []string      `json:"removedServices"`
+	RemovedConnections []Connection  `json:"removedConnections"`
+}
+
 // RenameProjectRequest supplies a new project name and expected revision.
 type RenameProjectRequest struct {
 	Name     string `json:"name"`

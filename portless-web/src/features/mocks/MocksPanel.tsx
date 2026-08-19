@@ -148,7 +148,7 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
           <div><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><strong>{profile.name}</strong></div>
           <span>{profile.service}</span><span>{profile.routes.length}</span><span>{active ? 'bound' : 'available'}</span>
           <time dateTime={profile.modifiedAt}>{formatTimestamp(profile.modifiedAt)}</time>
-          <div className="mock-row-actions"><button type="button" onClick={(event) => { event.stopPropagation(); setError(null); onSelectProfile(profile.name) }}>OPEN</button><button className={deleteName === profile.name ? 'is-confirming' : ''} type="button" disabled={busy !== ''} onClick={(event) => { event.stopPropagation(); void removeProfile(profile) }}>{deleteName === profile.name ? 'CONFIRM' : 'DELETE'}</button></div>
+          <div className="mock-row-actions table-row-actions"><button type="button" disabled={busy !== ''} onClick={(event) => { event.stopPropagation(); setError(null); onSelectProfile(profile.name) }}>OPEN</button><button className={deleteName === profile.name ? 'is-confirming' : ''} type="button" disabled={busy !== ''} onClick={(event) => { event.stopPropagation(); void removeProfile(profile) }}>{deleteName === profile.name ? 'CONFIRM' : 'DELETE'}</button></div>
         </div>
       })}
       {!loading && profiles.length === 0 && <div className="empty-row">No mock profiles. Create one for a service you do not want to run locally.</div>}
@@ -224,7 +224,7 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
           <div className="mock-route-row mock-route-row--header"><span>Route</span><span>Match</span><span>Response</span><span>Delay</span><span>State</span><span>Actions</span></div>
           {profile.routes.map((route) => <div className="mock-route-row" key={route.name}>
             <strong>{route.name}</strong><code>{route.method} {route.path}{formatQuerySummary(route.query)}</code><span>{route.status}{route.body ? ` · ${new Blob([route.body]).size} B` : ''}</span><span>{route.delayMs ? `${route.delayMs} ms` : '—'}</span><StatusMark status={route.enabled ? 'ready' : 'stopped'} />
-            <div className="mock-row-actions"><button type="button" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button><button className={deleteName === `delete-route:${route.name}` ? 'is-confirming' : ''} type="button" disabled={!!busy} onClick={() => onDeleteRoute(route)}>{deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button></div>
+            <div className="mock-row-actions table-row-actions"><button type="button" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button><button className={deleteName === `delete-route:${route.name}` ? 'is-confirming' : ''} type="button" disabled={!!busy} onClick={() => onDeleteRoute(route)}>{deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button></div>
           </div>)}
           {profile.routes.length === 0 && <div className="empty-row">This profile has no routes. Unmatched requests return 501 so missing behavior is visible.</div>}
         </section>

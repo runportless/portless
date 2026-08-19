@@ -1,3 +1,5 @@
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { applicationRequest, authenticate, controlAPI, environmentPath, issueBrowserClaim, readDownload } from './helpers'
 import { readE2EState } from './state'
@@ -562,6 +564,25 @@ test('renders durable lifecycle events from the environment timeline', async ({ 
   await expect(page.locator('.timeline-event').filter({ hasText: result.timeline[0].summary }).first()).toBeVisible()
 })
 
+test('shows a concise traffic error while the daemon reconnects', async ({ page }) => {
+  let unavailable = true
+  await page.route(/\/api\/v1\/environments\/[^/]+\/[^/]+\/traffic\/traces(?:\?|$)/, (route) => unavailable ? route.fulfill({
+    status: 503,
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><style>relay fallback markup</style></body></html>',
+  }) : route.continue())
+  await authenticate(page, environmentPath('traffic'))
+
+  const notice = page.getByRole('alert').filter({ hasText: "Traffic couldn't be loaded" })
+  await expect(notice).toContainText('DAEMON_UNAVAILABLE')
+  await expect(notice).toContainText('Portless is reconnecting to the local daemon. Try again in a moment.')
+  await expect(notice).not.toContainText('<!doctype html>')
+  await expect(notice).not.toContainText('relay fallback markup')
+
+  unavailable = false
+  await expect(notice).toHaveCount(0, { timeout: 8_000 })
+})
+
 test('paginates traces and exchanges at 25 rows', async ({ page }) => {
   await authenticate(page, environmentPath('traffic'))
   const marker = `/pagination-e2e-${Date.now()}`
@@ -745,7 +766,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
   await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-  await expect(drawer.getByText(/^10\.1\.0$/)).toBeVisible()
+  await expect(drawer.getByText(/^10\.4\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })
@@ -765,4 +786,62 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   const afterEnvironment = await controlAPI<{ services: Array<{ name: string; pid: number }> }>('/api/v1/environments/ui-e2e/local')
   expect(afterEnvironment.services.map(({ name, pid }) => ({ name, pid }))).toEqual(beforeEnvironment.services.map(({ name, pid }) => ({ name, pid })))
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
+})
+
+test('adds, edits, and deletes a project source from the bindings page', async ({ page }) => {
+  const state = readE2EState()
+  const catalogSource = join(state.root, 'catalog-source')
+  const catalogWorktree = join(state.root, 'catalog-worktree')
+  mkdirSync(catalogSource, { recursive: true })
+  mkdirSync(catalogWorktree, { recursive: true })
+  writeFileSync(join(catalogSource, 'package.json'), JSON.stringify({
+    name: 'catalog',
+    scripts: { start: 'node server.js' },
+    dependencies: { express: '1.0.0' },
+  }))
+  writeFileSync(join(catalogSource, 'server.js'), "require('http').createServer((_request, response) => response.end('catalog')).listen(Number(process.env.PORT))\n")
+  writeFileSync(join(catalogWorktree, 'package.json'), JSON.stringify({
+    name: 'catalog',
+    scripts: { start: 'node server.js' },
+    dependencies: { express: '1.0.0' },
+  }))
+  writeFileSync(join(catalogWorktree, 'server.js'), "require('http').createServer((_request, response) => response.end('catalog worktree')).listen(Number(process.env.PORT))\n")
+
+  await authenticate(page, environmentPath('bindings'))
+  await page.getByRole('button', { name: 'STOP ALL' }).click()
+  await expect(page.getByRole('button', { name: 'START ALL' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('change a path to a Git worktree')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'ADD SOURCE', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Add source' })
+  await expect(dialog.getByLabel('NAME', { exact: true })).toBeFocused()
+  await dialog.getByLabel('NAME', { exact: true }).fill('catalog')
+  await dialog.getByLabel('ABSOLUTE PATH', { exact: true }).fill(catalogSource)
+  await dialog.getByRole('button', { name: 'ADD SOURCE', exact: true }).click()
+  await expect(dialog).toHaveCount(0, { timeout: 30_000 })
+
+  const source = page.locator('.source-table tbody tr').filter({ hasText: 'catalog' })
+  await expect(source).toBeVisible()
+  await expect(source.locator('code')).toHaveText(realpathSync(catalogSource))
+  await expect(source.locator('time')).toHaveAttribute('datetime', /^\d{4}-\d{2}-\d{2}T/)
+  const createdAt = await source.locator('time').getAttribute('datetime')
+  await source.getByRole('button', { name: 'EDIT' }).click()
+  const editDialog = page.getByRole('dialog', { name: 'Edit catalog' })
+  await expect(editDialog.getByLabel('ABSOLUTE PATH')).toHaveValue(realpathSync(catalogSource))
+  await editDialog.getByLabel('ABSOLUTE PATH').fill(catalogWorktree)
+  await editDialog.getByRole('button', { name: 'SAVE CHANGES' }).click()
+  await expect(editDialog).toHaveCount(0, { timeout: 30_000 })
+  await expect(source.locator('code')).toHaveText(realpathSync(catalogWorktree))
+  await expect(source.locator('time')).toHaveAttribute('datetime', createdAt || '')
+
+  await source.getByRole('button', { name: 'DELETE' }).click()
+  const deleteDialog = page.getByRole('alertdialog', { name: 'Delete catalog?' })
+  await expect(deleteDialog).toContainText('catalog')
+  await deleteDialog.getByRole('button', { name: 'DELETE SOURCE', exact: true }).click()
+  await expect(deleteDialog).toHaveCount(0, { timeout: 30_000 })
+  await expect(source).toHaveCount(0)
+
+  const project = await controlAPI<{ sources: Array<{ name: string }> }>(`/api/v1/projects/${state.project}`)
+  expect(project.sources.map((item) => item.name)).not.toContain('catalog')
+  expect(project.sources.length).toBeGreaterThan(0)
 })

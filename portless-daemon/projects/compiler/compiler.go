@@ -95,6 +95,130 @@ func AddSource(project model.ProjectModel, projectSources []model.ProjectSource,
 	return definition, sources, defaults, nil
 }
 
+// RemoveSource removes one logical project source, the process services it
+// owns, and resource services that are no longer reachable from a remaining
+// process service. It returns every removed service and connection so callers
+// can present and persist the topology change explicitly.
+func RemoveSource(project model.ProjectModel, projectSources []model.ProjectSource, sourceName string) (model.ProjectModel, []model.ProjectSource, []string, []model.Connection, error) {
+	if len(projectSources) <= 1 {
+		return model.ProjectModel{}, nil, nil, nil, errors.New("a project must retain at least one source; forget the project instead")
+	}
+	removedProcesses := map[string]struct{}{}
+	remainingSources := make([]model.ProjectSource, 0, len(projectSources)-1)
+	found := false
+	for _, source := range projectSources {
+		if strings.EqualFold(source.Name, sourceName) {
+			found = true
+			for _, service := range source.Services {
+				removedProcesses[strings.ToLower(service)] = struct{}{}
+			}
+			continue
+		}
+		remainingSources = append(remainingSources, source)
+	}
+	if !found {
+		return model.ProjectModel{}, nil, nil, nil, fmt.Errorf("source %s does not exist", sourceName)
+	}
+
+	candidates := make([]model.ServiceDefinition, 0, len(project.Services))
+	candidateNames := make(map[string]model.ServiceDefinition, len(project.Services))
+	active := map[string]struct{}{}
+	for _, service := range project.Services {
+		key := strings.ToLower(service.Name)
+		if _, removed := removedProcesses[key]; removed {
+			continue
+		}
+		candidates = append(candidates, service)
+		candidateNames[key] = service
+		if service.Kind == model.ServiceProcess {
+			active[key] = struct{}{}
+		}
+	}
+	candidateConnections := make([]model.Connection, 0, len(project.Connections))
+	for _, connection := range project.Connections {
+		if connection.Source != "external" {
+			if _, ok := candidateNames[strings.ToLower(connection.Source)]; !ok {
+				continue
+			}
+		}
+		if _, ok := candidateNames[strings.ToLower(connection.Target)]; !ok {
+			continue
+		}
+		candidateConnections = append(candidateConnections, connection)
+	}
+	changed := true
+	for changed {
+		changed = false
+		for _, connection := range candidateConnections {
+			if connection.Source != "external" {
+				if _, ok := active[strings.ToLower(connection.Source)]; !ok {
+					continue
+				}
+			}
+			target := strings.ToLower(connection.Target)
+			if _, ok := active[target]; !ok {
+				active[target] = struct{}{}
+				changed = true
+			}
+		}
+	}
+
+	result := project
+	result.Services = nil
+	retained := map[string]struct{}{}
+	var removedServices []string
+	for _, service := range candidates {
+		key := strings.ToLower(service.Name)
+		if service.Kind == model.ServiceResource {
+			if _, ok := active[key]; !ok {
+				removedServices = append(removedServices, service.Name)
+				continue
+			}
+		}
+		result.Services = append(result.Services, service)
+		retained[key] = struct{}{}
+	}
+	for _, service := range project.Services {
+		if _, ok := removedProcesses[strings.ToLower(service.Name)]; ok {
+			removedServices = append(removedServices, service.Name)
+		}
+	}
+	var removedConnections []model.Connection
+	result.Connections = nil
+	for _, connection := range project.Connections {
+		_, targetRetained := retained[strings.ToLower(connection.Target)]
+		_, sourceRetained := retained[strings.ToLower(connection.Source)]
+		if connection.Source == "external" {
+			sourceRetained = true
+		}
+		if !sourceRetained || !targetRetained {
+			removedConnections = append(removedConnections, connection)
+			continue
+		}
+		result.Connections = append(result.Connections, connection)
+	}
+	result.References = nil
+	for _, reference := range project.References {
+		if _, ok := retained[strings.ToLower(reference.Source)]; ok {
+			result.References = append(result.References, reference)
+		}
+	}
+	if _, ok := retained[strings.ToLower(result.PrimaryService)]; !ok {
+		result.PrimaryService = ""
+		for _, service := range result.Services {
+			if service.Kind == model.ServiceProcess {
+				result.PrimaryService = service.Name
+				break
+			}
+		}
+		if result.PrimaryService == "" && len(result.Services) > 0 {
+			result.PrimaryService = result.Services[0].Name
+		}
+	}
+	sort.Strings(removedServices)
+	return result, remainingSources, removedServices, removedConnections, nil
+}
+
 // InitialProject combines discovered sources into reusable topology and default local bindings.
 func InitialProject(name string, sources []model.SourceBinding) (model.ProjectModel, []model.ProjectSource, []model.ComponentBinding, error) {
 	definition := model.ProjectModel{SuggestedName: name}

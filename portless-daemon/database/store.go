@@ -109,6 +109,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"connection_runtime", "dns_name", "TEXT NOT NULL DEFAULT ''"},
 		{"operations", "request_fingerprint", "TEXT NOT NULL DEFAULT ''"},
 		{"environment_bindings", "modified_at", "TEXT NOT NULL DEFAULT ''"},
+		{"environment_sources", "created_at", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.definition); err != nil {
 			return err
@@ -136,6 +137,12 @@ WHERE modified_at = ''`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE environment_sources SET created_at = scanned_at WHERE created_at = ''`); err != nil {
+		return fmt.Errorf("backfill environment source creation times: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(7, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -210,6 +217,7 @@ CREATE TABLE IF NOT EXISTS environment_sources (
   status TEXT NOT NULL DEFAULT 'ready',
   warnings_json BLOB NOT NULL DEFAULT '[]',
   discovery_json BLOB NOT NULL,
+  created_at TEXT NOT NULL,
   scanned_at TEXT NOT NULL,
   PRIMARY KEY(environment_key, source_name),
   UNIQUE(environment_key, path)

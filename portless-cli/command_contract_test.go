@@ -139,6 +139,7 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 	}
 	expected["portless project source"] = showHelp
 	expected["portless project source add"] = showHelp
+	expected["portless project source delete"] = showHelp
 
 	application, _, _ := newTestCLI(t)
 	actual := map[string]*cobra.Command{}
@@ -204,6 +205,7 @@ func TestBareLeafCommandsWithRequiredArgumentsShowHelp(t *testing.T) {
 	}{
 		{name: "env select", args: []string{"env", "select"}, want: "portless env select <project/environment>"},
 		{name: "project source add", args: []string{"project", "source", "add"}, want: "portless project source add <name>"},
+		{name: "project source delete", args: []string{"project", "source", "delete"}, want: "portless project source delete <name>"},
 		{name: "record start", args: []string{"record", "start"}, want: "portless record start <name>"},
 		{name: "partial fault add", args: []string{"fault", "add", "slow"}, want: "portless fault add <name> <source:target>"},
 		{name: "runtime use", args: []string{"runtime", "use"}, want: "portless runtime use <auto|docker|podman>"},

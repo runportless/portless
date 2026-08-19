@@ -80,8 +80,8 @@ The CLI E2E suite protects these product contracts:
 - `down --all` from an ambiguous checkout and across multiple simultaneously
   active worktrees;
 - several source repositories compiled into one project, environment cloning,
-  adding a source after cloning, and explicit remediation of the other
-  environment;
+  adding a source after cloning, explicit remediation of the other
+  environment, and project-wide source deletion;
 - a mixed environment with local services and a remote QA dependency,
   including traffic attribution, local enforcement of its read-only write
   policy, and active local/remote provider handoffs that preserve unrelated
@@ -106,7 +106,8 @@ The Playwright suite protects these browser journeys:
   maximizable mock-profile route drawer, complete header/body preview input,
   and a live mock handoff that keeps peer service PIDs stable and preserves
   traffic attribution;
-- environment stop/start controls;
+- environment stop/start controls and source add, checkout-path edit, and
+  project-wide delete workflows;
 - active service-scoped provider handoff with unrelated runtime preservation,
   plus stopped-environment remote binding persistence and restore;
 - durable timeline rendering and pagination;

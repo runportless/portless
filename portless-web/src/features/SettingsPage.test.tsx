@@ -18,7 +18,7 @@ const environment = {
   project: 'store',
   name: 'local',
   status: 'healthy',
-  sources: [{ name: 'store', path: '/Users/dev/store', status: 'ready', scannedAt: '2026-08-18T12:00:00Z' }],
+  sources: [{ name: 'store', path: '/Users/dev/store', status: 'ready', createdAt: '2026-08-18T12:00:00Z', scannedAt: '2026-08-18T12:00:00Z' }],
   services: [],
   connections: [],
 } as unknown as Environment

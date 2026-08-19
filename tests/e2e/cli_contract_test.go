@@ -30,8 +30,9 @@ func TestCLIHelpContracts(t *testing.T) {
 		{name: "record group", args: []string{"record"}, expected: []string{"Capture bounded local traffic recordings", "portless record [command]", "start", "stop", "export", "delete"}},
 		{name: "environment group", args: []string{"env"}, expected: []string{"Manage project environments", "portless env [command]", "select", "current", "clone", "bind"}},
 		{name: "missing environment selection", args: []string{"env", "select"}, expected: []string{"Select an environment", "portless env select <project/environment>"}},
-		{name: "project source group", args: []string{"project", "source"}, expected: []string{"Manage project sources", "portless project source [command]", "add"}},
+		{name: "project source group", args: []string{"project", "source"}, expected: []string{"Manage project sources", "portless project source [command]", "add", "delete"}},
 		{name: "missing project source", args: []string{"project", "source", "add"}, expected: []string{"Discover a checkout and add its services", "portless project source add <name>"}},
+		{name: "missing project source deletion", args: []string{"project", "source", "delete"}, expected: []string{"Delete a logical source from the current project", "portless project source delete <name>"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -17,6 +17,10 @@ export class APIError extends Error {
 }
 
 let csrf = ''
+const daemonUnavailable: APIErrorShape = {
+  code: 'DAEMON_UNAVAILABLE',
+  message: 'Portless is reconnecting to the local daemon. Try again in a moment.',
+}
 
 export function setCSRF(value: string) {
   csrf = value
@@ -28,15 +32,54 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   headers.set('Accept', 'application/json')
   if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrf) headers.set('X-Portless-CSRF', csrf)
-  const response = await fetch(`/api/v1${path}`, { ...options, headers, credentials: 'same-origin' })
+  let response: Response
+  try {
+    response = await fetch(`/api/v1${path}`, { ...options, headers, credentials: 'same-origin' })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new APIError(0, daemonUnavailable)
+  }
   if (response.status === 204) return undefined as T
   const contentType = response.headers.get('content-type') ?? ''
-  const value = contentType.includes('application/json') ? await response.json() : await response.text()
-  if (!response.ok) {
-    const error = typeof value === 'object' && value?.error ? value.error as APIErrorShape : { code: 'REQUEST_FAILED', message: String(value) }
-    throw new APIError(response.status, error)
+  let body: string
+  try {
+    body = await response.text()
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new APIError(response.status, daemonUnavailable)
   }
+  const jsonResponse = contentType.toLowerCase().includes('json')
+  let value: unknown = body
+  if (jsonResponse) {
+    try {
+      value = body ? JSON.parse(body) : undefined
+    } catch {
+      throw new APIError(response.status, responseError(response, body, contentType))
+    }
+  }
+  if (!response.ok) {
+    throw new APIError(response.status, apiErrorShape(value) || responseError(response, body, contentType))
+  }
+  if (!jsonResponse) throw new APIError(response.status, responseError(response, body, contentType))
   return value as T
+}
+
+function apiErrorShape(value: unknown): APIErrorShape | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const error = (value as { error?: unknown }).error
+  if (!error || typeof error !== 'object') return undefined
+  const candidate = error as Partial<APIErrorShape>
+  if (typeof candidate.code !== 'string' || typeof candidate.message !== 'string') return undefined
+  return candidate as APIErrorShape
+}
+
+function responseError(response: Response, body: string, contentType: string): APIErrorShape {
+  if ([502, 503, 504].includes(response.status)) return daemonUnavailable
+  const html = contentType.toLowerCase().includes('text/html') || /^\s*(?:<!doctype\s+html|<html\b)/i.test(body)
+  return {
+    code: 'UNEXPECTED_API_RESPONSE',
+    message: `Portless received an unexpected ${html ? 'HTML' : 'non-JSON'} response (HTTP ${response.status}).`,
+  }
 }
 
 export function jsonBody(value: unknown): Pick<RequestInit, 'body' | 'headers'> {

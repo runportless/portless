@@ -43,6 +43,14 @@ func (c *Client) AddProjectSource(ctx context.Context, project string, input con
 	return result, err
 }
 
+// DeleteProjectSource removes one logical source and its owned topology from
+// every environment in project.
+func (c *Client) DeleteProjectSource(ctx context.Context, project, source string) (contract.ProjectSourceDeletion, error) {
+	var result contract.ProjectSourceDeletion
+	err := c.do(ctx, http.MethodDelete, "/api/v1/projects/"+EscapePath(project)+"/sources/"+EscapePath(source), nil, &result)
+	return result, err
+}
+
 // ExportProject returns the portable declaration for project.
 func (c *Client) ExportProject(ctx context.Context, project string) ([]byte, error) {
 	var result []byte
