@@ -350,6 +350,9 @@ Add another repository later without recreating the project. Stop every environm
 portless --env billing/local project source add inventory --path ../inventory-service
 ```
 
+In the control plane, source checkout paths remain directly editable and the
+Browse action opens the operating system's native directory chooser.
+
 The source and its discovered services become part of `billing`, but `../inventory-service` belongs only to `billing/local`. Portless leaves every other environment explicitly unconfigured instead of copying a machine-specific path. Give each one its own checkout or bind the new service remotely:
 
 ```bash

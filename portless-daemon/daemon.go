@@ -25,6 +25,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/events"
 	daemonidentity "github.com/portless-run/portless/portless-daemon/identity"
 	"github.com/portless-run/portless/portless-daemon/lifecycle"
+	"github.com/portless-run/portless/portless-daemon/system/directorypicker"
 	"github.com/portless-run/portless/portless-daemon/system/installation"
 	"github.com/portless-run/portless/portless-relay"
 	portlessweb "github.com/portless-run/portless/portless-web"
@@ -164,6 +165,7 @@ func Run(ctx context.Context, config Config) error {
 			status, err := relay.Inspect(ctx)
 			return contract.RelayStatus(status), err
 		},
+		SelectDirectory: directorypicker.Select,
 	})
 	if err != nil {
 		return err

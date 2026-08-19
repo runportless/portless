@@ -106,8 +106,8 @@ The Playwright suite protects these browser journeys:
   maximizable mock-profile route drawer, complete header/body preview input,
   and a live mock handoff that keeps peer service PIDs stable and preserves
   traffic attribution;
-- environment stop/start controls and source add, checkout-path edit, and
-  project-wide delete workflows;
+- environment stop/start controls and typed source add, native-picker
+  checkout-path edit, and project-wide delete workflows;
 - active service-scoped provider handoff with unrelated runtime preservation,
   plus stopped-environment remote binding persistence and restore;
 - durable timeline rendering and pagination;

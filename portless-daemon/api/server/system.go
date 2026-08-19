@@ -86,12 +86,46 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 	writeJSON(writer, http.StatusAccepted, result)
 }
 
-func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer, http.MethodGet)
+func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {
+	if len(segments) == 1 {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
+			return
+		}
+		writeJSON(writer, http.StatusOK, contract.SystemStatus{Name: "portless", Version: "dev", APIVersion: contract.APIVersion, Telemetry: false})
 		return
 	}
-	writeJSON(writer, http.StatusOK, contract.SystemStatus{Name: "portless", Version: "dev", APIVersion: contract.APIVersion, Telemetry: false})
+	if len(segments) != 3 || segments[1] != "directories" || segments[2] != "select" {
+		writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "system route not found"})
+		return
+	}
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	if !principal.Session {
+		writeAPIError(writer, http.StatusForbidden, contract.APIError{Code: "BROWSER_SESSION_REQUIRED", Message: "native directory selection is available only to the authenticated Portless control plane"})
+		return
+	}
+	if s.selectDirectory == nil {
+		writeAPIError(writer, http.StatusServiceUnavailable, contract.APIError{Code: "DIRECTORY_PICKER_UNAVAILABLE", Message: "native directory selection is unavailable"})
+		return
+	}
+	var input contract.DirectorySelectionRequest
+	if err := decodeJSON(request, &input); err != nil {
+		writeDecodeError(writer, err)
+		return
+	}
+	path, canceled, err := s.selectDirectory(request.Context(), "Choose a Portless source directory", input.InitialPath)
+	if err != nil {
+		writeAPIError(writer, http.StatusServiceUnavailable, contract.APIError{Code: "DIRECTORY_PICKER_FAILED", Message: err.Error()})
+		return
+	}
+	if canceled {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(writer, http.StatusOK, contract.DirectorySelection{Path: path})
 }
 
 func (s *Server) handleRuntime(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {

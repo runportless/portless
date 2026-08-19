@@ -342,14 +342,14 @@ test('creates and hot-binds a mock profile without restarting peer services', as
 
   await page.getByRole('navigation', { name: `${state.project}/${state.environment} views` }).getByRole('button', { name: 'Bindings' }).click()
   const inventoryRow = page.locator('.configured-providers-panel .provider-row').filter({ hasText: 'inventory' })
-  await inventoryRow.getByRole('button', { name: 'CHANGE' }).click()
-  const bindingDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await inventoryRow.getByRole('button', { name: 'EDIT' }).click()
+  const bindingDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   await bindingDialog.getByLabel('Provider', { exact: true }).selectOption('mock')
   await bindingDialog.getByLabel('Mock profile', { exact: true }).selectOption('sold-out')
   await bindingDialog.getByRole('button', { name: 'SWITCH PROVIDER' }).click()
   await expect(bindingDialog).toHaveCount(0, { timeout: 30_000 })
-  await expect(inventoryRow).toContainText('Mock profile')
-  await expect(inventoryRow).toContainText('sold-out')
+  await expect(inventoryRow.locator('.provider-kind')).toHaveText('Mock')
+  await expect(inventoryRow.locator('.provider-configuration')).toHaveText('sold-out')
 
   const mocked = await controlAPI<Snapshot>(`/api/v1/environments/${state.project}/${state.environment}`)
   const mockedByName = new Map(mocked.services.map((service) => [service.name, service]))
@@ -367,8 +367,8 @@ test('creates and hot-binds a mock profile without restarting peer services', as
     return traffic.exchanges.some((exchange) => exchange.target === 'inventory' && exchange.targetProvider === 'mock' && exchange.mockProfile === 'sold-out' && exchange.mockRoute === 'lookup')
   }).toBe(true)
 
-  await inventoryRow.getByRole('button', { name: 'CHANGE' }).click()
-  const restoreDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await inventoryRow.getByRole('button', { name: 'EDIT' }).click()
+  const restoreDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   await restoreDialog.getByRole('button', { name: 'RESET TO DEFAULT' }).click()
   await expect(restoreDialog).toHaveCount(0, { timeout: 30_000 })
   const restored = await controlAPI<Snapshot>(`/api/v1/environments/${state.project}/${state.environment}`)
@@ -447,15 +447,27 @@ test('switches one active provider and persists stopped-environment bindings', a
   const providerCells = await firstProviderRow.getByRole('cell').evaluateAll((cells) => cells.map((cell) => Math.round(cell.getBoundingClientRect().x)))
   expect(providerCells).toEqual(headerColumns)
 
-  await expect(page.getByRole('button', { name: 'CONFIGURE PROVIDER', exact: true })).toBeVisible()
-  const firstChange = firstProviderRow.getByRole('button', { name: 'CHANGE', exact: true })
-  await firstChange.click()
-  let providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  const configureProvider = page.getByRole('button', { name: 'CONFIGURE PROVIDER', exact: true })
+  await expect(configureProvider).toBeVisible()
+  await configureProvider.click()
+  let providerDialog = page.getByRole('dialog', { name: 'Configure Provider' })
+  await expect(providerDialog.getByLabel('Service', { exact: true })).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(providerDialog).toHaveCount(0)
+  await expect(configureProvider).toBeFocused()
+
+  const firstEdit = firstProviderRow.getByRole('button', { name: 'EDIT', exact: true })
+  await firstEdit.click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   const providerSelect = providerDialog.getByLabel('Provider', { exact: true })
   await expect(providerSelect).toBeFocused()
-  await expect(providerDialog.getByLabel('Service', { exact: true })).toBeDisabled()
+  await expect(providerDialog.getByLabel('Service', { exact: true })).toHaveCount(0)
+  const lockedService = providerDialog.locator('.provider-service-value')
+  await expect(lockedService.getByText('SERVICE', { exact: true })).toBeVisible()
+  await expect(lockedService.getByText('checkout', { exact: true })).toBeVisible()
   await expect(providerDialog.getByRole('button', { name: 'SWITCH PROVIDER', exact: true })).toBeDisabled()
-  await expect(providerDialog.getByText('Only checkout will switch providers. Other running services stay available.')).toBeVisible()
+  await expect(providerDialog.getByText('Choose how Portless should run or route this service in this environment.')).toBeVisible()
+  await expect(providerDialog.getByText('Only checkout will switch providers. Other running services stay available.')).toHaveCount(0)
   let environmentRefreshes = 0
   page.on('response', (response) => {
     if (response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/environments') environmentRefreshes++
@@ -467,7 +479,7 @@ test('switches one active provider and persists stopped-environment bindings', a
   await expect(providerSelect).toHaveValue('remote')
   await page.keyboard.press('Escape')
   await expect(providerDialog).toHaveCount(0)
-  await expect(firstChange).toBeFocused()
+  await expect(firstEdit).toBeFocused()
 
   const before = await controlAPI<EnvironmentSnapshot>(`/api/v1/environments/${state.project}/local`)
   const remoteProviderPort = before.services.find((service) => service.name === 'orders')?.upstreamPort
@@ -475,8 +487,8 @@ test('switches one active provider and persists stopped-environment bindings', a
   const remoteProviderURL = `http://127.0.0.1:${remoteProviderPort}`
   const stableBefore = Object.fromEntries(before.services.filter((service) => service.name === 'checkout' || service.name === 'orders').map((service) => [service.name, { pid: service.pid, generation: service.generation }]))
   const activeInventoryRow = page.locator('.configured-providers-panel .provider-row:not(.provider-row--header)').filter({ hasText: 'inventory' })
-  await activeInventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
-  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await activeInventoryRow.getByRole('button', { name: 'EDIT', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   await providerDialog.getByLabel('Provider', { exact: true }).selectOption('remote')
   await providerDialog.getByLabel('Remote URL', { exact: true }).fill(remoteProviderURL)
   await providerDialog.getByLabel('Classification', { exact: true }).selectOption('qa')
@@ -484,7 +496,7 @@ test('switches one active provider and persists stopped-environment bindings', a
   await providerDialog.getByLabel('Health path', { exact: true }).fill('/health')
   await providerDialog.getByRole('button', { name: 'SWITCH PROVIDER', exact: true }).click()
   await expect(providerDialog).toHaveCount(0, { timeout: 30_000 })
-  await expect(activeInventoryRow).toContainText(remoteProviderURL)
+  await expect(activeInventoryRow.locator('.provider-configuration')).toHaveText(remoteProviderURL)
 
   const remoteActive = await controlAPI<EnvironmentSnapshot>(`/api/v1/environments/${state.project}/local`)
   expect(remoteActive.status).toBe('healthy')
@@ -494,8 +506,8 @@ test('switches one active provider and persists stopped-environment bindings', a
     expect({ pid: runtime?.pid, generation: runtime?.generation }).toEqual(stableBefore[serviceName])
   }
 
-  await activeInventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
-  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await activeInventoryRow.getByRole('button', { name: 'EDIT', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   await providerDialog.getByRole('button', { name: 'RESET TO DEFAULT', exact: true }).click()
   await expect(providerDialog).toHaveCount(0, { timeout: 30_000 })
   const restoredActive = await controlAPI<EnvironmentSnapshot>(`/api/v1/environments/${state.project}/local`)
@@ -512,8 +524,8 @@ test('switches one active provider and persists stopped-environment bindings', a
   await expect(page.getByRole('heading', { name: 'qa-ui', exact: true }).locator('..')).toContainText('stopped')
 
   const inventoryRow = page.locator('.configured-providers-panel .provider-row:not(.provider-row--header)').filter({ hasText: 'inventory' })
-  await inventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
-  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await inventoryRow.getByRole('button', { name: 'EDIT', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   await providerDialog.getByLabel('Provider', { exact: true }).selectOption('remote')
   await providerDialog.getByLabel('Remote URL', { exact: true }).fill('https://inventory.qa.example.test')
   await providerDialog.getByLabel('Classification', { exact: true }).selectOption('staging')
@@ -521,7 +533,7 @@ test('switches one active provider and persists stopped-environment bindings', a
   await providerDialog.getByLabel('Health path', { exact: true }).fill('/ready')
   await providerDialog.getByRole('button', { name: 'SAVE CHANGES', exact: true }).click()
   await expect(providerDialog).toHaveCount(0)
-  await expect(page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' })).toContainText('https://inventory.qa.example.test')
+  await expect(page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' }).locator('.provider-configuration')).toHaveText('https://inventory.qa.example.test')
 
   const remote = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
   const remoteInventory = remote.bindings.find((binding) => binding.service === 'inventory')
@@ -531,17 +543,17 @@ test('switches one active provider and persists stopped-environment bindings', a
   })
   expect(remoteInventory?.modifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
 
-  await inventoryRow.getByRole('button', { name: 'CHANGE', exact: true }).click()
-  providerDialog = page.getByRole('dialog', { name: 'Configure provider' })
+  await inventoryRow.getByRole('button', { name: 'EDIT', exact: true }).click()
+  providerDialog = page.getByRole('dialog', { name: 'Configure Provider' })
   await expect(providerDialog.getByRole('button', { name: 'RESET TO DEFAULT', exact: true })).toBeVisible()
   await providerDialog.getByRole('button', { name: 'RESET TO DEFAULT', exact: true }).click()
   await expect(providerDialog).toHaveCount(0)
-  const localInventory = page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' })
-  await expect(localInventory).toContainText('source checkout')
   const restored = await controlAPI<{ bindings: Binding[] }>(`/api/v1/environments/${state.project}/qa-ui`)
   const restoredInventory = restored.bindings.find((binding) => binding.service === 'inventory')
   expect(restoredInventory?.provider).toBe('local')
   expect(restoredInventory?.source).toBeTruthy()
+  const localInventory = page.locator('.configured-providers-panel .experiment-row').filter({ hasText: 'inventory' })
+  await expect(localInventory.locator('.provider-configuration')).toHaveText(restoredInventory?.source || '')
 })
 
 test('renders durable lifecycle events from the environment timeline', async ({ page }) => {
@@ -766,7 +778,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
   await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-  await expect(drawer.getByText(/^10\.4\.0$/)).toBeVisible()
+  await expect(drawer.getByText(/^10\.5\.0$/)).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })
@@ -807,6 +819,17 @@ test('adds, edits, and deletes a project source from the bindings page', async (
   }))
   writeFileSync(join(catalogWorktree, 'server.js'), "require('http').createServer((_request, response) => response.end('catalog worktree')).listen(Number(process.env.PORT))\n")
 
+  const pickerInitialPaths: string[] = []
+  await page.route('**/api/v1/system/directories/select', async (route) => {
+    const input = route.request().postDataJSON() as { initialPath?: string }
+    pickerInitialPaths.push(input.initialPath || '')
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ path: realpathSync(catalogWorktree) }),
+    })
+  })
+
   await authenticate(page, environmentPath('bindings'))
   await page.getByRole('button', { name: 'STOP ALL' }).click()
   await expect(page.getByRole('button', { name: 'START ALL' })).toBeVisible({ timeout: 30_000 })
@@ -815,6 +838,7 @@ test('adds, edits, and deletes a project source from the bindings page', async (
   await page.getByRole('button', { name: 'ADD SOURCE', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Add source' })
   await expect(dialog.getByLabel('NAME', { exact: true })).toBeFocused()
+  await expect(dialog.getByRole('button', { name: 'BROWSE…' })).toBeVisible()
   await dialog.getByLabel('NAME', { exact: true }).fill('catalog')
   await dialog.getByLabel('ABSOLUTE PATH', { exact: true }).fill(catalogSource)
   await dialog.getByRole('button', { name: 'ADD SOURCE', exact: true }).click()
@@ -825,10 +849,12 @@ test('adds, edits, and deletes a project source from the bindings page', async (
   await expect(source.locator('code')).toHaveText(realpathSync(catalogSource))
   await expect(source.locator('time')).toHaveAttribute('datetime', /^\d{4}-\d{2}-\d{2}T/)
   const createdAt = await source.locator('time').getAttribute('datetime')
-  await source.getByRole('button', { name: 'EDIT' }).click()
+  await source.getByRole('button', { name: 'EDIT', exact: true }).click()
   const editDialog = page.getByRole('dialog', { name: 'Edit catalog' })
   await expect(editDialog.getByLabel('ABSOLUTE PATH')).toHaveValue(realpathSync(catalogSource))
-  await editDialog.getByLabel('ABSOLUTE PATH').fill(catalogWorktree)
+  await editDialog.getByRole('button', { name: 'BROWSE…' }).click()
+  await expect(editDialog.getByLabel('ABSOLUTE PATH')).toHaveValue(realpathSync(catalogWorktree))
+  expect(pickerInitialPaths).toEqual([realpathSync(catalogSource)])
   await editDialog.getByRole('button', { name: 'SAVE CHANGES' }).click()
   await expect(editDialog).toHaveCount(0, { timeout: 30_000 })
   await expect(source.locator('code')).toHaveText(realpathSync(catalogWorktree))

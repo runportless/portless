@@ -351,6 +351,67 @@ func (f *fakeDaemonControl) Restart(_ context.Context, instanceID string) (contr
 	return contract.DaemonRestart{Restarting: true, PreviousInstanceID: instanceID, Handoff: true, ActiveEnvironments: append([]string(nil), f.identity.ActiveEnvironments...)}, nil
 }
 
+func TestDirectorySelectionRequiresABrowserSessionAndHandlesCancellation(t *testing.T) {
+	data := t.TempDir()
+	authManager, err := auth.LoadOrCreate(filepath.Join(data, "install.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>portless</html>"), Mode: fs.FileMode(0o600)}}
+	selectedPath := t.TempDir()
+	var selectedPrompt string
+	var selectedInitialPath string
+	server, err := New(Dependencies{
+		Auth: authManager, Assets: assets,
+		SelectDirectory: func(_ context.Context, prompt, initialPath string) (string, bool, error) {
+			selectedPrompt = prompt
+			selectedInitialPath = initialPath
+			return selectedPath, false, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nativeClient := request(server, authManager, http.MethodPost, "/api/v1/system/directories/select", `{"initialPath":"/workspace/checkout"}`, true)
+	if nativeClient.Code != http.StatusForbidden || !strings.Contains(nativeClient.Body.String(), `"code":"BROWSER_SESSION_REQUIRED"`) {
+		t.Fatalf("native client directory selection code=%d body=%s", nativeClient.Code, nativeClient.Body.String())
+	}
+	claim, _, err := authManager.IssueClaim("/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionToken, csrf, _, _, err := authManager.ConsumeClaim(claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutCSRF := requestBrowser(server, http.MethodPost, "/api/v1/system/directories/select", `{"initialPath":"/workspace/checkout"}`, sessionToken, "")
+	if withoutCSRF.Code != http.StatusForbidden {
+		t.Fatalf("browser directory selection without CSRF code=%d body=%s", withoutCSRF.Code, withoutCSRF.Body.String())
+	}
+	selected := requestBrowser(server, http.MethodPost, "/api/v1/system/directories/select", `{"initialPath":"/workspace/checkout"}`, sessionToken, csrf)
+	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), strconv.Quote(selectedPath)) {
+		t.Fatalf("browser directory selection code=%d body=%s", selected.Code, selected.Body.String())
+	}
+	if selectedPrompt != "Choose a Portless source directory" || selectedInitialPath != "/workspace/checkout" {
+		t.Fatalf("picker prompt=%q initialPath=%q", selectedPrompt, selectedInitialPath)
+	}
+
+	server.selectDirectory = func(context.Context, string, string) (string, bool, error) {
+		return "", true, nil
+	}
+	canceled := requestBrowser(server, http.MethodPost, "/api/v1/system/directories/select", `{"initialPath":""}`, sessionToken, csrf)
+	if canceled.Code != http.StatusNoContent || canceled.Body.Len() != 0 {
+		t.Fatalf("canceled directory selection code=%d body=%s", canceled.Code, canceled.Body.String())
+	}
+
+	server.selectDirectory = nil
+	unavailable := requestBrowser(server, http.MethodPost, "/api/v1/system/directories/select", `{"initialPath":""}`, sessionToken, csrf)
+	if unavailable.Code != http.StatusServiceUnavailable || !strings.Contains(unavailable.Body.String(), `"code":"DIRECTORY_PICKER_UNAVAILABLE"`) {
+		t.Fatalf("unavailable directory selection code=%d body=%s", unavailable.Code, unavailable.Body.String())
+	}
+}
+
 func TestApplicationHostRequiresServiceEnvironmentProject(t *testing.T) {
 	if service, environment, project, ok := applicationHost("checkout.local.billing.localhost"); !ok || service != "checkout" || environment != "local" || project != "billing" {
 		t.Fatalf("canonical host parsed as %q %q %q %v", service, environment, project, ok)

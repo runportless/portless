@@ -19,6 +19,18 @@ type SystemStatus struct {
 	Telemetry  bool   `json:"telemetry,omitempty"`
 }
 
+// DirectorySelectionRequest supplies an optional directory where the native
+// operating-system chooser should begin.
+type DirectorySelectionRequest struct {
+	InitialPath string `json:"initialPath,omitempty"`
+}
+
+// DirectorySelection is the absolute directory selected through the native
+// operating-system chooser.
+type DirectorySelection struct {
+	Path string `json:"path"`
+}
+
 // DaemonStatus describes the authenticated daemon process, compatibility,
 // recovery, and active environments.
 type DaemonStatus struct {

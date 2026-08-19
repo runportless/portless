@@ -13,6 +13,7 @@ type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordi
 type ProjectSourceMutation = { warnings: string[]; configurationRequired: string[] }
 type SourcePathMutation = { environment: Environment; warnings: string[] }
 type ProjectSourceDeletion = { project: Project; environments: Environment[]; removedServices: string[]; removedConnections: Connection[] }
+type DirectorySelection = { path: string }
 
 export function EnvironmentPage({ environment, project, tab, mockProfile, onNavigate, onChanged }: { environment: Environment; project?: Project; tab: Tab; mockProfile?: string; onNavigate: (path: string) => void; onChanged: () => void }) {
   const [selectedService, setSelectedService] = useState<Service | null>(null)
@@ -898,6 +899,12 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
     requestAnimationFrame(() => sourceCreateButton.current?.focus())
   }
 
+  const openSourceEdit = (item: SourceBinding, trigger: HTMLButtonElement) => {
+    sourceActionFocus.current = trigger
+    setSourceMutationError(null)
+    setSourceEdit(item)
+  }
+
   const addSource = async (name: string, path: string) => {
     setSourceCreateBusy(true)
     setSourceCreateError(null)
@@ -1016,9 +1023,9 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
           {providers.items.map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>
             <div className="provider-service" role="cell"><StatusMark status={environment.services.find((item) => item.name === binding.service)?.status || 'planned'} label={false} /><strong>{binding.service}</strong></div>
             <div className="provider-kind" role="cell">{providerDisplayName(binding.provider)}</div>
-            <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <><code>{binding.remote?.url}</code><small>{binding.remote?.classification} · {binding.remote?.writePolicy}</small></> : binding.provider === 'local' ? <><code>{binding.source}</code><small>source checkout</small></> : binding.provider === 'mock' ? <><code>{binding.mock?.profile}</code><small>deterministic HTTP mock</small></> : <><span>Portless managed</span><small>container runtime</small></>}</div>
+            <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <code>{binding.remote?.url}</code> : binding.provider === 'local' ? <code>{binding.source}</code> : binding.provider === 'mock' ? <code>{binding.mock?.profile}</code> : <span>Portless managed</span>}</div>
             {binding.modifiedAt ? <time role="cell" dateTime={binding.modifiedAt} title={new Date(binding.modifiedAt).toLocaleString()}>{formatTimestamp(binding.modifiedAt)}</time> : <time role="cell">—</time>}
-            <div className="provider-actions table-row-actions" role="cell"><button type="button" disabled={busy} onClick={(event) => openConfigure(binding.service, event.currentTarget)}>CHANGE</button></div>
+            <div className="provider-actions table-row-actions" role="cell"><button type="button" disabled={busy} onClick={(event) => openConfigure(binding.service, event.currentTarget)}>EDIT</button></div>
           </div>)}
           {!environment.bindings?.length && <div className="empty-row">No providers have been compiled for this environment.</div>}
         </div>
@@ -1028,19 +1035,19 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
         <div className="panel-title"><span>SOURCES</span><button ref={sourceCreateButton} className="button button--primary button--small panel-create-button" type="button" aria-haspopup="dialog" onClick={() => { setSourceCreateError(null); setSourceCreateOpen(true) }}>ADD SOURCE</button></div>
         {sources.total > 0 ? <table className="source-table" aria-label="Sources">
           <thead><tr><th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col">Actions</th></tr></thead>
-          <tbody>{sources.items.map((item) => <tr key={item.name}><td><strong>{item.name}</strong></td><td><code title={item.path}>{item.path}</code></td><td><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString()}>{formatTimestamp(item.createdAt)}</time></td><td><div className="table-row-actions"><button type="button" disabled={sourceMutationBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setSourceMutationError(null); setSourceEdit(item) }}>EDIT</button><button type="button" disabled={sourceMutationBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setSourceMutationError(null); setSourceDelete(item) }}>DELETE</button></div></td></tr>)}</tbody>
+          <tbody>{sources.items.map((item) => <tr key={item.name}><td><strong>{item.name}</strong></td><td><code title={item.path}>{item.path}</code></td><td><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString()}>{formatTimestamp(item.createdAt)}</time></td><td><div className="table-row-actions"><button type="button" disabled={sourceMutationBusy} onClick={(event) => openSourceEdit(item, event.currentTarget)}>EDIT</button><button type="button" disabled={sourceMutationBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setSourceMutationError(null); setSourceDelete(item) }}>DELETE</button></div></td></tr>)}</tbody>
         </table> : <div className="empty-row">No source directories are bound to this environment.</div>}
         <PanelPagination label="sources" pagination={sources} onPage={setSourcePage} />
       </section>
     </div>
     {configureOpen && <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={closeConfigure}>
       <section className="form-modal configure-provider-modal" role="dialog" aria-modal="true" aria-labelledby="configure-provider-title" aria-describedby="configure-provider-description" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><div className="eyebrow">PROVIDER BINDING</div><h2 id="configure-provider-title">Configure provider</h2></div><button className="icon-button" type="button" aria-label="Close configure provider" disabled={busy} onClick={closeConfigure}>×</button></header>
+        <header><div><div className="eyebrow">PROVIDER BINDING</div><h2 id="configure-provider-title">Configure Provider</h2></div><button className="icon-button" type="button" aria-label="Close configure provider" disabled={busy} onClick={closeConfigure}>×</button></header>
         <form onSubmit={(event) => { event.preventDefault(); void bind() }}>
-          <p id="configure-provider-description">Choose how one service is provided in this environment.</p>
+          <p id="configure-provider-description">Choose how Portless should run or route this service in this environment.</p>
           <div className="form-modal__fields configure-provider-form__fields">
-            <label><span>SERVICE</span><select ref={serviceSelect} aria-label="Service" value={service} disabled={busy || serviceLocked} onChange={(event) => { initializeProviderForm(event.target.value); setSaveError(null) }}>{environment.services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
-            <label><span>PROVIDER</span><select ref={providerSelect} aria-label="Provider" value={provider} disabled={busy} onChange={(event) => { const next = event.target.value as ProviderKind; setProvider(next); if (next === 'mock' && !mockProfile) setMockProfile(mockProfiles.find((profile) => profile.service.toLowerCase() === service.toLowerCase())?.name || ''); setSaveError(null) }}>{selected?.kind === 'process' && <option value="local">Local checkout</option>}{selected?.kind === 'resource' && <option value="container">Managed container</option>}{selected?.kind === 'process' && <option value="remote">Remote service</option>}{selected?.kind === 'process' && <option value="mock">Mock profile</option>}</select></label>
+            {serviceLocked ? <div className="provider-service-value"><span>SERVICE</span><strong>{service}</strong></div> : <label><span>SERVICE</span><select ref={serviceSelect} aria-label="Service" value={service} disabled={busy} onChange={(event) => { initializeProviderForm(event.target.value); setSaveError(null) }}>{environment.services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
+            <label><span>PROVIDER</span><select ref={providerSelect} aria-label="Provider" value={provider} disabled={busy} onChange={(event) => { const next = event.target.value as ProviderKind; setProvider(next); if (next === 'mock' && !mockProfile) setMockProfile(mockProfiles.find((profile) => profile.service.toLowerCase() === service.toLowerCase())?.name || ''); setSaveError(null) }}>{selected?.kind === 'process' && <option value="local">{providerDisplayName('local')}</option>}{selected?.kind === 'resource' && <option value="container">{providerDisplayName('container')}</option>}{selected?.kind === 'process' && <option value="remote">{providerDisplayName('remote')}</option>}{selected?.kind === 'process' && <option value="mock">{providerDisplayName('mock')}</option>}</select></label>
             {provider === 'local' && <label className="provider-field--wide"><span>SOURCE CHECKOUT</span><select aria-label="Source checkout" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setSaveError(null) }}>{environment.sources?.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
             {provider === 'remote' && <>
               <label className="provider-field--wide"><span>REMOTE URL</span><input aria-label="Remote URL" type="url" placeholder="https://payments.qa.example.com" value={remoteURL} disabled={busy} onChange={(event) => { setRemoteURL(event.target.value); setSaveError(null) }} /></label>
@@ -1053,7 +1060,6 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
               <label className="provider-field--wide"><span>MOCK PROFILE</span><select aria-label="Mock profile" value={mockProfile} disabled={busy} onChange={(event) => { setMockProfile(event.target.value); setSaveError(null) }}><option value="">Choose a profile for {service}</option>{mockProfiles.filter((profile) => profile.service.toLowerCase() === service.toLowerCase()).map((profile) => <option value={profile.name} key={profile.name}>{profile.name} · {profile.routes.length} routes</option>)}</select></label>
               <div className="scope-preview provider-field--wide"><span className="eyebrow">LOCAL MOCK</span><p>Portless stops this service, keeps its clean URL, and serves the selected profile through normal traffic, recording, and fault handling.</p></div>
             </>}
-            {environment.status !== 'stopped' && !transitionBlocked && <small className="provider-stop-note provider-field--wide">Only {service || 'the selected service'} will switch providers. Other running services stay available.</small>}
             {transitionBlocked && <small className="provider-stop-note provider-field--wide">Wait for the environment to finish {environment.status} before changing a provider.</small>}
           </div>
           {saveError && <ActionErrorNotice error={saveError} onDismiss={() => setSaveError(null)} />}
@@ -1081,15 +1087,21 @@ export function providerBindingMatches(binding: ComponentBinding, expected: Comp
   return binding.provider === 'container'
 }
 
-function providerDisplayName(provider: ProviderKind) {
-  if (provider === 'local') return 'Local checkout'
-  if (provider === 'container') return 'Managed container'
-  if (provider === 'mock') return 'Mock profile'
-  return 'Remote service'
+export function providerDisplayName(provider: ProviderKind) {
+  if (provider === 'local') return 'Checkout'
+  if (provider === 'container') return 'Container'
+  if (provider === 'mock') return 'Mock'
+  return 'Remote'
 }
 
 function formatTimestamp(value: string) {
   return new Date(value).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+async function chooseSourceDirectory(initialPath: string) {
+  return api<DirectorySelection | undefined>('/system/directories/select', {
+    method: 'POST', ...jsonBody({ initialPath: initialPath.trim() }),
+  })
 }
 
 function AddSourceModal({ environment, busy, error, onDismissError, onClose, onAdd }: {
@@ -1102,24 +1114,50 @@ function AddSourceModal({ environment, busy, error, onDismissError, onClose, onA
 }) {
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
+  const [choosingPath, setChoosingPath] = useState(false)
+  const [pickerError, setPickerError] = useState<ActionErrorDetails | null>(null)
   const nameInput = useRef<HTMLInputElement>(null)
+  const pathInput = useRef<HTMLInputElement>(null)
+  const modalBusy = busy || choosingPath
+  const dismissErrors = () => { setPickerError(null); onDismissError() }
+  const browse = async () => {
+    setChoosingPath(true)
+    dismissErrors()
+    try {
+      const selection = await chooseSourceDirectory(path)
+      if (selection?.path) setPath(selection.path)
+      pathInput.current?.focus()
+    } catch (value) {
+      setPickerError(actionError('Could not choose a source directory', value))
+    } finally {
+      setChoosingPath(false)
+      requestAnimationFrame(() => pathInput.current?.focus())
+    }
+  }
   useEffect(() => { nameInput.current?.focus() }, [])
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modalBusy) onClose() }
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [busy, onClose])
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
+  }, [modalBusy, onClose])
+  const visibleError = pickerError || error
+  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !modalBusy && onClose()}>
     <section className="form-modal add-source-modal" role="dialog" aria-modal="true" aria-labelledby="add-source-title" aria-describedby="add-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">PROJECT SOURCE</div><h2 id="add-source-title">Add source</h2></div><button className="icon-button" type="button" aria-label="Close add source" disabled={busy} onClick={onClose}>×</button></header>
-      <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onAdd(name.trim(), path.trim()) }}>
+      <header><div><div className="eyebrow">PROJECT SOURCE</div><h2 id="add-source-title">Add source</h2></div><button className="icon-button" type="button" aria-label="Close add source" disabled={modalBusy} onClick={onClose}>×</button></header>
+      <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); if (!modalBusy) void onAdd(name.trim(), path.trim()) }}>
         <p id="add-source-description">Discover another source directory for {environment.project}. All project environments must be stopped while its topology changes.</p>
         <div className="form-modal__fields">
-          <label><span>NAME</span><input ref={nameInput} name="portless-project-source-name" value={name} placeholder="inventory" required autoComplete="off" spellCheck="false" disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); onDismissError() }} /></label>
-          <label><span>ABSOLUTE PATH</span><input name="portless-project-source-path" value={path} placeholder="/Users/you/workspace/inventory" required autoComplete="off" spellCheck="false" disabled={busy} onChange={(event) => { setPath(event.target.value); onDismissError() }} /></label>
+          <label><span>NAME</span><input ref={nameInput} name="portless-project-source-name" value={name} placeholder="inventory" required autoComplete="off" spellCheck="false" disabled={modalBusy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); dismissErrors() }} /></label>
+          <div className="source-path-field">
+            <label htmlFor="portless-add-source-path">ABSOLUTE PATH</label>
+            <div className="source-path-control">
+              <input ref={pathInput} id="portless-add-source-path" name="portless-project-source-path" value={path} placeholder="/Users/you/workspace/inventory" required autoComplete="off" spellCheck="false" disabled={modalBusy} onChange={(event) => { setPath(event.target.value); dismissErrors() }} />
+              <button className="button button--quiet source-path-browse" type="button" disabled={modalBusy} onClick={() => void browse()}>{choosingPath ? 'CHOOSING…' : 'BROWSE…'}</button>
+            </div>
+          </div>
         </div>
-        {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-        <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !name.trim() || !path.trim()}>{busy ? 'ADDING…' : 'ADD SOURCE'}</button></footer>
+        {visibleError && <ActionErrorNotice error={visibleError} onDismiss={dismissErrors} />}
+        <footer><button className="button button--quiet" type="button" disabled={modalBusy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={modalBusy || !name.trim() || !path.trim()}>{busy ? 'ADDING…' : 'ADD SOURCE'}</button></footer>
       </form>
     </section>
   </div>
@@ -1135,25 +1173,53 @@ function EditSourceModal({ environment, source, busy, error, onDismissError, onC
   onSave: (path: string) => Promise<void>
 }) {
   const [path, setPath] = useState(source.path)
+  const [choosingPath, setChoosingPath] = useState(false)
+  const [pickerError, setPickerError] = useState<ActionErrorDetails | null>(null)
   const pathInput = useRef<HTMLInputElement>(null)
+  const modalBusy = busy || choosingPath
+  const dismissErrors = () => { setPickerError(null); onDismissError() }
+  const browse = async () => {
+    setChoosingPath(true)
+    dismissErrors()
+    try {
+      const selection = await chooseSourceDirectory(path)
+      if (selection?.path) setPath(selection.path)
+      pathInput.current?.focus()
+    } catch (value) {
+      setPickerError(actionError('Could not choose a source directory', value))
+    } finally {
+      setChoosingPath(false)
+      requestAnimationFrame(() => pathInput.current?.focus())
+    }
+  }
   useEffect(() => { pathInput.current?.focus(); pathInput.current?.select() }, [])
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modalBusy) onClose() }
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [busy, onClose])
+  }, [modalBusy, onClose])
   const stopped = environment.status === 'stopped'
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
+  const visibleError = pickerError || error
+  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !modalBusy && onClose()}>
     <section className="form-modal edit-source-modal" role="dialog" aria-modal="true" aria-labelledby="edit-source-title" aria-describedby="edit-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">SOURCE CHECKOUT</div><h2 id="edit-source-title">Edit {source.name}</h2></div><button className="icon-button" type="button" aria-label="Close edit source" disabled={busy} onClick={onClose}>×</button></header>
-      <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); void onSave(path.trim()) }}>
+      <header><div><div className="eyebrow">SOURCE CHECKOUT</div><h2 id="edit-source-title">Edit {source.name}</h2></div><button className="icon-button" type="button" aria-label="Close edit source" disabled={modalBusy} onClick={onClose}>×</button></header>
+      <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); if (!modalBusy) void onSave(path.trim()) }}>
         <p id="edit-source-description">Change the directory used by {environment.project}/{environment.name}. The source name and project topology stay the same.</p>
         <div className="form-modal__fields source-path-fields">
-          <label><span>ABSOLUTE PATH</span><input ref={pathInput} name="portless-project-source-path" value={path} required autoComplete="off" spellCheck="false" disabled={busy} onChange={(event) => { setPath(event.target.value); onDismissError() }} /></label>
-          {!stopped && <small className="source-modal-note">Stop this environment before changing a source checkout.</small>}
+          <div className="source-path-field">
+            <label htmlFor="portless-edit-source-path">ABSOLUTE PATH</label>
+            <div className="source-path-control">
+              <input ref={pathInput} id="portless-edit-source-path" name="portless-project-source-path" value={path} required autoComplete="off" spellCheck="false" disabled={modalBusy} onChange={(event) => { setPath(event.target.value); dismissErrors() }} />
+              <button className="button button--quiet source-path-browse" type="button" disabled={modalBusy} onClick={() => void browse()}>{choosingPath ? 'CHOOSING…' : 'BROWSE…'}</button>
+            </div>
+          </div>
+          {!stopped && <aside className="source-modal-warning" role="note">
+            <span className="source-modal-warning__mark" aria-hidden="true">!</span>
+            <div><strong>STOP REQUIRED</strong><p>Stop this environment before changing a source checkout.</p></div>
+          </aside>}
         </div>
-        {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-        <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !stopped || !path.trim() || path.trim() === source.path}>{busy ? 'SAVING…' : 'SAVE CHANGES'}</button></footer>
+        {visibleError && <ActionErrorNotice error={visibleError} onDismiss={dismissErrors} />}
+        <footer><button className="button button--quiet" type="button" disabled={modalBusy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={modalBusy || !stopped || !path.trim() || path.trim() === source.path}>{busy ? 'SAVING…' : 'SAVE CHANGES'}</button></footer>
       </form>
     </section>
   </div>

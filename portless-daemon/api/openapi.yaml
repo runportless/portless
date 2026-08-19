@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 10.4.0
+  version: 10.5.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,12 +30,43 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.4.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.5.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
       responses:
         '200': { description: Local daemon metadata }
+  /system/directories/select:
+    post:
+      operationId: selectSystemDirectory
+      description: >-
+        Opens the operating system's native directory chooser for an
+        authenticated control-plane browser session. The optional initial path
+        is used only when it names an existing absolute directory. Dismissing
+        the chooser is a successful cancellation and returns no content.
+      security:
+        - browserSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                initialPath: { type: string, description: Optional existing absolute directory where the chooser should begin. }
+      responses:
+        '200':
+          description: Selected directory
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DirectorySelection' }
+        '204': { description: The user dismissed the chooser without selecting a directory. }
+        '403':
+          description: A native bearer client attempted to open the browser-only chooser.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /daemon:
     get:
       operationId: daemonStatus
@@ -1213,7 +1244,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.4.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.5.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1225,6 +1256,11 @@ components:
         previousInstanceId: { type: string }
         handoff: { type: boolean, const: true }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    DirectorySelection:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string, description: Existing absolute directory selected by the user. }
     RelayStatus:
       type: object
       required: [platform, service, installed, running, healthy, httpHealthy, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress]

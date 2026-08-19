@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, providerDisplayName, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -194,16 +194,20 @@ describe('environment topology', () => {
     expect(markup).toContain('class="provider-service"')
     expect(markup).toContain('title="stopped"')
     expect(markup).not.toContain('<span>healthy</span>')
-    expect(markup).toContain('>Local checkout</div>')
+    expect(markup).toContain('>Checkout</div>')
     expect(markup).toContain('dateTime="2026-08-18T18:30:00Z"')
     expect(markup).not.toContain(' ago</time>')
     expect(markup).toContain('aria-haspopup="dialog"')
     expect(markup).toContain('>CONFIGURE PROVIDER</button>')
-    expect(markup).toContain('>CHANGE</button>')
+    expect(markup).not.toContain('>CHANGE</button>')
+    expect(markup).toContain('>EDIT</button>')
     expect(markup).toContain('<span>SOURCES</span><button')
     expect(markup).toContain('>ADD SOURCE</button>')
     expect(markup).toContain('<table class="source-table" aria-label="Sources">')
     expect(markup).toContain('<th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col">Actions</th>')
+    expect(markup).not.toContain('class="source-name-button"')
+    expect(markup).not.toContain('class="source-row--interactive"')
+    expect(markup).not.toContain('aria-label="Configure checkout source"')
     expect(markup).toContain('<strong>checkout</strong>')
     expect(markup).toContain('<code title="/workspace/checkout">/workspace/checkout</code>')
     expect(markup).toContain('<time dateTime="2026-08-17T16:20:00Z"')
@@ -213,6 +217,16 @@ describe('environment topology', () => {
     expect(markup).not.toContain('class="form-modal add-source-modal"')
     expect(markup).not.toContain('class="form-modal configure-provider-modal"')
     expect(markup).not.toContain('>REMOTE URL<')
+    expect(markup).not.toContain('source checkout')
+    expect(markup).not.toContain('deterministic HTTP mock')
+    expect(markup).not.toContain('container runtime')
+  })
+
+  it('uses concise provider names on the bindings page', () => {
+    expect(providerDisplayName('local')).toBe('Checkout')
+    expect(providerDisplayName('remote')).toBe('Remote')
+    expect(providerDisplayName('mock')).toBe('Mock')
+    expect(providerDisplayName('container')).toBe('Container')
   })
 
   it('paginates providers and sources independently after five rows', () => {

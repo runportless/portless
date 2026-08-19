@@ -19,13 +19,14 @@ import (
 // Server routes authenticated control API, embedded UI, and application-host
 // requests for one daemon.
 type Server struct {
-	app           *controlplane.Service
-	auth          *auth.Manager
-	daemonControl DaemonControl
-	assets        fs.FS
-	files         http.Handler
-	indexHTML     []byte
-	inspectRelay  func(context.Context) (contract.RelayStatus, error)
+	app             *controlplane.Service
+	auth            *auth.Manager
+	daemonControl   DaemonControl
+	assets          fs.FS
+	files           http.Handler
+	indexHTML       []byte
+	inspectRelay    func(context.Context) (contract.RelayStatus, error)
+	selectDirectory func(context.Context, string, string) (string, bool, error)
 }
 
 // DaemonControl exposes process lifecycle operations to the authenticated API.
@@ -38,11 +39,12 @@ type DaemonControl interface {
 
 // Dependencies contains the control-plane services required by Server.
 type Dependencies struct {
-	Application   *controlplane.Service
-	Auth          *auth.Manager
-	Assets        fs.FS
-	DaemonControl DaemonControl
-	InspectRelay  func(context.Context) (contract.RelayStatus, error)
+	Application     *controlplane.Service
+	Auth            *auth.Manager
+	Assets          fs.FS
+	DaemonControl   DaemonControl
+	InspectRelay    func(context.Context) (contract.RelayStatus, error)
+	SelectDirectory func(context.Context, string, string) (string, bool, error)
 }
 
 // New validates dependencies and constructs an HTTP server with embedded UI assets.
@@ -54,7 +56,7 @@ func New(dependencies Dependencies) (*Server, error) {
 	return &Server{
 		app: dependencies.Application, auth: dependencies.Auth, daemonControl: dependencies.DaemonControl,
 		assets: dependencies.Assets, files: http.FileServer(http.FS(dependencies.Assets)), indexHTML: index,
-		inspectRelay: dependencies.InspectRelay,
+		inspectRelay: dependencies.InspectRelay, selectDirectory: dependencies.SelectDirectory,
 	}, nil
 }
 
@@ -149,7 +151,7 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	}
 	switch segments[0] {
 	case "system":
-		s.handleSystem(writer, request)
+		s.handleSystem(writer, request, segments, principal)
 	case "daemon":
 		s.handleDaemon(writer, request, segments)
 	case "relay":
