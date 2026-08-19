@@ -82,6 +82,31 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		!strings.Contains(environment.Body.String(), `"url":"http://checkout.local.billing.localhost"`) || !strings.Contains(environment.Body.String(), `"modifiedAt":`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
 		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
+	mockBase := "/api/v1/environments/billing/local/mocks/checkout-empty"
+	createdMock := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/mocks", `{"name":"checkout-empty","service":"checkout","description":"predictable checkout"}`, true)
+	if createdMock.Code != http.StatusCreated || !strings.Contains(createdMock.Body.String(), `"mock":{"project":"billing","environment":"local","name":"checkout-empty"`) || !strings.Contains(createdMock.Body.String(), `"warnings":[]`) {
+		t.Fatalf("mock create response code=%d body=%s", createdMock.Code, createdMock.Body.String())
+	}
+	updatedMock := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"method":"GET","path":"/health","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"ready\":true}","enabled":true}`, true)
+	if updatedMock.Code != http.StatusOK || !strings.Contains(updatedMock.Body.String(), `"name":"health"`) || !strings.Contains(updatedMock.Body.String(), `"method":"GET"`) {
+		t.Fatalf("mock route response code=%d body=%s", updatedMock.Code, updatedMock.Body.String())
+	}
+	previewMock := request(server, authManager, http.MethodPost, mockBase+"/preview", `{"method":"GET","path":"/health","headers":{"Accept":["application/json"],"X-Trace":["one","two"]},"body":"preview payload"}`, true)
+	if previewMock.Code != http.StatusOK || !strings.Contains(previewMock.Body.String(), `"matched":true`) || !strings.Contains(previewMock.Body.String(), `"route":"health"`) {
+		t.Fatalf("mock preview response code=%d body=%s", previewMock.Code, previewMock.Body.String())
+	}
+	listedMocks := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/mocks", "", true)
+	if listedMocks.Code != http.StatusOK || !strings.Contains(listedMocks.Body.String(), `"mocks":[`) || !strings.Contains(listedMocks.Body.String(), `"checkout-empty"`) {
+		t.Fatalf("mock list response code=%d body=%s", listedMocks.Code, listedMocks.Body.String())
+	}
+	deletedMockRoute := request(server, authManager, http.MethodDelete, mockBase+"/routes/health", "", true)
+	if deletedMockRoute.Code != http.StatusOK || !strings.Contains(deletedMockRoute.Body.String(), `"routes":[]`) {
+		t.Fatalf("mock route delete response code=%d body=%s", deletedMockRoute.Code, deletedMockRoute.Body.String())
+	}
+	deletedMock := request(server, authManager, http.MethodDelete, mockBase, "", true)
+	if deletedMock.Code != http.StatusNoContent {
+		t.Fatalf("mock delete response code=%d body=%s", deletedMock.Code, deletedMock.Body.String())
+	}
 	inventorySource := t.TempDir()
 	if err := os.WriteFile(filepath.Join(inventorySource, "package.json"), []byte(`{"name":"inventory","scripts":{"start:dev":"node server.js"},"dependencies":{"@nestjs/core":"1.0.0"}}`), 0o600); err != nil {
 		t.Fatal(err)

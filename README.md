@@ -1,6 +1,6 @@
 # Portless
 
-Portless is a local application-environment control plane. A project describes an application that may span several repositories; each environment chooses where every component comes from and runs without fixed host ports. The browser UI lets you inspect services, watch traffic, record a reproduction, and introduce scoped failures.
+Portless is a local application-environment control plane. A project describes an application that may span several repositories; each environment chooses where every component comes from and runs without fixed host ports. The browser UI lets you inspect services, watch traffic, record a reproduction, introduce scoped failures, and replace an HTTP dependency with deterministic local responses.
 
 There is no required `portless.yaml`, Docker Compose project, account, or hosted control plane.
 
@@ -34,7 +34,7 @@ Processes and managed resource containers still receive private dynamic runtime 
 - One lazily started, machine-local Go daemon with an authenticated installation/instance/build handshake, plus one native Cobra CLI executable with generated nested help and shell completion.
 - Bounded, plugin-driven framework discovery for Spring Boot (Gradle and Maven), NestJS, Express, Fastify, Next.js, Go HTTP/RPC services, and FastAPI.
 - A separate managed-resource plugin registry in which each plugin owns static detection, declarative container provisioning, readiness, credentials, and process bindings. The built-in registry supports PostgreSQL 17, Valkey 8, MySQL 8.4, and NATS 2.
-- Reusable projects with independently runnable environments, per-environment checkout paths, and local, managed-container, or remote HTTP(S) providers.
+- Reusable projects with independently runnable environments, per-environment checkout paths, and local, managed-container, remote HTTP(S), or deterministic mock providers.
 - Explicit remote classification and write policy; read-only targets reject unsafe methods before traffic leaves the machine.
 - Readable project and service names throughout the CLI, API, URLs, and UI; immutable ownership keys remain private.
 - Persistent per-service supervisors, dynamic ports, HTTP/TCP readiness, bounded structured process/container logs, dependency-aware environment and individual-service lifecycle, daemon-crash reconciliation, and durable operations.
@@ -42,7 +42,8 @@ Processes and managed resource containers still receive private dynamic runtime 
 - Generic declarative Docker Engine or Podman networks, named volumes, generated local credentials, commands, and TCP/exec readiness. Docker Compose is not used.
 - Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
 - Trace-first HTTP/TCP inspection with explicit correlation confidence, expandable service waterfalls, raw exchange mode, exact request targets, repeated request/response headers, bounded body detail, and durable lookup through recordings.
-- Named, bounded local recordings and JSON export.
+- Named, bounded local recordings with opt-in bounded body capture, JSON export, and mock-profile import.
+- Environment-scoped HTTP mock profiles with method, parameterized-path, required-query matching, fixed headers/status/body/delay, preview, OpenAPI import, and service-scoped hot binding.
 - Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and optional expiry.
 - SQLite WAL state, project timeline, CLI bearer auth, one-use browser claims, session cookies, CSRF, Origin checks, and strict control/application Host separation.
 - A workspace-scoped, read-only-by-default MCP server launched as `portless mcp serve`, with separately gated lifecycle, traffic-control, and sensitive-traffic capabilities.
@@ -176,9 +177,17 @@ portless runtime use docker
 portless runtime use podman
 
 portless record start checkout-debug --edge checkout:orders
+portless record start inventory-cases --edge checkout:inventory --capture-bodies
 portless record stop checkout-debug
 portless record show checkout-debug
 portless record export checkout-debug --output checkout-debug.json
+
+portless mock create sold-out --service inventory
+portless mock route set sold-out lookup --path '/inventory/{sku}' \
+  --header Content-Type=application/json --body '{"available":false}'
+portless mock preview sold-out --path /inventory/coffee-mug
+portless env bind inventory --mock sold-out
+portless env bind inventory --local inventory
 
 portless fault add slow-orders checkout:orders --latency 2000
 portless fault add fail-payments checkout:payments --status 503
@@ -238,7 +247,7 @@ portless completion --help
 source <(portless completion zsh)
 ```
 
-When the daemon is already running, completion includes current projects, environments, services, connections, traffic sequences, recordings, faults, and sources. Completion never starts or replaces a daemon and silently falls back to static command completion when state is unavailable.
+When the daemon is already running, completion includes current projects, environments, services, connections, traffic sequences, recordings, mock profiles, faults, and sources. Completion never starts or replaces a daemon and silently falls back to static command completion when state is unavailable.
 
 Human-readable output is the default across the CLI. Add the global `--json` flag before or after a subcommand for scripting; streaming commands emit JSON Lines. Bounded list commands expose `--limit`, and logs also support `--since`, `--timestamps`, and `--tail`.
 
@@ -246,7 +255,10 @@ Traffic traces are rebuildable projections over a bounded live exchange window.
 They report whether each relationship is exact, inferred, partial, or ambiguous;
 Portless does not claim timing inference is certain. Exchange detail retains
 repeated non-sensitive headers and up to 64 KiB of inspectable request and
-response bodies. Authorization, cookie, and common API-key/token header values
+response bodies. Recordings remain metadata-only by default; `record start
+--capture-bodies` retains independently bounded request and response prefixes
+for that recording and warns that application payloads may contain secrets.
+Authorization, cookie, and common API-key/token header values
 are replaced with `[REDACTED]` before retention. Bodies and other application
 values remain local diagnostic data and can still be sensitive.
 
@@ -366,6 +378,40 @@ portless up
 
 All HTTP traffic to the remote dependency still crosses the environment proxy, so traffic inspection, recording, and faults work across that boundary. A read-only binding blocks `POST`, `PUT`, `PATCH`, and `DELETE` locally. Restore the local implementation with `portless env bind payments --local payments`.
 
+When a real dependency is unavailable or deliberately unwanted, create a mock
+profile for that service and switch only its provider:
+
+```bash
+portless mock create sold-out --service inventory
+portless mock route set sold-out lookup \
+  --method GET --path '/inventory/{sku}' \
+  --status 200 --header Content-Type=application/json \
+  --body '{"available":false,"reason":"mocked sold out"}'
+portless mock preview sold-out --path /inventory/coffee-mug
+portless env bind inventory --mock sold-out
+```
+
+Preview requests can include repeatable `--header name=value` flags and a
+request payload through `--body` or `--body-file`. The web preview exposes the
+same headers and shows a body editor for `POST`, `PUT`, `PATCH`, and `DELETE`.
+Preview input is validated but is never persisted, emitted as traffic, or used
+as an implicit header/body matcher; routes remain method/path/query based.
+
+Portless stops `inventory`, starts a private mock listener, and changes the
+existing edge proxy target. Callers keep the same injected inventory URL, so
+`checkout` and other peer services are not restarted. Mock exchanges still
+appear in traffic, traces, recordings, and faults, with the selected profile
+and route recorded on each exchange. An unmatched request returns `501` rather
+than silently inventing behavior. Restore the discovered implementation with
+`portless env bind inventory --local inventory`.
+
+Profiles may also be created from a stopped recording with
+`--from-recording`, or from a local OpenAPI 3.0/3.1 JSON or YAML file with
+`--from-openapi`. OpenAPI import resolves only references inside that file and
+never fetches a network resource. Imported responses are starting points: the
+matcher remains intentionally deterministic and does not execute scripts,
+templates, or passthrough requests.
+
 Provider changes do not require an environment-wide stop. In an active environment, `env bind` creates a durable `change-provider` operation, probes a remote candidate before changing traffic, and hands off only the selected service. Existing source-scoped listeners stay in place, so callers keep the same injected endpoint while its upstream changes. Other services keep their PIDs, generations, debugger sessions, and endpoints. If the selected replacement cannot become ready, Portless restores its previous binding and runtime. Changing a checkout path with `portless env source` remains stopped-only because that operation can recompile several services at once.
 
 Two environments cannot safely launch processes from the same checkout simultaneously. Point one environment at a Git worktree, then run both:
@@ -405,6 +451,8 @@ GET  /api/v1/projects/billing
 GET  /api/v1/environments/billing/qa-assisted
 POST /api/v1/environments/billing/qa-assisted/services/orders/restart
 GET  /api/v1/environments/billing/qa-assisted/recordings/checkout-debug/export
+GET  /api/v1/environments/billing/qa-assisted/mocks
+POST /api/v1/environments/billing/qa-assisted/mocks/sold-out/preview
 ```
 
 SQLite and the selected container engine keep ownership details private so project and environment renames cannot weaken cleanup safety.
@@ -423,6 +471,7 @@ flowchart LR
   APP --> CR["Docker Engine or Podman"]
   PROC --> PROXY["Source-aware HTTP/TCP edge proxies"]
   CR --> PROXY
+  MOCK["Private deterministic mock server"] --> PROXY
   HTTP["service.environment.project.localhost · port 80"] --> RELAY["Privileged loopback bind · drops privileges"]
   DNS["service.environment.project.portless.test · conventional TCP port"] --> RELAY
   RELAY -->|"private HTTP Unix socket"| API
@@ -476,7 +525,7 @@ portless ui
 Tests cover the Cobra command tree and completion, framework and resource
 discovery plugins, precedence and rescan behavior, naming and non-leakage,
 multi-source compilation, isolated environment state, provider and worktree
-switching, SQLite idempotency, browser claims and CSRF, dependency pruning and
+switching, mock matching and hot provider handoff, SQLite idempotency, browser claims and CSRF, dependency pruning and
 ordering, process and daemon crash recovery, executable replacement, bulk
 shutdown, control/application host isolation, remote read-only enforcement,
 lossless proxy traffic capture, recording persistence, and fault application.

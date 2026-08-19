@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"maps"
 	"net/http"
@@ -124,6 +125,101 @@ func TestCLIServiceLifecycleOnlyMutatesTheSelectedService(t *testing.T) {
 	recovered.Body.Close()
 	if recovered.StatusCode != http.StatusOK {
 		t.Fatalf("checkout did not recover after service lifecycle operations: %s", recovered.Status)
+	}
+}
+
+func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
+	binary := e2eBinary(t)
+	home, checkout := isolatedFixture(t, "store-lite")
+	defer cleanupInstallation(t, binary, home, checkout)
+
+	if output, err := runCLIAt(binary, home, checkout, "up", "--name", "mock-provider-e2e", "--no-open", "--timeout", "2m"); err != nil {
+		t.Fatalf("start environment: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	before := environmentStatus(t, binary, home, checkout)
+	checkoutBefore := requireService(t, before, "checkout")
+	inventoryBefore := requireService(t, before, "inventory")
+	ordersBefore := requireService(t, before, "orders")
+	if len(before.Sources) != 1 {
+		t.Fatalf("environment sources = %#v, want one local source", before.Sources)
+	}
+
+	if output, err := runCLIAt(binary, home, checkout, "mock", "create", "sold-out", "--service", "inventory", "--description", "Inventory has no available stock"); err != nil {
+		t.Fatalf("create mock profile: %v\n%s", err, output)
+	}
+	if output, err := runCLIAt(binary, home, checkout, "mock", "route", "set", "sold-out", "lookup", "--method", "GET", "--path", "/inventory/{sku}", "--status", "200", "--header", "Content-Type=application/json", "--body", `{"available":false,"reason":"mocked sold out"}`); err != nil {
+		t.Fatalf("create mock route: %v\n%s", err, output)
+	}
+	if output, err := runCLIAt(binary, home, checkout, "mock", "preview", "sold-out", "--path", "/inventory/coffee-mug", "--query", "quantity=1"); err != nil || !strings.Contains(output, "matched lookup") {
+		t.Fatalf("preview mock route: %v\n%s", err, output)
+	}
+	if output, err := runCLIAt(binary, home, checkout, "env", "bind", "inventory", "--mock", "sold-out"); err != nil {
+		t.Fatalf("bind mock provider: %v\n%s", err, output)
+	}
+
+	mocked := environmentStatus(t, binary, home, checkout)
+	assertSameServiceProcess(t, checkoutBefore, requireService(t, mocked, "checkout"))
+	assertSameServiceProcess(t, ordersBefore, requireService(t, mocked, "orders"))
+	inventoryMocked := requireService(t, mocked, "inventory")
+	if inventoryMocked.Status != model.ServiceReady || inventoryMocked.PID != 0 || inventoryMocked.Generation != inventoryBefore.Generation {
+		t.Fatalf("inventory mock runtime = %#v, before=%#v", inventoryMocked, inventoryBefore)
+	}
+	var inventoryBinding *model.ComponentBinding
+	for index := range mocked.Bindings {
+		if mocked.Bindings[index].Service == "inventory" {
+			inventoryBinding = &mocked.Bindings[index]
+			break
+		}
+	}
+	if inventoryBinding == nil || inventoryBinding.Provider != model.ProviderMock || inventoryBinding.Mock == nil || inventoryBinding.Mock.Profile != "sold-out" {
+		t.Fatalf("inventory binding = %#v, want mock sold-out", inventoryBinding)
+	}
+
+	response := applicationRequest(t, home, "checkout.local.mock-provider-e2e.localhost", "/checkout?sku=coffee-mug&quantity=1", nil)
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusConflict || !strings.Contains(string(body), "mocked sold out") {
+		t.Fatalf("checkout mock response: status=%s err=%v body=%s", response.Status, readErr, body)
+	}
+	trafficOutput, err := runCLIAt(binary, home, checkout, "--json", "traffic", "list", "--edge", "checkout:inventory", "--limit", "20")
+	if err != nil {
+		t.Fatalf("list mock traffic: %v\n%s", err, trafficOutput)
+	}
+	var traffic struct {
+		Exchanges []model.TrafficExchange `json:"exchanges"`
+	}
+	if err := json.Unmarshal([]byte(trafficOutput), &traffic); err != nil {
+		t.Fatalf("decode mock traffic: %v\n%s", err, trafficOutput)
+	}
+	if len(traffic.Exchanges) != 1 || traffic.Exchanges[0].TargetProvider != model.ProviderMock || traffic.Exchanges[0].MockProfile != "sold-out" || traffic.Exchanges[0].MockRoute != "lookup" {
+		t.Fatalf("mock attribution = %#v", traffic.Exchanges)
+	}
+	ordersTraffic, err := runCLIAt(binary, home, checkout, "--json", "traffic", "list", "--edge", "checkout:orders", "--limit", "20")
+	if err != nil {
+		t.Fatalf("list orders traffic: %v\n%s", err, ordersTraffic)
+	}
+	traffic.Exchanges = nil
+	if err := json.Unmarshal([]byte(ordersTraffic), &traffic); err != nil || len(traffic.Exchanges) != 0 {
+		t.Fatalf("orders should not be called after inventory rejects checkout: err=%v output=%s", err, ordersTraffic)
+	}
+
+	if output, err := runCLIAt(binary, home, checkout, "env", "bind", "inventory", "--local", before.Sources[0].Name); err != nil {
+		t.Fatalf("restore local inventory: %v\n%s", err, output)
+	}
+	restored := environmentStatus(t, binary, home, checkout)
+	assertSameServiceProcess(t, checkoutBefore, requireService(t, restored, "checkout"))
+	assertSameServiceProcess(t, ordersBefore, requireService(t, restored, "orders"))
+	inventoryRestored := requireService(t, restored, "inventory")
+	if inventoryRestored.Status != model.ServiceReady || inventoryRestored.PID == 0 || inventoryRestored.Generation != inventoryBefore.Generation+1 {
+		t.Fatalf("restored inventory = %#v, before=%#v", inventoryRestored, inventoryBefore)
+	}
+	recovered := applicationRequest(t, home, "checkout.local.mock-provider-e2e.localhost", "/checkout?sku=coffee-mug&quantity=1", nil)
+	recovered.Body.Close()
+	if recovered.StatusCode != http.StatusOK {
+		t.Fatalf("checkout did not recover after restoring inventory: %s", recovered.Status)
+	}
+	if output, err := runCLIAt(binary, home, checkout, "mock", "delete", "sold-out", "--yes"); err != nil {
+		t.Fatalf("delete mock profile: %v\n%s", err, output)
 	}
 }
 

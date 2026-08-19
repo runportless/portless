@@ -86,6 +86,9 @@ The CLI E2E suite protects these product contracts:
   including traffic attribution, local enforcement of its read-only write
   policy, and active local/remote provider handoffs that preserve unrelated
   service PIDs and generations;
+- deterministic mock profile and route creation, matcher preview, active
+  local/mock provider handoff, mock traffic attribution, dependency short
+  circuiting, peer-process preservation, and restoration of the real service;
 - forced reset when ordinary lifecycle state is from an incompatible model.
 
 The Playwright suite protects these browser journeys:
@@ -99,7 +102,10 @@ The Playwright suite protects these browser journeys:
   displaying its attach endpoint, preserving healthy environment semantics,
   and returning the service to normal mode;
 - captured request and response inspection with repeated headers and redacted credentials;
-- recording and fault workflows;
+- recording, mock-provider, and fault workflows, including a URL-addressable,
+  maximizable mock-profile route drawer, complete header/body preview input,
+  and a live mock handoff that keeps peer service PIDs stable and preserves
+  traffic attribution;
 - environment stop/start controls;
 - active service-scoped provider handoff with unrelated runtime preservation,
   plus stopped-environment remote binding persistence and restore;

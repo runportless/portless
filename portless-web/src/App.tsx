@@ -131,6 +131,7 @@ export function App() {
     { group: 'Views', label: 'Open topology', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'topology')) },
     { group: 'Views', label: 'Configure providers', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'bindings')) },
     { group: 'Views', label: 'Inspect live traffic', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'traffic')) },
+    { group: 'Views', label: 'Manage mock responses', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'mocks')) },
     { group: 'Views', label: 'Introduce a fault', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'faults')) },
     { group: 'Views', label: 'Start a recording', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'recordings')) },
   ] : [], [activeEnvironment, mutateEnvironment, navigate])
@@ -143,7 +144,7 @@ export function App() {
     content = <SettingsPage tab={parsed.settingsTab} preference={themePreference} resolvedTheme={resolvedTheme} runtime={runtimeStatus} environments={environments} initialEnvironment={parsed.settingsEnvironment} onNavigate={navigate} onPreferenceChange={changeThemePreference} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} />
   } else if (parsed.environment) {
     content = activeEnvironment
-      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} tab={parsed.tab} onNavigate={navigate} onChanged={refresh} />
+      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} tab={parsed.tab} mockProfile={parsed.mockProfile} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="environment" name={`${parsed.project}/${parsed.environment}`} onNavigate={navigate} />
   } else if (parsed.project && !activeProject) {
     content = <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
@@ -157,7 +158,7 @@ export function environmentSessionKey(environment: Pick<Environment, 'project' |
   return `${environment.project}/${environment.name}@${daemon?.instanceId || 'daemon-pending'}`
 }
 
-export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; tab: Tab } {
+export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockProfile?: string; tab: Tab } {
   const current = new URL(route, 'http://portless.localhost')
   const parts = current.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   let project: string | undefined
@@ -166,12 +167,13 @@ export function parseRoute(route: string): { project?: string; environment?: str
   if (parts[0] === 'environments' && parts[1] && parts[2]) { project = parts[1]; environment = parts[2] }
   const settings = parts[0] === 'settings'
   const requested = current.searchParams.get('tab')
-  const tabs: Tab[] = ['overview', 'topology', 'bindings', 'traffic', 'recordings', 'faults', 'timeline']
+  const tabs: Tab[] = ['overview', 'topology', 'bindings', 'traffic', 'mocks', 'recordings', 'faults', 'timeline']
   const tab = tabs.includes(requested as Tab) ? requested as Tab : 'overview'
   const settingsTabs: SettingsTab[] = ['appearance', 'runtime', 'mcp']
   const settingsTab = settings && settingsTabs.includes(requested as SettingsTab) ? requested as SettingsTab : 'appearance'
   const requestedEnvironment = settings ? current.searchParams.get('env')?.trim() : undefined
-  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), tab }
+  const requestedMockProfile = tab === 'mocks' ? current.searchParams.get('profile')?.trim() : undefined
+  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), ...(requestedMockProfile ? { mockProfile: requestedMockProfile } : {}), tab }
 }
 
 function environmentUIPath(environment: Pick<Environment, 'project' | 'name'>, tab: Tab) {

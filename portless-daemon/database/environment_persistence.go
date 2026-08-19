@@ -166,6 +166,12 @@ FROM environment_bindings WHERE environment_key = ? ORDER BY service_name COLLAT
 				return nil, err
 			}
 			binding.Remote = &remote
+		} else if binding.Provider == model.ProviderMock {
+			var mock model.MockTarget
+			if err := json.Unmarshal(config, &mock); err != nil {
+				return nil, err
+			}
+			binding.Mock = &mock
 		}
 		result = append(result, binding)
 	}
@@ -227,6 +233,11 @@ func insertBinding(ctx context.Context, executor sqlExecutor, environmentKey str
 	var err error
 	if binding.Remote != nil {
 		config, err = json.Marshal(binding.Remote)
+		if err != nil {
+			return err
+		}
+	} else if binding.Mock != nil {
+		config, err = json.Marshal(binding.Mock)
 		if err != nil {
 			return err
 		}

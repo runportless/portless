@@ -15,6 +15,7 @@ import (
 
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/events"
+	"github.com/portless-run/portless/portless-daemon/mocks"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/networking"
 	trafficstore "github.com/portless-run/portless/portless-daemon/traffic"
@@ -125,6 +126,67 @@ func TestHTTPBodyCaptureSkipsBinaryContent(t *testing.T) {
 		if !inspectableBody(contentType) {
 			t.Fatalf("text content %q should be captured", contentType)
 		}
+	}
+}
+
+func TestMockProviderMetadataIsCapturedButNotExposed(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set(mocks.ProfileHeader, "sold-out")
+		writer.Header().Set(mocks.RouteHeader, "lookup")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"available":false}`))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	broker := events.NewBroker()
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
+	manager.SetTargetProvider(scope, "inventory", port, model.ProviderMock)
+
+	response := httptest.NewRecorder()
+	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://inventory.local.billing.localhost/inventory/coffee", nil), scope, "inventory")
+	if response.Code != http.StatusOK || response.Header().Get(mocks.ProfileHeader) != "" || response.Header().Get(mocks.RouteHeader) != "" {
+		t.Fatalf("public response = %d %#v", response.Code, response.Header())
+	}
+	exchanges := trafficStore.RecentExchanges(scope, 1)
+	if len(exchanges) != 1 || exchanges[0].TargetProvider != model.ProviderMock || exchanges[0].MockProfile != "sold-out" || exchanges[0].MockRoute != "lookup" {
+		t.Fatalf("exchange = %#v", exchanges)
+	}
+}
+
+func TestRecordingBodyLimitCanExceedLiveTrafficLimit(t *testing.T) {
+	ctx := context.Background()
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	content := strings.Repeat("x", trafficBodyLimit+1024)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte(content))
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	broker := events.NewBroker()
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
+	manager.SetTarget(scope, "checkout", port)
+	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "mock-source", CaptureBodies: true, MaxBodyBytes: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/inventory", nil), scope, "checkout")
+	recorded, err := controlStore.RecordedTraffic(ctx, scope, "mock-source", 1)
+	if err != nil || len(recorded) != 1 || recorded[0].ResponseBody != content || recorded[0].ResponseBodyTruncated {
+		t.Fatalf("recorded = %#v, err = %v", recorded, err)
+	}
+	live := trafficStore.RecentExchanges(scope, 1)
+	if len(live) != 1 || len(live[0].ResponseBody) != trafficBodyLimit || !live[0].ResponseBodyTruncated || live[0].ResponseCapturedBytes != trafficBodyLimit {
+		t.Fatalf("live exchange exceeded its independent body limit: %#v", live)
 	}
 }
 

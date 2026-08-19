@@ -249,7 +249,8 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			if connection.Source != serviceName || !connection.Required {
 				continue
 			}
-			if bindingForEnvironment(environment, connection.Target).Provider == model.ProviderRemote {
+			targetProvider := bindingForEnvironment(environment, connection.Target).Provider
+			if targetProvider == model.ProviderRemote || targetProvider == model.ProviderMock {
 				continue
 			}
 			dependency := runtimeFor(environment, connection.Target)
@@ -290,6 +291,7 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			return
 		}
 		currentRuntime := runtimeFor(current, serviceName)
+		currentBinding := bindingForEnvironment(current, serviceName)
 		if !restart && currentRuntime.Status == model.ServiceReady {
 			s.completeOperation(scope, operation, "Service "+serviceName+" is already ready")
 			return
@@ -298,7 +300,7 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			s.failOperation(scope, operation, currentErr)
 			return
 		}
-		if currentDefinition.Kind == model.ServiceProcess {
+		if currentBinding.Provider == model.ProviderLocal && currentDefinition.Kind == model.ServiceProcess {
 			if currentErr = s.acquireSourceLeases(scope, current); currentErr != nil {
 				s.failOperation(scope, operation, currentErr)
 				return
@@ -308,7 +310,9 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			_ = s.database.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceStopping, "")
 			s.reconcileEnvironmentStatus(context.Background(), scope)
 			_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Stopping "+serviceName)
-			if currentDefinition.Kind == model.ServiceProcess {
+			if currentBinding.Provider == model.ProviderMock {
+				currentErr = s.mocks.Remove(context.Background(), scope, serviceName)
+			} else if currentDefinition.Kind == model.ServiceProcess {
 				currentErr = s.processes.Stop(context.Background(), scope, serviceName, 10*time.Second)
 			} else {
 				var privateKey string
@@ -331,7 +335,9 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 		if restart {
 			increment = 1
 		}
-		if currentDefinition.Kind == model.ServiceProcess {
+		if currentBinding.Provider == model.ProviderMock {
+			currentErr = s.activateMock(context.Background(), scope, currentBinding, currentRuntime)
+		} else if currentDefinition.Kind == model.ServiceProcess {
 			launchMode := currentRuntime.LaunchMode
 			if launchMode == "" {
 				launchMode = model.LaunchManaged
@@ -405,6 +411,7 @@ func (s *Service) StopService(ctx context.Context, projectName, environmentName,
 			return
 		}
 		currentRuntime := runtimeFor(current, serviceName)
+		currentBinding := bindingForEnvironment(current, serviceName)
 		if currentRuntime.Status == model.ServiceStopped || currentRuntime.Status == model.ServicePlanned {
 			s.completeOperation(scope, operation, "Service "+serviceName+" is already stopped")
 			return
@@ -413,7 +420,9 @@ func (s *Service) StopService(ctx context.Context, projectName, environmentName,
 		s.reconcileEnvironmentStatus(context.Background(), scope)
 		_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Stopping service")
 		var stopErr error
-		if currentDefinition.Kind == model.ServiceProcess {
+		if currentBinding.Provider == model.ProviderMock {
+			stopErr = s.mocks.Remove(context.Background(), scope, serviceName)
+		} else if currentDefinition.Kind == model.ServiceProcess {
 			stopErr = s.processes.Stop(context.Background(), scope, serviceName, 10*time.Second)
 		} else {
 			var privateKey string

@@ -10,6 +10,7 @@ type bindingOptions struct {
 	provider       model.ProviderKind
 	source         string
 	remoteURL      string
+	mockProfile    string
 	classification model.RemoteClassification
 	writePolicy    model.WritePolicy
 	healthPath     string

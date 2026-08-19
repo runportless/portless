@@ -138,6 +138,8 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 		s.handleDown(writer, request, project, environment, principal)
 	case "bindings":
 		s.handleBindings(writer, request, project, environment, segments, principal)
+	case "mocks":
+		s.handleMocks(writer, request, project, environment, segments, principal)
 	case "sources":
 		s.handleSources(writer, request, project, environment, segments)
 	case "services":

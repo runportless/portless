@@ -53,13 +53,15 @@ func (c *Commands) recordCommand() *cobra.Command {
 	list.Flags().IntVar(&listOptions.limit, "limit", listOptions.limit, "maximum recordings")
 	root.AddCommand(list)
 
-	options := recordingOptions{duration: 15 * time.Minute, maxEvents: 10000}
+	options := recordingOptions{duration: 15 * time.Minute, maxEvents: 10000, maxBodyBytes: 64 * 1024}
 	start := &cobra.Command{Use: "start <name>", Short: "Start a bounded recording", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		return c.startRecording(cmd.Context(), args[0], options)
 	}}
 	start.Flags().StringVar(&options.edge, "edge", "", "source:target scope")
 	start.Flags().DurationVar(&options.duration, "duration", options.duration, "automatic stop time")
 	start.Flags().Int64Var(&options.maxEvents, "max-events", options.maxEvents, "maximum retained events")
+	start.Flags().BoolVar(&options.captureBodies, "capture-bodies", false, "retain bounded inspectable request and response bodies")
+	start.Flags().Int64Var(&options.maxBodyBytes, "max-body-bytes", options.maxBodyBytes, "maximum retained bytes for each request or response body")
 	_ = start.RegisterFlagCompletionFunc("edge", c.Complete(shared.CompletionConnections))
 	root.AddCommand(start)
 

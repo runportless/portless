@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 9.0.0
+  version: 10.1.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '9.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.1.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -770,6 +770,97 @@ paths:
           explode: true
       responses:
         '200': { description: text/event-stream; see portless-daemon/api/events.md }
+  /environments/{projectName}/{environmentName}/mocks:
+    parameters: *environmentParameters
+    get:
+      operationId: listMockProfiles
+      responses:
+        '200':
+          description: Environment-scoped HTTP mock profiles and their routes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockProfileList' }
+    post:
+      operationId: createMockProfile
+      description: Creates an empty profile or imports deterministic routes from one stopped recording or local OpenAPI 3.0/3.1 document.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateMockRequest' }
+      responses:
+        '201':
+          description: Created profile and non-fatal import warnings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockMutation' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /environments/{projectName}/{environmentName}/mocks/{mockName}:
+    parameters: &mockParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/MockName' }
+    get:
+      operationId: getMockProfile
+      responses:
+        '200':
+          description: One mock profile and its ordered routes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockProfile' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteMockProfile
+      description: Deletes an unbound profile and all of its routes.
+      responses:
+        '204': { description: Profile deleted }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /environments/{projectName}/{environmentName}/mocks/{mockName}/routes/{routeName}:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/MockName' }
+      - { $ref: '#/components/parameters/MockRouteName' }
+    put:
+      operationId: putMockRoute
+      description: Creates or replaces one fixed-response route after validating the complete profile for ambiguous matches.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MockRoute' }
+      responses:
+        '200':
+          description: Updated profile; an active mock is reloaded atomically
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockProfile' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteMockRoute
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockProfile' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /environments/{projectName}/{environmentName}/mocks/{mockName}/preview:
+    parameters: *mockParameters
+    post:
+      operationId: previewMockRequest
+      description: Evaluates the profile matcher without generating traffic or timeline history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MockRequest' }
+      responses:
+        '200':
+          description: Selected fixed response, or an unmatched 501 preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockPreview' }
   /environments/{projectName}/{environmentName}/recordings:
     parameters: *environmentParameters
     get:
@@ -1004,6 +1095,16 @@ components:
       name: faultName
       required: true
       schema: { $ref: '#/components/schemas/ArtifactName' }
+    MockName:
+      in: path
+      name: mockName
+      required: true
+      schema: { $ref: '#/components/schemas/ArtifactName' }
+    MockRouteName:
+      in: path
+      name: routeName
+      required: true
+      schema: { $ref: '#/components/schemas/ArtifactName' }
     OperationNumber:
       in: path
       name: operationNumber
@@ -1052,6 +1153,10 @@ components:
       type: string
       pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'
       examples: [checkout-debug]
+    HTTPFinalStatusCode:
+      type: integer
+      description: Registered HTTP status code that completes a response; informational 1xx codes are not final responses.
+      enum: [200, 201, 202, 203, 204, 205, 206, 207, 208, 226, 300, 301, 302, 303, 304, 305, 307, 308, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425, 426, 428, 429, 431, 451, 500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511]
     RuntimeStatus:
       type: object
       required: [preference, state, candidates]
@@ -1083,7 +1188,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '9.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.1.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1147,18 +1252,105 @@ components:
         classification: { type: string, enum: [development, qa, staging, unknown] }
         writePolicy: { type: string, enum: [read-only, read-write] }
         healthPath: { type: string, pattern: '^/' }
+    MockTarget:
+      type: object
+      required: [profile]
+      properties:
+        profile: { $ref: '#/components/schemas/ArtifactName' }
     ComponentBinding:
       type: object
       required: [provider]
       properties:
         service: { $ref: '#/components/schemas/ServiceName' }
-        provider: { type: string, enum: [local, container, remote] }
+        provider: { type: string, enum: [local, container, remote, mock] }
         source: { $ref: '#/components/schemas/SourceName' }
         remote: { $ref: '#/components/schemas/RemoteTarget' }
+        mock: { $ref: '#/components/schemas/MockTarget' }
         modifiedAt: { type: string, format: date-time, readOnly: true }
       description: >-
         local requires source, container is valid only for discovered managed
-        dependencies, and remote requires remote configuration.
+        dependencies, remote requires remote configuration, and mock requires
+        an environment-scoped profile attached to the same service.
+    MockRoute:
+      type: object
+      required: [name, method, path, status, enabled]
+      properties:
+        name: { $ref: '#/components/schemas/ArtifactName' }
+        method: { type: string, pattern: '^[!#$%&''*+.^_`|~0-9A-Za-z-]+$', example: GET }
+        path: { type: string, pattern: '^/', example: '/inventory/{sku}' }
+        query:
+          type: object
+          additionalProperties: { type: string }
+          description: Required query names and optional exact values. An empty value requires only presence.
+        status: { $ref: '#/components/schemas/HTTPFinalStatusCode' }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        body: { type: string, maxLength: 1048576 }
+        delayMs: { type: integer, format: int64, minimum: 0, maximum: 300000 }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        modifiedAt: { type: string, format: date-time, readOnly: true }
+    MockProfile:
+      type: object
+      required: [project, environment, name, service, routes, createdAt, modifiedAt]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        name: { $ref: '#/components/schemas/ArtifactName' }
+        service: { $ref: '#/components/schemas/ServiceName' }
+        description: { type: string }
+        routes: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/MockRoute' } }
+        createdAt: { type: string, format: date-time }
+        modifiedAt: { type: string, format: date-time }
+    MockProfileList:
+      type: object
+      required: [mocks]
+      properties:
+        mocks: { type: array, items: { $ref: '#/components/schemas/MockProfile' } }
+    CreateMockRequest:
+      type: object
+      required: [name, service]
+      properties:
+        name: { $ref: '#/components/schemas/ArtifactName' }
+        service: { $ref: '#/components/schemas/ServiceName' }
+        description: { type: string }
+        fromRecording: { $ref: '#/components/schemas/ArtifactName' }
+        openapiDocument: { type: string, maxLength: 1048576, description: Complete local OpenAPI 3.0 or 3.1 JSON/YAML document. External references are rejected. }
+      description: fromRecording and openapiDocument are mutually exclusive; omit both for an empty profile.
+    MockMutation:
+      type: object
+      required: [mock, warnings]
+      properties:
+        mock: { $ref: '#/components/schemas/MockProfile' }
+        warnings: { type: array, items: { type: string } }
+    MockRequest:
+      type: object
+      required: [method, path]
+      properties:
+        method: { type: string }
+        path: { type: string, pattern: '^/' }
+        query:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+        headers:
+          type: object
+          description: Repeated request header values. Values are validated but are not persisted or used as route matchers.
+          additionalProperties: { type: array, items: { type: string } }
+        body:
+          type: string
+          maxLength: 262144
+          description: Optional request body used only for the side-effect-free preview. Request bodies are not route matchers.
+    MockPreview:
+      type: object
+      required: [matched, status]
+      properties:
+        matched: { type: boolean }
+        route: { type: string }
+        status: { $ref: '#/components/schemas/HTTPFinalStatusCode' }
+        headers: { type: object, additionalProperties: { type: string } }
+        body: { type: string }
+        delayMs: { type: integer, format: int64, minimum: 0 }
     HealthCheck:
       type: object
       required: [kind, timeout, interval]
@@ -1246,7 +1438,7 @@ components:
         - type: object
           required: [targetProvider, targetStatus]
           properties:
-            targetProvider: { type: string, enum: [local, container, remote] }
+            targetProvider: { type: string, enum: [local, container, remote, mock] }
             targetStatus: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
             endpoint: { $ref: '#/components/schemas/Endpoint' }
             runtimeTarget: { type: string, description: Raw process, container, or remote target retained only for diagnostics. }
@@ -1299,7 +1491,7 @@ components:
         protocol: { type: string, enum: [http, tcp] }
         source: { type: string }
         target: { type: string }
-        targetProvider: { type: string, enum: [local, container, remote] }
+        targetProvider: { type: string, enum: [local, container, remote, mock] }
         remoteClassification: { type: string, enum: [development, qa, staging, unknown] }
         startedAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time }
@@ -1316,6 +1508,8 @@ components:
         responseCapturedBytes: { type: integer, format: int64, minimum: 0 }
         fault: { type: string }
         recording: { type: string }
+        mockProfile: { type: string, description: Mock profile that served this exchange. }
+        mockRoute: { type: string, description: Mock route that matched this exchange. }
         error: { type: string }
         traceId: { type: string, pattern: '^[0-9a-f]{32}$' }
         spanId: { type: string, pattern: '^[0-9a-f]{16}$' }
@@ -1470,7 +1664,7 @@ components:
         name: { $ref: '#/components/schemas/ArtifactName' }
         source: { type: string }
         target: { type: string }
-        captureBodies: { type: boolean, const: false, default: false }
+        captureBodies: { type: boolean, default: false, description: Persist bounded inspectable request and response bodies after secret-like headers are redacted. }
         maxEvents: { type: integer, default: 10000, maximum: 100000 }
         maxBodyBytes: { type: integer, default: 65536, maximum: 1048576 }
         expiresAt: { type: string, format: date-time }

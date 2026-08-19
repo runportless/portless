@@ -82,3 +82,23 @@ type TimelineList struct {
 type OperationList struct {
 	Operations []Operation `json:"operations"`
 }
+
+// MockProfileList is a collection of environment-scoped mock profiles.
+type MockProfileList struct {
+	Mocks []MockProfile `json:"mocks"`
+}
+
+// CreateMockRequest creates a profile, optionally deriving routes from a recording.
+type CreateMockRequest struct {
+	Name            string `json:"name"`
+	Service         string `json:"service"`
+	Description     string `json:"description,omitempty"`
+	FromRecording   string `json:"fromRecording,omitempty"`
+	OpenAPIDocument string `json:"openapiDocument,omitempty"`
+}
+
+// MockMutation returns an updated profile and non-fatal import warnings.
+type MockMutation struct {
+	Mock     MockProfile `json:"mock"`
+	Warnings []string    `json:"warnings"`
+}

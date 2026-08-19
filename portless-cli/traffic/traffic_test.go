@@ -38,3 +38,21 @@ func TestTraceHumanOutputShowsTreeAndCorrelationConfidence(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPTrafficHumanOutputAttributesMockProfileAndRoute(t *testing.T) {
+	application, output, _ := newTestCommands(t)
+	event := model.TrafficExchange{
+		Sequence: 4, Protocol: model.ProtocolHTTP, Source: "checkout", Target: "inventory",
+		TargetProvider: model.ProviderMock, MockProfile: "sold-out", MockRoute: "lookup",
+		Method: "GET", RequestTarget: "/inventory/coffee", Status: 200, DurationMS: 3,
+	}
+
+	application.printTraffic(event)
+	application.printTrafficDetail(event)
+
+	for _, expected := range []string{"mock=sold-out/lookup", "Provider:", "mock", "Mock profile:", "sold-out", "Mock route:", "lookup"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("mock traffic output does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}

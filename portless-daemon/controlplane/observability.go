@@ -67,16 +67,13 @@ func (s *Service) Timeline(ctx context.Context, project, environment string, lim
 	return s.database.Timeline(ctx, model.EnvironmentSelector(project, environment), limit)
 }
 
-// StartRecording validates and begins a bounded metadata traffic capture.
+// StartRecording validates and begins a bounded traffic capture.
 func (s *Service) StartRecording(ctx context.Context, recording model.Recording, actor string) (model.Recording, error) {
 	if err := model.ValidateArtifactName(recording.Name); err != nil {
 		return model.Recording{}, err
 	}
 	if recording.Project == "" || recording.Environment == "" {
 		return model.Recording{}, errors.New("project and environment are required")
-	}
-	if recording.CaptureBodies {
-		return model.Recording{}, errors.New("request and response body capture is not enabled in this build; start a metadata-only recording")
 	}
 	definition, err := s.database.EnvironmentModel(ctx, recording.Project, recording.Environment)
 	if err != nil {

@@ -144,10 +144,10 @@ func (c *Commands) environmentCommand() *cobra.Command {
 	command.AddCommand(clone)
 
 	options := bindingOptions{}
-	local, remote, classification, writePolicy, container := "", "", string(model.RemoteUnknown), string(model.WriteReadOnly), false
+	local, remote, mockProfile, classification, writePolicy, container := "", "", "", string(model.RemoteUnknown), string(model.WriteReadOnly), false
 	bind := &cobra.Command{
 		Use:   "bind <service>",
-		Short: "Choose a local, container, or remote provider",
+		Short: "Choose a local, container, remote, or mock provider",
 		Args:  shared.UsageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.classification = model.RemoteClassification(classification)
@@ -159,6 +159,8 @@ func (c *Commands) environmentCommand() *cobra.Command {
 				options.provider = model.ProviderContainer
 			case cmd.Flags().Changed("remote"):
 				options.provider, options.remoteURL = model.ProviderRemote, remote
+			case cmd.Flags().Changed("mock"):
+				options.provider, options.mockProfile = model.ProviderMock, mockProfile
 			}
 			if options.provider != model.ProviderRemote && (cmd.Flags().Changed("classification") || cmd.Flags().Changed("write-policy") || cmd.Flags().Changed("health-path")) {
 				return shared.UsageError("--classification, --write-policy, and --health-path require --remote")
@@ -177,14 +179,16 @@ func (c *Commands) environmentCommand() *cobra.Command {
 	bind.Flags().StringVar(&local, "local", "", "run the service from the named source")
 	bind.Flags().BoolVar(&container, "container", false, "use a Portless-managed container")
 	bind.Flags().StringVar(&remote, "remote", "", "route the service to an HTTP(S) URL")
+	bind.Flags().StringVar(&mockProfile, "mock", "", "serve the service from a mock profile")
 	bind.Flags().StringVar(&classification, "classification", classification, "remote class: development, qa, staging, or unknown")
 	bind.Flags().StringVar(&writePolicy, "write-policy", writePolicy, "remote policy: read-only or read-write")
 	bind.Flags().StringVar(&options.healthPath, "health-path", "", "remote readiness path")
-	bind.MarkFlagsOneRequired("local", "container", "remote")
-	bind.MarkFlagsMutuallyExclusive("local", "container", "remote")
+	bind.MarkFlagsOneRequired("local", "container", "remote", "mock")
+	bind.MarkFlagsMutuallyExclusive("local", "container", "remote", "mock")
 	_ = bind.RegisterFlagCompletionFunc("classification", shared.FixedCompletions("development", "qa", "staging", "unknown"))
 	_ = bind.RegisterFlagCompletionFunc("write-policy", shared.FixedCompletions("read-only", "read-write"))
 	_ = bind.RegisterFlagCompletionFunc("local", c.Complete(shared.CompletionSources))
+	_ = bind.RegisterFlagCompletionFunc("mock", c.Complete(shared.CompletionMocks))
 	bind.ValidArgsFunction = c.Complete(shared.CompletionServices)
 	command.AddCommand(bind)
 

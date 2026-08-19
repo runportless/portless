@@ -11,6 +11,7 @@ import (
 	"github.com/portless-run/portless/portless-cli/command"
 	"github.com/portless-run/portless/portless-cli/doctor"
 	"github.com/portless-run/portless/portless-cli/environment"
+	"github.com/portless-run/portless/portless-cli/mocks"
 	"github.com/portless-run/portless/portless-cli/observe"
 	"github.com/portless-run/portless/portless-cli/projects"
 	"github.com/portless-run/portless/portless-cli/traffic"
@@ -35,6 +36,7 @@ type CLI struct {
 	projects       *projects.Commands
 	observe        *observe.Commands
 	traffic        *traffic.Commands
+	mocks          *mocks.Commands
 	administration *administration.Commands
 }
 
@@ -94,7 +96,7 @@ func newWithDependencies(out, errOut io.Writer, dataDirectory string, overrides 
 	return &CLI{
 		Out: out, Err: errOut, context: shared,
 		environment: environment.New(shared), projects: projects.New(shared), observe: observe.New(shared),
-		traffic: traffic.New(shared), administration: administration.New(shared),
+		traffic: traffic.New(shared), mocks: mocks.New(shared), administration: administration.New(shared),
 	}, nil
 }
 

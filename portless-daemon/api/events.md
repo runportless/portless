@@ -23,10 +23,16 @@ Current topics:
 - `operation.state`
 - `recording.state`
 - `fault.state`
+- `mock.state`
 - `traffic.exchange`
 - `traffic.trace`
 - `traffic.cleared`
 - `traffic.tcp.activity`
+
+`mock.state` carries the current profile after a profile or route change, or a
+small `{name, deleted}` tombstone after deletion. Clients should reload the
+mock collection after receiving it because active profiles are recompiled and
+swapped atomically.
 
 `traffic.exchange` carries a completed HTTP or TCP summary. Request and response
 headers and bodies are omitted from this notification; clients load the full

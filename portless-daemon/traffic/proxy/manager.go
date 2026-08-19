@@ -20,6 +20,7 @@ import (
 
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/events"
+	"github.com/portless-run/portless/portless-daemon/mocks"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/traffic"
 )
@@ -42,6 +43,8 @@ type target struct {
 	classification model.RemoteClassification
 	writePolicy    model.WritePolicy
 	healthPath     string
+	mockProfile    string
+	mockRoute      string
 }
 
 // Manager owns source-scoped HTTP and TCP proxies, targets, capture, and fault behavior.
@@ -61,13 +64,14 @@ const trafficBodyLimit = 64 << 10
 type bodyCapture struct {
 	body  []byte
 	total int64
+	limit int
 }
 
 // Write records a bounded prefix while preserving the original byte count.
 func (c *bodyCapture) Write(content []byte) (int, error) {
 	written := len(content)
 	c.total += int64(written)
-	if remaining := trafficBodyLimit - len(c.body); remaining > 0 {
+	if remaining := c.limit - len(c.body); remaining > 0 {
 		if len(content) > remaining {
 			content = content[:remaining]
 		}
@@ -335,7 +339,12 @@ func (m *Manager) Close(ctx context.Context) {
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
 	started := time.Now().UTC()
 	traceContext := newExchangeTraceContext(request.Header.Get("Traceparent"))
-	requestCapture := captureRequestBody(request)
+	_, recordBodies, recordBodyLimit := m.matchRecording(request.Context(), scope, source, targetName)
+	captureLimit := trafficBodyLimit
+	if recordBodies && recordBodyLimit > int64(captureLimit) {
+		captureLimit = int(recordBodyLimit)
+	}
+	requestCapture := captureRequestBody(request, captureLimit)
 	fault := m.matchFault(request.Context(), scope, source, targetName, request.Method, request.URL.Path)
 	if fault != nil {
 		m.applyDelay(request.Context(), *fault)
@@ -388,9 +397,15 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	}
 	defer response.Body.Close()
 	removeHopHeaders(response.Header)
+	if upstream.provider == model.ProviderMock {
+		upstream.mockProfile = response.Header.Get(mocks.ProfileHeader)
+		upstream.mockRoute = response.Header.Get(mocks.RouteHeader)
+		response.Header.Del(mocks.ProfileHeader)
+		response.Header.Del(mocks.RouteHeader)
+	}
 	copyHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
-	responseCapture := captureResponseBody(response.Header)
+	responseCapture := captureResponseBody(response.Header, captureLimit)
 	destination := io.Writer(writer)
 	if responseCapture != nil {
 		destination = io.MultiWriter(writer, responseCapture)
@@ -416,6 +431,7 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 	exchange := model.TrafficExchange{
 		Project: project, Environment: environment, Protocol: model.ProtocolHTTP, Source: source, Target: targetName,
 		TargetProvider: upstream.provider, RemoteClassification: upstream.classification,
+		MockProfile: upstream.mockProfile, MockRoute: upstream.mockRoute,
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
 		Path: request.URL.Path, RequestTarget: exactRequestTarget(request.URL), RequestKind: classifyRequest(source, request),
 		Status: status, DurationMS: completed.Sub(started).Milliseconds(),
@@ -427,16 +443,29 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
 	}
 	var persistBodies bool
-	exchange.Recording, persistBodies = m.matchRecording(ctx, scope, source, targetName)
+	var maxBodyBytes int64
+	exchange.Recording, persistBodies, maxBodyBytes = m.matchRecording(ctx, scope, source, targetName)
+	persisted := exchange
+	if !persistBodies {
+		persisted.RequestBody = ""
+		persisted.ResponseBody = ""
+		persisted.RequestBodyTruncated = false
+		persisted.ResponseBodyTruncated = false
+		persisted.RequestCapturedBytes = 0
+		persisted.ResponseCapturedBytes = 0
+	} else {
+		persisted.RequestBody, persisted.RequestBodyTruncated = boundedBody(persisted.RequestBody, persisted.RequestBodyTruncated, maxBodyBytes)
+		persisted.ResponseBody, persisted.ResponseBodyTruncated = boundedBody(persisted.ResponseBody, persisted.ResponseBodyTruncated, maxBodyBytes)
+		persisted.RequestCapturedBytes = boundedCapturedBytes(persisted.RequestCapturedBytes, maxBodyBytes)
+		persisted.ResponseCapturedBytes = boundedCapturedBytes(persisted.ResponseCapturedBytes, maxBodyBytes)
+	}
+	exchange.RequestBody, exchange.RequestBodyTruncated = boundedBody(exchange.RequestBody, exchange.RequestBodyTruncated, trafficBodyLimit)
+	exchange.ResponseBody, exchange.ResponseBodyTruncated = boundedBody(exchange.ResponseBody, exchange.ResponseBodyTruncated, trafficBodyLimit)
+	exchange.RequestCapturedBytes = boundedCapturedBytes(exchange.RequestCapturedBytes, trafficBodyLimit)
+	exchange.ResponseCapturedBytes = boundedCapturedBytes(exchange.ResponseCapturedBytes, trafficBodyLimit)
 	exchange = m.traffic.AddExchange(exchange)
 	if exchange.Recording != "" {
-		persisted := exchange
-		if !persistBodies {
-			persisted.RequestBody = ""
-			persisted.ResponseBody = ""
-			persisted.RequestBodyTruncated = false
-			persisted.ResponseBodyTruncated = false
-		}
+		persisted.Sequence = exchange.Sequence
 		_ = m.database.PersistTraffic(context.Background(), persisted)
 	}
 }
@@ -586,7 +615,7 @@ func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, resp
 		exchange.TargetProvider = upstream.provider
 		exchange.RemoteClassification = upstream.classification
 	}
-	exchange.Recording, _ = m.matchRecording(context.Background(), current.scope, current.source, current.target)
+	exchange.Recording, _, _ = m.matchRecording(context.Background(), current.scope, current.source, current.target)
 	exchange = m.traffic.AddExchange(exchange)
 	if exchange.Recording != "" {
 		_ = m.database.PersistTraffic(context.Background(), exchange)
@@ -620,10 +649,10 @@ func (m *Manager) matchFault(ctx context.Context, project, source, target, metho
 	return nil
 }
 
-func (m *Manager) matchRecording(ctx context.Context, project, source, target string) (string, bool) {
+func (m *Manager) matchRecording(ctx context.Context, project, source, target string) (string, bool, int64) {
 	recordings, err := m.database.ActiveRecordings(ctx, project)
 	if err != nil {
-		return "", false
+		return "", false, 0
 	}
 	for _, recording := range recordings {
 		if recording.Source != "" && recording.Source != source {
@@ -632,25 +661,46 @@ func (m *Manager) matchRecording(ctx context.Context, project, source, target st
 		if recording.Target != "" && recording.Target != target {
 			continue
 		}
-		return recording.Name, recording.CaptureBodies
+		return recording.Name, recording.CaptureBodies, recording.MaxBodyBytes
 	}
-	return "", false
+	return "", false, 0
 }
 
-func captureRequestBody(request *http.Request) *bodyCapture {
+func captureRequestBody(request *http.Request, limit int) *bodyCapture {
 	if request.Body == nil || !inspectableBody(request.Header.Get("Content-Type")) {
 		return nil
 	}
-	capture := &bodyCapture{}
+	capture := &bodyCapture{limit: limit}
 	request.Body = &capturingReadCloser{ReadCloser: request.Body, capture: capture}
 	return capture
 }
 
-func captureResponseBody(headers http.Header) *bodyCapture {
+func captureResponseBody(headers http.Header, limit int) *bodyCapture {
 	if !inspectableBody(headers.Get("Content-Type")) {
 		return nil
 	}
-	return &bodyCapture{}
+	return &bodyCapture{limit: limit}
+}
+
+func boundedBody(body string, alreadyTruncated bool, limit int64) (string, bool) {
+	if limit <= 0 {
+		limit = trafficBodyLimit
+	}
+	content := []byte(body)
+	if int64(len(content)) <= limit {
+		return body, alreadyTruncated
+	}
+	return strings.ToValidUTF8(string(content[:limit]), "�"), true
+}
+
+func boundedCapturedBytes(captured int64, limit int64) int64 {
+	if limit <= 0 {
+		limit = trafficBodyLimit
+	}
+	if captured > limit {
+		return limit
+	}
+	return captured
 }
 
 func inspectableBody(contentType string) bool {

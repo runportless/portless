@@ -38,7 +38,7 @@ func executionOrder(definition model.ProjectModel, bindings []model.ComponentBin
 				continue
 			}
 			provider := providers[connection.Target]
-			if provider == model.ProviderRemote {
+			if provider == model.ProviderRemote || provider == model.ProviderMock {
 				continue
 			}
 			if _, ok := active[connection.Target]; !ok {
@@ -54,7 +54,7 @@ func executionOrder(definition model.ProjectModel, bindings []model.ComponentBin
 		if _, ok := active[service.Name]; !ok {
 			continue
 		}
-		if providers[service.Name] == model.ProviderRemote {
+		if providers[service.Name] == model.ProviderRemote || providers[service.Name] == model.ProviderMock {
 			continue
 		}
 		services[service.Name] = struct{}{}

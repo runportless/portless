@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, defaultProviderBinding, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -12,7 +12,7 @@ describe('environment topology', () => {
   it('renders an inspected HTTP event as a request and response exchange', () => {
     const event = {
       project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
-      source: 'checkout', target: 'orders', targetProvider: 'local',
+      source: 'checkout', target: 'orders', targetProvider: 'mock', mockProfile: 'sold-out', mockRoute: 'reject-order',
       startedAt: '2026-08-13T12:00:00Z', completedAt: '2026-08-13T12:00:00.024Z',
       method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
       durationMs: 24, requestBytes: 42, responseBytes: 118,
@@ -36,6 +36,10 @@ describe('environment topology', () => {
     expect(markup).toContain('>RESPONSE<')
     expect(markup).toContain('HTTP 201')
     expect(markup).toContain('X-Request-Id: req-7')
+    expect(markup).toContain('MOCK PROFILE')
+    expect(markup).toContain('sold-out')
+    expect(markup).toContain('MOCK ROUTE')
+    expect(markup).toContain('reject-order')
     expect(markup).toContain('&quot;sku&quot;: &quot;coffee&quot;')
     expect(markup).toContain('&quot;order&quot;: 42')
     expect(markup).not.toContain('{&quot;Authorization&quot;')
@@ -141,6 +145,21 @@ describe('environment topology', () => {
       { service: 'checkout', provider: 'remote' },
       { service: 'orders', provider: 'remote' },
     ] })).toEqual({ value: 'REMOTE', detail: '2 remote services', tone: 'warning' })
+    expect(summarizeEnvironmentBindings({ ...environment, bindings: [
+      { service: 'checkout', provider: 'local' },
+      { service: 'orders', provider: 'mock', mock: { profile: 'sold-out' } },
+      { service: 'postgres', provider: 'container' },
+    ] })).toEqual({ value: 'LOCAL', detail: '2 local · 1 mocked' })
+  })
+
+  it('shows mock as the mode for a service using a mock provider', () => {
+    const inventory = { name: 'inventory', kind: 'process', launchMode: 'managed' } as Service
+    const environment = {
+      services: [inventory],
+      bindings: [{ service: 'inventory', provider: 'mock', mock: { profile: 'sold-out' } }],
+    } as Environment
+
+    expect(displayLaunchMode(environment, inventory)).toBe('mock')
   })
 
   it('keeps the provider table full width and configures each service from a modal action', () => {
@@ -185,6 +204,7 @@ describe('environment topology', () => {
     expect(defaultProviderBinding(project, environment, checkout)).toEqual({ service: 'checkout', provider: 'local', source: 'checkout' })
     expect(defaultProviderBinding(project, environment, postgres)).toEqual({ service: 'postgres', provider: 'container' })
     expect(providerBindingMatches({ service: 'checkout', provider: 'local', source: 'checkout' }, { service: 'checkout', provider: 'local', source: 'CHECKOUT' })).toBe(true)
+    expect(providerBindingMatches({ service: 'checkout', provider: 'mock', mock: { profile: 'sold-out' } }, { service: 'checkout', provider: 'mock', mock: { profile: 'SOLD-OUT' } })).toBe(true)
     expect(providerBindingMatches({ service: 'checkout', provider: 'remote' }, { service: 'checkout', provider: 'local', source: 'checkout' })).toBe(false)
   })
 

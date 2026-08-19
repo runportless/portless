@@ -24,6 +24,15 @@ describe('application routes', () => {
       settingsTab: 'appearance',
       tab: 'traffic',
     })
+    expect(parseRoute('/environments/store/local?tab=mocks&profile=sold-out')).toEqual({
+      project: 'store',
+      environment: 'local',
+      settings: false,
+      settingsTab: 'appearance',
+      mockProfile: 'sold-out',
+      tab: 'mocks',
+    })
+    expect(parseRoute('/environments/store/local?tab=traffic&profile=ignored')).not.toHaveProperty('mockProfile')
   })
 
   it('replaces environment view state when the daemon instance changes', () => {

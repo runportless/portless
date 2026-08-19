@@ -83,30 +83,44 @@ func (s *Service) runUp(scope string, operation model.Operation, options UpOptio
 		return
 	}
 	for _, binding := range environment.Bindings {
-		if binding.Provider != model.ProviderRemote || binding.Remote == nil {
-			continue
-		}
-		_ = s.serviceEvent(scope, operation, binding.Service, "starting", "Connecting "+binding.Service+" to "+string(binding.Remote.Classification))
-		if err := s.proxy.SetRemoteTarget(scope, binding.Service, *binding.Remote); err != nil {
-			s.failOperation(scope, operation, err)
-			return
-		}
-		if binding.Remote.HealthPath != "" {
-			checkCtx, checkCancel := context.WithTimeout(ctx, 15*time.Second)
-			err = s.proxy.CheckRemote(checkCtx, scope, binding.Service)
-			checkCancel()
-			if err != nil {
-				_ = s.database.SetServiceRuntime(context.Background(), scope, binding.Service, database.ServiceRuntimeUpdate{Status: model.ServiceFailed, Reason: "remote health check failed: " + err.Error()})
-				s.failOperation(scope, operation, fmt.Errorf("%s remote health check: %w", binding.Service, err))
+		switch binding.Provider {
+		case model.ProviderRemote:
+			if binding.Remote == nil {
+				continue
+			}
+			_ = s.serviceEvent(scope, operation, binding.Service, "starting", "Connecting "+binding.Service+" to "+string(binding.Remote.Classification))
+			if err := s.proxy.SetRemoteTarget(scope, binding.Service, *binding.Remote); err != nil {
+				s.failOperation(scope, operation, err)
 				return
 			}
+			if binding.Remote.HealthPath != "" {
+				checkCtx, checkCancel := context.WithTimeout(ctx, 15*time.Second)
+				err = s.proxy.CheckRemote(checkCtx, scope, binding.Service)
+				checkCancel()
+				if err != nil {
+					_ = s.database.SetServiceRuntime(context.Background(), scope, binding.Service, database.ServiceRuntimeUpdate{Status: model.ServiceFailed, Reason: "remote health check failed: " + err.Error()})
+					s.failOperation(scope, operation, fmt.Errorf("%s remote health check: %w", binding.Service, err))
+					return
+				}
+			}
+			now := time.Now().UTC()
+			_ = s.database.SetServiceRuntime(ctx, scope, binding.Service, database.ServiceRuntimeUpdate{
+				Status: model.ServiceReady, Reason: "remote " + string(binding.Remote.Classification) + " target",
+				OwnerInstanceID: s.daemonInstanceID, ObservedAt: &now,
+			})
+			_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is routed to "+string(binding.Remote.Classification))
+		case model.ProviderMock:
+			if binding.Mock == nil {
+				s.failOperation(scope, operation, fmt.Errorf("%s mock provider has no profile", binding.Service))
+				return
+			}
+			_ = s.serviceEvent(scope, operation, binding.Service, "starting", "Loading mock profile "+binding.Mock.Profile)
+			if err := s.activateMock(ctx, scope, binding, runtimeFor(environment, binding.Service)); err != nil {
+				s.failOperation(scope, operation, fmt.Errorf("%s mock provider: %w", binding.Service, err))
+				return
+			}
+			_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is served by mock profile "+binding.Mock.Profile)
 		}
-		now := time.Now().UTC()
-		_ = s.database.SetServiceRuntime(ctx, scope, binding.Service, database.ServiceRuntimeUpdate{
-			Status: model.ServiceReady, Reason: "remote " + string(binding.Remote.Classification) + " target",
-			OwnerInstanceID: s.daemonInstanceID, ObservedAt: &now,
-		})
-		_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is routed to "+string(binding.Remote.Classification))
 	}
 	order, err := executionOrder(definition, environment.Bindings)
 	if err != nil {
@@ -225,6 +239,7 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 	for _, service := range environment.Services {
 		_ = s.database.SetServiceRuntime(ctx, scope, service.Name, database.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: service.Generation, LaunchMode: model.LaunchManaged})
 	}
+	_ = s.mocks.RemoveScope(ctx, scope)
 	s.proxy.CloseEnvironment(ctx, scope)
 	_ = s.database.DeleteConnectionRuntimes(ctx, scope)
 	_, _ = s.database.DisableAllFaults(ctx, scope)
@@ -499,6 +514,16 @@ func (s *Service) prepareServiceDependencies(ctx context.Context, scope string, 
 			continue
 		}
 		binding := bindingForEnvironment(environment, connection.Target)
+		if binding.Provider == model.ProviderMock {
+			if binding.Mock == nil {
+				return fmt.Errorf("mock dependency %s has no profile", connection.Target)
+			}
+			if err := s.activateMock(ctx, scope, binding, runtimeFor(environment, connection.Target)); err != nil {
+				return fmt.Errorf("%s mock provider: %w", connection.Target, err)
+			}
+			_ = s.serviceEvent(scope, operation, connection.Target, "ready", connection.Target+" is served by mock profile "+binding.Mock.Profile)
+			continue
+		}
 		if binding.Provider != model.ProviderRemote {
 			if connection.Required {
 				dependency := runtimeFor(environment, connection.Target)
@@ -553,7 +578,7 @@ func (s *Service) reconcileEnvironmentStatus(ctx context.Context, scope string) 
 		required[name] = struct{}{}
 	}
 	for _, binding := range environment.Bindings {
-		if binding.Provider == model.ProviderRemote {
+		if binding.Provider == model.ProviderRemote || binding.Provider == model.ProviderMock {
 			required[binding.Service] = struct{}{}
 		}
 	}

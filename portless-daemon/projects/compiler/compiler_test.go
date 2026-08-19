@@ -98,6 +98,43 @@ func TestCompileAllowsRemoteHTTPProvider(t *testing.T) {
 	}
 }
 
+func TestCompileAllowsMockHTTPProviderAndPrunesItsPrivateDependencies(t *testing.T) {
+	project := model.ProjectModel{
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "inventory", Kind: model.ServiceProcess},
+			resourceService("inventory-db", "postgres", "17", 5432),
+		},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "inventory", Protocol: model.ProtocolHTTP, Required: true},
+			{Source: "inventory", Target: "inventory-db", Protocol: model.ProtocolTCP, Required: true},
+		},
+	}
+	sources := []model.SourceBinding{{Name: "store", Definition: model.ProjectModel{Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}}}}}
+	result := Compile(project, sources, []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal, Source: "store"},
+		{Service: "inventory", Provider: model.ProviderMock, Mock: &model.MockTarget{Profile: "sold-out"}},
+		{Service: "inventory-db", Provider: model.ProviderContainer},
+	})
+	if len(result.Issues) != 0 {
+		t.Fatalf("issues = %#v", result.Issues)
+	}
+	if len(result.Definition.Services) != 2 || result.Definition.Services[0].Name != "checkout" || result.Definition.Services[1].Name != "inventory" {
+		t.Fatalf("effective services = %#v", result.Definition.Services)
+	}
+	if len(result.Definition.Connections) != 1 || result.Definition.Connections[0].Target != "inventory" {
+		t.Fatalf("effective connections = %#v", result.Definition.Connections)
+	}
+}
+
+func TestCompileRejectsIncompleteMockProvider(t *testing.T) {
+	project := model.ProjectModel{Services: []model.ServiceDefinition{{Name: "inventory", Kind: model.ServiceProcess}}}
+	result := Compile(project, nil, []model.ComponentBinding{{Service: "inventory", Provider: model.ProviderMock}})
+	if len(result.Issues) != 1 || result.Issues[0].Code != "INVALID_MOCK" {
+		t.Fatalf("issues = %#v", result.Issues)
+	}
+}
+
 func TestRemoteURLRejectsCredentials(t *testing.T) {
 	err := ValidateRemote(&model.RemoteTarget{URL: "https://token@example.com", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly})
 	if err == nil || !strings.Contains(err.Error(), "credentials") {

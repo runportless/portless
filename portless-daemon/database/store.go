@@ -135,6 +135,9 @@ WHERE modified_at = ''`, nowText()); err != nil {
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(5, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(6, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
 	return nil
 }
 
@@ -222,6 +225,38 @@ CREATE TABLE IF NOT EXISTS environment_bindings (
   config_json BLOB NOT NULL DEFAULT '{}',
   modified_at TEXT NOT NULL,
   PRIMARY KEY(environment_key, service_name)
+);
+
+CREATE TABLE IF NOT EXISTS mock_profiles (
+  environment_key TEXT NOT NULL REFERENCES environments(private_key) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  service_name TEXT NOT NULL COLLATE NOCASE,
+  description TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  modified_at TEXT NOT NULL,
+  PRIMARY KEY(environment_key, name)
+);
+
+CREATE INDEX IF NOT EXISTS mock_profiles_by_service
+ON mock_profiles(environment_key, service_name, name);
+
+CREATE TABLE IF NOT EXISTS mock_routes (
+  environment_key TEXT NOT NULL,
+  profile_name TEXT NOT NULL COLLATE NOCASE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  query_json BLOB NOT NULL DEFAULT '{}',
+  status INTEGER NOT NULL,
+  headers_json BLOB NOT NULL DEFAULT '{}',
+  body TEXT NOT NULL DEFAULT '',
+  delay_ms INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  modified_at TEXT NOT NULL,
+  PRIMARY KEY(environment_key, profile_name, name),
+  FOREIGN KEY(environment_key, profile_name)
+    REFERENCES mock_profiles(environment_key, name) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS context_selections (

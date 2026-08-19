@@ -181,7 +181,7 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 	for _, logical := range project.Services {
 		binding, ok := bindingByService[strings.ToLower(logical.Name)]
 		if !ok {
-			result.Issues = append(result.Issues, issue("MISSING_BINDING", logical.Name, "component has no provider binding", "bind it to a local source, managed resource, or remote service"))
+			result.Issues = append(result.Issues, issue("MISSING_BINDING", logical.Name, "component has no provider binding", "bind it to a local source, managed resource, remote service, or mock profile"))
 			continue
 		}
 		switch binding.Provider {
@@ -213,8 +213,18 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 				continue
 			}
 			effective = append(effective, logical)
+		case model.ProviderMock:
+			if logical.Kind != model.ServiceProcess {
+				result.Issues = append(result.Issues, issue("MOCK_PROTOCOL_UNSUPPORTED", logical.Name, "only HTTP application services can use a mock provider", "use a managed resource provider"))
+				continue
+			}
+			if err := ValidateMock(binding.Mock); err != nil {
+				result.Issues = append(result.Issues, issue("INVALID_MOCK", logical.Name, err.Error(), "choose an existing mock profile"))
+				continue
+			}
+			effective = append(effective, logical)
 		default:
-			result.Issues = append(result.Issues, issue("INVALID_PROVIDER", logical.Name, "unknown provider "+string(binding.Provider), "choose local, container, or remote"))
+			result.Issues = append(result.Issues, issue("INVALID_PROVIDER", logical.Name, "unknown provider "+string(binding.Provider), "choose local, container, remote, or mock"))
 			continue
 		}
 		result.Bindings = append(result.Bindings, normalizedBinding(binding))
@@ -295,7 +305,7 @@ func pruneUnusedResources(services []model.ServiceDefinition, connections []mode
 				continue
 			}
 			target := strings.ToLower(connection.Target)
-			if bindings[target].Provider == model.ProviderRemote {
+			if bindings[target].Provider == model.ProviderRemote || bindings[target].Provider == model.ProviderMock {
 				continue
 			}
 			if _, ok := active[target]; !ok {
@@ -352,6 +362,17 @@ func ValidateRemote(remote *model.RemoteTarget) error {
 	}
 	if remote.HealthPath != "" && !strings.HasPrefix(remote.HealthPath, "/") {
 		return errors.New("remote health path must begin with /")
+	}
+	return nil
+}
+
+// ValidateMock verifies that a provider selects a syntactically valid profile.
+func ValidateMock(mock *model.MockTarget) error {
+	if mock == nil {
+		return errors.New("mock target configuration is missing")
+	}
+	if err := model.ValidateArtifactName(mock.Profile); err != nil {
+		return fmt.Errorf("mock profile is invalid: %w", err)
 	}
 	return nil
 }

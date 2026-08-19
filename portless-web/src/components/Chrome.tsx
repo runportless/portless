@@ -4,7 +4,7 @@ import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
-export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
+export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'timeline'
 export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const expandedProjectsKey = 'portless.expanded-projects'
@@ -118,6 +118,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
             <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} onNavigate={onNavigate} />
             <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} onNavigate={onNavigate} />
             <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} onNavigate={onNavigate} />
+            <ViewButton label="Mocks" view="mocks" activeView={activeView} environment={activeEnvironment} icon={<MockIcon />} onNavigate={onNavigate} />
             <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} onNavigate={onNavigate} />
             <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} onNavigate={onNavigate} />
             <ViewButton label="Timeline" view="timeline" activeView={activeView} environment={activeEnvironment} icon={<TimelineIcon />} onNavigate={onNavigate} />
@@ -208,6 +209,7 @@ function GridIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x
 function TopologyIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.5" /><circle cx="10.5" cy="3.5" r="1.5" /><circle cx="13" cy="11.5" r="1.5" /><path d="m4.5 7.1 4.6-2.7M4.5 8.7l7 2.3M11.2 5l1.2 5" /></svg> }
 function LinkIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 5.5 5 4a3 3 0 0 0-4 4l2 2a3 3 0 0 0 4 0l1-1"/><path d="m9.5 10.5 1.5 1.5a3 3 0 0 0 4-4l-2-2a3 3 0 0 0-4 0L8 7"/></svg> }
 function PulseIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8h3l2-5 3.5 10L12 8h3" /></svg> }
+function MockIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2h4M7 2v4l-4 7h10L9 6V2" /><path d="M5 10h6" /></svg> }
 function RecordIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" /><circle cx="8" cy="8" r="2" className="fill" /></svg> }
 function FaultIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 14.5 14h-13L8 1.5Z" /><path d="M8 5v4M8 11.5v.5" /></svg> }
 function TimelineIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2v12M3 4h8M3 8h6M3 12h10" /><circle cx="3" cy="4" r="1" /><circle cx="3" cy="8" r="1" /><circle cx="3" cy="12" r="1" /></svg> }

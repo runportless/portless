@@ -103,6 +103,13 @@ func (c *Commands) printTraffic(event model.TrafficExchange) {
 	if event.Fault != "" {
 		fault = " fault=" + event.Fault
 	}
+	mock := ""
+	if event.MockProfile != "" {
+		mock = " mock=" + event.MockProfile
+		if event.MockRoute != "" {
+			mock += "/" + event.MockRoute
+		}
+	}
 	if event.Protocol != model.ProtocolHTTP {
 		result := "ok"
 		if event.Error != "" {
@@ -137,13 +144,19 @@ func (c *Commands) printTraffic(event model.TrafficExchange) {
 	if path == "" {
 		path = "session"
 	}
-	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %s %5dms %s:%s%s\n", event.Sequence, method, path, status, event.DurationMS, event.Source, event.Target, fault)
+	fmt.Fprintf(c.Out, "#%-5d %-7s %-18s %s %5dms %s:%s%s%s\n", event.Sequence, method, path, status, event.DurationMS, event.Source, event.Target, fault, mock)
 }
 
 func (c *Commands) printTrafficDetail(event model.TrafficExchange) {
 	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, strings.ToUpper(string(event.Protocol))+" exchange"), event.Sequence)
 	fmt.Fprintf(c.Out, "  %-18s %s → %s\n", "Edge:", event.Source, event.Target)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Provider:", command.EmptyAs(string(event.TargetProvider), "unknown"))
+	if event.MockProfile != "" {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Mock profile:", event.MockProfile)
+	}
+	if event.MockRoute != "" {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Mock route:", event.MockRoute)
+	}
 	if event.Method != "" {
 		requestTarget := event.RequestTarget
 		if requestTarget == "" {

@@ -47,3 +47,15 @@ type Recording = model.Recording
 
 // FaultRule is the stable traffic-fault wire model.
 type FaultRule = model.FaultRule
+
+// MockProfile is the stable environment-scoped HTTP mock wire model.
+type MockProfile = model.MockProfile
+
+// MockRoute is the stable deterministic mock-route wire model.
+type MockRoute = model.MockRoute
+
+// MockRequest is the stable mock preview request wire model.
+type MockRequest = model.MockRequest
+
+// MockPreview is the stable mock preview result wire model.
+type MockPreview = model.MockPreview

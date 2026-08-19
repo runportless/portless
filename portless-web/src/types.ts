@@ -1,6 +1,6 @@
 export type EnvironmentStatus = 'starting' | 'recovering' | 'healthy' | 'degraded' | 'failed' | 'stopping' | 'stopped' | 'unknown'
 export type ServiceStatus = 'planned' | 'starting' | 'recovering' | 'ready' | 'unhealthy' | 'exited' | 'failed' | 'stopping' | 'stopped' | 'unknown'
-export type ProviderKind = 'local' | 'container' | 'remote'
+export type ProviderKind = 'local' | 'container' | 'remote' | 'mock'
 export type LaunchMode = 'managed' | 'debug'
 export type DebugAdapter = 'node-inspector' | 'jdwp'
 export type RemoteClassification = 'development' | 'qa' | 'staging' | 'unknown'
@@ -170,12 +170,51 @@ export interface RemoteTarget {
   healthPath?: string
 }
 
+export interface MockTarget {
+  profile: string
+}
+
 export interface ComponentBinding {
   service: string
   provider: ProviderKind
   source?: string
   remote?: RemoteTarget
+  mock?: MockTarget
   modifiedAt?: string
+}
+
+export interface MockRoute {
+  name: string
+  method: string
+  path: string
+  query?: Record<string, string>
+  status: number
+  headers?: Record<string, string>
+  body?: string
+  delayMs?: number
+  enabled: boolean
+  createdAt?: string
+  modifiedAt?: string
+}
+
+export interface MockProfile {
+  project: string
+  environment: string
+  name: string
+  service: string
+  description?: string
+  routes: MockRoute[]
+  createdAt: string
+  modifiedAt: string
+}
+
+export interface MockPreview {
+  matched: boolean
+  route?: string
+  status: number
+  headers?: Record<string, string>
+  body?: string
+  delayMs?: number
 }
 
 export interface ConfigurationIssue { code: string; subject?: string; message: string; remediation?: string }
@@ -229,6 +268,8 @@ export interface TrafficExchange {
   responseCapturedBytes?: number
   fault?: string
   recording?: string
+  mockProfile?: string
+  mockRoute?: string
   error?: string
   traceId?: string
   spanId?: string

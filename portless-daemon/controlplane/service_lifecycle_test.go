@@ -134,6 +134,143 @@ func TestActiveProviderChangeRestartsOnlySelectedService(t *testing.T) {
 	}
 }
 
+func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	source := t.TempDir()
+	process := func(name string) model.ServiceDefinition {
+		return model.ServiceDefinition{
+			Name: name, Kind: model.ServiceProcess, Required: true,
+			Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, WorkingDirectory: source, ServiceDirectory: source,
+			PortEnvironment: "PORT", Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+			Health: model.HealthCheck{Kind: "http", Path: "/health", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+		}
+	}
+	definition := model.ProjectModel{
+		SuggestedName: "store", PrimaryService: "checkout",
+		Services: []model.ServiceDefinition{process("checkout"), process("orders"), process("inventory")},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Environment: "ORDERS_URL", Required: true},
+			{Source: "checkout", Target: "inventory", Protocol: model.ProtocolHTTP, Environment: "INVENTORY_URL", Required: true},
+		},
+	}
+	if _, err := controlStore.CreateProject(ctx, "store", definition, []model.ProjectSource{{Name: "store", Services: []string{"checkout", "orders", "inventory"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "store", "local", definition,
+		[]model.SourceBinding{{Name: "store", Path: source, Status: "ready", Definition: definition}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "store"}, {Service: "orders", Provider: model.ProviderLocal, Source: "store"}, {Service: "inventory", Provider: model.ProviderLocal, Source: "store"}}); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	for _, name := range []string{"checkout", "orders", "inventory"} {
+		defer app.processes.Stop(context.Background(), "store/local", name, time.Second)
+	}
+	operation, err := app.Up(ctx, "store", "local", "test", "mock-store-up", UpOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("up operation = %#v", operation)
+	}
+	checkoutBefore := scopedServiceSnapshot(t, app, "store", "local", "checkout")
+	ordersBefore := scopedServiceSnapshot(t, app, "store", "local", "orders")
+	inventoryBefore := scopedServiceSnapshot(t, app, "store", "local", "inventory")
+	if _, err := app.CreateMockProfile(ctx, "store", "local", model.MockProfile{Name: "sold-out", Service: "inventory"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusConflict, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false}`, Enabled: true}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	operation, err = app.ChangeBinding(ctx, "store", "local", "inventory", model.ComponentBinding{Provider: model.ProviderMock, Mock: &model.MockTarget{Profile: "sold-out"}}, "test", "inventory-mock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("mock handoff = %#v", operation)
+	}
+	checkoutMock := scopedServiceSnapshot(t, app, "store", "local", "checkout")
+	ordersMock := scopedServiceSnapshot(t, app, "store", "local", "orders")
+	inventoryMock := scopedServiceSnapshot(t, app, "store", "local", "inventory")
+	if checkoutMock.PID != checkoutBefore.PID || ordersMock.PID != ordersBefore.PID || inventoryMock.PID != 0 || inventoryMock.Status != model.ServiceReady || inventoryMock.Generation != inventoryBefore.Generation {
+		t.Fatalf("mock handoff changed the wrong runtimes: checkout=%#v orders=%#v inventory=%#v", checkoutMock, ordersMock, inventoryMock)
+	}
+	response := httptest.NewRecorder()
+	app.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://inventory.local.store.localhost/inventory/coffee", nil), "store/local", "inventory")
+	if response.Code != http.StatusConflict || response.Body.String() != `{"available":false}` {
+		t.Fatalf("mock ingress = %d %q", response.Code, response.Body.String())
+	}
+	exchanges := app.TrafficExchanges("store", "local", 1)
+	if len(exchanges) != 1 || exchanges[0].TargetProvider != model.ProviderMock || exchanges[0].MockProfile != "sold-out" || exchanges[0].MockRoute != "lookup" {
+		t.Fatalf("mock exchange = %#v", exchanges)
+	}
+	operation, err = app.StopService(ctx, "store", "local", "inventory", "test", "stop-mock-inventory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("stop mock service = %#v", operation)
+	}
+	if _, active := app.mocks.Address("store/local", "inventory"); active {
+		t.Fatal("mock listener remained active after stopping the service")
+	}
+	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusGone, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false,"updated":true}`, Enabled: true}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if stopped := scopedServiceSnapshot(t, app, "store", "local", "inventory"); stopped.Status != model.ServiceStopped {
+		t.Fatalf("editing a stopped mock route restarted the service: %#v", stopped)
+	}
+	if _, active := app.mocks.Address("store/local", "inventory"); active {
+		t.Fatal("editing a stopped mock route recreated its listener")
+	}
+	operation, err = app.StartService(ctx, "store", "local", "inventory", "test", "start-mock-inventory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("start mock service = %#v", operation)
+	}
+	response = httptest.NewRecorder()
+	app.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://inventory.local.store.localhost/inventory/coffee", nil), "store/local", "inventory")
+	if response.Code != http.StatusGone || response.Body.String() != `{"available":false,"updated":true}` {
+		t.Fatalf("restarted mock ingress = %d %q", response.Code, response.Body.String())
+	}
+	operation, err = app.ChangeBinding(ctx, "store", "local", "inventory", model.ComponentBinding{Provider: model.ProviderLocal, Source: "store"}, "test", "inventory-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("local handoff = %#v", operation)
+	}
+	checkoutAfter := scopedServiceSnapshot(t, app, "store", "local", "checkout")
+	ordersAfter := scopedServiceSnapshot(t, app, "store", "local", "orders")
+	inventoryAfter := scopedServiceSnapshot(t, app, "store", "local", "inventory")
+	if checkoutAfter.PID != checkoutBefore.PID || ordersAfter.PID != ordersBefore.PID || inventoryAfter.PID == 0 || inventoryAfter.Generation != inventoryBefore.Generation+1 {
+		t.Fatalf("local restore changed the wrong runtimes: checkout=%#v orders=%#v inventory=%#v", checkoutAfter, ordersAfter, inventoryAfter)
+	}
+}
+
+func scopedServiceSnapshot(t *testing.T, app *Service, project, environment, name string) model.Service {
+	t.Helper()
+	snapshot, err := app.Environment(context.Background(), project, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range snapshot.Services {
+		if service.Name == name {
+			return service
+		}
+	}
+	t.Fatalf("service %s was not found in %s/%s", name, project, environment)
+	return model.Service{}
+}
+
 func TestUpStartsFocusedServiceUnderPortlessWithDebugger(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()

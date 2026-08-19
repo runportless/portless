@@ -119,6 +119,7 @@ func (c *CLI) rootCommand() *cobra.Command {
 		}
 		root.AddCommand(inRootGroup(group, child))
 	}
+	addRootCommands(root, rootGroupTest, c.mocks.RootCommands())
 	addRootCommands(root, rootGroupSystem, c.administration.RootCommands())
 	return root
 }

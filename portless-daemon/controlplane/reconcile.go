@@ -160,12 +160,14 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		if runtimeErr != nil {
 			return runtimeErr
 		}
-		if binding.Provider != model.ProviderRemote && runtime.Generation == 0 && (runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned) {
+		if binding.Provider != model.ProviderRemote && binding.Provider != model.ProviderMock && runtime.Generation == 0 && (runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned) {
 			continue
 		}
 		switch binding.Provider {
 		case model.ProviderRemote:
 			err = s.reconcileRemote(ctx, scope, binding, runtime)
+		case model.ProviderMock:
+			err = s.activateMock(ctx, scope, binding, model.Service{Generation: runtime.Generation, RestartCount: runtime.RestartCount})
 		case model.ProviderContainer:
 			err = s.reconcileContainer(ctx, scope, environment, serviceDefinition, runtime, privateEnvironmentKey, logsRoot)
 		default:

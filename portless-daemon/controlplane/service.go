@@ -9,6 +9,7 @@ import (
 
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/events"
+	"github.com/portless-run/portless/portless-daemon/mocks"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/projects/discovery"
 	"github.com/portless-run/portless/portless-daemon/providers"
@@ -99,6 +100,7 @@ type Service struct {
 	processes            *processruntime.Manager
 	containers           *container.Manager
 	proxy                *proxy.Manager
+	mocks                *mocks.Manager
 	dataDirectory        string
 	installationKey      string
 	daemonInstanceID     string
@@ -136,6 +138,7 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 		discoverer: discoverer, resources: resources,
 	}
 	service.proxy = proxy.NewManager(controlStore, trafficStore, broker)
+	service.mocks = mocks.NewManager()
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
 	service.containers = container.NewManager(
 		filepath.Join(config.DataDirectory, "runtime.json"),
@@ -170,4 +173,5 @@ func (s *Service) Close(ctx context.Context) {
 		defer cancel()
 	}
 	s.proxy.Close(closeContext)
+	_ = s.mocks.Close(closeContext)
 }

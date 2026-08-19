@@ -64,7 +64,7 @@ VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?)`, key, projectKey, environmentName, model.
 	return s.Environment(ctx, projectName, environmentName)
 }
 
-// CloneEnvironment copies topology, source bindings, and provider bindings into a new environment.
+// CloneEnvironment copies topology, source bindings, provider bindings, and mock profiles into a new environment.
 func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, targetName string) (model.Environment, error) {
 	source, err := s.Environment(ctx, projectName, sourceName)
 	if err != nil {
@@ -74,7 +74,15 @@ func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, t
 	if err != nil {
 		return model.Environment{}, err
 	}
-	return s.CreateEnvironment(ctx, projectName, targetName, definition, source.Sources, source.Bindings)
+	created, err := s.CreateEnvironment(ctx, projectName, targetName, definition, source.Sources, source.Bindings)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	if err := s.cloneMockProfiles(ctx, projectName, sourceName, targetName); err != nil {
+		_ = s.ForgetEnvironment(context.Background(), projectName, targetName)
+		return model.Environment{}, err
+	}
+	return created, nil
 }
 
 // Environment loads and hydrates one environment by public project and environment names.

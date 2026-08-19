@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { api, connectEvents, jsonBody, environmentPath } from '../api'
-import type { ComponentBinding, FaultRule, LogEntry, Operation, Environment, Project, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
+import type { ComponentBinding, FaultRule, LogEntry, MockProfile, Operation, Environment, Project, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
 import { DrawerSizeButton } from '../components/DrawerSizeButton'
 import { paginateItems, PanelPagination } from '../components/PanelPagination'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 import { TrafficPanel } from './traffic'
+import { MocksPanel } from './mocks'
 
-type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'recordings' | 'faults' | 'timeline'
+type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'timeline'
 
-export function EnvironmentPage({ environment, project, tab, onNavigate, onChanged }: { environment: Environment; project?: Project; tab: Tab; onNavigate: (path: string) => void; onChanged: () => void }) {
+export function EnvironmentPage({ environment, project, tab, mockProfile, onNavigate, onChanged }: { environment: Environment; project?: Project; tab: Tab; mockProfile?: string; onNavigate: (path: string) => void; onChanged: () => void }) {
   const [selectedService, setSelectedService] = useState<Service | null>(null)
   const [timeline, setTimeline] = useState<TimelineEvent[]>([])
   const [recordings, setRecordings] = useState<Recording[]>([])
@@ -73,12 +74,13 @@ export function EnvironmentPage({ environment, project, tab, onNavigate, onChang
       {!!environment.issues?.length && <div className="alert alert--danger"><strong>Configuration needs attention</strong><span>{environment.issues.map((issue) => issue.message).join(' · ')}</span></div>}
       {error && <div className="alert alert--danger"><strong>Action failed</strong><span>{error}</span><button onClick={() => setError('')}>DISMISS</button></div>}
       <nav className="tabs" aria-label="Environment views">
-        {(['overview', 'topology', 'bindings', 'traffic', 'recordings', 'faults', 'timeline'] as Tab[]).map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => onNavigate(environmentUIPath(environment, name))}>{name}<small>{name === 'recordings' ? recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
+        {(['overview', 'topology', 'bindings', 'traffic', 'mocks', 'recordings', 'faults', 'timeline'] as Tab[]).map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => onNavigate(environmentUIPath(environment, name))}>{name}<small>{name === 'recordings' ? recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
       </nav>
-      {tab === 'overview' && <Overview environment={environment} timeline={timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, edge, protocol))} />}
-      {tab === 'topology' && <TopologyView environment={environment} faults={activeFaults} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, edge, protocol))} />}
+      {tab === 'overview' && <Overview environment={environment} timeline={timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, { edge, protocol }))} />}
+      {tab === 'topology' && <TopologyView environment={environment} faults={activeFaults} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, { edge, protocol }))} />}
       {tab === 'bindings' && <BindingsPanel environment={environment} project={project} onChanged={onChanged} />}
       {tab === 'traffic' && <TrafficPanel environment={environment} />}
+      {tab === 'mocks' && <MocksPanel environment={environment} selectedProfile={mockProfile} onSelectProfile={(profile) => onNavigate(environmentUIPath(environment, 'mocks', { profile }))} />}
       {tab === 'recordings' && <RecordingsPanel environment={environment} recordings={recordings} refresh={refreshSecondary} />}
       {tab === 'faults' && <FaultsPanel environment={environment} faults={faults} refresh={refreshSecondary} />}
       {tab === 'timeline' && <TimelinePanel key={`${environment.project}/${environment.name}`} timeline={timeline} />}
@@ -154,20 +156,23 @@ export function summarizeEnvironmentBindings(environment: Environment): { value:
   const bindingServices = new Set((environment.bindings || []).map((binding) => binding.service))
   const remoteBindings = (environment.bindings || []).filter((binding) => binding.provider === 'remote')
   const remoteServices = new Set(remoteBindings.map((binding) => binding.service))
+  const mockServices = new Set((environment.bindings || []).filter((binding) => binding.provider === 'mock').map((binding) => binding.service))
   const total = Math.max(environment.services.length, bindingServices.size)
   const remote = remoteServices.size
-  const local = Math.max(0, total - remote)
+  const mocked = mockServices.size
+  const local = Math.max(0, total - remote - mocked)
 
   if (remote === 0) {
-    return { value: 'LOCAL', detail: `${total} ${total === 1 ? 'service' : 'services'} local` }
+    if (mocked > 0) return { value: 'LOCAL', detail: `${local} local · ${mocked} mocked` }
+    return { value: 'LOCAL', detail: `${local} ${local === 1 ? 'service' : 'services'} local` }
   }
-  if (local === 0) {
+  if (local === 0 && mocked === 0) {
     return { value: 'REMOTE', detail: `${remote} remote ${remote === 1 ? 'service' : 'services'}`, tone: 'warning' }
   }
 
   const classifications = new Set(remoteBindings.map((binding) => binding.remote?.classification).filter((classification) => classification && classification !== 'unknown'))
   const remoteDetail = classifications.size === 1 ? `${remote} ${[...classifications][0]!.toUpperCase()}` : `${remote} remote`
-  return { value: 'HYBRID', detail: `${local} local · ${remoteDetail}`, tone: 'warning' }
+  return { value: 'HYBRID', detail: `${local} local${mocked ? ` · ${mocked} mocked` : ''} · ${remoteDetail}`, tone: 'warning' }
 }
 
 export function overviewServiceEndpoint(environment: Environment, service: Service) {
@@ -698,6 +703,8 @@ function Detail({ label, value }: { label: string; value: string }) { return <di
 function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
   const [name, setName] = useState('checkout-debug')
   const [scopeID, setScopeID] = useState('')
+  const [captureBodies, setCaptureBodies] = useState(false)
+  const [maxBodyBytes, setMaxBodyBytes] = useState(65536)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const scopes = useMemo(() => experimentScopes(environment), [environment])
   const selectedScope = scopes.find((scope) => scope.id === scopeID)
@@ -706,7 +713,7 @@ function RecordingsPanel({ environment, recordings, refresh }: { environment: En
     setError(null)
     const recordingName = name.trim()
     if (!recordingName) { setError(actionError("Recording wasn't started", 'Enter a recording name.')); return }
-    try { await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody({ name: recordingName, source: selectedScope?.source || '', target: selectedScope?.target || '', captureBodies: false, maxEvents: 10000, maxBodyBytes: 65536 }) }); await refresh() }
+    try { await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody({ name: recordingName, source: selectedScope?.source || '', target: selectedScope?.target || '', captureBodies, maxEvents: 10000, maxBodyBytes }) }); await refresh() }
     catch (value) { setError(actionError("Recording wasn't started", value)) }
   }
   const stop = async (recording: Recording) => {
@@ -721,8 +728,8 @@ function RecordingsPanel({ environment, recordings, refresh }: { environment: En
   }
   return <div className="experiment-layout">
     {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
-    <section className="panel experiment-form"><div className="panel-title"><span>START RECORDING</span></div><label><span>NAME</span><input value={name} onChange={(event) => { setName(event.target.value); setError(null) }} /></label><label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} onChange={(event) => { setScopeID(event.target.value); setError(null) }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label><button className="button button--primary" onClick={start}>● START RECORDING</button></section>
-    <section className="panel experiment-list"><div className="panel-title"><span>RECORDINGS</span></div>{recordings.map((recording) => <div className="experiment-row" key={recording.name}><StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} /><div><strong>{recording.name}</strong><small>{recordingScopeLabel(recording)} · {recording.eventCount} events</small></div><span>{relativeTime(recording.startedAt)} ago</span><div>{recording.status === 'active' ? <button onClick={() => stop(recording)}>STOP</button> : <><a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}>EXPORT</a><button onClick={() => remove(recording)}>DELETE</button></>}</div></div>)}{recordings.length === 0 && <div className="empty-row">No recordings. Start one before reproducing a local issue.</div>}</section>
+    <section className="panel experiment-form"><div className="panel-title"><span>START RECORDING</span></div><label><span>NAME</span><input value={name} onChange={(event) => { setName(event.target.value); setError(null) }} /></label><label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} onChange={(event) => { setScopeID(event.target.value); setError(null) }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label><label className="recording-body-toggle"><input type="checkbox" checked={captureBodies} onChange={(event) => setCaptureBodies(event.target.checked)} /><span><strong>CAPTURE BODIES</strong><small>Needed when a recording will become a useful mock response.</small></span></label>{captureBodies && <><label><span>MAXIMUM BODY SIZE</span><select value={maxBodyBytes} onChange={(event) => setMaxBodyBytes(Number(event.target.value))}><option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label><div className="recording-body-warning"><strong>SENSITIVE DATA</strong><span>Request and response bodies are retained locally. Header redaction does not remove secrets inside a body.</span></div></>}<button className="button button--primary" onClick={start}>● START RECORDING</button></section>
+    <section className="panel experiment-list"><div className="panel-title"><span>RECORDINGS</span></div>{recordings.map((recording) => <div className="experiment-row" key={recording.name}><StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} /><div><strong>{recording.name}</strong><small>{recordingScopeLabel(recording)} · {recording.eventCount} events{recording.captureBodies ? ' · bodies captured' : ''}</small></div><span>{relativeTime(recording.startedAt)} ago</span><div>{recording.status === 'active' ? <button onClick={() => stop(recording)}>STOP</button> : <><a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}>EXPORT</a><button onClick={() => remove(recording)}>DELETE</button></>}</div></div>)}{recordings.length === 0 && <div className="empty-row">No recordings. Start one before reproducing a local issue.</div>}</section>
   </div>
 }
 
@@ -789,6 +796,8 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
   const [classification, setClassification] = useState<RemoteClassification>('qa')
   const [writePolicy, setWritePolicy] = useState<WritePolicy>('read-only')
   const [healthPath, setHealthPath] = useState('/health')
+  const [mockProfile, setMockProfile] = useState('')
+  const [mockProfiles, setMockProfiles] = useState<MockProfile[]>([])
   const [busyAction, setBusyAction] = useState<'save' | 'reset' | ''>('')
   const [configureOpen, setConfigureOpen] = useState(false)
   const [serviceLocked, setServiceLocked] = useState(false)
@@ -806,7 +815,8 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
   const providerUnchanged = !!currentBinding && currentBinding.provider === provider && (
     provider === 'container' ||
     (provider === 'local' && currentBinding.source?.toLowerCase() === source.toLowerCase()) ||
-    (provider === 'remote' && currentBinding.remote?.url === remoteURL && currentBinding.remote?.classification === classification && currentBinding.remote?.writePolicy === writePolicy && (currentBinding.remote?.healthPath || '') === healthPath)
+    (provider === 'remote' && currentBinding.remote?.url === remoteURL && currentBinding.remote?.classification === classification && currentBinding.remote?.writePolicy === writePolicy && (currentBinding.remote?.healthPath || '') === healthPath) ||
+    (provider === 'mock' && currentBinding.mock?.profile.toLowerCase() === mockProfile.toLowerCase())
   )
 
   const initializeProviderForm = (serviceName: string) => {
@@ -819,7 +829,12 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
     setClassification(current?.remote?.classification || 'qa')
     setWritePolicy(current?.remote?.writePolicy || 'read-only')
     setHealthPath(current?.remote?.healthPath || '/health')
+    setMockProfile(current?.mock?.profile || mockProfiles.find((profile) => profile.service.toLowerCase() === serviceName.toLowerCase())?.name || '')
   }
+
+  useEffect(() => {
+    api<{ mocks: MockProfile[] }>(environmentPath(environment, '/mocks')).then((result) => setMockProfiles(result.mocks)).catch(() => setMockProfiles([]))
+  }, [environment.project, environment.name])
 
   useEffect(() => {
     if (!configureOpen) return
@@ -861,6 +876,7 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
       const binding: ComponentBinding = { service, provider }
       if (provider === 'local') binding.source = source
       if (provider === 'remote') binding.remote = { url: remoteURL, classification, writePolicy, healthPath }
+      if (provider === 'mock') binding.mock = { profile: mockProfile }
       const operation = await api<Operation>(environmentPath(environment, `/bindings/${encodeURIComponent(service)}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(binding),
       })
@@ -905,7 +921,7 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
           {(environment.bindings || []).map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>
             <div className="provider-service" role="cell"><StatusMark status={environment.services.find((item) => item.name === binding.service)?.status || 'planned'} label={false} /><strong>{binding.service}</strong></div>
             <div className="provider-kind" role="cell">{providerDisplayName(binding.provider)}</div>
-            <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <><code>{binding.remote?.url}</code><small>{binding.remote?.classification} · {binding.remote?.writePolicy}</small></> : binding.provider === 'local' ? <><code>{binding.source}</code><small>source checkout</small></> : <><span>Portless managed</span><small>container runtime</small></>}</div>
+            <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <><code>{binding.remote?.url}</code><small>{binding.remote?.classification} · {binding.remote?.writePolicy}</small></> : binding.provider === 'local' ? <><code>{binding.source}</code><small>source checkout</small></> : binding.provider === 'mock' ? <><code>{binding.mock?.profile}</code><small>deterministic HTTP mock</small></> : <><span>Portless managed</span><small>container runtime</small></>}</div>
             {binding.modifiedAt ? <time role="cell" dateTime={binding.modifiedAt} title={new Date(binding.modifiedAt).toLocaleString()}>{formatProviderTimestamp(binding.modifiedAt)}</time> : <time role="cell">—</time>}
             <div className="provider-actions" role="cell"><button type="button" disabled={busy} onClick={(event) => openConfigure(binding.service, event.currentTarget)}>CHANGE</button></div>
           </div>)}
@@ -924,7 +940,7 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
           <p id="configure-provider-description">Choose how one service is provided in this environment.</p>
           <div className="form-modal__fields configure-provider-form__fields">
             <label><span>SERVICE</span><select ref={serviceSelect} aria-label="Service" value={service} disabled={busy || serviceLocked} onChange={(event) => { initializeProviderForm(event.target.value); setSaveError(null) }}>{environment.services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
-            <label><span>PROVIDER</span><select ref={providerSelect} aria-label="Provider" value={provider} disabled={busy} onChange={(event) => { setProvider(event.target.value as ProviderKind); setSaveError(null) }}>{selected?.kind === 'process' && <option value="local">Local checkout</option>}{selected?.kind === 'resource' && <option value="container">Managed container</option>}{selected?.kind === 'process' && <option value="remote">Remote service</option>}</select></label>
+            <label><span>PROVIDER</span><select ref={providerSelect} aria-label="Provider" value={provider} disabled={busy} onChange={(event) => { const next = event.target.value as ProviderKind; setProvider(next); if (next === 'mock' && !mockProfile) setMockProfile(mockProfiles.find((profile) => profile.service.toLowerCase() === service.toLowerCase())?.name || ''); setSaveError(null) }}>{selected?.kind === 'process' && <option value="local">Local checkout</option>}{selected?.kind === 'resource' && <option value="container">Managed container</option>}{selected?.kind === 'process' && <option value="remote">Remote service</option>}{selected?.kind === 'process' && <option value="mock">Mock profile</option>}</select></label>
             {provider === 'local' && <label className="provider-field--wide"><span>SOURCE CHECKOUT</span><select aria-label="Source checkout" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setSaveError(null) }}>{environment.sources?.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
             {provider === 'remote' && <>
               <label className="provider-field--wide"><span>REMOTE URL</span><input aria-label="Remote URL" type="url" placeholder="https://payments.qa.example.com" value={remoteURL} disabled={busy} onChange={(event) => { setRemoteURL(event.target.value); setSaveError(null) }} /></label>
@@ -933,11 +949,15 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
               <label className="provider-field--wide"><span>HEALTH PATH</span><input aria-label="Health path" value={healthPath} disabled={busy} onChange={(event) => { setHealthPath(event.target.value); setSaveError(null) }} placeholder="/health" /></label>
               <div className="scope-preview scope-preview--warning provider-field--wide"><span className="eyebrow">REMOTE BOUNDARY</span><p>Traffic still passes through Portless, so recordings and faults remain available. A read-only binding blocks POST, PUT, PATCH, and DELETE before they leave this machine.</p></div>
             </>}
+            {provider === 'mock' && <>
+              <label className="provider-field--wide"><span>MOCK PROFILE</span><select aria-label="Mock profile" value={mockProfile} disabled={busy} onChange={(event) => { setMockProfile(event.target.value); setSaveError(null) }}><option value="">Choose a profile for {service}</option>{mockProfiles.filter((profile) => profile.service.toLowerCase() === service.toLowerCase()).map((profile) => <option value={profile.name} key={profile.name}>{profile.name} · {profile.routes.length} routes</option>)}</select></label>
+              <div className="scope-preview provider-field--wide"><span className="eyebrow">LOCAL MOCK</span><p>Portless stops this service, keeps its clean URL, and serves the selected profile through normal traffic, recording, and fault handling.</p></div>
+            </>}
             {environment.status !== 'stopped' && !transitionBlocked && <small className="provider-stop-note provider-field--wide">Only {service || 'the selected service'} will switch providers. Other running services stay available.</small>}
             {transitionBlocked && <small className="provider-stop-note provider-field--wide">Wait for the environment to finish {environment.status} before changing a provider.</small>}
           </div>
           {saveError && <ActionErrorNotice error={saveError} onDismiss={() => setSaveError(null)} />}
-          <footer>{resetAvailable && <button className="button button--quiet provider-reset-button" type="button" disabled={busy || transitionBlocked} onClick={() => void reset()}>{busyAction === 'reset' ? 'RESETTING…' : 'RESET TO DEFAULT'}</button>}<button className="button button--quiet" type="button" disabled={busy} onClick={closeConfigure}>CANCEL</button><button className={provider === 'remote' ? 'button button--warning' : 'button button--primary'} type="submit" disabled={busy || transitionBlocked || providerUnchanged || !service || (provider === 'remote' && !remoteURL) || (provider === 'local' && !source)}>{busyAction === 'save' ? 'SWITCHING…' : environment.status === 'stopped' ? 'SAVE CHANGES' : 'SWITCH PROVIDER'}</button></footer>
+          <footer>{resetAvailable && <button className="button button--quiet provider-reset-button" type="button" disabled={busy || transitionBlocked} onClick={() => void reset()}>{busyAction === 'reset' ? 'RESETTING…' : 'RESET TO DEFAULT'}</button>}<button className="button button--quiet" type="button" disabled={busy} onClick={closeConfigure}>CANCEL</button><button className={provider === 'remote' ? 'button button--warning' : 'button button--primary'} type="submit" disabled={busy || transitionBlocked || providerUnchanged || !service || (provider === 'remote' && !remoteURL) || (provider === 'local' && !source) || (provider === 'mock' && !mockProfile)}>{busyAction === 'save' ? 'SWITCHING…' : environment.status === 'stopped' ? 'SAVE CHANGES' : 'SWITCH PROVIDER'}</button></footer>
         </form>
       </section>
     </div>}
@@ -954,12 +974,14 @@ export function defaultProviderBinding(project: Project | undefined, environment
 export function providerBindingMatches(binding: ComponentBinding, expected: ComponentBinding) {
   if (binding.provider !== expected.provider) return false
   if (binding.provider === 'local') return binding.source?.toLowerCase() === expected.source?.toLowerCase()
+  if (binding.provider === 'mock') return binding.mock?.profile.toLowerCase() === expected.mock?.profile.toLowerCase()
   return binding.provider === 'container'
 }
 
 function providerDisplayName(provider: ProviderKind) {
   if (provider === 'local') return 'Local checkout'
   if (provider === 'container') return 'Managed container'
+  if (provider === 'mock') return 'Mock profile'
   return 'Remote service'
 }
 
@@ -1008,16 +1030,19 @@ function bindingFor(environment: Environment, service: string) {
   return environment.bindings?.find((binding) => binding.service === service)
 }
 
-function displayLaunchMode(environment: Environment, service: Service) {
-  if (service.kind !== 'process' || bindingFor(environment, service.name)?.provider !== 'local') return '—'
+export function displayLaunchMode(environment: Environment, service: Service) {
+  const provider = bindingFor(environment, service.name)?.provider
+  if (provider === 'mock') return 'mock'
+  if (service.kind !== 'process' || provider !== 'local') return '—'
   return service.launchMode || 'managed'
 }
 
-function environmentUIPath(environment: Environment, tab: Tab, edge?: string, protocol?: 'http' | 'tcp') {
+function environmentUIPath(environment: Environment, tab: Tab, options: { edge?: string; protocol?: 'http' | 'tcp'; profile?: string } = {}) {
   const base = `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}`
   if (tab === 'overview') return base
   const query = new URLSearchParams({ tab })
-  if (edge) query.set('edge', edge)
-  if (protocol) query.set('protocol', protocol)
+  if (options.edge) query.set('edge', options.edge)
+  if (options.protocol) query.set('protocol', options.protocol)
+  if (options.profile) query.set('profile', options.profile)
   return `${base}?${query}`
 }

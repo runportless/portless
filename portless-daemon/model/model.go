@@ -104,6 +104,8 @@ const (
 	ProviderContainer ProviderKind = "container"
 	// ProviderRemote routes the service to an external environment.
 	ProviderRemote ProviderKind = "remote"
+	// ProviderMock routes the service to an environment-scoped mock profile.
+	ProviderMock ProviderKind = "mock"
 )
 
 // RemoteClassification records the safety classification of a remote target.
@@ -288,13 +290,66 @@ type RemoteTarget struct {
 	HealthPath     string               `json:"healthPath,omitempty"`
 }
 
+// MockTarget selects an environment-scoped mock profile for a service.
+type MockTarget struct {
+	Profile string `json:"profile"`
+}
+
 // ComponentBinding selects a provider and source for one environment service.
 type ComponentBinding struct {
 	Service    string        `json:"service"`
 	Provider   ProviderKind  `json:"provider"`
 	Source     string        `json:"source,omitempty"`
 	Remote     *RemoteTarget `json:"remote,omitempty"`
+	Mock       *MockTarget   `json:"mock,omitempty"`
 	ModifiedAt time.Time     `json:"modifiedAt,omitzero"`
+}
+
+// MockProfile groups deterministic HTTP routes for one environment service.
+type MockProfile struct {
+	Project     string      `json:"project"`
+	Environment string      `json:"environment"`
+	Name        string      `json:"name"`
+	Service     string      `json:"service"`
+	Description string      `json:"description,omitempty"`
+	Routes      []MockRoute `json:"routes"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	ModifiedAt  time.Time   `json:"modifiedAt"`
+}
+
+// MockRoute matches one HTTP request and returns a fixed response.
+type MockRoute struct {
+	Name       string            `json:"name"`
+	Method     string            `json:"method"`
+	Path       string            `json:"path"`
+	Query      map[string]string `json:"query,omitempty"`
+	Status     int               `json:"status"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	DelayMS    int64             `json:"delayMs,omitempty"`
+	Enabled    bool              `json:"enabled"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	ModifiedAt time.Time         `json:"modifiedAt"`
+}
+
+// MockRequest is a request used to preview matching without sending traffic.
+// Headers and Body model the complete request but are not persisted or emitted as traffic.
+type MockRequest struct {
+	Method  string              `json:"method"`
+	Path    string              `json:"path"`
+	Query   map[string][]string `json:"query,omitempty"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	Body    string              `json:"body,omitempty"`
+}
+
+// MockPreview describes the route and fixed response selected for a request.
+type MockPreview struct {
+	Matched bool              `json:"matched"`
+	Route   string            `json:"route,omitempty"`
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+	DelayMS int64             `json:"delayMs,omitempty"`
 }
 
 // ConfigurationIssue describes an invalid or incomplete environment setting.
@@ -434,6 +489,8 @@ type TrafficExchange struct {
 	Source                string               `json:"source"`
 	Target                string               `json:"target"`
 	TargetProvider        ProviderKind         `json:"targetProvider,omitempty"`
+	MockProfile           string               `json:"mockProfile,omitempty"`
+	MockRoute             string               `json:"mockRoute,omitempty"`
 	RemoteClassification  RemoteClassification `json:"remoteClassification,omitempty"`
 	StartedAt             time.Time            `json:"startedAt"`
 	CompletedAt           time.Time            `json:"completedAt"`
