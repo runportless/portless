@@ -225,6 +225,10 @@ summary:focus-visible {
   color: var(--red);
 }
 
+.eyebrow--pillar {
+  font-size: 16px;
+}
+
 .hero {
   position: relative;
   width: min(calc(100% - 40px), var(--max-width));
@@ -473,6 +477,10 @@ summary:focus-visible {
   transform: translateX(-50%);
 }
 
+.problem h2 span {
+  color: var(--red);
+}
+
 .conflict-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -625,8 +633,29 @@ summary:focus-visible {
   padding: 17px 22px;
   border-top: 1px solid var(--line);
   display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) 52px;
   align-items: center;
   gap: 13px;
+}
+
+.solution-proof__side > div > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.solution-proof__side > div > code {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .solution-proof__side > div:first-of-type {
@@ -637,52 +666,21 @@ summary:focus-visible {
   border-top: 2px solid var(--red);
 }
 
-.solution-proof__side--before > div {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
 .solution-proof__side--before code,
 .solution-proof__side small {
   font-family: var(--mono);
 }
 
 .solution-proof__side--before code {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-}
-
-.solution-proof__side--before code strong {
-  color: var(--text);
-  font-size: 13px;
-  letter-spacing: -0.03em;
-}
-
-.solution-proof__side--before code b {
-  padding: 4px 6px;
-  border: 1px solid var(--line-bright);
-  background: rgb(255 84 103 / 7%);
-  color: var(--red);
-  font-size: 7px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
-.solution-proof__side--before code span {
-  min-width: 0;
-  overflow: hidden;
   color: var(--red);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .solution-proof__side small {
   color: var(--red);
   font-size: 7px;
   font-weight: 800;
+  justify-self: end;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -697,27 +695,14 @@ summary:focus-visible {
   color: var(--green);
 }
 
-.solution-proof__side--after > div {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
 .solution-proof__side--after code {
-  min-width: 0;
-  overflow: hidden;
   color: var(--muted);
-  font-family: var(--mono);
   font-size: clamp(10px, 1vw, 13px);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.solution-proof__side--after code strong,
-.solution-proof__side--after code b {
+.solution-proof__side--after code strong {
   color: var(--teal-bright);
-}
-
-.solution-proof__side--after code b {
-  font-weight: 400;
+  font-weight: 700;
 }
 
 .solution-proof__bridge {
@@ -731,6 +716,10 @@ summary:focus-visible {
   color: var(--teal);
   font-size: 22px;
   font-style: normal;
+}
+
+.one-command .section-heading h2 span {
+  color: var(--teal);
 }
 
 .run-command {
@@ -1031,13 +1020,22 @@ summary:focus-visible {
 
 .product-section {
   display: grid;
-  grid-template-columns: minmax(300px, 0.75fr) minmax(550px, 1.25fr);
+  grid-template-columns: minmax(550px, 1.25fr) minmax(300px, 0.75fr);
   align-items: center;
   gap: 75px;
+  border-top: 0;
 }
 
 .product-copy > p {
   margin-bottom: 33px;
+}
+
+.product-copy h2 {
+  font-size: clamp(30px, 3.5vw, 44px);
+}
+
+.product-copy h2 span {
+  white-space: nowrap;
 }
 
 .check-list {
@@ -1090,8 +1088,8 @@ summary:focus-visible {
 }
 
 .product-window--projects {
-  transform: perspective(1800px) rotateY(-3deg) rotateX(1deg);
-  transform-origin: right center;
+  transform: perspective(1800px) rotateY(3deg) rotateX(1deg);
+  transform-origin: left center;
 }
 
 .topology-section {
@@ -1585,7 +1583,7 @@ summary:focus-visible {
   }
 
   .product-section {
-    grid-template-columns: 0.8fr 1.2fr;
+    grid-template-columns: 1.2fr 0.8fr;
     gap: 45px;
   }
 
@@ -1802,6 +1800,10 @@ summary:focus-visible {
     font-size: clamp(31px, 10vw, 45px);
   }
 
+  .product-copy h2 {
+    font-size: clamp(28px, 8.5vw, 38px);
+  }
+
   .conflict-grid,
   .experiment-grid,
   .principles-grid {
@@ -1827,21 +1829,29 @@ summary:focus-visible {
   .solution-proof__side > div {
     min-height: 64px;
     padding-inline: 17px;
+    grid-template-columns: 1fr auto;
     gap: 9px;
   }
 
+  .solution-proof__side > div > strong {
+    grid-column: 1;
+    grid-row: 1;
+    font-size: 11px;
+  }
+
+  .solution-proof__side > div > code {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .solution-proof__side > div > small {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .solution-proof__side--before code,
   .solution-proof__side--after code {
     font-size: 9px;
-  }
-
-  .solution-proof__side--before code {
-    grid-template-columns: auto auto;
-    justify-content: start;
-    gap: 6px 8px;
-  }
-
-  .solution-proof__side--before code span {
-    grid-column: 1 / -1;
   }
 
   .run-command {

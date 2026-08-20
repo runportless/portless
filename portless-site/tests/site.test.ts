@@ -86,6 +86,9 @@ test('the Docker Compose comparison states the product boundary', async () => {
 
 test('the page moves from the problem and solution into the product pillars', async () => {
   const page = await readFile(`${siteRoot}src/pages/index.astro`, 'utf8');
+  const projectsStart = page.indexOf('class="section product-section"');
+  const projectsEnd = page.indexOf('id="control-plane"');
+  const projectsSection = page.slice(projectsStart, projectsEnd);
   const orderedMarkers = [
     'id="problem"',
     'id="solution"',
@@ -98,6 +101,13 @@ test('the page moves from the problem and solution into the product pillars', as
 
   assert.ok(positions.every((position) => position >= 0), 'every narrative section must be present');
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
+  assert.match(page, /eyebrow eyebrow--danger eyebrow--pillar">The problem/);
+  assert.match(page, /eyebrow eyebrow--pillar">The solution/);
+  assert.match(page, /eyebrow eyebrow--pillar">locally\./);
+  assert.match(page, /gets <span>messy<\/span> fast/);
+  assert.doesNotMatch(projectsSection, /Projects \+ environments/);
+  assert.match(projectsSection, /<span>One application\.<\/span><br \/>Many shapes\./);
+  assert.ok(projectsSection.indexOf('product-window--projects') < projectsSection.indexOf('product-copy'));
   assert.doesNotMatch(page, /How it works/);
 });
 
@@ -109,14 +119,20 @@ test('the solution resolves collisions before Run it explains the command', asyn
 
   assert.match(page, /id="solution"/);
   assert.match(page, /Every service gets/);
-  assert.match(page, /<strong>orders<\/strong><b>HTTP<\/b><span>localhost:8080/);
-  assert.match(page, /<strong>inventory<\/strong><b>HTTP<\/b><span>localhost:8080/);
-  assert.match(page, /<strong>orders-db<\/strong><b>Postgres<\/b><span>localhost:5432/);
-  assert.match(page, /<strong>inventory-db<\/strong><b>Postgres<\/b><span>localhost:5432/);
-  assert.match(page, /orders<\/strong>\.local\.store\.localhost/);
-  assert.match(page, /inventory<\/strong>\.local\.store\.localhost/);
-  assert.match(page, /orders-db<\/strong>\.local\.store\.portless\.test<b>:5432/);
-  assert.match(page, /inventory-db<\/strong>\.local\.store\.portless\.test<b>:5432/);
+  assert.match(page, /<strong>orders<\/strong><code>localhost:8080/);
+  assert.match(page, /<strong>inventory<\/strong><code>localhost:8080/);
+  assert.match(page, /<strong>orders-db<\/strong><code>localhost:5432/);
+  assert.match(page, /<strong>inventory-db<\/strong><code>localhost:5432/);
+  assert.doesNotMatch(page, /<b>HTTP<\/b>|<b>Postgres<\/b>/);
+  assert.match(page, /<strong>orders<\/strong><code><strong>orders<\/strong>\.local\.store\.localhost/);
+  assert.match(page, /<strong>inventory<\/strong><code><strong>inventory<\/strong>\.local\.store\.localhost/);
+  assert.match(page, /<strong>orders-db<\/strong><code><strong>orders-db<\/strong>\.local\.store\.portless\.test<\/code>/);
+  assert.match(page, /<strong>inventory-db<\/strong><code><strong>inventory-db<\/strong>\.local\.store\.portless\.test<\/code>/);
+  assert.match(runSection, /<p class="eyebrow eyebrow--pillar">Run it<\/p>/);
+  assert.match(page, /<p class="eyebrow eyebrow--pillar">See it · live topology<\/p>/);
+  assert.match(page, /<p class="eyebrow eyebrow--pillar">Break it · reproduce the failure<\/p>/);
+  assert.match(runSection, /<span>One command<\/span> starts/);
+  assert.doesNotMatch(runSection, /Run it · one command/);
   assert.match(runSection, /portless up/);
   assert.doesNotMatch(runSection, /portless setup|portless ui/);
 });

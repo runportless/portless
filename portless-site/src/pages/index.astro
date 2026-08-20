@@ -70,8 +70,8 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section problem" id="problem" aria-labelledby="problem-title">
       <div class="section-heading section-heading--split">
         <div>
-          <p class="eyebrow eyebrow--danger">The problem</p>
-          <h2 id="problem-title">Local development<br />gets messy fast.</h2>
+          <p class="eyebrow eyebrow--danger eyebrow--pillar">The problem</p>
+          <h2 id="problem-title">Local development<br />gets <span>messy</span> fast.</h2>
         </div>
         <p>Ports collide. Services scatter across terminals. Dependencies run wherever they happen to fit. Soon the environment is harder to understand than the application.</p>
       </div>
@@ -89,7 +89,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section solution-section" id="solution" aria-labelledby="solution-title">
       <div class="solution-heading">
         <div>
-          <p class="eyebrow">The solution</p>
+          <p class="eyebrow eyebrow--pillar">The solution</p>
           <h2 id="solution-title">Every service gets<br /><span>a stable local identity.</span></h2>
         </div>
         <p>Portless keeps process and container ports private, then publishes service-scoped HTTP and TCP addresses. Orders and inventory can both default to <code>:8080</code>, while both PostgreSQL dependencies remain available on <code>:5432</code>.</p>
@@ -98,18 +98,18 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <div class="solution-proof" aria-label="Portless resolves shared HTTP and PostgreSQL ports for orders and inventory">
         <div class="solution-proof__side solution-proof__side--before">
           <header><span>Before Portless</span><strong>Same defaults. Immediate conflicts.</strong></header>
-          <div><code><strong>orders</strong><b>HTTP</b><span>localhost:8080</span></code><small>conflict</small></div>
-          <div><code><strong>inventory</strong><b>HTTP</b><span>localhost:8080</span></code><small>conflict</small></div>
-          <div><code><strong>orders-db</strong><b>Postgres</b><span>localhost:5432</span></code><small>conflict</small></div>
-          <div><code><strong>inventory-db</strong><b>Postgres</b><span>localhost:5432</span></code><small>conflict</small></div>
+          <div><strong>orders</strong><code>localhost:8080</code><small>conflict</small></div>
+          <div><strong>inventory</strong><code>localhost:8080</code><small>conflict</small></div>
+          <div><strong>orders-db</strong><code>localhost:5432</code><small>conflict</small></div>
+          <div><strong>inventory-db</strong><code>localhost:5432</code><small>conflict</small></div>
         </div>
         <div class="solution-proof__bridge" aria-hidden="true"><i>→</i></div>
         <div class="solution-proof__side solution-proof__side--after">
           <header><span>With Portless</span><strong>Each one gets its own identity.</strong></header>
-          <div><code><strong>orders</strong>.local.store.localhost</code><small>ready</small></div>
-          <div><code><strong>inventory</strong>.local.store.localhost</code><small>ready</small></div>
-          <div><code><strong>orders-db</strong>.local.store.portless.test<b>:5432</b></code><small>ready</small></div>
-          <div><code><strong>inventory-db</strong>.local.store.portless.test<b>:5432</b></code><small>ready</small></div>
+          <div><strong>orders</strong><code><strong>orders</strong>.local.store.localhost</code><small>ready</small></div>
+          <div><strong>inventory</strong><code><strong>inventory</strong>.local.store.localhost</code><small>ready</small></div>
+          <div><strong>orders-db</strong><code><strong>orders-db</strong>.local.store.portless.test</code><small>ready</small></div>
+          <div><strong>inventory-db</strong><code><strong>inventory-db</strong>.local.store.portless.test</code><small>ready</small></div>
         </div>
       </div>
     </section>
@@ -117,8 +117,8 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section one-command narrative-section" id="how-it-works" aria-labelledby="command-title">
       <div class="narrative-section__number" aria-hidden="true">01</div>
       <div class="section-heading">
-        <p class="eyebrow">Run it · one command</p>
-        <h2 id="command-title">One command starts<br />the whole application.</h2>
+        <p class="eyebrow eyebrow--pillar">Run it</p>
+        <h2 id="command-title"><span>One command</span> starts<br />the whole application.</h2>
         <p>From any supported service checkout, <code>portless up</code> discovers the project, starts its processes and managed dependencies, waits for readiness, and opens the local control plane.</p>
       </div>
       <div class="run-command"><span>From your service checkout</span><code><b>$</b> portless up</code><small>one command</small></div>
@@ -132,9 +132,11 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     </section>
 
     <section class="section product-section" aria-labelledby="projects-title">
+      <div class="product-window product-window--projects">
+        <Image src={projectsImage} alt="Portless environment overview for showcase local showing three ready services and one active fault" layout="full-width" widths={[640, 960, 1280]} quality="high" />
+      </div>
       <div class="product-copy">
-        <p class="eyebrow">Projects + environments</p>
-        <h2 id="projects-title">One application.<br />Many shapes.</h2>
+        <h2 id="projects-title"><span>One application.</span><br />Many shapes.</h2>
         <p>A project can span several repositories. Each environment reuses that topology while deciding what runs from a checkout, in a container, against a remote service, or as a deterministic mock.</p>
         <ul class="check-list">
           <li>Reuse the same readable service names everywhere</li>
@@ -142,15 +144,12 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
           <li>Switch one provider without restarting its callers</li>
         </ul>
       </div>
-      <div class="product-window product-window--projects">
-        <Image src={projectsImage} alt="Portless environment overview for showcase local showing three ready services and one active fault" layout="full-width" widths={[640, 960, 1280]} quality="high" />
-      </div>
     </section>
 
     <section class="section topology-section narrative-section" id="control-plane" aria-labelledby="topology-title">
       <div class="narrative-section__number" aria-hidden="true">02</div>
       <div class="section-heading section-heading--centered">
-        <p class="eyebrow">See it · live topology</p>
+        <p class="eyebrow eyebrow--pillar">See it · live topology</p>
         <h2 id="topology-title">See the system as it runs.</h2>
         <p>Watch real requests cross exact source-to-target edges, with rate and latency attached to the relationships that produced them.</p>
       </div>
@@ -189,7 +188,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section experiments narrative-section" id="experiments" aria-labelledby="experiments-title">
       <div class="narrative-section__number" aria-hidden="true">03</div>
       <div class="section-heading section-heading--centered">
-        <p class="eyebrow">Break it · reproduce the failure</p>
+        <p class="eyebrow eyebrow--pillar">Break it · reproduce the failure</p>
         <h2 id="experiments-title">Not just the happy path.</h2>
         <p>Keep the evidence, replace the dependency, or break one edge—without adding diagnostic code to the application.</p>
       </div>
@@ -231,7 +230,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
 
     <section class="section principles-section" aria-labelledby="principles-title">
       <div class="principles-intro">
-        <p class="eyebrow">locally.</p>
+        <p class="eyebrow eyebrow--pillar">locally.</p>
         <h2 id="principles-title">A control plane for your machine — not another platform to operate.</h2>
       </div>
       <div class="principles-grid">
