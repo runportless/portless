@@ -45,6 +45,15 @@ test('all marketing product media are live-app captures', async () => {
   const topologyAnimation = await readFile(`${siteRoot}src/assets/product/topology-live.gif`);
   assert.equal(topologyAnimation.subarray(0, 6).toString('ascii'), 'GIF89a');
   assert.match(topologyAnimation.toString('latin1'), /NETSCAPE2\.0/, 'topology capture must loop as an animated GIF');
+  const frameDelays: number[] = [];
+  for (let offset = 0; offset + 7 < topologyAnimation.length; offset += 1) {
+    if (topologyAnimation[offset] === 0x21 && topologyAnimation[offset + 1] === 0xf9 && topologyAnimation[offset + 2] === 0x04) {
+      frameDelays.push(topologyAnimation.readUInt16LE(offset + 4));
+      offset += 7;
+    }
+  }
+  assert.equal(frameDelays.length, 48);
+  assert.ok(frameDelays.every((delay) => delay === 20), 'topology capture must play at the slower five-frames-per-second pace');
 
   const page = await readFile(`${siteRoot}src/pages/index.astro`, 'utf8');
   assert.doesNotMatch(page, /brand\/video-preview|explainer-poster/i);
