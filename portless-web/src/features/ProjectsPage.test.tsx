@@ -73,19 +73,19 @@ describe('projects page', () => {
     expect(markup).toContain('>CREATE ENVIRONMENT</button>')
     expect(markup).not.toContain('class="panel clone-panel"')
     expect(markup).not.toContain('class="create-environment-modal"')
-    expect(markup).toContain('PROJECT SOURCES')
+    expect(markup).toContain('<span>SOURCES</span>')
     expect(markup).toContain('Filesystem bindings')
     expect(markup).toContain('/Users/dev/workspace/store')
     expect(markup).toContain('checkout, inventory, orders')
     expect(markup).not.toContain('one logical application, many repositories')
     expect(markup).not.toContain('Each environment clones this topology')
-    expect(markup.indexOf('ENVIRONMENTS')).toBeLessThan(markup.indexOf('PROJECT SOURCES'))
+    expect(markup.indexOf('<span>ENVIRONMENTS</span>')).toBeLessThan(markup.indexOf('<span>SOURCES</span>'))
   })
 
   it('groups environment bindings beneath one logical project source', () => {
     const markup = renderProjects(project, [environment, qaEnvironment])
 
-    expect(markup).toContain('<span>PROJECT SOURCES</span><small>1 source</small>')
+    expect(markup).toContain('<span>SOURCES</span><small>1 source</small>')
     expect(markup).toContain('<small>local, qa-local</small>')
     expect(markup.match(/class="table-row project-source-row"/g)).toHaveLength(1)
   })

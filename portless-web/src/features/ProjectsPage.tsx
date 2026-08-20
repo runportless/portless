@@ -102,7 +102,7 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
         </button>)}
       </section> : <section className="empty-environment panel"><div><div className="eyebrow">No projects yet</div><h2>Start one repository or assemble several.</h2><p>For one repository, run:</p><pre><span>$</span> portless up</pre><p>For several repositories, create one project and name each source:</p><pre><span>$</span> portless project create billing --source checkout=../checkout --source ledger=../ledger</pre></div></section>}
     {selectedProject && sourceRows.length > 0 && <section className="panel project-sources-panel">
-      <div className="panel-title"><span>PROJECT SOURCES</span><small>{sourceRows.length} source{sourceRows.length === 1 ? '' : 's'}</small></div>
+      <div className="panel-title"><span>SOURCES</span><small>{sourceRows.length} source{sourceRows.length === 1 ? '' : 's'}</small></div>
       <div className="table-row table-row--header project-source-row"><span>Source</span><span>Filesystem bindings</span><span>Services</span></div>
       {sourceRows.map((source) => <div className="table-row project-source-row" key={source.name}>
         <strong>{source.name}</strong>

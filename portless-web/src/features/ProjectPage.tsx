@@ -1054,11 +1054,11 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
               <label><span>CLASSIFICATION</span><select aria-label="Classification" value={classification} disabled={busy} onChange={(event) => { setClassification(event.target.value as RemoteClassification); setSaveError(null) }}><option value="development">development</option><option value="qa">qa</option><option value="staging">staging</option><option value="unknown">unknown</option></select></label>
               <label><span>WRITE POLICY</span><select aria-label="Write policy" value={writePolicy} disabled={busy} onChange={(event) => { setWritePolicy(event.target.value as WritePolicy); setSaveError(null) }}><option value="read-only">read-only</option><option value="read-write">read-write</option></select></label>
               <label className="provider-field--wide"><span>HEALTH PATH</span><input aria-label="Health path" value={healthPath} disabled={busy} onChange={(event) => { setHealthPath(event.target.value); setSaveError(null) }} placeholder="/health" /></label>
-              <div className="scope-preview scope-preview--warning provider-field--wide"><span className="eyebrow">REMOTE BOUNDARY</span><p>Traffic still passes through Portless, so recordings and faults remain available. A read-only binding blocks POST, PUT, PATCH, and DELETE before they leave this machine.</p></div>
+              <ProviderInfoCard kind="remote" title="REMOTE BOUNDARY" description="Traffic still passes through Portless, so recordings and faults remain available. A read-only binding blocks POST, PUT, PATCH, and DELETE before they leave this machine." />
             </>}
             {provider === 'mock' && <>
               <label className="provider-field--wide"><span>MOCK PROFILE</span><select aria-label="Mock profile" value={mockProfile} disabled={busy} onChange={(event) => { setMockProfile(event.target.value); setSaveError(null) }}><option value="">Choose a profile for {service}</option>{mockProfiles.filter((profile) => profile.service.toLowerCase() === service.toLowerCase()).map((profile) => <option value={profile.name} key={profile.name}>{profile.name} · {profile.routes.length} routes</option>)}</select></label>
-              <div className="scope-preview provider-field--wide"><span className="eyebrow">LOCAL MOCK</span><p>Portless stops this service, keeps its clean URL, and serves the selected profile through normal traffic, recording, and fault handling.</p></div>
+              <ProviderInfoCard kind="mock" title="LOCAL MOCK" description="Portless stops this service, keeps its clean URL, and serves the selected profile through normal traffic, recording, and fault handling." />
             </>}
             {transitionBlocked && <small className="provider-stop-note provider-field--wide">Wait for the environment to finish {environment.status} before changing a provider.</small>}
           </div>
@@ -1071,6 +1071,15 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
     {sourceEdit && <EditSourceModal environment={environment} source={sourceEdit} busy={sourceMutationBusy} error={sourceMutationError} onDismissError={() => setSourceMutationError(null)} onClose={closeSourceMutation} onSave={editSourcePath} />}
     {sourceDelete && <DeleteSourceModal project={project} source={sourceDelete} busy={sourceMutationBusy} error={sourceMutationError} onDismissError={() => setSourceMutationError(null)} onClose={closeSourceMutation} onDelete={deleteProjectSource} />}
   </>
+}
+
+function ProviderInfoCard({ kind, title, description }: { kind: 'remote' | 'mock'; title: string; description: string }) {
+  return <aside className={`provider-info-card provider-info-card--${kind} provider-field--wide`} role="note">
+    <span className="provider-info-card__icon" aria-hidden="true">
+      {kind === 'remote' ? <svg viewBox="0 0 24 24"><path d="M5 18h7a3 3 0 0 0 3-3v-3" /><path d="M11 6h7v7" /><path d="m10 14 8-8" /></svg> : <svg viewBox="0 0 24 24"><path d="M5 8h14v10H5z" /><path d="m9 11-2 2 2 2" /><path d="m15 11 2 2-2 2" /></svg>}
+    </span>
+    <div><strong>{title}</strong><p>{description}</p></div>
+  </aside>
 }
 
 export function defaultProviderBinding(project: Project | undefined, environment: Environment, service: Service): ComponentBinding | undefined {
