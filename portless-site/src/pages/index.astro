@@ -1,13 +1,12 @@
 ---
 import {Image} from 'astro:assets';
 import BrandMark from '../components/BrandMark.astro';
-import VideoDialog from '../components/VideoDialog.astro';
 import SiteLayout from '../layouts/SiteLayout.astro';
 import {frameworks, primaryCallToAction, principles, problemCards, resources} from '../data/site';
 import faultsImage from '../assets/product/faults.jpg';
 import projectsImage from '../assets/product/projects.jpg';
 import recordingsImage from '../assets/product/recordings.jpg';
-import topologyImage from '../assets/product/topology-live.jpg';
+import topologyAnimation from '../assets/product/topology-live.gif';
 import trafficDetailImage from '../assets/product/traffic-detail.jpg';
 import trafficImage from '../assets/product/traffic.jpg';
 
@@ -68,7 +67,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       </div>
     </section>
 
-    <section class="section problem" aria-labelledby="problem-title">
+    <section class="section problem" id="problem" aria-labelledby="problem-title">
       <div class="section-heading section-heading--split">
         <div>
           <p class="eyebrow eyebrow--danger">The problem</p>
@@ -79,7 +78,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <div class="conflict-grid" aria-label="Examples of local port collisions">
         {problemCards.map((card) => (
           <article class:list={['conflict-card', `conflict-card--${card.tone}`]}>
-            <p>Project / {card.project}</p>
+            <p>{card.scope} / {card.owner}</p>
             <div><strong>{card.service}</strong><code>{card.port}</code></div>
             <small>▲ Address already in use</small>
           </article>
@@ -87,35 +86,48 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       </div>
     </section>
 
+    <section class="section solution-section" id="solution" aria-labelledby="solution-title">
+      <div class="solution-heading">
+        <div>
+          <p class="eyebrow">The solution</p>
+          <h2 id="solution-title">Every service gets<br /><span>a stable local identity.</span></h2>
+        </div>
+        <p>Portless keeps process and container ports private, then publishes service-scoped HTTP and TCP addresses. Orders and inventory can both default to <code>:8080</code>, while both PostgreSQL dependencies remain available on <code>:5432</code>.</p>
+      </div>
+
+      <div class="solution-proof" aria-label="Portless resolves shared HTTP and PostgreSQL ports for orders and inventory">
+        <div class="solution-proof__side solution-proof__side--before">
+          <header><span>Before Portless</span><strong>Same defaults. Immediate conflicts.</strong></header>
+          <div><code><strong>orders</strong><b>HTTP</b><span>localhost:8080</span></code><small>conflict</small></div>
+          <div><code><strong>inventory</strong><b>HTTP</b><span>localhost:8080</span></code><small>conflict</small></div>
+          <div><code><strong>orders-db</strong><b>Postgres</b><span>localhost:5432</span></code><small>conflict</small></div>
+          <div><code><strong>inventory-db</strong><b>Postgres</b><span>localhost:5432</span></code><small>conflict</small></div>
+        </div>
+        <div class="solution-proof__bridge" aria-hidden="true"><i>→</i></div>
+        <div class="solution-proof__side solution-proof__side--after">
+          <header><span>With Portless</span><strong>Each one gets its own identity.</strong></header>
+          <div><code><strong>orders</strong>.local.store.localhost</code><small>ready</small></div>
+          <div><code><strong>inventory</strong>.local.store.localhost</code><small>ready</small></div>
+          <div><code><strong>orders-db</strong>.local.store.portless.test<b>:5432</b></code><small>ready</small></div>
+          <div><code><strong>inventory-db</strong>.local.store.portless.test<b>:5432</b></code><small>ready</small></div>
+        </div>
+      </div>
+    </section>
+
     <section class="section one-command narrative-section" id="how-it-works" aria-labelledby="command-title">
       <div class="narrative-section__number" aria-hidden="true">01</div>
       <div class="section-heading">
         <p class="eyebrow">Run it · one command</p>
-        <h2 id="command-title">Stand up the whole environment.</h2>
-        <p>Portless statically discovers the application, starts local processes and managed dependencies, waits for readiness, then publishes clean endpoints.</p>
+        <h2 id="command-title">One command starts<br />the whole application.</h2>
+        <p>From any supported service checkout, <code>portless up</code> discovers the project, starts its processes and managed dependencies, waits for readiness, and opens the local control plane.</p>
       </div>
+      <div class="run-command"><span>From your service checkout</span><code><b>$</b> portless up</code><small>one command</small></div>
       <div class="command-flow">
-        <article>
-          <span>01 · one time</span>
-          <code><b>$</b> portless setup</code>
-          <p>Install the narrow local relay for readable HTTP and TCP addresses.</p>
-        </article>
+        <article><span>01</span><h3>Discover</h3><p>Understand supported services and resources across every project checkout.</p></article>
         <i aria-hidden="true"></i>
-        <article>
-          <span>02 · every day</span>
-          <code><b>$</b> portless up</code>
-          <p>Discover, start, connect, and open the current environment.</p>
-        </article>
+        <article><span>02</span><h3>Start</h3><p>Launch local processes and managed dependencies in dependency order.</p></article>
         <i aria-hidden="true"></i>
-        <article>
-          <span>03 · stay oriented</span>
-          <code><b>$</b> portless ui</code>
-          <p>Inspect the application through one authenticated local control plane.</p>
-        </article>
-      </div>
-      <div class="endpoint-strip">
-        <span>Public HTTP</span><code>checkout.local.billing.localhost</code>
-        <span>Public TCP</span><code>postgres.local.billing.portless.test:5432</code>
+        <article><span>03</span><h3>Ready</h3><p>Wait for health, publish stable endpoints, and open one local control plane.</p></article>
       </div>
     </section>
 
@@ -143,10 +155,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
         <p>Watch real requests cross exact source-to-target edges, with rate and latency attached to the relationships that produced them.</p>
       </div>
       <div class="product-window product-window--hero">
-        <Image src={topologyImage} alt="Live Portless topology showing browser traffic entering checkout and flowing to inventory and orders" layout="full-width" widths={[640, 960, 1280]} quality="high" />
-        <span class="flow-dot flow-dot--one" aria-hidden="true"></span>
-        <span class="flow-dot flow-dot--two" aria-hidden="true"></span>
-        <span class="flow-dot flow-dot--three" aria-hidden="true"></span>
+        <img src={topologyAnimation.src} alt="Animated live Portless topology showing real checkout traffic flowing to inventory and orders" width={topologyAnimation.width} height={topologyAnimation.height} loading="lazy" decoding="async" />
         <div class="product-callout">
           <span>Live system map</span>
           <strong>Traffic has a direction.</strong>
@@ -223,7 +232,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section principles-section" aria-labelledby="principles-title">
       <div class="principles-intro">
         <p class="eyebrow">locally.</p>
-        <h2 id="principles-title">A control plane for your machine—not another platform to operate.</h2>
+        <h2 id="principles-title">A control plane for your machine — not another platform to operate.</h2>
       </div>
       <div class="principles-grid">
         {principles.map((principle) => (
@@ -246,16 +255,82 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       </div>
     </section>
 
+    <section class="section compose-section" id="docker-compose" aria-labelledby="compose-title">
+      <div class="compose-intro">
+        <div>
+          <p class="eyebrow">What about Docker Compose?</p>
+          <h2 id="compose-title">Compose is container-first.<br /><span>Portless is application-first.</span></h2>
+        </div>
+        <p>Docker Compose is a solid way to start a stack you have already described as containers. Portless starts with what developers are changing: the application, its source checkouts, service relationships, and traffic.</p>
+      </div>
+
+      <div class="compose-comparison" aria-label="Docker Compose and Portless comparison">
+        <article class="compose-card compose-card--docker">
+          <header>
+            <span aria-hidden="true">01</span>
+            <div><h3>Docker Compose</h3><p>Container orchestration</p></div>
+          </header>
+          <ul>
+            <li><strong>Define</strong><span>Services in a Compose file</span></li>
+            <li><strong>Run</strong><span>Containerized processes and resources</span></li>
+            <li><strong>Address</strong><span>Container DNS and published host ports</span></li>
+            <li><strong>Inspect</strong><span>Container lifecycle and logs</span></li>
+          </ul>
+        </article>
+
+        <div class="compose-divider" aria-hidden="true"><span>vs.</span></div>
+
+        <article class="compose-card compose-card--portless">
+          <header>
+            <span aria-hidden="true">02</span>
+            <div><h3>Portless</h3><p>Local application control plane</p></div>
+          </header>
+          <ul>
+            <li><strong>Discover</strong><span>Services and resources across checkouts</span></li>
+            <li><strong>Mix</strong><span>Local processes, managed containers, remote services, and mocks</span></li>
+            <li><strong>Address</strong><span>Stable service names while runtime ports stay private</span></li>
+            <li><strong>Observe</strong><span>Topology, traffic, recordings, mocks, and edge faults</span></li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="compose-runtime-note">
+        <span>Docker still fits.</span>
+        <p>Portless can use Docker Engine or Podman for managed PostgreSQL, Valkey, MySQL, and NATS dependencies. The container runtime stays a runtime choice—not the shape of your application.</p>
+        <code><b>portless</b><i aria-hidden="true">→</i> Docker / Podman <i aria-hidden="true">→</i> managed resources</code>
+      </div>
+    </section>
+
     <section class="section demo-section" id="demo" aria-labelledby="demo-title">
-      <div class="demo-poster">
-        <img src="/demo/portless-live-app-poster.jpg" alt="Live Portless environment overview showing three ready local services and one targeted fault" width="1280" height="720" loading="lazy" />
-        <button class="play-button" type="button" data-open-video aria-label="Play the 46-second Portless product demo"><span aria-hidden="true">▶</span><strong>Play product tour</strong><small>00:46</small></button>
+      <div class="demo-player">
+        <video playsinline preload="metadata" poster="/demo/portless-live-app-poster.jpg" data-demo-video aria-label="46-second Portless product tour">
+          <source src="/demo/portless-explainer.mp4" type="video/mp4" />
+          <track kind="captions" src="/demo/portless-explainer.vtt" srclang="en" label="English" />
+          Your browser does not support embedded video. <a href="/demo/portless-explainer.mp4">Download the demo</a>.
+        </video>
+        <div class="demo-controls" data-demo-controls>
+          <button class="demo-control demo-control--play" type="button" data-demo-play aria-label="Play demo">▶</button>
+          <input class="demo-progress" type="range" min="0" max="100" step="0.1" value="0" data-demo-progress aria-label="Seek demo" />
+          <output class="demo-time" data-demo-time>0:00 / 0:46</output>
+          <div class="demo-controls__secondary">
+            <button class="demo-control" type="button" data-demo-captions aria-label="Turn captions on" aria-pressed="false">CC</button>
+            <button class="demo-control" type="button" data-demo-mute aria-label="Mute demo" aria-pressed="false">MUTE</button>
+            <button class="demo-control" type="button" data-demo-fullscreen aria-label="Enter full screen">FULL</button>
+          </div>
+        </div>
       </div>
       <div class="demo-copy">
         <p class="eyebrow">Run it · see it · break it</p>
         <h2 id="demo-title">See the whole workflow.</h2>
         <p>From port collisions to clean endpoints, live topology, traffic inspection, recordings, and targeted faults.</p>
-        <button class="text-button text-button--bright" type="button" data-open-video>Watch with captions <span aria-hidden="true">→</span></button>
+        <details class="transcript">
+          <summary>Read the transcript</summary>
+          <p>Local development gets messy fast. Projects compete for Postgres, Redis, and the same ports. Understanding what is happening means bouncing between terminals.</p>
+          <p>Portless turns your environment into one control plane. Run Portless up. It starts processes and containers, then gives every application a clean localhost address.</p>
+          <p>Watch traffic flow from checkout to orders, Postgres, and Redis. Open a request to inspect status, timing, headers, and response.</p>
+          <p>Record a workflow, or introduce latency, errors, and aborted connections on one edge.</p>
+          <p>One project. Multiple environments. Run it, see it, and break it—locally.</p>
+        </details>
       </div>
     </section>
 
@@ -282,7 +357,6 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <small>© {new Date().getFullYear()} Portless</small>
   </footer>
 
-  <VideoDialog />
 </SiteLayout>
 
 <script>
@@ -313,4 +387,88 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       next.focus();
     });
   });
+
+  const demoVideo = document.querySelector<HTMLVideoElement>('[data-demo-video]');
+  const demoPlayButton = document.querySelector<HTMLButtonElement>('[data-demo-play]');
+  const demoProgress = document.querySelector<HTMLInputElement>('[data-demo-progress]');
+  const demoTime = document.querySelector<HTMLOutputElement>('[data-demo-time]');
+  const demoCaptionsButton = document.querySelector<HTMLButtonElement>('[data-demo-captions]');
+  const demoMuteButton = document.querySelector<HTMLButtonElement>('[data-demo-mute]');
+  const demoFullscreenButton = document.querySelector<HTMLButtonElement>('[data-demo-fullscreen]');
+
+  const formatDemoTime = (seconds: number) => {
+    if (!Number.isFinite(seconds)) return '0:00';
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+  };
+
+  const syncDemoPlayback = () => {
+    if (!demoVideo || !demoPlayButton) return;
+    const isPlaying = !demoVideo.paused && !demoVideo.ended;
+    demoPlayButton.textContent = isPlaying ? 'Ⅱ' : '▶';
+    demoPlayButton.setAttribute('aria-label', isPlaying ? 'Pause demo' : 'Play demo');
+  };
+
+  const syncDemoTimeline = () => {
+    if (!demoVideo) return;
+    const duration = Number.isFinite(demoVideo.duration) ? demoVideo.duration : 0;
+    if (demoProgress) demoProgress.value = duration > 0 ? String((demoVideo.currentTime / duration) * 100) : '0';
+    if (demoTime) demoTime.textContent = `${formatDemoTime(demoVideo.currentTime)} / ${formatDemoTime(duration)}`;
+  };
+
+  const toggleDemoPlayback = async () => {
+    if (!demoVideo) return;
+    if (!demoVideo.paused && !demoVideo.ended) {
+      demoVideo.pause();
+      return;
+    }
+    await demoVideo.play();
+  };
+
+  const disableInitialCaptions = () => {
+    if (!demoVideo) return;
+    Array.from(demoVideo.textTracks).forEach((track) => {
+      track.mode = 'disabled';
+    });
+  };
+
+  disableInitialCaptions();
+  demoVideo?.addEventListener('loadedmetadata', () => {
+    disableInitialCaptions();
+    syncDemoTimeline();
+  }, {once: true});
+  demoVideo?.addEventListener('play', syncDemoPlayback);
+  demoVideo?.addEventListener('pause', syncDemoPlayback);
+  demoVideo?.addEventListener('ended', syncDemoPlayback);
+  demoVideo?.addEventListener('timeupdate', syncDemoTimeline);
+  demoPlayButton?.addEventListener('click', () => void toggleDemoPlayback());
+  demoProgress?.addEventListener('input', () => {
+    if (!demoVideo || !Number.isFinite(demoVideo.duration)) return;
+    demoVideo.currentTime = (Number(demoProgress.value) / 100) * demoVideo.duration;
+  });
+  demoCaptionsButton?.addEventListener('click', () => {
+    if (!demoVideo) return;
+    const tracks = Array.from(demoVideo.textTracks);
+    const enabled = tracks.some((track) => track.mode === 'showing');
+    tracks.forEach((track) => {
+      track.mode = enabled ? 'disabled' : 'showing';
+    });
+    demoCaptionsButton.setAttribute('aria-pressed', String(!enabled));
+    demoCaptionsButton.setAttribute('aria-label', enabled ? 'Turn captions on' : 'Turn captions off');
+  });
+  demoMuteButton?.addEventListener('click', () => {
+    if (!demoVideo) return;
+    demoVideo.muted = !demoVideo.muted;
+    demoMuteButton.textContent = demoVideo.muted ? 'SOUND' : 'MUTE';
+    demoMuteButton.setAttribute('aria-pressed', String(demoVideo.muted));
+    demoMuteButton.setAttribute('aria-label', demoVideo.muted ? 'Unmute demo' : 'Mute demo');
+  });
+  demoFullscreenButton?.addEventListener('click', () => {
+    if (!demoVideo) return;
+    const webkitVideo = demoVideo as HTMLVideoElement & {webkitEnterFullscreen?: () => void};
+    if (demoVideo.requestFullscreen) void demoVideo.requestFullscreen();
+    else webkitVideo.webkitEnterFullscreen?.();
+  });
+  syncDemoPlayback();
+  syncDemoTimeline();
 </script>

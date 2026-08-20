@@ -194,11 +194,36 @@ test('renders real services, endpoints, topology, and service details', async ({
   await expect.poll(() => ingressEdge.locator('.topology-edge__pulse').count()).toBeGreaterThan(1)
   expect(await edgeGeometry()).toEqual(activeGeometry)
 
+  let serviceLogRequests = 0
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname.endsWith('/logs') && url.searchParams.get('service') === 'checkout') serviceLogRequests++
+  })
   await services.filter({ hasText: 'checkout' }).getByRole('button', { name: 'INSPECT' }).click()
   const drawer = page.getByRole('dialog', { name: 'checkout service' })
   await expect(drawer).toContainText('http://checkout.local.ui-e2e.localhost')
   await drawer.getByRole('button', { name: 'logs' }).click()
   await expect(drawer).toContainText('checkout ready on')
+  const rawLogs = drawer.getByRole('button', { name: 'Open raw logs in new tab' })
+  const pauseTail = drawer.getByRole('button', { name: 'Pause live tail' })
+  await expect(pauseTail).toHaveAttribute('aria-pressed', 'true')
+  await expect(drawer.getByRole('status', { name: 'Live tail active' })).toBeVisible()
+  await expect.poll(() => serviceLogRequests).toBeGreaterThan(1)
+  const [rawPage] = await Promise.all([page.waitForEvent('popup'), rawLogs.click()])
+  await rawPage.waitForLoadState()
+  expect(await rawPage.evaluate(() => document.contentType)).toBe('text/plain')
+  await expect(rawPage.locator('body')).toContainText('checkout ready on')
+  await rawPage.close()
+  await pauseTail.click()
+  await expect(drawer.getByRole('button', { name: 'Resume live tail' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(drawer.getByRole('status', { name: 'Live tail active' })).toHaveCount(0)
+  await page.waitForTimeout(100)
+  const pausedLogRequests = serviceLogRequests
+  await page.waitForTimeout(1_100)
+  expect(serviceLogRequests).toBe(pausedLogRequests)
+  await drawer.getByRole('button', { name: 'Resume live tail' }).click()
+  await expect(drawer.getByRole('button', { name: 'Pause live tail' })).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => serviceLogRequests).toBeGreaterThan(pausedLogRequests)
   await drawer.getByRole('button', { name: 'Close' }).click()
 })
 

@@ -292,7 +292,7 @@ Confirmed uninstall is deliberately ordered so cleanup ownership cannot be lost:
 
 The full command will not use `--force` to override relay ownership or remove a relay targeting another Portless data directory. Resolve that exceptional machine-wide ownership case separately with `portless relay status` and, only when intentional, `portless relay uninstall --force`. If runtime cleanup, relay removal, or daemon/data removal fails, later destructive steps are skipped and the remaining ownership state is retained for a safe retry. `--json` provides the same preview and completion result as structured output.
 
-Logs from both host processes and managed containers are stored as structured entries. Portless retains the newest 10 generations for each service and caps each generation's stdout and stderr stream at 16 MiB, so a noisy local service cannot grow storage without bound.
+Logs from both host processes and managed containers are stored as structured entries. The service drawer tails the newest logs by default, can pause and resume the live view, and can open the raw service output as plain text in a separate browser tab. Portless retains the newest 10 generations for each service and caps each generation's stdout and stderr stream at 16 MiB, so a noisy local service cannot grow storage without bound.
 
 ## Manage the privileged relay
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { api, connectEvents, jsonBody, environmentPath } from '../api'
-import type { ComponentBinding, FaultRule, LogEntry, MockProfile, Operation, Environment, Project, ProjectSource, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
+import type { ComponentBinding, FaultRule, MockProfile, Operation, Environment, Project, ProjectSource, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
 import { DrawerSizeButton } from '../components/DrawerSizeButton'
@@ -9,6 +9,7 @@ import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './ex
 import { TrafficPanel } from './traffic'
 import { MocksPanel } from './mocks'
 import { ConfigureCheckoutModal, RemoveCheckoutModal } from './SourceModals'
+import { ServiceLogs } from './ServiceLogs'
 
 type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'timeline'
 type SourcePathMutation = { environment: Environment; warnings: string[] }
@@ -577,7 +578,6 @@ export function buildTopology(environment: Environment) {
 }
 
 function ServiceDrawer({ environment, service, onClose, onChanged }: { environment: Environment; service: Service; onClose: () => void; onChanged: () => void }) {
-  const [logs, setLogs] = useState<LogEntry[]>([])
   const [configuration, setConfiguration] = useState<{ environment?: Array<{ key: string; value: string; classification: string; source: string }> } | null>(null)
   const [drawerTab, setDrawerTab] = useState<'details' | 'logs' | 'configuration'>('details')
   const [busy, setBusy] = useState<ServiceAction | ''>('')
@@ -586,7 +586,6 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
   const [fullScreen, setFullScreen] = useState(false)
   const base = environmentPath(environment, `/services/${encodeURIComponent(service.name)}`)
   useEffect(() => {
-    api<{ entries: LogEntry[] }>(`${environmentPath(environment, '/logs')}?service=${encodeURIComponent(service.name)}&limit=500`).then((value) => setLogs(value.entries)).catch(() => setLogs([]))
     api<typeof configuration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
   }, [base, environment.name, service.name])
   useEffect(() => {
@@ -634,7 +633,7 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
           <section className="drawer-section"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.resource?.type} ${service.resource?.version}`}</pre></section>
           <section className="drawer-section"><div className="eyebrow">HEALTH</div><p><StatusMark status={service.status} /> {service.health.kind}{service.health.path ? ` ${service.health.path}` : ''}</p><small>{service.reason || 'No current readiness error.'}</small></section>
         </>}
-        {drawerTab === 'logs' && <div className="log-view"><div className="log-view__meta">last {logs.length} lines · stdout + stderr</div><pre>{logs.length ? logs.map((entry, index) => <span key={`${entry.timestamp}-${entry.stream}-${index}`}><i>{new Date(entry.timestamp).toLocaleTimeString()}</i>{entry.message}{'\n'}</span>) : 'No logs captured for this service.'}</pre></div>}
+        {drawerTab === 'logs' && <ServiceLogs environment={environment} service={service.name} />}
         {drawerTab === 'configuration' && <div className="config-table"><div className="config-row config-row--head"><span>KEY</span><span>EFFECTIVE VALUE</span><span>SOURCE</span></div>{configuration?.environment?.map((item) => <div className="config-row" key={item.key}><code>{item.key}</code><span className={item.classification === 'masked' ? 'masked-value' : ''}>{item.value}</span><small>{item.source} · {item.classification}</small></div>)}{!configuration?.environment?.length && <div className="empty-row">No static environment values were discovered. Connection bindings are generated at runtime.</div>}</div>}
       </div>
     </aside>

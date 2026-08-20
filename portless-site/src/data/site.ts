@@ -1,8 +1,8 @@
 export const problemCards = [
-  {project: 'payments', service: 'postgres', port: ':5432', tone: 'danger'},
-  {project: 'billing', service: 'postgres', port: ':5432', tone: 'danger'},
-  {project: 'checkout', service: 'valkey', port: ':6379', tone: 'warning'},
-  {project: 'orders', service: 'valkey', port: ':6379', tone: 'warning'},
+  {scope: 'Service', owner: 'orders', service: 'http', port: ':8080', tone: 'danger'},
+  {scope: 'Service', owner: 'inventory', service: 'http', port: ':8080', tone: 'danger'},
+  {scope: 'Resource', owner: 'orders', service: 'postgres', port: ':5432', tone: 'warning'},
+  {scope: 'Resource', owner: 'inventory', service: 'postgres', port: ':5432', tone: 'warning'},
 ] as const;
 
 export const principles = [

@@ -184,6 +184,23 @@ it by hand. After changing web source or public assets, regenerate it with
 `portless-web/node_modules`, Playwright reports, test results, coverage, or
 `bin` artifacts.
 
+Building web assets does not update an already running Portless daemon. When a
+web change needs to be visible in the developer's current control-plane page,
+build the complete executable and restart the daemon with that exact checkout:
+
+```bash
+make
+./bin/portless daemon restart
+```
+
+`make web`, `make test-web`, and `make test` may regenerate
+`portless-web/dist`, but they do not replace the running executable. Do not
+hand off a refreshable local UI change until the normal daemon restart has
+succeeded; after it does, a browser refresh loads the new hashed bundle. Do not
+use `daemon restart --force` as a routine fallback. Inspect
+`./bin/portless daemon status` first and obtain explicit authorization because
+a forced replacement can interrupt active environments.
+
 The public website is independently owned by `portless-site`. Keep it fully
 static and compatible with GitHub Pages. Product screenshots must come from a
 running Portless application, never from explainer-video frames. Do not track

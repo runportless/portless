@@ -97,7 +97,8 @@ The Playwright suite protects these browser journeys:
 - project, environment, sidebar, and breadcrumb navigation;
 - environment creation through the modal without duplicating project sources;
 - browser theme persistence;
-- services, copyable endpoints, topology edges, service details, and logs;
+- services, copyable endpoints, topology edges, service details, and default-on
+  live logs with a plain-text raw tab and pause/resume controls;
 - starting a real Portless-owned Node debugger from the service drawer,
   displaying its attach endpoint, preserving healthy environment semantics,
   and returning the service to normal mode;
