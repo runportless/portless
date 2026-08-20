@@ -1,0 +1,42 @@
+<dialog class="video-dialog" id="demo-dialog" aria-labelledby="demo-dialog-title">
+  <div class="video-dialog__surface">
+    <div class="video-dialog__header">
+      <div>
+        <p class="eyebrow">46-second product tour</p>
+        <h2 id="demo-dialog-title">Portless in one minute.</h2>
+      </div>
+      <button class="icon-button" type="button" data-close-video aria-label="Close product demo">×</button>
+    </div>
+    <video controls preload="metadata" poster="/demo/portless-live-app-poster.jpg">
+      <source src="/demo/portless-explainer.mp4" type="video/mp4" />
+      <track kind="captions" src="/demo/portless-explainer.vtt" srclang="en" label="English" default />
+      Your browser does not support embedded video. <a href="/demo/portless-explainer.mp4">Download the demo</a>.
+    </video>
+    <details class="transcript">
+      <summary>Read the transcript</summary>
+      <p>Local development gets messy fast. Projects compete for Postgres, Redis, and the same ports. Understanding what is happening means bouncing between terminals.</p>
+      <p>Portless turns your environment into one control plane. Run Portless up. It starts processes and containers, then gives every application a clean localhost address.</p>
+      <p>Watch traffic flow from checkout to orders, Postgres, and Redis. Open a request to inspect status, timing, headers, and response.</p>
+      <p>Record a workflow, or introduce latency, errors, and aborted connections on one edge.</p>
+      <p>One project. Multiple environments. Run it, see it, and break it—locally.</p>
+    </details>
+  </div>
+</dialog>
+
+<script>
+  const dialog = document.querySelector<HTMLDialogElement>('#demo-dialog');
+  const video = dialog?.querySelector<HTMLVideoElement>('video');
+
+  document.querySelectorAll<HTMLButtonElement>('[data-open-video]').forEach((button) => {
+    button.addEventListener('click', () => {
+      dialog?.showModal();
+      video?.focus();
+    });
+  });
+
+  dialog?.querySelector<HTMLButtonElement>('[data-close-video]')?.addEventListener('click', () => dialog.close());
+  dialog?.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog?.addEventListener('close', () => video?.pause());
+</script>

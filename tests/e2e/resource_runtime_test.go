@@ -130,7 +130,7 @@ func TestCLIManagedResourcesAreIsolatedAcrossEnvironments(t *testing.T) {
 	if output, err := runCLIAt(binary, home, checkout, "env", "clone", "isolated"); err != nil {
 		t.Fatalf("clone resource environment: %v\n%s", err, output)
 	}
-	if output, err := runCLIAt(binary, home, checkout, "--env", "resource-isolation/isolated", "env", "source", local.Sources[0].Name, "--path", secondCheckout); err != nil {
+	if output, err := runCLIAt(binary, home, checkout, "--env", "resource-isolation/isolated", "env", "checkout", "set", local.Sources[0].Name, "--path", secondCheckout); err != nil {
 		t.Fatalf("bind isolated checkout: %v\n%s", err, output)
 	}
 	if output, err := runCLIAt(binary, home, secondCheckout, "--env", "resource-isolation/isolated", "up", "--managed", "--no-open", "--timeout", "4m"); err != nil {

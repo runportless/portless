@@ -1,0 +1,316 @@
+---
+import {Image} from 'astro:assets';
+import BrandMark from '../components/BrandMark.astro';
+import VideoDialog from '../components/VideoDialog.astro';
+import SiteLayout from '../layouts/SiteLayout.astro';
+import {frameworks, primaryCallToAction, principles, problemCards, resources} from '../data/site';
+import faultsImage from '../assets/product/faults.jpg';
+import projectsImage from '../assets/product/projects.jpg';
+import recordingsImage from '../assets/product/recordings.jpg';
+import topologyImage from '../assets/product/topology-live.jpg';
+import trafficDetailImage from '../assets/product/traffic-detail.jpg';
+import trafficImage from '../assets/product/traffic.jpg';
+
+const title = 'Portless — Run it. See it. Break it. locally.';
+const description = 'Run, inspect, record, mock, and break your complete application environment locally with one control plane.';
+const primaryCTA = primaryCallToAction(import.meta.env.PUBLIC_EARLY_ACCESS_URL);
+const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.com/gregwhitaker/portless';
+---
+
+<SiteLayout title={title} description={description}>
+  <header class="site-header">
+    <a class="brand-link" href="#top"><BrandMark /></a>
+    <nav aria-label="Primary navigation">
+      <a href="#how-it-works">Run it</a>
+      <a href="#control-plane">See it</a>
+      <a href="#experiments">Break it</a>
+      <a href="#demo">Demo</a>
+      {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
+      <a class="button button--small" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero__grid" aria-hidden="true"></div>
+      <div class="hero__copy">
+        <h1 id="hero-title">Own your entire<br /><span>local environment.</span></h1>
+        <p class="hero__lede">Portless discovers your application, starts its processes and dependencies, and gives every service a stable, readable address—all from one local control plane.</p>
+        <div class="hero__actions">
+          <a class="button" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
+        </div>
+        <ul class="hero__proof" aria-label="Portless setup benefits">
+          <li>No required project file</li>
+          <li>No account</li>
+          <li>macOS + Linux</li>
+        </ul>
+      </div>
+
+      <div class="terminal" aria-label="Example Portless command output">
+        <div class="terminal__bar">
+          <span class="terminal__lights" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>~/workspace/store</span>
+        </div>
+        <div class="terminal__body">
+          <p><span class="prompt">$</span> portless up<span class="cursor" aria-hidden="true"></span></p>
+          <p class="terminal__line terminal__line--1"><span class="ok">✓</span> discovered checkout, inventory, orders</p>
+          <p class="terminal__line terminal__line--2"><span class="ok">✓</span> started postgres and valkey</p>
+          <p class="terminal__line terminal__line--3"><span class="ok">✓</span> store/local <span class="status">healthy · 5/5 ready</span></p>
+          <p class="terminal__line terminal__line--4 endpoint">http://checkout.local.store.localhost</p>
+        </div>
+      </div>
+
+      <div class="narrative" aria-label="Portless product narrative">
+        <span>Run it.</span>
+        <span>See it.</span>
+        <span>Break it.</span>
+        <strong>locally.</strong>
+      </div>
+    </section>
+
+    <section class="section problem" aria-labelledby="problem-title">
+      <div class="section-heading section-heading--split">
+        <div>
+          <p class="eyebrow eyebrow--danger">The problem</p>
+          <h2 id="problem-title">Local development<br />gets messy fast.</h2>
+        </div>
+        <p>Ports collide. Services scatter across terminals. Dependencies run wherever they happen to fit. Soon the environment is harder to understand than the application.</p>
+      </div>
+      <div class="conflict-grid" aria-label="Examples of local port collisions">
+        {problemCards.map((card) => (
+          <article class:list={['conflict-card', `conflict-card--${card.tone}`]}>
+            <p>Project / {card.project}</p>
+            <div><strong>{card.service}</strong><code>{card.port}</code></div>
+            <small>▲ Address already in use</small>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <section class="section one-command narrative-section" id="how-it-works" aria-labelledby="command-title">
+      <div class="narrative-section__number" aria-hidden="true">01</div>
+      <div class="section-heading">
+        <p class="eyebrow">Run it · one command</p>
+        <h2 id="command-title">Stand up the whole environment.</h2>
+        <p>Portless statically discovers the application, starts local processes and managed dependencies, waits for readiness, then publishes clean endpoints.</p>
+      </div>
+      <div class="command-flow">
+        <article>
+          <span>01 · one time</span>
+          <code><b>$</b> portless setup</code>
+          <p>Install the narrow local relay for readable HTTP and TCP addresses.</p>
+        </article>
+        <i aria-hidden="true"></i>
+        <article>
+          <span>02 · every day</span>
+          <code><b>$</b> portless up</code>
+          <p>Discover, start, connect, and open the current environment.</p>
+        </article>
+        <i aria-hidden="true"></i>
+        <article>
+          <span>03 · stay oriented</span>
+          <code><b>$</b> portless ui</code>
+          <p>Inspect the application through one authenticated local control plane.</p>
+        </article>
+      </div>
+      <div class="endpoint-strip">
+        <span>Public HTTP</span><code>checkout.local.billing.localhost</code>
+        <span>Public TCP</span><code>postgres.local.billing.portless.test:5432</code>
+      </div>
+    </section>
+
+    <section class="section product-section" aria-labelledby="projects-title">
+      <div class="product-copy">
+        <p class="eyebrow">Projects + environments</p>
+        <h2 id="projects-title">One application.<br />Many shapes.</h2>
+        <p>A project can span several repositories. Each environment reuses that topology while deciding what runs from a checkout, in a container, against a remote service, or as a deterministic mock.</p>
+        <ul class="check-list">
+          <li>Reuse the same readable service names everywhere</li>
+          <li>Keep remote targets behind explicit write policies</li>
+          <li>Switch one provider without restarting its callers</li>
+        </ul>
+      </div>
+      <div class="product-window product-window--projects">
+        <Image src={projectsImage} alt="Portless environment overview for showcase local showing three ready services and one active fault" layout="full-width" widths={[640, 960, 1280]} quality="high" />
+      </div>
+    </section>
+
+    <section class="section topology-section narrative-section" id="control-plane" aria-labelledby="topology-title">
+      <div class="narrative-section__number" aria-hidden="true">02</div>
+      <div class="section-heading section-heading--centered">
+        <p class="eyebrow">See it · live topology</p>
+        <h2 id="topology-title">See the system as it runs.</h2>
+        <p>Watch real requests cross exact source-to-target edges, with rate and latency attached to the relationships that produced them.</p>
+      </div>
+      <div class="product-window product-window--hero">
+        <Image src={topologyImage} alt="Live Portless topology showing browser traffic entering checkout and flowing to inventory and orders" layout="full-width" widths={[640, 960, 1280]} quality="high" />
+        <span class="flow-dot flow-dot--one" aria-hidden="true"></span>
+        <span class="flow-dot flow-dot--two" aria-hidden="true"></span>
+        <span class="flow-dot flow-dot--three" aria-hidden="true"></span>
+        <div class="product-callout">
+          <span>Live system map</span>
+          <strong>Traffic has a direction.</strong>
+          <p>Portless preserves the caller on every dependency edge.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section traffic-section" aria-labelledby="traffic-title">
+      <div class="traffic-intro">
+        <div>
+          <p class="eyebrow">See it · traffic inspector</p>
+          <h2 id="traffic-title">Open the complete exchange.</h2>
+        </div>
+        <p>Move from a service waterfall to the exact request, timing, repeated headers, bounded body detail, response, and correlation confidence.</p>
+      </div>
+      <div class="traffic-tabs">
+        <div class="traffic-tabs__list" role="tablist" aria-label="Traffic inspector views">
+          <button type="button" role="tab" id="traffic-tab-trace" aria-controls="traffic-panel-trace" aria-selected="true" data-traffic-tab="trace">Trace waterfall</button>
+          <button type="button" role="tab" id="traffic-tab-detail" aria-controls="traffic-panel-detail" aria-selected="false" tabindex="-1" data-traffic-tab="detail">Exchange detail</button>
+        </div>
+        <div class="product-window traffic-panel" role="tabpanel" id="traffic-panel-trace" aria-labelledby="traffic-tab-trace" data-traffic-panel="trace">
+          <Image src={trafficImage} alt="Portless Traffic page with trace 88 expanded into a three-span waterfall across checkout, inventory, and orders" layout="full-width" widths={[640, 960, 1280]} quality="high" />
+        </div>
+        <div class="product-window traffic-panel" role="tabpanel" id="traffic-panel-detail" aria-labelledby="traffic-tab-detail" data-traffic-panel="detail" hidden>
+          <Image src={trafficDetailImage} alt="Portless exchange detail showing the checkout to orders request, response, active fault, and recording" layout="full-width" widths={[640, 960, 1280]} quality="high" />
+        </div>
+      </div>
+    </section>
+
+    <section class="section experiments narrative-section" id="experiments" aria-labelledby="experiments-title">
+      <div class="narrative-section__number" aria-hidden="true">03</div>
+      <div class="section-heading section-heading--centered">
+        <p class="eyebrow">Break it · reproduce the failure</p>
+        <h2 id="experiments-title">Not just the happy path.</h2>
+        <p>Keep the evidence, replace the dependency, or break one edge—without adding diagnostic code to the application.</p>
+      </div>
+      <div class="experiment-grid">
+        <article class="experiment-card">
+          <div class="experiment-card__image">
+            <Image src={recordingsImage} alt="Portless Recordings page showing a stopped checkout debug recording with 30 captured events" layout="full-width" widths={[480, 720]} quality="high" />
+          </div>
+          <div class="experiment-card__copy">
+            <span>Record</span><h3>Keep the evidence.</h3>
+            <p>Capture a bounded workflow and retain the requests that matter, with body capture only when you opt in.</p>
+          </div>
+        </article>
+        <article class="experiment-card experiment-card--mock">
+          <div class="mock-console" aria-label="Example deterministic mock response">
+            <p><span>GET</span> /inventory/coffee-mug</p>
+            <div><code>200</code><strong>sold-out</strong></div>
+            <pre>{`{
+  "available": false,
+  "reason": "mocked sold out"
+}`}</pre>
+          </div>
+          <div class="experiment-card__copy">
+            <span>Mock</span><h3>Replace one dependency.</h3>
+            <p>Bind a service to a fixed local response while callers keep the same injected endpoint.</p>
+          </div>
+        </article>
+        <article class="experiment-card">
+          <div class="experiment-card__image">
+            <Image src={faultsImage} alt="Portless Faults page showing an active slow orders rule and the targeted latency editor" layout="full-width" widths={[480, 720]} quality="high" />
+          </div>
+          <div class="experiment-card__copy">
+            <span>Fault</span><h3>Break one edge.</h3>
+            <p>Introduce latency, HTTP status codes, probability, or aborted connections without changing application code.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section principles-section" aria-labelledby="principles-title">
+      <div class="principles-intro">
+        <p class="eyebrow">locally.</p>
+        <h2 id="principles-title">A control plane for your machine—not another platform to operate.</h2>
+      </div>
+      <div class="principles-grid">
+        {principles.map((principle) => (
+          <article>
+            <span>{principle.index}</span>
+            <h3>{principle.title}</h3>
+            <p>{principle.copy}</p>
+          </article>
+        ))}
+      </div>
+      <div class="support-grid">
+        <div>
+          <span>Application discovery</span>
+          <ul>{frameworks.map((framework) => <li>{framework}</li>)}</ul>
+        </div>
+        <div>
+          <span>Managed resources</span>
+          <ul>{resources.map((resource) => <li>{resource}</li>)}</ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section demo-section" id="demo" aria-labelledby="demo-title">
+      <div class="demo-poster">
+        <img src="/demo/portless-live-app-poster.jpg" alt="Live Portless environment overview showing three ready local services and one targeted fault" width="1280" height="720" loading="lazy" />
+        <button class="play-button" type="button" data-open-video aria-label="Play the 46-second Portless product demo"><span aria-hidden="true">▶</span><strong>Play product tour</strong><small>00:46</small></button>
+      </div>
+      <div class="demo-copy">
+        <p class="eyebrow">Run it · see it · break it</p>
+        <h2 id="demo-title">See the whole workflow.</h2>
+        <p>From port collisions to clean endpoints, live topology, traffic inspection, recordings, and targeted faults.</p>
+        <button class="text-button text-button--bright" type="button" data-open-video>Watch with captions <span aria-hidden="true">→</span></button>
+      </div>
+    </section>
+
+    <section class="final-cta" id="early-access" aria-labelledby="cta-title">
+      <div class="final-cta__grid" aria-hidden="true"></div>
+      <BrandMark />
+      <h2 id="cta-title"><span>Run it.</span><span>See it.</span><span>Break it.</span></h2>
+      <p>locally.</p>
+      <a class="button" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
+      {!primaryCTA.external && <small>Portless is preparing for its first public release.</small>}
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <a class="brand-link" href="#top"><BrandMark compact /></a>
+    <p>A local application-environment control plane.</p>
+    <nav aria-label="Footer navigation">
+      <a href="#how-it-works">Run it</a>
+      <a href="#control-plane">See it</a>
+      <a href="#experiments">Break it</a>
+      <a href="#demo">Demo</a>
+      {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
+    </nav>
+    <small>© {new Date().getFullYear()} Portless</small>
+  </footer>
+
+  <VideoDialog />
+</SiteLayout>
+
+<script>
+  const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-traffic-tab]'));
+  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-traffic-panel]'));
+
+  function selectTrafficTab(selected: HTMLButtonElement) {
+    const selectedName = selected.dataset.trafficTab;
+    tabs.forEach((tab) => {
+      const active = tab === selected;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
+    panels.forEach((panel) => {
+      panel.hidden = panel.dataset.trafficPanel !== selectedName;
+    });
+  }
+
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectTrafficTab(tab));
+    tab.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const offset = event.key === 'ArrowRight' ? 1 : -1;
+      const next = tabs[(index + offset + tabs.length) % tabs.length];
+      if (!next) return;
+      selectTrafficTab(next);
+      next.focus();
+    });
+  });
+</script>

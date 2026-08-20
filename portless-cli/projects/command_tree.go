@@ -36,8 +36,8 @@ func (c *Commands) projectCommand() *cobra.Command {
 	addPath := ""
 	add := &cobra.Command{
 		Use:     "add <name>",
-		Short:   "Add a source checkout to the current project",
-		Long:    "Discover a checkout and add its services to the logical project. All project environments must be stopped. The path is bound only to the selected environment; configure every other environment explicitly.",
+		Short:   "Add a source to the current project and configure its initial checkout",
+		Long:    "Discover a checkout and add its services to the logical project. All project environments must be stopped. The source belongs to the project; its path is configured only for the selected environment. Configure a checkout separately in every other environment that runs services from this source.",
 		Example: "  portless project source add inventory --path ../inventory\n  portless --env store/local project source add inventory --path ../inventory",
 		Args:    shared.UsageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -202,24 +202,52 @@ func (c *Commands) environmentCommand() *cobra.Command {
 	bind.MarkFlagsMutuallyExclusive("local", "container", "remote", "mock")
 	_ = bind.RegisterFlagCompletionFunc("classification", shared.FixedCompletions("development", "qa", "staging", "unknown"))
 	_ = bind.RegisterFlagCompletionFunc("write-policy", shared.FixedCompletions("read-only", "read-write"))
-	_ = bind.RegisterFlagCompletionFunc("local", c.Complete(shared.CompletionSources))
+	_ = bind.RegisterFlagCompletionFunc("local", c.Complete(shared.CompletionCheckouts))
 	_ = bind.RegisterFlagCompletionFunc("mock", c.Complete(shared.CompletionMocks))
 	bind.ValidArgsFunction = c.Complete(shared.CompletionServices)
 	command.AddCommand(bind)
 
-	sourcePath := ""
-	source := &cobra.Command{
-		Use:   "source <source>",
-		Short: "Point an environment source at another checkout or worktree",
+	checkoutGroup := shared.CommandGroup("checkout", "Manage source checkouts for the selected environment")
+	checkoutGroup.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List source checkouts configured for the selected environment",
+		Args:  shared.UsageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return c.listCheckouts(cmd.Context())
+		},
+	})
+
+	checkoutPath := ""
+	setCheckout := &cobra.Command{
+		Use:   "set <source>",
+		Short: "Configure a source checkout for the selected environment",
+		Long:  "Configure a source checkout for the selected environment. Portless rediscovers the selected filesystem path and recompiles the environment, so the environment must be stopped.",
 		Args:  shared.UsageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.bindSource(cmd.Context(), args[0], sourcePath)
+			return c.setCheckout(cmd.Context(), args[0], checkoutPath)
 		},
 	}
-	source.Flags().StringVar(&sourcePath, "path", "", "source checkout path")
-	_ = source.MarkFlagRequired("path")
-	source.ValidArgsFunction = c.Complete(shared.CompletionSources)
-	command.AddCommand(source)
+	setCheckout.Flags().StringVar(&checkoutPath, "path", "", "source checkout path")
+	_ = setCheckout.MarkFlagRequired("path")
+	setCheckout.ValidArgsFunction = c.Complete(shared.CompletionSources)
+
+	removeCheckoutYes := false
+	removeCheckout := &cobra.Command{
+		Use:   "remove <source>",
+		Short: "Remove a source checkout from the selected environment",
+		Long:  "Remove only this environment's checkout path. The project source and checkouts configured in other environments remain intact. The environment must be stopped, and no local provider may still use the checkout.",
+		Args:  shared.UsageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !removeCheckoutYes {
+				return shared.UsageError("remove deletes only the selected environment's checkout path; repeat with --yes")
+			}
+			return c.removeCheckout(cmd.Context(), args[0])
+		},
+	}
+	removeCheckout.Flags().BoolVar(&removeCheckoutYes, "yes", false, "confirm environment checkout removal")
+	removeCheckout.ValidArgsFunction = c.Complete(shared.CompletionCheckouts)
+	checkoutGroup.AddCommand(setCheckout, removeCheckout)
+	command.AddCommand(checkoutGroup)
 
 	command.AddCommand(&cobra.Command{
 		Use:   "rescan",

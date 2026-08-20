@@ -190,7 +190,7 @@ describe('environment topology', () => {
     expect(markup).toContain('class="experiment-layout bindings-layout"')
     expect(markup).toContain('<span>PROVIDERS</span><button')
     expect(markup).toContain('role="table" aria-label="Configured providers"')
-    expect(markup).toContain('<span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader">Actions</span>')
+    expect(markup).toContain('<span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader" aria-label="Row actions"></span>')
     expect(markup).toContain('class="provider-service"')
     expect(markup).toContain('title="stopped"')
     expect(markup).not.toContain('<span>healthy</span>')
@@ -201,10 +201,12 @@ describe('environment topology', () => {
     expect(markup).toContain('>CONFIGURE PROVIDER</button>')
     expect(markup).not.toContain('>CHANGE</button>')
     expect(markup).toContain('>EDIT</button>')
-    expect(markup).toContain('<span>SOURCES</span><button')
-    expect(markup).toContain('>ADD SOURCE</button>')
-    expect(markup).toContain('<table class="source-table" aria-label="Sources">')
-    expect(markup).toContain('<th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col">Actions</th>')
+    expect(markup).toContain('<span>CHECKOUTS</span><button')
+    expect(markup).toContain('>MANAGE SOURCES</button>')
+    expect(markup).not.toContain('>ADD SOURCE</button>')
+    expect(markup).toContain('<table class="source-table" aria-label="Environment checkouts">')
+    expect(markup).toContain('<th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col" aria-label="Row actions"></th>')
+    expect(markup).not.toContain('>Actions</')
     expect(markup).not.toContain('class="source-name-button"')
     expect(markup).not.toContain('class="source-row--interactive"')
     expect(markup).not.toContain('aria-label="Configure checkout source"')
@@ -212,7 +214,8 @@ describe('environment topology', () => {
     expect(markup).toContain('<code title="/workspace/checkout">/workspace/checkout</code>')
     expect(markup).toContain('<time dateTime="2026-08-17T16:20:00Z"')
     expect(markup).toContain('>EDIT</button>')
-    expect(markup).toContain('>DELETE</button>')
+    expect(markup).toContain('>REMOVE</button>')
+    expect(markup).not.toContain('>DELETE</button>')
     expect(markup).not.toContain('change a path to a Git worktree')
     expect(markup).not.toContain('class="form-modal add-source-modal"')
     expect(markup).not.toContain('class="form-modal configure-provider-modal"')
@@ -229,7 +232,7 @@ describe('environment topology', () => {
     expect(providerDisplayName('container')).toBe('Container')
   })
 
-  it('paginates providers and sources independently after five rows', () => {
+  it('paginates providers and checkouts independently after five rows', () => {
     const services = Array.from({ length: 6 }, (_, index) => ({ name: `service-${index + 1}`, kind: 'process', status: 'stopped' } as Service))
     const environment = {
       project: 'billing', name: 'local', status: 'stopped', revision: 1,
@@ -244,12 +247,34 @@ describe('environment topology', () => {
     }))
 
     expect(markup).toContain('aria-label="providers pagination"')
-    expect(markup).toContain('aria-label="sources pagination"')
+    expect(markup).toContain('aria-label="checkouts pagination"')
     expect(markup).toContain('1–5 of 6')
     expect(markup).toContain('service-5')
     expect(markup).not.toContain('service-6')
     expect(markup).toContain('/workspace/source-5')
     expect(markup).not.toContain('/workspace/source-6')
+  })
+
+  it('shows project sources without checkouts as environment configuration choices', () => {
+    const project = { name: 'billing', sources: [{ name: 'checkout', services: ['checkout'] }, { name: 'inventory', services: ['inventory'] }] } as Project
+    const environment = {
+      project: 'billing', name: 'qa', status: 'stopped', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [{ name: 'checkout', kind: 'process', status: 'stopped' } as Service, { name: 'inventory', kind: 'process', status: 'stopped' } as Service],
+      connections: [],
+      sources: [{ name: 'checkout', path: '/workspace/checkout', status: 'ready', createdAt: new Date(0).toISOString(), scannedAt: new Date(0).toISOString() }],
+      bindings: [{ service: 'checkout', provider: 'local', source: 'checkout' }],
+      issues: [{ code: 'MISSING_BINDING', subject: 'inventory', message: 'component has no provider binding' }],
+    } as Environment
+
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment, project, tab: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+
+    expect(markup).toContain('<strong>inventory</strong>')
+    expect(markup).toContain('Configuration required')
+    expect(markup).toContain('>CONFIGURE</button>')
+    expect(markup).not.toContain('>ADD SOURCE</button>')
   })
 
   it('derives and compares canonical provider defaults from the project topology', () => {

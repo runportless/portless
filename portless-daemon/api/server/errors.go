@@ -45,6 +45,10 @@ func (s *Server) writeError(writer http.ResponseWriter, err error, subject map[s
 	case controlplane.ErrorRuntimeInUse:
 		status = http.StatusConflict
 		apiError.Code = "CONTAINER_RUNTIME_IN_USE"
+	case controlplane.ErrorCheckoutInUse:
+		status = http.StatusConflict
+		apiError.Code = "CHECKOUT_IN_USE"
+		apiError.Details = map[string]any{"services": nonNil(classification.Services)}
 	case controlplane.ErrorRuntimeUnavailable:
 		status = http.StatusServiceUnavailable
 		apiError.Code = "CONTAINER_RUNTIME_UNAVAILABLE"

@@ -5,6 +5,7 @@ bin/
 dist/
 coverage/
 node_modules/
+.astro/
 portless-web/*.tsbuildinfo
 portless-web/vite.config.js
 portless-web/vite.config.d.ts
@@ -16,3 +17,6 @@ portless-web/test-results/
 *.db
 *.db-shm
 *.db-wal
+portless-site/.env
+portless-site/.env.local
+portless-site/.npm-cache/

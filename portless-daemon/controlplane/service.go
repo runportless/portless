@@ -33,6 +33,13 @@ type RuntimeInUseError struct {
 	Project string `json:"project"`
 }
 
+// CheckoutInUseError identifies services whose checkout provider prevents an
+// environment checkout from being removed.
+type CheckoutInUseError struct {
+	Source   string   `json:"source"`
+	Services []string `json:"services"`
+}
+
 // ResetActiveEnvironmentsError lists environments that require an explicit forced reset.
 type ResetActiveEnvironmentsError struct {
 	Environments []string `json:"environments"`
@@ -69,6 +76,11 @@ type UpOptions struct {
 // Error describes why the selected container runtime cannot be changed.
 func (e RuntimeInUseError) Error() string {
 	return "stop project " + e.Project + " before changing the container runtime"
+}
+
+// Error describes the services that must switch providers before checkout removal.
+func (e CheckoutInUseError) Error() string {
+	return "source checkout " + e.Source + " is used by checkout providers for: " + strings.Join(e.Services, ", ")
 }
 
 // Error describes the active environments preventing an unforced reset.

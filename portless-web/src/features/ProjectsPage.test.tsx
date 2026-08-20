@@ -59,6 +59,14 @@ describe('projects page', () => {
     expect(markup).not.toContain('title="degraded"')
   })
 
+  it('offers to start a stopped environment from its project row', () => {
+    const markup = renderProjects(project, [stoppedEnvironment])
+
+    expect(markup).toContain('aria-label="Start demo"')
+    expect(markup).toContain('>START</button>')
+    expect(markup).not.toContain('aria-label="Stop demo"')
+  })
+
   it('keeps the project detail heading and environment listing', () => {
     const markup = renderProjects(project)
 
@@ -68,26 +76,64 @@ describe('projects page', () => {
     expect(markup).toContain('<code>local</code>')
     expect(markup).toContain('<span class="status status--success" title="healthy"><span class="status__mark" aria-hidden="true">●</span><span>healthy</span></span>')
     expect(markup).toContain('<span>ENVIRONMENTS</span>')
+    expect(markup).toContain('aria-label="Stop all store environments"')
+    expect(markup).toContain('>STOP ALL</button>')
+    expect(markup).toContain('<span>Modified</span>')
+    expect(markup).toContain('<span>Why</span></div><span aria-hidden="true"></span>')
+    expect(markup).toContain('aria-label="Stop local"')
+    expect(markup).not.toContain('<span>Age</span>')
+    expect(markup).toContain('<time dateTime=')
     expect(markup).not.toContain('<small>1 environment</small>')
     expect(markup).toContain('aria-haspopup="dialog"')
     expect(markup).toContain('>CREATE ENVIRONMENT</button>')
     expect(markup).not.toContain('class="panel clone-panel"')
     expect(markup).not.toContain('class="create-environment-modal"')
     expect(markup).toContain('<span>SOURCES</span>')
-    expect(markup).toContain('Filesystem bindings')
+    expect(markup).toContain('>ADD SOURCE</button>')
+    expect(markup).toContain('<span>Name</span><span>Path</span><span>Services</span><span aria-hidden="true"></span>')
+    expect(markup).not.toContain('<span>Actions</span>')
     expect(markup).toContain('/Users/dev/workspace/store')
     expect(markup).toContain('checkout, inventory, orders')
+    expect(markup).toContain('<div class="checkout-source"><span class="status status--success" title="ready"><span class="status__mark" aria-hidden="true">●</span></span><strong>store</strong></div>')
     expect(markup).not.toContain('one logical application, many repositories')
     expect(markup).not.toContain('Each environment clones this topology')
     expect(markup.indexOf('<span>ENVIRONMENTS</span>')).toBeLessThan(markup.indexOf('<span>SOURCES</span>'))
   })
 
-  it('groups environment bindings beneath one logical project source', () => {
+  it('deduplicates checkout paths without repeating environment names in source rows', () => {
     const markup = renderProjects(project, [environment, qaEnvironment])
 
-    expect(markup).toContain('<span>SOURCES</span><small>1 source</small>')
-    expect(markup).toContain('<small>local, qa-local</small>')
+    expect(markup).toContain('<span>SOURCES</span><button')
+    expect(markup).not.toContain('<small>local, qa-local</small>')
+    expect(markup.match(/<code class="truncate" title="\/Users\/dev\/workspace\/store">/g)).toHaveLength(1)
+    expect(markup).toContain('>DELETE</button>')
     expect(markup.match(/class="table-row project-source-row"/g)).toHaveLength(1)
+  })
+
+  it('paginates project environments and sources independently at ten rows', () => {
+    const environments = Array.from({ length: 11 }, (_, index) => ({
+      ...environment,
+      name: `environment-${String(index + 1).padStart(2, '0')}`,
+      revision: index + 1,
+      sources: [{ ...environment.sources[0] }],
+    } satisfies Environment))
+    const sources = Array.from({ length: 11 }, (_, index) => ({
+      name: `source-${String(index + 1).padStart(2, '0')}`,
+      services: [`service-${String(index + 1).padStart(2, '0')}`],
+    }))
+    const paginatedProject = { ...project, sources } as Project
+
+    const markup = renderProjects(paginatedProject, environments)
+
+    expect(markup).toContain('aria-label="environments pagination"')
+    expect(markup).toContain('aria-label="sources pagination"')
+    expect(markup.match(/class="table-row environment-row"/g)).toHaveLength(10)
+    expect(markup.match(/class="table-row project-source-row"/g)).toHaveLength(10)
+    expect(markup).toContain('1–10 of 11')
+    expect(markup).toContain('<code>environment-10</code>')
+    expect(markup).not.toContain('<code>environment-11</code>')
+    expect(markup).toContain('<strong>source-10</strong>')
+    expect(markup).not.toContain('<strong>source-11</strong>')
   })
 
   it('distinguishes an environment that needs source configuration from one using remote providers', () => {
@@ -104,8 +150,8 @@ describe('projects page', () => {
 
     expect(markup).toContain('configuration required')
     expect(markup).toContain('not bound locally')
-    expect(markup).toContain('<small>qa-local</small>')
-    expect(markup).toContain('<small>remote</small>')
+    expect(markup).not.toContain('<small>qa-local</small>')
+    expect(markup).not.toContain('<small>remote</small>')
     expect(markup).toContain('component has no provider binding')
   })
 

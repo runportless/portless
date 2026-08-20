@@ -83,6 +83,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		!strings.Contains(environment.Body.String(), `"modifiedAt":`) || strings.Contains(environment.Body.String(), ".localhost:7331") {
 		t.Fatalf("environment API did not use clean scoped URLs: %s", environment.Body.String())
 	}
+	checkoutInUse := request(server, authManager, http.MethodDelete, "/api/v1/environments/billing/local/sources/checkout", "", true)
+	if checkoutInUse.Code != http.StatusConflict || !strings.Contains(checkoutInUse.Body.String(), `"code":"CHECKOUT_IN_USE"`) || !strings.Contains(checkoutInUse.Body.String(), `"services":["checkout"]`) {
+		t.Fatalf("checkout in-use response code=%d body=%s", checkoutInUse.Code, checkoutInUse.Body.String())
+	}
 	mockBase := "/api/v1/environments/billing/local/mocks/checkout-empty"
 	createdMock := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/mocks", `{"name":"checkout-empty","service":"checkout","description":"predictable checkout"}`, true)
 	if createdMock.Code != http.StatusCreated || !strings.Contains(createdMock.Body.String(), `"mock":{"project":"billing","environment":"local","name":"checkout-empty"`) || !strings.Contains(createdMock.Body.String(), `"warnings":[]`) {

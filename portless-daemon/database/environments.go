@@ -266,6 +266,12 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	if err := replaceEnvironmentChildren(ctx, tx, key, definition, sources, bindings); err != nil {
 		return model.Environment{}, err
 	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM context_selections
+WHERE environment_key = ?
+  AND path NOT IN (SELECT path FROM environment_sources WHERE environment_key = ?)`, key, key); err != nil {
+		return model.Environment{}, err
+	}
 	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
 		return model.Environment{}, err
 	}

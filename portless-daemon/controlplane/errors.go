@@ -38,6 +38,8 @@ const (
 	ErrorIncompatibleState ErrorKind = "incompatible-state"
 	// ErrorRuntimeInUse indicates that active resources prevent a runtime change.
 	ErrorRuntimeInUse ErrorKind = "runtime-in-use"
+	// ErrorCheckoutInUse indicates that checkout-backed services prevent checkout removal.
+	ErrorCheckoutInUse ErrorKind = "checkout-in-use"
 	// ErrorRuntimeUnavailable indicates that no usable container runtime is available.
 	ErrorRuntimeUnavailable ErrorKind = "runtime-unavailable"
 )
@@ -48,6 +50,7 @@ type ErrorClassification struct {
 	Suggestions        []string
 	ActiveEnvironments []string
 	Issues             []model.ConfigurationIssue
+	Services           []string
 }
 
 // ClassifyError maps a control-plane error to its public classification.
@@ -56,6 +59,7 @@ func ClassifyError(err error) ErrorClassification {
 	var conflict NameConflictError
 	var active database.ActiveProjectEnvironmentsError
 	var configuration compiler.ConfigurationError
+	var checkoutInUse CheckoutInUseError
 	switch {
 	case errors.As(err, &conflict):
 		classification.Kind = ErrorNameTaken
@@ -80,6 +84,9 @@ func ClassifyError(err error) ErrorClassification {
 		classification.Kind = ErrorIncompatibleState
 	case errors.As(err, &RuntimeInUseError{}):
 		classification.Kind = ErrorRuntimeInUse
+	case errors.As(err, &checkoutInUse):
+		classification.Kind = ErrorCheckoutInUse
+		classification.Services = append([]string(nil), checkoutInUse.Services...)
 	case container.IsUnavailable(err):
 		classification.Kind = ErrorRuntimeUnavailable
 	}

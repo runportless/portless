@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00.000 --> 00:06.000
+Local development gets messy fast. Projects compete for Postgres, Redis, and the same ports.
+
+00:06.000 --> 00:10.500
+Understanding what is happening means bouncing between terminals.
+
+00:10.500 --> 00:16.500
+Portless turns your environment into one control plane. Run Portless up.
+
+00:16.500 --> 00:21.500
+It starts processes and containers, then gives every application a clean localhost address.
+
+00:21.500 --> 00:29.500
+Watch traffic flow from checkout to orders, Postgres, and Redis. Open a request to inspect status, timing, headers, and response.
+
+00:29.500 --> 00:38.000
+Record a workflow, or introduce latency, errors, and aborted connections on one edge.
+
+00:38.000 --> 00:46.500
+One project. Multiple environments. Run it, see it, and break it—locally.

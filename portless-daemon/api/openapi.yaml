@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 10.5.0
+  version: 10.6.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.5.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.6.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -528,8 +528,8 @@ paths:
       - { $ref: '#/components/parameters/EnvironmentName' }
       - { $ref: '#/components/parameters/SourceName' }
     put:
-      operationId: setEnvironmentSourcePath
-      description: Re-discovers a checkout or Git worktree and recompiles the stopped environment.
+      operationId: setEnvironmentSourceCheckout
+      description: Configures or replaces a checkout and recompiles the stopped environment without changing the project source.
       requestBody:
         required: true
         content:
@@ -541,6 +541,18 @@ paths:
                 path: { type: string, description: Absolute checkout or worktree path. }
       responses:
         '200': { description: Recompiled environment and discovery warnings }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: removeEnvironmentSourceCheckout
+      description: >-
+        Removes only this environment's checkout while retaining the project source and every
+        other environment. The environment must be stopped and no Checkout provider may still
+        reference the source.
+      responses:
+        '200': { description: Recompiled environment without the checkout }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services:
     parameters: *environmentParameters
     get:
@@ -1244,7 +1256,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.5.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.6.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }

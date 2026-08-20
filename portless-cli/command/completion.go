@@ -33,6 +33,8 @@ const (
 	CompletionTraces = "traces"
 	// CompletionSources identifies project-source-name completion candidates.
 	CompletionSources = "sources"
+	// CompletionCheckouts identifies environment-checkout-name completion candidates.
+	CompletionCheckouts = "checkouts"
 )
 
 // Complete returns a Cobra completion function for a Portless resource type.
@@ -104,6 +106,14 @@ func (c *Context) CompletionValues(parent context.Context, resource string) []st
 				values = append(values, connection.Source+":"+connection.Target)
 			}
 		case CompletionSources:
+			project, projectErr := client.Project(ctx, environment.Project)
+			if projectErr != nil {
+				return nil
+			}
+			for _, source := range project.Sources {
+				values = append(values, source.Name)
+			}
+		case CompletionCheckouts:
 			for _, source := range environment.Sources {
 				values = append(values, source.Name)
 			}

@@ -98,10 +98,17 @@ func (c *Client) ChangeBinding(ctx context.Context, project, environment, servic
 	return result, err
 }
 
-// SetSource changes one environment source path and rediscovers its services.
-func (c *Client) SetSource(ctx context.Context, project, environment, source, path string) (contract.EnvironmentMutation, error) {
+// SetSourceCheckout changes one environment checkout path and rediscovers its services.
+func (c *Client) SetSourceCheckout(ctx context.Context, project, environment, source, path string) (contract.EnvironmentMutation, error) {
 	var result contract.EnvironmentMutation
-	err := c.do(ctx, http.MethodPut, environmentPath(project, environment)+"/sources/"+EscapePath(source), contract.SetSourceRequest{Path: path}, &result)
+	err := c.do(ctx, http.MethodPut, environmentPath(project, environment)+"/sources/"+EscapePath(source), contract.SetSourceCheckoutRequest{Path: path}, &result)
+	return result, err
+}
+
+// RemoveSourceCheckout removes one environment checkout while retaining its project source.
+func (c *Client) RemoveSourceCheckout(ctx context.Context, project, environment, source string) (contract.EnvironmentMutation, error) {
+	var result contract.EnvironmentMutation
+	err := c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/sources/"+EscapePath(source), nil, &result)
 	return result, err
 }
 

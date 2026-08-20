@@ -54,7 +54,7 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 		t.Fatalf("provider changes leaked between environments: local=%#v hybrid=%#v", local.Bindings, hybrid.Bindings)
 	}
 	createdAt := hybrid.Sources[0].CreatedAt
-	hybrid, _, err = app.SetSource(ctx, "billing", "hybrid", "checkout", worktree)
+	hybrid, _, err = app.SetSourceCheckout(ctx, "billing", "hybrid", "checkout", worktree, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +78,66 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	}
 	if !hybrid.Sources[0].CreatedAt.Equal(createdAt) {
 		t.Fatalf("source path change replaced creation time: got %s, want %s", hybrid.Sources[0].CreatedAt, createdAt)
+	}
+}
+
+func TestEnvironmentCanRemoveUnusedCheckoutWithoutDeletingProjectSource(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	checkout := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	project, local, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: checkout}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.RemoveSourceCheckout(ctx, "billing", "local", "checkout", "test"); err == nil {
+		t.Fatal("checkout removal succeeded while a Checkout provider still used it")
+	} else {
+		var inUse CheckoutInUseError
+		if !errors.As(err, &inUse) || strings.Join(inUse.Services, ",") != "checkout" {
+			t.Fatalf("checkout removal error = %#v, %v", inUse, err)
+		}
+	}
+	if _, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid"); err != nil {
+		t.Fatal(err)
+	}
+	remote := model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
+		URL: "https://checkout.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly,
+	}}
+	operation, err := app.ChangeBinding(ctx, "billing", "hybrid", "checkout", remote, "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+		t.Fatalf("remote provider operation = %#v", operation)
+	}
+	hybrid, err := app.RemoveSourceCheckout(ctx, "billing", "hybrid", "checkout", "browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hybrid.Sources) != 0 || hybrid.Bindings[0].Provider != model.ProviderRemote {
+		t.Fatalf("checkout removal changed the wrong configuration: %#v", hybrid)
+	}
+	project, err = app.Project(ctx, "billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(project.Sources) != 1 || project.Sources[0].Name != "checkout" || len(local.Sources) != 1 {
+		t.Fatalf("checkout removal changed project or sibling environment: project=%#v local=%#v", project.Sources, local.Sources)
+	}
+	timeline, err := app.Timeline(ctx, "billing", "hybrid", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline) == 0 || timeline[0].Type != "environment.checkout_removed" || timeline[0].Actor != "browser" {
+		t.Fatalf("checkout removal timeline = %#v", timeline)
 	}
 }
 
@@ -135,7 +195,7 @@ func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *test
 	}
 
 	inventoryQA := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory-qa"), "inventory")
-	qa, _, err = app.SetSource(ctx, "store", "qa", "inventory", inventoryQA)
+	qa, _, err = app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventoryQA, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +291,7 @@ func TestProjectSourceRemovalUpdatesEveryStoppedEnvironmentAndDeletesOwnedMocks(
 	if _, _, _, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := app.SetSource(ctx, "store", "qa", "inventory", inventory); err != nil {
+	if _, _, err := app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventory, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.CreateMockProfile(ctx, "store", "local", model.MockProfile{Name: "empty-inventory", Service: "inventory"}, "test"); err != nil {

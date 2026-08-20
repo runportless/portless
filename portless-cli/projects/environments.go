@@ -104,7 +104,37 @@ func (c *Commands) bindProvider(ctx context.Context, service string, options bin
 	return nil
 }
 
-func (c *Commands) bindSource(ctx context.Context, source, pathValue string) error {
+type checkoutListOutput struct {
+	Project     string                `json:"project"`
+	Environment string                `json:"environment"`
+	Checkouts   []model.SourceBinding `json:"checkouts"`
+}
+
+func (c *Commands) listCheckouts(ctx context.Context) error {
+	_, environment, err := c.Current(ctx)
+	if err != nil {
+		return err
+	}
+	checkouts := environment.Sources
+	if checkouts == nil {
+		checkouts = []model.SourceBinding{}
+	}
+	if c.JSONOutput {
+		return command.WriteJSON(c.Out, checkoutListOutput{Project: environment.Project, Environment: environment.Name, Checkouts: checkouts})
+	}
+	fmt.Fprintf(c.Out, "Checkouts · %s\n\n", model.EnvironmentSelector(environment.Project, environment.Name))
+	if len(checkouts) == 0 {
+		fmt.Fprintln(c.Out, c.Muted(c.Out, "No source checkouts configured."))
+		return nil
+	}
+	fmt.Fprintln(c.Out, c.Muted(c.Out, fmt.Sprintf("%-24s %-14s %s", "SOURCE", "STATUS", "PATH")))
+	for _, checkout := range checkouts {
+		fmt.Fprintf(c.Out, "%-24s %s %s\n", checkout.Name, c.State(c.Out, fmt.Sprintf("%-14s", checkout.Status)), checkout.Path)
+	}
+	return nil
+}
+
+func (c *Commands) setCheckout(ctx context.Context, source, pathValue string) error {
 	sourcePath, err := absoluteSourcePath(pathValue)
 	if err != nil {
 		return err
@@ -113,7 +143,7 @@ func (c *Commands) bindSource(ctx context.Context, source, pathValue string) err
 	if err != nil {
 		return err
 	}
-	response, err := client.SetSource(ctx, environment.Project, environment.Name, source, sourcePath)
+	response, err := client.SetSourceCheckout(ctx, environment.Project, environment.Name, source, sourcePath)
 	if err != nil {
 		return err
 	}
@@ -122,7 +152,25 @@ func (c *Commands) bindSource(ctx context.Context, source, pathValue string) err
 		return command.WriteJSON(c.Out, response)
 	}
 	c.PrintWarnings(response.Warnings)
-	fmt.Fprintf(c.Out, "%s now uses %s for source %s\n", model.EnvironmentSelector(environment.Project, environment.Name), sourcePath, source)
+	fmt.Fprintf(c.Out, "%s checkout %s now uses %s\n", model.EnvironmentSelector(environment.Project, environment.Name), source, sourcePath)
+	return nil
+}
+
+func (c *Commands) removeCheckout(ctx context.Context, source string) error {
+	client, environment, err := c.Current(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := client.RemoveSourceCheckout(ctx, environment.Project, environment.Name, source)
+	if err != nil {
+		return err
+	}
+	response.Warnings = command.NonNilStrings(response.Warnings)
+	if c.JSONOutput {
+		return command.WriteJSON(c.Out, response)
+	}
+	c.PrintWarnings(response.Warnings)
+	fmt.Fprintf(c.Out, "%s checkout %s from %s\n", c.Success(c.Out, "removed"), source, model.EnvironmentSelector(environment.Project, environment.Name))
 	return nil
 }
 

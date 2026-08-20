@@ -53,3 +53,14 @@ func TestProjectSourceDeleteRequiresExplicitConfirmation(t *testing.T) {
 		t.Fatalf("delete error = %v, want explicit confirmation", err)
 	}
 }
+
+func TestEnvironmentCheckoutRemoveRequiresExplicitConfirmation(t *testing.T) {
+	application, output, errorsOutput := newTestCommands(t)
+	root := application.environmentCommand()
+	root.SetOut(output)
+	root.SetErr(errorsOutput)
+	root.SetArgs([]string{"checkout", "remove", "inventory"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "repeat with --yes") {
+		t.Fatalf("remove error = %v, want explicit confirmation", err)
+	}
+}

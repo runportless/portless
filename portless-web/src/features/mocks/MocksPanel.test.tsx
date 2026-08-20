@@ -30,6 +30,7 @@ describe('MocksPanel', () => {
     expect(html).toContain('PREVIEW REQUEST')
     expect(html).toContain('ADD ROUTE')
     expect(html).toContain('class="mock-row-actions table-row-actions"')
+    expect(html).not.toContain('<span>Actions</span>')
     expect(html).toContain('GET /inventory/{sku}')
     expect(html).toContain('Inventory has no available stock')
   })

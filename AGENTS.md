@@ -54,7 +54,7 @@ all callers, tests, generated assets, and documentation instead.
 
 ## Product and package ownership
 
-There are five top-level product roots but one Go module and one distributed
+There are six top-level product roots but one Go module and one distributed
 `portless` executable:
 
 - `portless-cli`: Cobra command tree, current-checkout selection, human and
@@ -66,6 +66,8 @@ There are five top-level product roots but one Go module and one distributed
   restart, ownership, and removal.
 - `portless-web`: React/TypeScript control plane and the assets embedded by the
   daemon.
+- `portless-site`: Astro/TypeScript public marketing site deployed separately
+  to GitHub Pages; it is never embedded in the daemon.
 - `portless-mcp`: local stdio MCP runtime, capability policy, scoped tool
   registry, redaction, limits, and MCP result mapping. It is consumed by the
   CLI and is not a separate executable or daemon API.
@@ -182,6 +184,12 @@ it by hand. After changing web source or public assets, regenerate it with
 `portless-web/node_modules`, Playwright reports, test results, coverage, or
 `bin` artifacts.
 
+The public website is independently owned by `portless-site`. Keep it fully
+static and compatible with GitHub Pages. Product screenshots must come from a
+running Portless application, never from explainer-video frames. Do not track
+`portless-site/dist`, `.astro`, or `node_modules`; build it with `make site` and
+validate it with `make test-site`.
+
 ## Build and validation
 
 The root Makefile is the supported build interface:
@@ -191,6 +199,9 @@ make                 # install locked web dependencies as needed, build web, bui
 make test            # web typecheck/unit/build, then all Go tests
 make test-go         # all Go tests only
 make test-web        # web typecheck, Vitest, and production build
+make site-dev        # run the marketing site development server
+make site            # marketing site typecheck and production build
+make test-site       # marketing site typecheck, tests, and production build
 ```
 
 Use focused checks while iterating:

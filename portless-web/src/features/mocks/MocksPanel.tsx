@@ -141,7 +141,7 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
     {warnings.length > 0 && <div className="mock-warning"><strong>IMPORT FINISHED WITH NOTES</strong><span>{warnings.join(' ')}</span><button type="button" onClick={() => setWarnings([])}>DISMISS</button></div>}
     <section className="panel mock-profiles-panel">
       <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" onClick={() => { setCreateOpen(true); setError(null) }}>CREATE PROFILE</button></div>
-      <div className="mock-profile-row mock-profile-row--header" role="row"><span>Profile</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span>Actions</span></div>
+      <div className="mock-profile-row mock-profile-row--header" role="row"><span>Profile</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span aria-hidden="true" /></div>
       {profiles.map((profile) => {
         const active = environment.bindings?.some((binding) => binding.provider === 'mock' && binding.mock?.profile === profile.name)
         return <div className={`mock-profile-row${selected?.name === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => { setDeleteName(''); setError(null); onSelectProfile(profile.name) }}>
@@ -221,7 +221,7 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
         <div className="mock-profile-summary"><div><span>SERVICE</span><strong>{profile.service}</strong></div><div><span>DESCRIPTION</span><strong>{profile.description || '—'}</strong></div><div><span>FALLBACK</span><strong>501 · no route matched</strong></div><div><span>MODIFIED</span><strong>{formatTimestamp(profile.modifiedAt)}</strong></div></div>
         <section className="mock-route-table" aria-label={`${profile.name} routes`}>
           <div className="mock-route-table__title"><span>ROUTES</span><small>{profile.routes.length}</small></div>
-          <div className="mock-route-row mock-route-row--header"><span>Route</span><span>Match</span><span>Response</span><span>Delay</span><span>State</span><span>Actions</span></div>
+          <div className="mock-route-row mock-route-row--header"><span>Route</span><span>Match</span><span>Response</span><span>Delay</span><span>State</span><span aria-hidden="true" /></div>
           {profile.routes.map((route) => <div className="mock-route-row" key={route.name}>
             <strong>{route.name}</strong><code>{route.method} {route.path}{formatQuerySummary(route.query)}</code><span>{route.status}{route.body ? ` · ${new Blob([route.body]).size} B` : ''}</span><span>{route.delayMs ? `${route.delayMs} ms` : '—'}</span><StatusMark status={route.enabled ? 'ready' : 'stopped'} />
             <div className="mock-row-actions table-row-actions"><button type="button" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button><button className={deleteName === `delete-route:${route.name}` ? 'is-confirming' : ''} type="button" disabled={!!busy} onClick={() => onDeleteRoute(route)}>{deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button></div>

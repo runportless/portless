@@ -242,7 +242,7 @@ func TestCLIDownAllStopsMultipleActiveWorktrees(t *testing.T) {
 	if output, err := runCLIAt(binary, home, checkout, "env", "clone", "qa"); err != nil {
 		t.Fatalf("clone qa environment: %v\n%s", err, output)
 	}
-	if output, err := runCLIAt(binary, home, checkout, "--env", "worktrees-e2e/qa", "env", "source", local.Sources[0].Name, "--path", secondCheckout); err != nil {
+	if output, err := runCLIAt(binary, home, checkout, "--env", "worktrees-e2e/qa", "env", "checkout", "set", local.Sources[0].Name, "--path", secondCheckout); err != nil {
 		t.Fatalf("bind qa worktree: %v\n%s", err, output)
 	}
 	if output, err := runCLIAt(binary, home, secondCheckout, "--env", "worktrees-e2e/qa", "up", "--managed", "--no-open", "--timeout", "2m"); err != nil {

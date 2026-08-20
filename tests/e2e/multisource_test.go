@@ -72,7 +72,7 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 		t.Fatalf("cloned environment did not expose its missing catalog binding: %#v", qaBefore.Issues)
 	}
 	if output, err := runCLIAt(binary, home, checkout,
-		"--env", "distributed-store/qa-assisted", "env", "source", "catalog", "--path", sources["catalog"],
+		"--env", "distributed-store/qa-assisted", "env", "checkout", "set", "catalog", "--path", sources["catalog"],
 	); err != nil {
 		t.Fatalf("bind new source in cloned environment: %v\n%s", err, output)
 	}
@@ -213,6 +213,58 @@ func TestCLIMultipleSourcesAndMixedProviderEnvironment(t *testing.T) {
 	if output, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "down"); err != nil {
 		t.Fatalf("stop mixed-provider environment before source deletion: %v\n%s", err, output)
 	}
+	checkoutListOutput, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "--json", "env", "checkout", "list")
+	if err != nil {
+		t.Fatalf("list environment checkouts: %v\n%s", err, checkoutListOutput)
+	}
+	var checkoutList struct {
+		Project     string                `json:"project"`
+		Environment string                `json:"environment"`
+		Checkouts   []model.SourceBinding `json:"checkouts"`
+	}
+	if err := json.Unmarshal([]byte(checkoutListOutput), &checkoutList); err != nil || checkoutList.Project != "distributed-store" || checkoutList.Environment != "qa-assisted" || len(checkoutList.Checkouts) != 4 {
+		t.Fatalf("environment checkout list: err=%v value=%#v output=%s", err, checkoutList, checkoutListOutput)
+	}
+	blockedRemove, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "env", "checkout", "remove", "catalog", "--yes")
+	if err == nil || !strings.Contains(blockedRemove, "source checkout catalog is used by checkout providers for: catalog") || !strings.Contains(blockedRemove, "CHECKOUT_IN_USE") {
+		t.Fatalf("checkout removal did not protect its local provider: err=%v\n%s", err, blockedRemove)
+	}
+	if output, err := runCLIAt(binary, home, checkout,
+		"--env", "distributed-store/qa-assisted", "env", "bind", "catalog",
+		"--remote", remote.URL, "--classification", "qa", "--write-policy", "read-only", "--health-path", "/health",
+	); err != nil {
+		t.Fatalf("switch catalog away from its checkout: %v\n%s", err, output)
+	}
+	removeOutput, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "--json", "env", "checkout", "remove", "catalog", "--yes")
+	if err != nil {
+		t.Fatalf("remove environment checkout: %v\n%s", err, removeOutput)
+	}
+	var removedCheckout struct {
+		Environment model.Environment `json:"environment"`
+		Warnings    []string          `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(removeOutput), &removedCheckout); err != nil {
+		t.Fatalf("decode checkout removal: %v\n%s", err, removeOutput)
+	}
+	assertSourcePaths(t, removedCheckout.Environment, sources, "checkout", "inventory", "orders")
+	setCompletion, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "__complete", "env", "checkout", "set", "cat")
+	if err != nil || !strings.Contains(setCompletion, "catalog") {
+		t.Fatalf("project source was not offered for checkout configuration: err=%v\n%s", err, setCompletion)
+	}
+	removeCompletion, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/qa-assisted", "__complete", "env", "checkout", "remove", "cat")
+	if err != nil || strings.Contains(removeCompletion, "catalog") {
+		t.Fatalf("removed checkout was still offered for checkout removal: err=%v\n%s", err, removeCompletion)
+	}
+	projectBeforeDeleteOutput, err := runCLIAt(binary, home, checkout, "--json", "project", "show", "distributed-store")
+	if err != nil {
+		t.Fatalf("show project after environment checkout removal: %v\n%s", err, projectBeforeDeleteOutput)
+	}
+	var projectBeforeDelete model.Project
+	if err := json.Unmarshal([]byte(projectBeforeDeleteOutput), &projectBeforeDelete); err != nil {
+		t.Fatalf("decode project after environment checkout removal: %v\n%s", err, projectBeforeDeleteOutput)
+	}
+	assertProjectSources(t, projectBeforeDelete, "catalog", "checkout", "inventory", "orders")
+
 	deleteOutput, err := runCLIAt(binary, home, checkout, "--env", "distributed-store/local", "--json", "project", "source", "delete", "catalog", "--yes")
 	if err != nil {
 		t.Fatalf("delete source from existing project: %v\n%s", err, deleteOutput)

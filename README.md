@@ -65,6 +65,9 @@ layout:
   installation and removal.
 - `portless-web` owns the React control plane and the assets embedded into the
   daemon.
+- `portless-site` owns the static Astro marketing site published at
+  [www.portless.run](https://www.portless.run) through GitHub Pages. It is
+  deployed separately and is not embedded in the Portless executable.
 - `portless-mcp` owns the local stdio MCP runtime, scoped tool registry,
   capability policy, redaction, and result limits. The CLI consumes it through
   `portless mcp serve`; it is not a separate executable or daemon API.
@@ -97,6 +100,17 @@ then compiles the Go executable. Later builds reuse
 The Vite build is written to `portless-web/dist` and embedded directly by the
 `portless-web` product. The resulting `bin/portless` does not need Node.js to
 serve the UI.
+
+Build and validate the separate public website with:
+
+```bash
+make site-dev
+make site
+make test-site
+```
+
+The GitHub Pages workflow publishes `portless-site/dist` after pushes to
+`main`; pull requests run the same site checks without deploying.
 
 ## First run
 
@@ -350,13 +364,14 @@ Add another repository later without recreating the project. Stop every environm
 portless --env billing/local project source add inventory --path ../inventory-service
 ```
 
-In the control plane, source checkout paths remain directly editable and the
-Browse action opens the operating system's native directory chooser.
+In the control plane, project sources are added and deleted from the project
+page. The Bindings page owns each environment's checkout paths; its Browse
+action opens the operating system's native directory chooser.
 
 The source and its discovered services become part of `billing`, but `../inventory-service` belongs only to `billing/local`. Portless leaves every other environment explicitly unconfigured instead of copying a machine-specific path. Give each one its own checkout or bind the new service remotely:
 
 ```bash
-portless --env billing/qa-assisted env source inventory --path ../inventory-qa
+portless --env billing/qa-assisted env checkout set inventory --path ../inventory-qa
 
 # Or use the QA service without a local inventory checkout.
 portless --env billing/qa-assisted env bind inventory \
@@ -366,12 +381,18 @@ portless --env billing/qa-assisted env bind inventory \
 
 `portless up` refuses to start an environment until every newly declared component has a valid provider.
 
-Changing a checkout path affects only the selected environment. Deleting a
-logical source is a project-wide topology change, so every environment must be
-stopped and the project must retain at least one source:
+Changing or removing a checkout affects only the selected environment. A
+checkout cannot be removed while a service still uses it through the Checkout
+provider; switch those services to Remote, Mock, or Container first. Deleting
+a logical source is a project-wide topology change, so every environment must
+be stopped and the project must retain at least one source:
 
 ```bash
-portless --env billing/local env source inventory --path ../inventory-worktree
+portless --env billing/local env checkout list
+portless --env billing/local env checkout set inventory --path ../inventory-worktree
+portless --env billing/local env bind inventory --remote https://inventory.qa.example.com \
+  --classification qa --write-policy read-only
+portless --env billing/local env checkout remove inventory --yes
 portless --env billing/local project source delete inventory --yes
 ```
 
@@ -428,13 +449,13 @@ never fetches a network resource. Imported responses are starting points: the
 matcher remains intentionally deterministic and does not execute scripts,
 templates, or passthrough requests.
 
-Provider changes do not require an environment-wide stop. In an active environment, `env bind` creates a durable `change-provider` operation, probes a remote candidate before changing traffic, and hands off only the selected service. Existing source-scoped listeners stay in place, so callers keep the same injected endpoint while its upstream changes. Other services keep their PIDs, generations, debugger sessions, and endpoints. If the selected replacement cannot become ready, Portless restores its previous binding and runtime. Changing a checkout path with `portless env source` remains stopped-only because that operation can recompile several services at once.
+Provider changes do not require an environment-wide stop. In an active environment, `env bind` creates a durable `change-provider` operation, probes a remote candidate before changing traffic, and hands off only the selected service. Existing source-scoped listeners stay in place, so callers keep the same injected endpoint while its upstream changes. Other services keep their PIDs, generations, debugger sessions, and endpoints. If the selected replacement cannot become ready, Portless restores its previous binding and runtime. Changing or removing a checkout with `portless env checkout` remains stopped-only because that operation can recompile several services at once.
 
 Two environments cannot safely launch processes from the same checkout simultaneously. Point one environment at a Git worktree, then run both:
 
 ```bash
 git -C ../payments-service worktree add ../payments-experiment experiment
-portless env source payments --path ../payments-experiment
+portless env checkout set payments --path ../payments-experiment
 ```
 
 From any project source directory, `portless env select billing/qa-assisted` saves that environment as the context for the checkout. Commands such as `up`, `down`, `status`, `logs`, `traffic`, `record`, `fault`, and environment configuration then use it automatically. `portless env current` shows the effective environment and whether it came from a saved selection or was inferred because only one environment uses the checkout. `portless env clear` removes only the saved selection.

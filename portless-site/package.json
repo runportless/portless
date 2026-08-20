@@ -1,0 +1,22 @@
+{
+  "name": "portless-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "check": "astro check",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "preview": "astro preview"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@astrojs/sitemap": "3.7.3",
+    "astro": "7.2.4",
+    "typescript": "6.0.3"
+  }
+}

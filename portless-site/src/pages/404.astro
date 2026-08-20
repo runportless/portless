@@ -1,0 +1,14 @@
+---
+import BrandMark from '../components/BrandMark.astro';
+import SiteLayout from '../layouts/SiteLayout.astro';
+---
+
+<SiteLayout title="Page not found — Portless" description="The requested Portless page could not be found.">
+  <main class="not-found" id="main">
+    <a class="brand-link" href="/"><BrandMark /></a>
+    <p class="eyebrow">404 · route not found</p>
+    <h1>This endpoint is unavailable.</h1>
+    <p>The page may have moved, but your local environment is right where you left it.</p>
+    <a class="button" href="/">Return to Portless</a>
+  </main>
+</SiteLayout>

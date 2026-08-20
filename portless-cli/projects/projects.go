@@ -70,7 +70,7 @@ func (c *Commands) addProjectSource(ctx context.Context, source, pathValue strin
 		}
 		fmt.Fprintf(c.Out, "%d other %s configuration: %s\n", len(pending), label, strings.Join(pending, ", "))
 		for _, selector := range pending {
-			fmt.Fprintln(c.Out, "  "+c.Accent(c.Out, "portless --env "+selector+" env source "+source+" --path <checkout>"))
+			fmt.Fprintln(c.Out, "  "+c.Accent(c.Out, "portless --env "+selector+" env checkout set "+source+" --path <checkout>"))
 		}
 		fmt.Fprintln(c.Out, "Or bind the new services remotely with `portless env bind`.")
 	}

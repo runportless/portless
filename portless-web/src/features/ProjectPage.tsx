@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { api, connectEvents, jsonBody, environmentPath, projectPath } from '../api'
-import type { ComponentBinding, Connection, FaultRule, LogEntry, MockProfile, Operation, Environment, Project, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
+import { api, connectEvents, jsonBody, environmentPath } from '../api'
+import type { ComponentBinding, FaultRule, LogEntry, MockProfile, Operation, Environment, Project, ProjectSource, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
 import { DrawerSizeButton } from '../components/DrawerSizeButton'
@@ -8,12 +8,11 @@ import { paginateItems, PanelPagination } from '../components/PanelPagination'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 import { TrafficPanel } from './traffic'
 import { MocksPanel } from './mocks'
+import { ConfigureCheckoutModal, RemoveCheckoutModal } from './SourceModals'
 
 type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'timeline'
-type ProjectSourceMutation = { warnings: string[]; configurationRequired: string[] }
 type SourcePathMutation = { environment: Environment; warnings: string[] }
-type ProjectSourceDeletion = { project: Project; environments: Environment[]; removedServices: string[]; removedConnections: Connection[] }
-type DirectorySelection = { path: string }
+type EnvironmentCheckoutRow = { source: ProjectSource; checkout?: SourceBinding; usedBy: string[]; required: boolean }
 
 export function EnvironmentPage({ environment, project, tab, mockProfile, onNavigate, onChanged }: { environment: Environment; project?: Project; tab: Tab; mockProfile?: string; onNavigate: (path: string) => void; onChanged: () => void }) {
   const [selectedService, setSelectedService] = useState<Service | null>(null)
@@ -82,7 +81,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
       </nav>
       {tab === 'overview' && <Overview environment={environment} timeline={timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, { edge, protocol }))} />}
       {tab === 'topology' && <TopologyView environment={environment} faults={activeFaults} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, { edge, protocol }))} />}
-      {tab === 'bindings' && <BindingsPanel environment={environment} project={project} onChanged={onChanged} />}
+      {tab === 'bindings' && <BindingsPanel environment={environment} project={project} onNavigate={onNavigate} onChanged={onChanged} />}
       {tab === 'traffic' && <TrafficPanel environment={environment} />}
       {tab === 'mocks' && <MocksPanel environment={environment} selectedProfile={mockProfile} onSelectProfile={(profile) => onNavigate(environmentUIPath(environment, 'mocks', { profile }))} />}
       {tab === 'recordings' && <RecordingsPanel environment={environment} recordings={recordings} refresh={refreshSecondary} />}
@@ -792,9 +791,9 @@ function faultLifetime(fault: FaultRule) {
   return `expires ${new Date(fault.expiresAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
 }
 
-function BindingsPanel({ environment, project, onChanged }: { environment: Environment; project?: Project; onChanged: () => void }) {
+function BindingsPanel({ environment, project, onNavigate, onChanged }: { environment: Environment; project?: Project; onNavigate: (path: string) => void; onChanged: () => void }) {
   const [providerPage, setProviderPage] = useState(0)
-  const [sourcePage, setSourcePage] = useState(0)
+  const [checkoutPage, setCheckoutPage] = useState(0)
   const [service, setService] = useState(environment.services[0]?.name || '')
   const [provider, setProvider] = useState<ProviderKind>(environment.services[0]?.kind === 'resource' ? 'container' : 'local')
   const [source, setSource] = useState(environment.sources?.[0]?.name || '')
@@ -806,18 +805,14 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
   const [mockProfiles, setMockProfiles] = useState<MockProfile[]>([])
   const [busyAction, setBusyAction] = useState<'save' | 'reset' | ''>('')
   const [configureOpen, setConfigureOpen] = useState(false)
-  const [sourceCreateOpen, setSourceCreateOpen] = useState(false)
-  const [sourceCreateBusy, setSourceCreateBusy] = useState(false)
-  const [sourceCreateError, setSourceCreateError] = useState<ActionErrorDetails | null>(null)
-  const [sourceEdit, setSourceEdit] = useState<SourceBinding | null>(null)
-  const [sourceDelete, setSourceDelete] = useState<SourceBinding | null>(null)
-  const [sourceMutationBusy, setSourceMutationBusy] = useState(false)
-  const [sourceMutationError, setSourceMutationError] = useState<ActionErrorDetails | null>(null)
-  const [sourceNotice, setSourceNotice] = useState('')
+  const [checkoutEdit, setCheckoutEdit] = useState<{ source: ProjectSource; checkout?: SourceBinding } | null>(null)
+  const [checkoutRemove, setCheckoutRemove] = useState<{ source: ProjectSource; checkout: SourceBinding; usedBy: string[] } | null>(null)
+  const [checkoutMutationBusy, setCheckoutMutationBusy] = useState(false)
+  const [checkoutMutationError, setCheckoutMutationError] = useState<ActionErrorDetails | null>(null)
+  const [checkoutNotice, setCheckoutNotice] = useState('')
   const [serviceLocked, setServiceLocked] = useState(false)
   const [saveError, setSaveError] = useState<ActionErrorDetails | null>(null)
   const configureButton = useRef<HTMLButtonElement>(null)
-  const sourceCreateButton = useRef<HTMLButtonElement>(null)
   const sourceActionFocus = useRef<HTMLButtonElement | null>(null)
   const returnFocus = useRef<HTMLButtonElement | null>(null)
   const serviceSelect = useRef<HTMLSelectElement>(null)
@@ -829,7 +824,8 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
   const busy = busyAction !== ''
   const transitionBlocked = ['starting', 'stopping', 'recovering', 'unknown'].includes(environment.status)
   const providers = useMemo(() => paginateItems(environment.bindings || [], providerPage, 5), [environment.bindings, providerPage])
-  const sources = useMemo(() => paginateItems(environment.sources || [], sourcePage, 5), [environment.sources, sourcePage])
+  const checkoutRows = useMemo(() => environmentCheckoutRows(project, environment), [project, environment])
+  const checkouts = useMemo(() => paginateItems(checkoutRows, checkoutPage, 5), [checkoutRows, checkoutPage])
   const providerUnchanged = !!currentBinding && currentBinding.provider === provider && (
     provider === 'container' ||
     (provider === 'local' && currentBinding.source?.toLowerCase() === source.toLowerCase()) ||
@@ -856,7 +852,7 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
 
   useEffect(() => {
     setProviderPage(0)
-    setSourcePage(0)
+    setCheckoutPage(0)
   }, [environment.project, environment.name])
 
   useEffect(() => {
@@ -892,81 +888,53 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
     requestAnimationFrame(() => returnFocus.current?.focus())
   }
 
-  const closeSourceCreate = () => {
-    if (sourceCreateBusy) return
-    setSourceCreateOpen(false)
-    setSourceCreateError(null)
-    requestAnimationFrame(() => sourceCreateButton.current?.focus())
-  }
-
-  const openSourceEdit = (item: SourceBinding, trigger: HTMLButtonElement) => {
+  const openCheckoutEdit = (item: { source: ProjectSource; checkout?: SourceBinding }, trigger: HTMLButtonElement) => {
     sourceActionFocus.current = trigger
-    setSourceMutationError(null)
-    setSourceEdit(item)
+    setCheckoutMutationError(null)
+    setCheckoutEdit(item)
   }
 
-  const addSource = async (name: string, path: string) => {
-    setSourceCreateBusy(true)
-    setSourceCreateError(null)
-    try {
-      const result = await api<ProjectSourceMutation>(projectPath(environment.project, '/sources'), {
-        method: 'POST', ...jsonBody({ name, path, environment: environment.name }),
-      })
-      await onChanged()
-      setSourcePage(Math.floor(sources.total / 5))
-      const notes = [...(result.warnings || [])]
-      if (result.configurationRequired?.length) notes.push(`Configure source ${name} in ${result.configurationRequired.join(', ')}.`)
-      setSourceNotice(notes.join(' '))
-      setSourceCreateOpen(false)
-      requestAnimationFrame(() => sourceCreateButton.current?.focus())
-    } catch (reason) {
-      setSourceCreateError(actionError("Source wasn't added", reason))
-    } finally {
-      setSourceCreateBusy(false)
-    }
-  }
-
-  const closeSourceMutation = () => {
-    if (sourceMutationBusy) return
-    setSourceEdit(null)
-    setSourceDelete(null)
-    setSourceMutationError(null)
+  const closeCheckoutMutation = () => {
+    if (checkoutMutationBusy) return
+    setCheckoutEdit(null)
+    setCheckoutRemove(null)
+    setCheckoutMutationError(null)
     requestAnimationFrame(() => sourceActionFocus.current?.focus())
   }
 
-  const editSourcePath = async (path: string) => {
-    if (!sourceEdit) return
-    setSourceMutationBusy(true)
-    setSourceMutationError(null)
+  const saveCheckout = async (path: string) => {
+    if (!checkoutEdit) return
+    setCheckoutMutationBusy(true)
+    setCheckoutMutationError(null)
     try {
-      const result = await api<SourcePathMutation>(environmentPath(environment, `/sources/${encodeURIComponent(sourceEdit.name)}`), {
+      const result = await api<SourcePathMutation>(environmentPath(environment, `/sources/${encodeURIComponent(checkoutEdit.source.name)}`), {
         method: 'PUT', ...jsonBody({ path }),
       })
       await onChanged()
-      setSourceNotice((result.warnings || []).join(' '))
-      setSourceEdit(null)
+      setCheckoutNotice((result.warnings || []).join(' ') || `${checkoutEdit.source.name} now uses ${path}.`)
+      setCheckoutEdit(null)
       requestAnimationFrame(() => sourceActionFocus.current?.focus())
     } catch (reason) {
-      setSourceMutationError(actionError("Source path wasn't updated", reason))
+      setCheckoutMutationError(actionError("Checkout wasn't updated", reason))
     } finally {
-      setSourceMutationBusy(false)
+      setCheckoutMutationBusy(false)
     }
   }
 
-  const deleteProjectSource = async () => {
-    if (!sourceDelete) return
-    setSourceMutationBusy(true)
-    setSourceMutationError(null)
+  const removeCheckout = async () => {
+    if (!checkoutRemove) return
+    setCheckoutMutationBusy(true)
+    setCheckoutMutationError(null)
     try {
-      await api<ProjectSourceDeletion>(projectPath(environment.project, `/sources/${encodeURIComponent(sourceDelete.name)}`), { method: 'DELETE' })
+      await api<SourcePathMutation>(environmentPath(environment, `/sources/${encodeURIComponent(checkoutRemove.source.name)}`), { method: 'DELETE' })
       await onChanged()
-      setSourcePage((page) => Math.min(page, Math.max(0, Math.ceil((sources.total - 1) / 5) - 1)))
-      setSourceDelete(null)
-      requestAnimationFrame(() => sourceCreateButton.current?.focus())
+      setCheckoutNotice(`${checkoutRemove.source.name} is no longer checked out in ${environment.project}/${environment.name}.`)
+      setCheckoutRemove(null)
+      requestAnimationFrame(() => sourceActionFocus.current?.focus())
     } catch (reason) {
-      setSourceMutationError(actionError("Source wasn't deleted", reason))
+      setCheckoutMutationError(actionError("Checkout wasn't removed", reason))
     } finally {
-      setSourceMutationBusy(false)
+      setCheckoutMutationBusy(false)
     }
   }
 
@@ -1015,11 +983,11 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
 
   return <>
     <div className="experiment-layout bindings-layout">
-      {sourceNotice && <div className="mock-warning source-add-notice"><strong>SOURCE CHANGE</strong><span>{sourceNotice}</span><button type="button" onClick={() => setSourceNotice('')}>DISMISS</button></div>}
+      {checkoutNotice && <div className="mock-warning source-add-notice"><strong>CHECKOUT CHANGE</strong><span>{checkoutNotice}</span><button type="button" onClick={() => setCheckoutNotice('')}>DISMISS</button></div>}
       <section className="panel experiment-list configured-providers-panel">
         <div className="panel-title"><span>PROVIDERS</span><button ref={configureButton} className="button button--primary button--small panel-create-button configure-provider-button" type="button" aria-haspopup="dialog" disabled={!environment.services.length} onClick={(event) => openConfigure(undefined, event.currentTarget)}>CONFIGURE PROVIDER</button></div>
         <div className="provider-table" role="table" aria-label="Configured providers">
-          <div className="provider-row provider-row--header" role="row"><span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader">Actions</span></div>
+          <div className="provider-row provider-row--header" role="row"><span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader" aria-label="Row actions" /></div>
           {providers.items.map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>
             <div className="provider-service" role="cell"><StatusMark status={environment.services.find((item) => item.name === binding.service)?.status || 'planned'} label={false} /><strong>{binding.service}</strong></div>
             <div className="provider-kind" role="cell">{providerDisplayName(binding.provider)}</div>
@@ -1032,12 +1000,12 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
         <PanelPagination label="providers" pagination={providers} onPage={setProviderPage} />
       </section>
       <section className="panel source-checkouts-panel">
-        <div className="panel-title"><span>SOURCES</span><button ref={sourceCreateButton} className="button button--primary button--small panel-create-button" type="button" aria-haspopup="dialog" onClick={() => { setSourceCreateError(null); setSourceCreateOpen(true) }}>ADD SOURCE</button></div>
-        {sources.total > 0 ? <table className="source-table" aria-label="Sources">
-          <thead><tr><th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col">Actions</th></tr></thead>
-          <tbody>{sources.items.map((item) => <tr key={item.name}><td><strong>{item.name}</strong></td><td><code title={item.path}>{item.path}</code></td><td><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString()}>{formatTimestamp(item.createdAt)}</time></td><td><div className="table-row-actions"><button type="button" disabled={sourceMutationBusy} onClick={(event) => openSourceEdit(item, event.currentTarget)}>EDIT</button><button type="button" disabled={sourceMutationBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setSourceMutationError(null); setSourceDelete(item) }}>DELETE</button></div></td></tr>)}</tbody>
-        </table> : <div className="empty-row">No source directories are bound to this environment.</div>}
-        <PanelPagination label="sources" pagination={sources} onPage={setSourcePage} />
+        <div className="panel-title"><span>CHECKOUTS</span><button type="button" onClick={() => onNavigate(`/projects/${encodeURIComponent(environment.project)}`)}>MANAGE SOURCES</button></div>
+        {checkouts.total > 0 ? <table className="source-table" aria-label="Environment checkouts">
+          <thead><tr><th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col" aria-label="Row actions" /></tr></thead>
+          <tbody>{checkouts.items.map((item) => <tr key={item.source.name}><td><div className="checkout-source"><StatusMark status={item.checkout ? item.checkout.status : item.required ? 'degraded' : 'stopped'} label={false} /><strong>{item.source.name}</strong></div></td><td>{item.checkout ? <code title={item.checkout.path}>{item.checkout.path}</code> : <span className={item.required ? 'warning-text' : 'muted'}>{item.required ? 'Configuration required' : 'Not configured'}</span>}</td><td>{item.checkout ? <time dateTime={item.checkout.createdAt} title={new Date(item.checkout.createdAt).toLocaleString()}>{formatTimestamp(item.checkout.createdAt)}</time> : <span>—</span>}</td><td><div className="table-row-actions">{item.checkout ? <><button type="button" disabled={checkoutMutationBusy} onClick={(event) => openCheckoutEdit(item, event.currentTarget)}>EDIT</button><button type="button" disabled={checkoutMutationBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setCheckoutMutationError(null); setCheckoutRemove({ source: item.source, checkout: item.checkout!, usedBy: item.usedBy }) }}>REMOVE</button></> : <button type="button" disabled={checkoutMutationBusy} onClick={(event) => openCheckoutEdit(item, event.currentTarget)}>CONFIGURE</button>}</div></td></tr>)}</tbody>
+        </table> : <div className="empty-row">This project has no sources to configure.</div>}
+        <PanelPagination label="checkouts" pagination={checkouts} onPage={setCheckoutPage} />
       </section>
     </div>
     {configureOpen && <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={closeConfigure}>
@@ -1048,7 +1016,7 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
           <div className="form-modal__fields configure-provider-form__fields">
             {serviceLocked ? <div className="provider-service-value"><span>SERVICE</span><strong>{service}</strong></div> : <label><span>SERVICE</span><select ref={serviceSelect} aria-label="Service" value={service} disabled={busy} onChange={(event) => { initializeProviderForm(event.target.value); setSaveError(null) }}>{environment.services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
             <label><span>PROVIDER</span><select ref={providerSelect} aria-label="Provider" value={provider} disabled={busy} onChange={(event) => { const next = event.target.value as ProviderKind; setProvider(next); if (next === 'mock' && !mockProfile) setMockProfile(mockProfiles.find((profile) => profile.service.toLowerCase() === service.toLowerCase())?.name || ''); setSaveError(null) }}>{selected?.kind === 'process' && <option value="local">{providerDisplayName('local')}</option>}{selected?.kind === 'resource' && <option value="container">{providerDisplayName('container')}</option>}{selected?.kind === 'process' && <option value="remote">{providerDisplayName('remote')}</option>}{selected?.kind === 'process' && <option value="mock">{providerDisplayName('mock')}</option>}</select></label>
-            {provider === 'local' && <label className="provider-field--wide"><span>SOURCE CHECKOUT</span><select aria-label="Source checkout" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setSaveError(null) }}>{environment.sources?.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
+            {provider === 'local' && (environment.sources?.length ? <label className="provider-field--wide"><span>SOURCE CHECKOUT</span><select aria-label="Source checkout" value={source} disabled={busy} onChange={(event) => { setSource(event.target.value); setSaveError(null) }}>{environment.sources.map((item) => <option key={item.name}>{item.name}</option>)}</select></label> : <ProviderInfoCard kind="checkout" title="CHECKOUT REQUIRED" description="Configure a checkout below before using the Checkout provider for this service." />)}
             {provider === 'remote' && <>
               <label className="provider-field--wide"><span>REMOTE URL</span><input aria-label="Remote URL" type="url" placeholder="https://payments.qa.example.com" value={remoteURL} disabled={busy} onChange={(event) => { setRemoteURL(event.target.value); setSaveError(null) }} /></label>
               <label><span>CLASSIFICATION</span><select aria-label="Classification" value={classification} disabled={busy} onChange={(event) => { setClassification(event.target.value as RemoteClassification); setSaveError(null) }}><option value="development">development</option><option value="qa">qa</option><option value="staging">staging</option><option value="unknown">unknown</option></select></label>
@@ -1067,16 +1035,15 @@ function BindingsPanel({ environment, project, onChanged }: { environment: Envir
         </form>
       </section>
     </div>}
-    {sourceCreateOpen && <AddSourceModal environment={environment} busy={sourceCreateBusy} error={sourceCreateError} onDismissError={() => setSourceCreateError(null)} onClose={closeSourceCreate} onAdd={addSource} />}
-    {sourceEdit && <EditSourceModal environment={environment} source={sourceEdit} busy={sourceMutationBusy} error={sourceMutationError} onDismissError={() => setSourceMutationError(null)} onClose={closeSourceMutation} onSave={editSourcePath} />}
-    {sourceDelete && <DeleteSourceModal project={project} source={sourceDelete} busy={sourceMutationBusy} error={sourceMutationError} onDismissError={() => setSourceMutationError(null)} onClose={closeSourceMutation} onDelete={deleteProjectSource} />}
+    {checkoutEdit && <ConfigureCheckoutModal environment={environment} source={checkoutEdit.source} checkout={checkoutEdit.checkout} busy={checkoutMutationBusy} error={checkoutMutationError} onDismissError={() => setCheckoutMutationError(null)} onClose={closeCheckoutMutation} onSave={saveCheckout} />}
+    {checkoutRemove && <RemoveCheckoutModal environment={environment} source={checkoutRemove.source} usedBy={checkoutRemove.usedBy} busy={checkoutMutationBusy} error={checkoutMutationError} onDismissError={() => setCheckoutMutationError(null)} onClose={closeCheckoutMutation} onRemove={removeCheckout} />}
   </>
 }
 
-function ProviderInfoCard({ kind, title, description }: { kind: 'remote' | 'mock'; title: string; description: string }) {
+function ProviderInfoCard({ kind, title, description }: { kind: 'checkout' | 'remote' | 'mock'; title: string; description: string }) {
   return <aside className={`provider-info-card provider-info-card--${kind} provider-field--wide`} role="note">
     <span className="provider-info-card__icon" aria-hidden="true">
-      {kind === 'remote' ? <svg viewBox="0 0 24 24"><path d="M5 18h7a3 3 0 0 0 3-3v-3" /><path d="M11 6h7v7" /><path d="m10 14 8-8" /></svg> : <svg viewBox="0 0 24 24"><path d="M5 8h14v10H5z" /><path d="m9 11-2 2 2 2" /><path d="m15 11 2 2-2 2" /></svg>}
+      {kind === 'remote' ? <svg viewBox="0 0 24 24"><path d="M5 18h7a3 3 0 0 0 3-3v-3" /><path d="M11 6h7v7" /><path d="m10 14 8-8" /></svg> : kind === 'mock' ? <svg viewBox="0 0 24 24"><path d="M5 8h14v10H5z" /><path d="m9 11-2 2 2 2" /><path d="m15 11 2 2-2 2" /></svg> : <svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z" /><path d="M4 7v12" /></svg>}
     </span>
     <div><strong>{title}</strong><p>{description}</p></div>
   </aside>
@@ -1103,172 +1070,26 @@ export function providerDisplayName(provider: ProviderKind) {
   return 'Remote'
 }
 
-function formatTimestamp(value: string) {
-  return new Date(value).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
-
-async function chooseSourceDirectory(initialPath: string) {
-  return api<DirectorySelection | undefined>('/system/directories/select', {
-    method: 'POST', ...jsonBody({ initialPath: initialPath.trim() }),
+function environmentCheckoutRows(project: Project | undefined, environment: Environment): EnvironmentCheckoutRow[] {
+  const declared = project?.sources?.length
+    ? project.sources
+    : (environment.sources || []).map((source) => ({ name: source.name, services: [] }))
+  return declared.map((source) => {
+    const checkout = environment.sources?.find((item) => item.name.toLowerCase() === source.name.toLowerCase())
+    const usedBy = (environment.bindings || [])
+      .filter((binding) => binding.provider === 'local' && binding.source?.toLowerCase() === source.name.toLowerCase())
+      .map((binding) => binding.service)
+      .sort()
+    const owned = new Set((source.services || []).map((service) => service.toLowerCase()))
+    const required = usedBy.length > 0 || (environment.issues || []).some((issue) =>
+      (issue.code === 'MISSING_BINDING' || issue.code === 'MISSING_SOURCE') && !!issue.subject && owned.has(issue.subject.toLowerCase()),
+    )
+    return { source, checkout, usedBy, required }
   })
 }
 
-function AddSourceModal({ environment, busy, error, onDismissError, onClose, onAdd }: {
-  environment: Environment
-  busy: boolean
-  error: ActionErrorDetails | null
-  onDismissError: () => void
-  onClose: () => void
-  onAdd: (name: string, path: string) => Promise<void>
-}) {
-  const [name, setName] = useState('')
-  const [path, setPath] = useState('')
-  const [choosingPath, setChoosingPath] = useState(false)
-  const [pickerError, setPickerError] = useState<ActionErrorDetails | null>(null)
-  const nameInput = useRef<HTMLInputElement>(null)
-  const pathInput = useRef<HTMLInputElement>(null)
-  const modalBusy = busy || choosingPath
-  const dismissErrors = () => { setPickerError(null); onDismissError() }
-  const browse = async () => {
-    setChoosingPath(true)
-    dismissErrors()
-    try {
-      const selection = await chooseSourceDirectory(path)
-      if (selection?.path) setPath(selection.path)
-      pathInput.current?.focus()
-    } catch (value) {
-      setPickerError(actionError('Could not choose a source directory', value))
-    } finally {
-      setChoosingPath(false)
-      requestAnimationFrame(() => pathInput.current?.focus())
-    }
-  }
-  useEffect(() => { nameInput.current?.focus() }, [])
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modalBusy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [modalBusy, onClose])
-  const visibleError = pickerError || error
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !modalBusy && onClose()}>
-    <section className="form-modal add-source-modal" role="dialog" aria-modal="true" aria-labelledby="add-source-title" aria-describedby="add-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">PROJECT SOURCE</div><h2 id="add-source-title">Add source</h2></div><button className="icon-button" type="button" aria-label="Close add source" disabled={modalBusy} onClick={onClose}>×</button></header>
-      <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); if (!modalBusy) void onAdd(name.trim(), path.trim()) }}>
-        <p id="add-source-description">Discover another source directory for {environment.project}. All project environments must be stopped while its topology changes.</p>
-        <div className="form-modal__fields">
-          <label><span>NAME</span><input ref={nameInput} name="portless-project-source-name" value={name} placeholder="inventory" required autoComplete="off" spellCheck="false" disabled={modalBusy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); dismissErrors() }} /></label>
-          <div className="source-path-field">
-            <label htmlFor="portless-add-source-path">ABSOLUTE PATH</label>
-            <div className="source-path-control">
-              <input ref={pathInput} id="portless-add-source-path" name="portless-project-source-path" value={path} placeholder="/Users/you/workspace/inventory" required autoComplete="off" spellCheck="false" disabled={modalBusy} onChange={(event) => { setPath(event.target.value); dismissErrors() }} />
-              <button className="button button--quiet source-path-browse" type="button" disabled={modalBusy} onClick={() => void browse()}>{choosingPath ? 'CHOOSING…' : 'BROWSE…'}</button>
-            </div>
-          </div>
-        </div>
-        {visibleError && <ActionErrorNotice error={visibleError} onDismiss={dismissErrors} />}
-        <footer><button className="button button--quiet" type="button" disabled={modalBusy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={modalBusy || !name.trim() || !path.trim()}>{busy ? 'ADDING…' : 'ADD SOURCE'}</button></footer>
-      </form>
-    </section>
-  </div>
-}
-
-function EditSourceModal({ environment, source, busy, error, onDismissError, onClose, onSave }: {
-  environment: Environment
-  source: SourceBinding
-  busy: boolean
-  error: ActionErrorDetails | null
-  onDismissError: () => void
-  onClose: () => void
-  onSave: (path: string) => Promise<void>
-}) {
-  const [path, setPath] = useState(source.path)
-  const [choosingPath, setChoosingPath] = useState(false)
-  const [pickerError, setPickerError] = useState<ActionErrorDetails | null>(null)
-  const pathInput = useRef<HTMLInputElement>(null)
-  const modalBusy = busy || choosingPath
-  const dismissErrors = () => { setPickerError(null); onDismissError() }
-  const browse = async () => {
-    setChoosingPath(true)
-    dismissErrors()
-    try {
-      const selection = await chooseSourceDirectory(path)
-      if (selection?.path) setPath(selection.path)
-      pathInput.current?.focus()
-    } catch (value) {
-      setPickerError(actionError('Could not choose a source directory', value))
-    } finally {
-      setChoosingPath(false)
-      requestAnimationFrame(() => pathInput.current?.focus())
-    }
-  }
-  useEffect(() => { pathInput.current?.focus(); pathInput.current?.select() }, [])
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modalBusy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [modalBusy, onClose])
-  const stopped = environment.status === 'stopped'
-  const visibleError = pickerError || error
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !modalBusy && onClose()}>
-    <section className="form-modal edit-source-modal" role="dialog" aria-modal="true" aria-labelledby="edit-source-title" aria-describedby="edit-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">SOURCE CHECKOUT</div><h2 id="edit-source-title">Edit {source.name}</h2></div><button className="icon-button" type="button" aria-label="Close edit source" disabled={modalBusy} onClick={onClose}>×</button></header>
-      <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); if (!modalBusy) void onSave(path.trim()) }}>
-        <p id="edit-source-description">Change the directory used by {environment.project}/{environment.name}. The source name and project topology stay the same.</p>
-        <div className="form-modal__fields source-path-fields">
-          <div className="source-path-field">
-            <label htmlFor="portless-edit-source-path">ABSOLUTE PATH</label>
-            <div className="source-path-control">
-              <input ref={pathInput} id="portless-edit-source-path" name="portless-project-source-path" value={path} required autoComplete="off" spellCheck="false" disabled={modalBusy} onChange={(event) => { setPath(event.target.value); dismissErrors() }} />
-              <button className="button button--quiet source-path-browse" type="button" disabled={modalBusy} onClick={() => void browse()}>{choosingPath ? 'CHOOSING…' : 'BROWSE…'}</button>
-            </div>
-          </div>
-          {!stopped && <aside className="source-modal-warning" role="note">
-            <span className="source-modal-warning__mark" aria-hidden="true">!</span>
-            <div><strong>STOP REQUIRED</strong><p>Stop this environment before changing a source checkout.</p></div>
-          </aside>}
-        </div>
-        {visibleError && <ActionErrorNotice error={visibleError} onDismiss={dismissErrors} />}
-        <footer><button className="button button--quiet" type="button" disabled={modalBusy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={modalBusy || !stopped || !path.trim() || path.trim() === source.path}>{busy ? 'SAVING…' : 'SAVE CHANGES'}</button></footer>
-      </form>
-    </section>
-  </div>
-}
-
-function DeleteSourceModal({ project, source, busy, error, onDismissError, onClose, onDelete }: {
-  project?: Project
-  source: SourceBinding
-  busy: boolean
-  error: ActionErrorDetails | null
-  onDismissError: () => void
-  onClose: () => void
-  onDelete: () => Promise<void>
-}) {
-  const cancelButton = useRef<HTMLButtonElement>(null)
-  useEffect(() => { cancelButton.current?.focus() }, [])
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [busy, onClose])
-  const ownedServices = project?.sources?.find((item) => item.name.toLowerCase() === source.name.toLowerCase())?.services || []
-  const ownedServiceNames = new Set(ownedServices.map((name) => name.toLowerCase()))
-  const affectedConnections = project?.connections?.filter((connection) => ownedServiceNames.has(connection.source.toLowerCase()) || ownedServiceNames.has(connection.target.toLowerCase())) || []
-  const activeEnvironments = project?.environments?.filter((item) => item.status !== 'stopped') || []
-  const lastSource = (project?.sources?.length || 0) <= 1
-  const blocked = lastSource || activeEnvironments.length > 0
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
-    <section className="form-modal delete-source-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-source-title" aria-describedby="delete-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">PROJECT TOPOLOGY</div><h2 id="delete-source-title">Delete {source.name}?</h2></div><button className="icon-button" type="button" aria-label="Close delete source" disabled={busy} onClick={onClose}>×</button></header>
-      <div className="source-delete-content">
-        <p id="delete-source-description">This removes the source from every environment in {project?.name || 'the project'}. Services owned by it and resources used only by those services are also removed.</p>
-        <div className="source-delete-impact"><div><span className="eyebrow">SERVICES REMOVED</span><strong>{ownedServices.length ? ownedServices.join(', ') : 'No services were discovered for this source'}</strong></div>{affectedConnections.length > 0 && <div><span className="eyebrow">CONNECTIONS REMOVED</span><strong>{affectedConnections.map((connection) => `${connection.source} → ${connection.target}`).join(', ')}</strong></div>}</div>
-        {lastSource && <p className="source-modal-note source-modal-note--danger">A project must retain at least one source.</p>}
-        {activeEnvironments.length > 0 && <p className="source-modal-note source-modal-note--danger">Stop every environment first: {activeEnvironments.map((item) => item.name).join(', ')}.</p>}
-      </div>
-      {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-      <footer><button ref={cancelButton} className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--danger" type="button" disabled={busy || blocked} onClick={() => void onDelete()}>{busy ? 'DELETING…' : 'DELETE SOURCE'}</button></footer>
-    </section>
-  </div>
+function formatTimestamp(value: string) {
+  return new Date(value).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
 const timelinePageSizes = [25, 50, 100] as const

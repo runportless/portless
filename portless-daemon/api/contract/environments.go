@@ -50,8 +50,9 @@ type EnvironmentMutation struct {
 	Warnings    []string    `json:"warnings"`
 }
 
-// SetSourceRequest replaces the filesystem path for one project source.
-type SetSourceRequest struct {
+// SetSourceCheckoutRequest replaces the filesystem path for one project source
+// in a single environment.
+type SetSourceCheckoutRequest struct {
 	Path string `json:"path"`
 }
 

@@ -141,7 +141,7 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 	case "mocks":
 		s.handleMocks(writer, request, project, environment, segments, principal)
 	case "sources":
-		s.handleSources(writer, request, project, environment, segments)
+		s.handleSources(writer, request, project, environment, segments, principal)
 	case "services":
 		s.handleServices(writer, request, project, environment, segments, principal)
 	case "connections":
@@ -256,26 +256,38 @@ func (s *Server) handleBindings(writer http.ResponseWriter, request *http.Reques
 	writeJSON(writer, http.StatusAccepted, result)
 }
 
-func (s *Server) handleSources(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
-	if len(segments) != 5 || request.Method != http.MethodPut {
-		methodNotAllowed(writer, http.MethodPut)
+func (s *Server) handleSources(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string, principal auth.Principal) {
+	if len(segments) != 5 {
+		writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "source checkout route not found"})
 		return
 	}
-	var input contract.SetSourceRequest
-	if err := decodeJSON(request, &input); err != nil {
-		writeDecodeError(writer, err)
-		return
+	switch request.Method {
+	case http.MethodPut:
+		var input contract.SetSourceCheckoutRequest
+		if err := decodeJSON(request, &input); err != nil {
+			writeDecodeError(writer, err)
+			return
+		}
+		if input.Path == "" {
+			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "PATH_REQUIRED", Message: "checkout path is required"})
+			return
+		}
+		result, warnings, err := s.app.SetSourceCheckout(request.Context(), project, environment, segments[4], input.Path, principal.Actor)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "source": segments[4]})
+			return
+		}
+		writeJSON(writer, http.StatusOK, contract.EnvironmentMutation{Environment: result, Warnings: nonNil(warnings)})
+	case http.MethodDelete:
+		result, err := s.app.RemoveSourceCheckout(request.Context(), project, environment, segments[4], principal.Actor)
+		if err != nil {
+			s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "source": segments[4]})
+			return
+		}
+		writeJSON(writer, http.StatusOK, contract.EnvironmentMutation{Environment: result, Warnings: []string{}})
+	default:
+		methodNotAllowed(writer, http.MethodPut, http.MethodDelete)
 	}
-	if input.Path == "" {
-		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "PATH_REQUIRED", Message: "source path is required"})
-		return
-	}
-	result, warnings, err := s.app.SetSource(request.Context(), project, environment, segments[4], input.Path)
-	if err != nil {
-		s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "source": segments[4]})
-		return
-	}
-	writeJSON(writer, http.StatusOK, contract.EnvironmentMutation{Environment: result, Warnings: nonNil(warnings)})
 }
 
 func (s *Server) handleServices(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string, principal auth.Principal) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -392,8 +393,11 @@ func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmen
 	return s.database.ForgetEnvironment(ctx, projectName, environmentName)
 }
 
-// SetSource rebinds one environment source to a newly discovered filesystem path.
-func (s *Service) SetSource(ctx context.Context, projectName, environmentName, sourceName, path string) (model.Environment, []string, error) {
+// SetSourceCheckout rebinds one environment checkout to a newly discovered filesystem path.
+func (s *Service) SetSourceCheckout(ctx context.Context, projectName, environmentName, sourceName, path, actor string) (model.Environment, []string, error) {
+	lock := s.projectLock(model.EnvironmentSelector(projectName, environmentName))
+	lock.Lock()
+	defer lock.Unlock()
 	if !filepath.IsAbs(path) {
 		return model.Environment{}, nil, errors.New("source path must be absolute")
 	}
@@ -469,8 +473,79 @@ func (s *Service) SetSource(ctx context.Context, projectName, environmentName, s
 	}
 	updated.Issues = compiled.Issues
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	_, _ = s.timeline(ctx, scope, "CLI", "environment.source_changed", sourceName, "info", "Source "+sourceName+" now uses "+result.Root, nil)
+	_, _ = s.timeline(ctx, scope, actor, "environment.checkout_changed", sourceName, "info", "Checkout "+sourceName+" now uses "+result.Root, nil)
 	return s.decorateEnvironment(updated), result.Warnings, nil
+}
+
+// RemoveSourceCheckout removes one environment's filesystem checkout without
+// changing the project source or any other environment.
+func (s *Service) RemoveSourceCheckout(ctx context.Context, projectName, environmentName, sourceName, actor string) (model.Environment, error) {
+	lock := s.projectLock(model.EnvironmentSelector(projectName, environmentName))
+	lock.Lock()
+	defer lock.Unlock()
+	if err := model.ValidateSourceName(sourceName); err != nil {
+		return model.Environment{}, err
+	}
+	project, err := s.database.Project(ctx, projectName)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	declared := false
+	for _, source := range project.Sources {
+		if strings.EqualFold(source.Name, sourceName) {
+			sourceName = source.Name
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		return model.Environment{}, database.ErrNotFound
+	}
+	environment, err := s.database.Environment(ctx, projectName, environmentName)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	if environment.Status != model.EnvironmentStopped {
+		return model.Environment{}, errors.New("environment must be stopped before a source checkout changes")
+	}
+	found := false
+	remaining := make([]model.SourceBinding, 0, len(environment.Sources))
+	for _, source := range environment.Sources {
+		if strings.EqualFold(source.Name, sourceName) {
+			found = true
+			continue
+		}
+		remaining = append(remaining, source)
+	}
+	if !found {
+		return model.Environment{}, database.ErrNotFound
+	}
+	var usedBy []string
+	for _, binding := range environment.Bindings {
+		if binding.Provider == model.ProviderLocal && strings.EqualFold(binding.Source, sourceName) {
+			usedBy = append(usedBy, binding.Service)
+		}
+	}
+	if len(usedBy) > 0 {
+		sort.Strings(usedBy)
+		return model.Environment{}, CheckoutInUseError{Source: sourceName, Services: usedBy}
+	}
+	definition, err := s.database.ProjectModel(ctx, projectName)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	compiled := compiler.Compile(definition, remaining, environment.Bindings)
+	if !configurationCanBeSaved(compiled.Issues) {
+		return model.Environment{}, compiler.ConfigurationError{Issues: compiled.Issues}
+	}
+	updated, err := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, remaining, compiled.Bindings)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	updated.Issues = compiled.Issues
+	scope := model.EnvironmentSelector(projectName, environmentName)
+	_, _ = s.timeline(ctx, scope, actor, "environment.checkout_removed", sourceName, "info", "Removed checkout "+sourceName, nil)
+	return s.decorateEnvironment(updated), nil
 }
 
 // SelectEnvironment persists the environment explicitly selected for a checkout path.
