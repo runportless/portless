@@ -28,6 +28,15 @@ test('the primary call to action accepts a configured early-access URL', () => {
   });
 });
 
+test('the hero explains automatic discovery without required config', async () => {
+  const page = await readFile(`${siteRoot}src/pages/index.astro`, 'utf8');
+  const hero = page.slice(page.indexOf('class="hero"'), page.indexOf('id="problem"'));
+
+  assert.match(hero, /automatically discovers and runs your services<br \/>/);
+  assert.match(hero, /and dependencies — no config required — so you can trace<br \/>/);
+  assert.match(hero, /without leaving your<br \/>local development workflow/);
+});
+
 test('all marketing product media are live-app captures', async () => {
   const captures = [
     'faults.jpg',
@@ -112,7 +121,7 @@ test('the page moves from the problem and solution into the product pillars', as
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
   assert.match(page, /eyebrow eyebrow--danger eyebrow--pillar">The problem/);
   assert.match(page, /eyebrow eyebrow--pillar">The solution/);
-  assert.match(page, /eyebrow eyebrow--pillar">locally\./);
+  assert.match(page, /eyebrow eyebrow--pillar">Locally</);
   assert.match(page, /gets <span>messy<\/span> fast/);
   assert.doesNotMatch(projectsSection, /Projects \+ environments/);
   assert.match(projectsSection, /<span>One application\.<\/span><br \/>Many shapes\./);
@@ -139,7 +148,10 @@ test('the solution resolves collisions before Run it explains the command', asyn
   assert.match(page, /<strong>inventory-db<\/strong><code><strong>inventory-db<\/strong>\.local\.store\.portless\.test<\/code>/);
   assert.match(runSection, /<p class="eyebrow eyebrow--pillar">Run it<\/p>/);
   assert.match(page, /<p class="eyebrow eyebrow--pillar">See it · live topology<\/p>/);
-  assert.match(page, /<p class="eyebrow eyebrow--pillar">Break it · reproduce the failure<\/p>/);
+  assert.match(page, /<p class="eyebrow eyebrow--pillar">See it<\/p>/);
+  assert.match(page, /<p class="eyebrow eyebrow--pillar">Break it<\/p>/);
+  assert.doesNotMatch(page, /reproduce the failure|Locally\./);
+  assert.doesNotMatch(page, /traffic inspector<\/p>/);
   assert.match(runSection, /<span>One command<\/span> starts/);
   assert.doesNotMatch(runSection, /Run it · one command/);
   assert.match(runSection, /portless up/);

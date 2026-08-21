@@ -10,7 +10,7 @@ import topologyAnimation from '../assets/product/topology-live.gif';
 import trafficDetailImage from '../assets/product/traffic-detail.jpg';
 import trafficImage from '../assets/product/traffic.jpg';
 
-const title = 'Portless — Run it. See it. Break it. locally.';
+const title = 'Portless — Run it. See it. Break it. Locally';
 const description = 'Run, inspect, record, mock, and break your complete application environment locally with one control plane.';
 const primaryCTA = primaryCallToAction(import.meta.env.PUBLIC_EARLY_ACCESS_URL);
 const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.com/gregwhitaker/portless';
@@ -33,16 +33,11 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="hero__grid" aria-hidden="true"></div>
       <div class="hero__copy">
-        <h1 id="hero-title">Own your entire<br /><span>local environment.</span></h1>
-        <p class="hero__lede">Portless discovers your application, starts its processes and dependencies, and gives every service a stable, readable address—all from one local control plane.</p>
+        <h1 id="hero-title">Your application<br />is a system.<span>Develop it like one.</span></h1>
+        <p class="hero__lede">Portless automatically discovers and runs your services<br />and dependencies — no config required — so you can trace<br />every interaction and reproduce failures, without leaving your<br />local development workflow.</p>
         <div class="hero__actions">
           <a class="button" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
         </div>
-        <ul class="hero__proof" aria-label="Portless setup benefits">
-          <li>No required project file</li>
-          <li>No account</li>
-          <li>macOS + Linux</li>
-        </ul>
       </div>
 
       <div class="terminal" aria-label="Example Portless command output">
@@ -63,7 +58,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
         <span>Run it.</span>
         <span>See it.</span>
         <span>Break it.</span>
-        <strong>locally.</strong>
+        <strong>Locally</strong>
       </div>
     </section>
 
@@ -166,7 +161,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section traffic-section" aria-labelledby="traffic-title">
       <div class="traffic-intro">
         <div>
-          <p class="eyebrow">See it · traffic inspector</p>
+          <p class="eyebrow eyebrow--pillar">See it</p>
           <h2 id="traffic-title">Open the complete exchange.</h2>
         </div>
         <p>Move from a service waterfall to the exact request, timing, repeated headers, bounded body detail, response, and correlation confidence.</p>
@@ -188,7 +183,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section experiments narrative-section" id="experiments" aria-labelledby="experiments-title">
       <div class="narrative-section__number" aria-hidden="true">03</div>
       <div class="section-heading section-heading--centered">
-        <p class="eyebrow eyebrow--pillar">Break it · reproduce the failure</p>
+        <p class="eyebrow eyebrow--pillar">Break it</p>
         <h2 id="experiments-title">Not just the happy path.</h2>
         <p>Keep the evidence, replace the dependency, or break one edge—without adding diagnostic code to the application.</p>
       </div>
@@ -230,7 +225,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
 
     <section class="section principles-section" aria-labelledby="principles-title">
       <div class="principles-intro">
-        <p class="eyebrow eyebrow--pillar">locally.</p>
+        <p class="eyebrow eyebrow--pillar">Locally</p>
         <h2 id="principles-title">A control plane for your machine — not another platform to operate.</h2>
       </div>
       <div class="principles-grid">
@@ -328,7 +323,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
           <p>Portless turns your environment into one control plane. Run Portless up. It starts processes and containers, then gives every application a clean localhost address.</p>
           <p>Watch traffic flow from checkout to orders, Postgres, and Redis. Open a request to inspect status, timing, headers, and response.</p>
           <p>Record a workflow, or introduce latency, errors, and aborted connections on one edge.</p>
-          <p>One project. Multiple environments. Run it, see it, and break it—locally.</p>
+          <p>One project. Multiple environments. Run it, see it, and break it—Locally</p>
         </details>
       </div>
     </section>
@@ -337,7 +332,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <div class="final-cta__grid" aria-hidden="true"></div>
       <BrandMark />
       <h2 id="cta-title"><span>Run it.</span><span>See it.</span><span>Break it.</span></h2>
-      <p>locally.</p>
+      <p>Locally</p>
       <a class="button" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
       {!primaryCTA.external && <small>Portless is preparing for its first public release.</small>}
     </section>

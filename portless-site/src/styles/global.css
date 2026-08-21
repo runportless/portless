@@ -236,9 +236,9 @@ summary:focus-visible {
   margin: 0 auto;
   padding: 96px 0 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(500px, 1.08fr);
+  grid-template-columns: minmax(0, 1fr) minmax(500px, 1fr);
   align-items: center;
-  column-gap: 72px;
+  column-gap: 40px;
   row-gap: 0;
 }
 
@@ -259,12 +259,14 @@ summary:focus-visible {
   max-width: 720px;
   margin: 0;
   font-family: var(--mono);
-  font-size: clamp(46px, 5.2vw, 73px);
+  font-size: clamp(48px, 5.2vw, 60px);
   line-height: 1.04;
   letter-spacing: -0.07em;
 }
 
 .hero h1 span {
+  margin-top: clamp(20px, 2vw, 28px);
+  display: block;
   color: var(--teal);
 }
 
@@ -281,24 +283,6 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 25px;
-}
-
-.hero__proof {
-  margin: 32px 0 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px 23px;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 10px;
-  list-style: none;
-}
-
-.hero__proof li::before {
-  margin-right: 8px;
-  color: var(--green);
-  content: "✓";
 }
 
 .terminal {
@@ -1562,12 +1546,12 @@ summary:focus-visible {
   }
 
   .hero {
-    grid-template-columns: minmax(0, 0.9fr) minmax(450px, 1.1fr);
-    column-gap: 45px;
+    grid-template-columns: minmax(0, 1fr) minmax(500px, 1fr);
+    column-gap: 32px;
   }
 
   .hero h1 {
-    font-size: clamp(44px, 5.5vw, 61px);
+    font-size: clamp(44px, 5.2vw, 56px);
   }
 
   .conflict-grid {
@@ -1745,7 +1729,7 @@ summary:focus-visible {
   }
 
   .hero h1 {
-    font-size: clamp(38px, 11.4vw, 55px);
+    font-size: clamp(36px, 10vw, 44px);
   }
 
   .hero__lede {
