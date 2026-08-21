@@ -2,8 +2,6 @@
   <img src="brand/portless-logo-dark-1200x300.png" alt="Portless" width="600">
 </p>
 
-# Portless
-
 Portless is a local application-environment control plane. A project describes an application that may span several repositories; each environment chooses where every component comes from and runs without fixed host ports. The browser UI lets you inspect services, watch traffic, record a reproduction, introduce scoped failures, and replace an HTTP dependency with deterministic local responses.
 
 There is no required `portless.yaml`, Docker Compose project, account, or hosted control plane.
