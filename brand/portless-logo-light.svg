@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title">
+  <title id="title">Portless</title>
+  <g fill="#31c3b5">
+    <rect x="100" y="164" width="48" height="101" opacity=".62" />
+    <rect x="176" y="100" width="48" height="165" opacity=".8" />
+    <rect x="251" y="37" width="48" height="228" />
+  </g>
+  <text
+    x="377"
+    y="225"
+    fill="#e5ecee"
+    font-family="SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace"
+    font-size="162"
+    font-weight="800"
+    letter-spacing="-8"
+  >portless</text>
+</svg>
