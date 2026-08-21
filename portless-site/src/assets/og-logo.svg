@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="46%" r="50%">
+      <stop offset="0" stop-color="#31c3b5" stop-opacity=".1" />
+      <stop offset="1" stop-color="#31c3b5" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#071012" />
+  <rect width="1200" height="630" fill="url(#glow)" />
+  <g transform="translate(220 226)">
+    <g fill="#31c3b5">
+      <rect x="0" y="90" width="34" height="72" opacity=".62" />
+      <rect x="54" y="44" width="34" height="118" opacity=".8" />
+      <rect x="108" width="34" height="162" />
+    </g>
+    <text
+      x="198"
+      y="135"
+      fill="#e5ecee"
+      font-family="SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace"
+      font-size="116"
+      font-weight="800"
+      letter-spacing="-6"
+    >portless</text>
+  </g>
+</svg>

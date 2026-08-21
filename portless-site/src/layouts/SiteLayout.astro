@@ -11,7 +11,7 @@ const canonicalPath = Astro.url.pathname.endsWith('/index.html')
   ? Astro.url.pathname.slice(0, -'index.html'.length)
   : Astro.url.pathname;
 const canonicalURL = new URL(canonicalPath, Astro.site);
-const socialImageURL = new URL('/og.png', Astro.site);
+const socialImageURL = new URL('/portless-social.png', Astro.site);
 ---
 
 <!doctype html>
@@ -30,11 +30,12 @@ const socialImageURL = new URL('/og.png', Astro.site);
     <meta property="og:image" content={socialImageURL} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Three application signal paths converging inside one local environment boundary" />
+    <meta property="og:image:alt" content="Portless logo" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={socialImageURL} />
+    <meta name="twitter:image:alt" content="Portless logo" />
     <link rel="canonical" href={canonicalURL} />
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />

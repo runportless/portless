@@ -85,6 +85,22 @@ test('the supported stack uses bundled technology logos', async () => {
   assert.doesNotMatch(logos, /https?:\/\//);
 });
 
+test('social previews use the Portless logo', async () => {
+  const [layout, socialImage] = await Promise.all([
+    readFile(`${siteRoot}src/layouts/SiteLayout.astro`, 'utf8'),
+    readFile(`${siteRoot}public/portless-social.png`),
+  ]);
+
+  assert.match(layout, /const socialImageURL = new URL\('\/portless-social\.png', Astro\.site\)/);
+  assert.match(layout, /<meta property="og:image" content=\{socialImageURL\} \/>/);
+  assert.match(layout, /<meta property="og:image:alt" content="Portless logo" \/>/);
+  assert.match(layout, /<meta name="twitter:image" content=\{socialImageURL\} \/>/);
+  assert.match(layout, /<meta name="twitter:image:alt" content="Portless logo" \/>/);
+  assert.deepEqual([...socialImage.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(socialImage.readUInt32BE(16), 1200);
+  assert.equal(socialImage.readUInt32BE(20), 630);
+});
+
 test('the published explainer uses the neural-voice master', async () => {
   const [published, neuralMaster, naturalMaster] = await Promise.all([
     readFile(`${siteRoot}public/demo/portless-explainer.mp4`),
