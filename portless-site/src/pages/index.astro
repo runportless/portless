@@ -1,6 +1,7 @@
 ---
 import {Image} from 'astro:assets';
 import BrandMark from '../components/BrandMark.astro';
+import PrincipleIcon from '../components/PrincipleIcon.astro';
 import SiteLayout from '../layouts/SiteLayout.astro';
 import {frameworks, primaryCallToAction, principles, problemCards, resources} from '../data/site';
 import faultsImage from '../assets/product/faults.jpg';
@@ -20,6 +21,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
   <header class="site-header">
     <a class="brand-link" href="#top"><BrandMark /></a>
     <nav aria-label="Primary navigation">
+      <a href="#why-portless">Why Portless</a>
       <a href="#how-it-works">Run it</a>
       <a href="#control-plane">See it</a>
       <a href="#experiments">Break it</a>
@@ -58,7 +60,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
         <span>Run it.</span>
         <span>See it.</span>
         <span>Break it.</span>
-        <strong>Locally</strong>
+        <strong>Locally.</strong>
       </div>
     </section>
 
@@ -81,10 +83,10 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       </div>
     </section>
 
-    <section class="section solution-section" id="solution" aria-labelledby="solution-title">
+    <section class="section solution-section" id="why-portless" aria-labelledby="solution-title">
       <div class="solution-heading">
         <div>
-          <p class="eyebrow eyebrow--pillar">The solution</p>
+          <p class="eyebrow eyebrow--pillar">Why Portless</p>
           <h2 id="solution-title">Every service gets<br /><span>a stable local identity.</span></h2>
         </div>
         <p>Portless keeps process and container ports private, then publishes service-scoped HTTP and TCP addresses. Orders and inventory can both default to <code>:8080</code>, while both PostgreSQL dependencies remain available on <code>:5432</code>.</p>
@@ -111,18 +113,22 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
 
     <section class="section one-command narrative-section" id="how-it-works" aria-labelledby="command-title">
       <div class="narrative-section__number" aria-hidden="true">01</div>
-      <div class="section-heading">
-        <p class="eyebrow eyebrow--pillar">Run it</p>
-        <h2 id="command-title"><span>One command</span> starts<br />the whole application.</h2>
-        <p>From any supported service checkout, <code>portless up</code> discovers the project, starts its processes and managed dependencies, waits for readiness, and opens the local control plane.</p>
+      <div class="section-heading command-heading">
+        <div>
+          <p class="eyebrow eyebrow--pillar">Run it</p>
+          <h2 id="command-title"><span>One command</span> starts<br />the whole application.</h2>
+        </div>
+        <p>Starting work shouldn't mean rebuilding your local environment by hand. Run <code>portless up</code> from any checkout and Portless discovers the application, launches its services and dependencies, and opens the local control plane.</p>
       </div>
-      <div class="run-command"><span>From your service checkout</span><code><b>$</b> portless up</code><small>one command</small></div>
-      <div class="command-flow">
-        <article><span>01</span><h3>Discover</h3><p>Understand supported services and resources across every project checkout.</p></article>
-        <i aria-hidden="true"></i>
-        <article><span>02</span><h3>Start</h3><p>Launch local processes and managed dependencies in dependency order.</p></article>
-        <i aria-hidden="true"></i>
-        <article><span>03</span><h3>Ready</h3><p>Wait for health, publish stable endpoints, and open one local control plane.</p></article>
+      <div class="command-story" aria-label="What happens after running portless up">
+        <div class="command-story__prompt">
+          <code><b>$</b> portless up</code>
+        </div>
+        <ol class="command-story__outcomes">
+          <li><span>01</span><div><strong><span>Discovers</span> the application around you.</strong><p>Related checkouts, services, and dependencies are discovered automatically.</p></div></li>
+          <li><span>02</span><div><strong><span>Launches</span> in dependency order.</strong><p>Local processes and managed resources launch in the order they are needed.</p></div></li>
+          <li><span>03</span><div><strong><span>Publishes</span> stable service endpoints.</strong><p>The control plane opens with addresses and health visible for every service.</p></div></li>
+        </ol>
       </div>
     </section>
 
@@ -131,11 +137,11 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
         <Image src={projectsImage} alt="Portless environment overview for showcase local showing three ready services and one active fault" layout="full-width" widths={[640, 960, 1280]} quality="high" />
       </div>
       <div class="product-copy">
-        <h2 id="projects-title"><span>One application.</span><br />Many shapes.</h2>
+        <h2 id="projects-title"><span>One application.</span><br /><span class="product-copy__accent">Many shapes.</span></h2>
         <p>A project can span several repositories. Each environment reuses that topology while deciding what runs from a checkout, in a container, against a remote service, or as a deterministic mock.</p>
         <ul class="check-list">
           <li>Reuse the same readable service names everywhere</li>
-          <li>Keep remote targets behind explicit write policies</li>
+          <li>Mix local, container, remote, and mock providers</li>
           <li>Switch one provider without restarting its callers</li>
         </ul>
       </div>
@@ -144,15 +150,19 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section topology-section narrative-section" id="control-plane" aria-labelledby="topology-title">
       <div class="narrative-section__number" aria-hidden="true">02</div>
       <div class="section-heading section-heading--centered">
-        <p class="eyebrow eyebrow--pillar">See it · live topology</p>
-        <h2 id="topology-title">See the system as it runs.</h2>
+        <p class="eyebrow eyebrow--pillar">See it</p>
+        <h2 id="topology-title">
+          <span class="topology-title__line">Every service.</span>
+          <span class="topology-title__line">Every interaction.</span>
+          <span class="topology-title__line topology-title__line--accent">One live view.</span>
+        </h2>
         <p>Watch real requests cross exact source-to-target edges, with rate and latency attached to the relationships that produced them.</p>
       </div>
       <div class="product-window product-window--hero">
         <img src={topologyAnimation.src} alt="Animated live Portless topology showing real checkout traffic flowing to inventory and orders" width={topologyAnimation.width} height={topologyAnimation.height} loading="lazy" decoding="async" />
         <div class="product-callout">
           <span>Live system map</span>
-          <strong>Traffic has a direction.</strong>
+          <strong>Trace every call to its source.</strong>
           <p>Portless preserves the caller on every dependency edge.</p>
         </div>
       </div>
@@ -161,15 +171,14 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section traffic-section" aria-labelledby="traffic-title">
       <div class="traffic-intro">
         <div>
-          <p class="eyebrow eyebrow--pillar">See it</p>
-          <h2 id="traffic-title">Open the complete exchange.</h2>
+          <h2 id="traffic-title">Follow the request. <span class="traffic-title__accent">Inspect</span> the exchange.</h2>
         </div>
-        <p>Move from a service waterfall to the exact request, timing, repeated headers, bounded body detail, response, and correlation confidence.</p>
+        <p>Trace requests across services, then inspect timing, headers, and captured request and response bodies.</p>
       </div>
       <div class="traffic-tabs">
         <div class="traffic-tabs__list" role="tablist" aria-label="Traffic inspector views">
-          <button type="button" role="tab" id="traffic-tab-trace" aria-controls="traffic-panel-trace" aria-selected="true" data-traffic-tab="trace">Trace waterfall</button>
-          <button type="button" role="tab" id="traffic-tab-detail" aria-controls="traffic-panel-detail" aria-selected="false" tabindex="-1" data-traffic-tab="detail">Exchange detail</button>
+          <button type="button" role="tab" id="traffic-tab-trace" aria-controls="traffic-panel-trace" aria-selected="true" data-traffic-tab="trace">Trace Waterfall</button>
+          <button type="button" role="tab" id="traffic-tab-detail" aria-controls="traffic-panel-detail" aria-selected="false" tabindex="-1" data-traffic-tab="detail">Exchange Detail</button>
         </div>
         <div class="product-window traffic-panel" role="tabpanel" id="traffic-panel-trace" aria-labelledby="traffic-tab-trace" data-traffic-panel="trace">
           <Image src={trafficImage} alt="Portless Traffic page with trace 88 expanded into a three-span waterfall across checkout, inventory, and orders" layout="full-width" widths={[640, 960, 1280]} quality="high" />
@@ -184,8 +193,8 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <div class="narrative-section__number" aria-hidden="true">03</div>
       <div class="section-heading section-heading--centered">
         <p class="eyebrow eyebrow--pillar">Break it</p>
-        <h2 id="experiments-title">Not just the happy path.</h2>
-        <p>Keep the evidence, replace the dependency, or break one edge—without adding diagnostic code to the application.</p>
+        <h2 id="experiments-title"><span class="experiments-title__accent">Beyond</span> the happy path.</h2>
+        <p>Capture a workflow, replace one dependency with a deterministic mock, or inject latency and failures between services. No application code changes required.</p>
       </div>
       <div class="experiment-grid">
         <article class="experiment-card">
@@ -193,8 +202,8 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
             <Image src={recordingsImage} alt="Portless Recordings page showing a stopped checkout debug recording with 30 captured events" layout="full-width" widths={[480, 720]} quality="high" />
           </div>
           <div class="experiment-card__copy">
-            <span>Record</span><h3>Keep the evidence.</h3>
-            <p>Capture a bounded workflow and retain the requests that matter, with body capture only when you opt in.</p>
+            <h3>Record Traffic</h3>
+            <p>Capture a failing workflow as it happens, then inspect the requests, responses, and timing that led to it.</p>
           </div>
         </article>
         <article class="experiment-card experiment-card--mock">
@@ -207,7 +216,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
 }`}</pre>
           </div>
           <div class="experiment-card__copy">
-            <span>Mock</span><h3>Replace one dependency.</h3>
+            <h3>Mock Dependencies</h3>
             <p>Bind a service to a fixed local response while callers keep the same injected endpoint.</p>
           </div>
         </article>
@@ -216,8 +225,8 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
             <Image src={faultsImage} alt="Portless Faults page showing an active slow orders rule and the targeted latency editor" layout="full-width" widths={[480, 720]} quality="high" />
           </div>
           <div class="experiment-card__copy">
-            <span>Fault</span><h3>Break one edge.</h3>
-            <p>Introduce latency, HTTP status codes, probability, or aborted connections without changing application code.</p>
+            <h3>Inject Faults</h3>
+            <p>Target one service connection with latency, error responses, or dropped connections and see how the system reacts.</p>
           </div>
         </article>
       </div>
@@ -226,12 +235,16 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <section class="section principles-section" aria-labelledby="principles-title">
       <div class="principles-intro">
         <p class="eyebrow eyebrow--pillar">Locally</p>
-        <h2 id="principles-title">A control plane for your machine — not another platform to operate.</h2>
+        <h2 id="principles-title">
+          <span class="principles-title__line">Your application.</span>{' '}
+          <span class="principles-title__line principles-title__accent">Your machine.</span>
+        </h2>
+        <p>Portless runs locally with no account or hosted service required. Environment state, traffic, recordings, mocks, and faults stay on your machine.</p>
       </div>
       <div class="principles-grid">
         {principles.map((principle) => (
           <article>
-            <span>{principle.index}</span>
+            <PrincipleIcon name={principle.icon} />
             <h3>{principle.title}</h3>
             <p>{principle.copy}</p>
           </article>
@@ -246,52 +259,6 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
           <span>Managed resources</span>
           <ul>{resources.map((resource) => <li>{resource}</li>)}</ul>
         </div>
-      </div>
-    </section>
-
-    <section class="section compose-section" id="docker-compose" aria-labelledby="compose-title">
-      <div class="compose-intro">
-        <div>
-          <p class="eyebrow">What about Docker Compose?</p>
-          <h2 id="compose-title">Compose is container-first.<br /><span>Portless is application-first.</span></h2>
-        </div>
-        <p>Docker Compose is a solid way to start a stack you have already described as containers. Portless starts with what developers are changing: the application, its source checkouts, service relationships, and traffic.</p>
-      </div>
-
-      <div class="compose-comparison" aria-label="Docker Compose and Portless comparison">
-        <article class="compose-card compose-card--docker">
-          <header>
-            <span aria-hidden="true">01</span>
-            <div><h3>Docker Compose</h3><p>Container orchestration</p></div>
-          </header>
-          <ul>
-            <li><strong>Define</strong><span>Services in a Compose file</span></li>
-            <li><strong>Run</strong><span>Containerized processes and resources</span></li>
-            <li><strong>Address</strong><span>Container DNS and published host ports</span></li>
-            <li><strong>Inspect</strong><span>Container lifecycle and logs</span></li>
-          </ul>
-        </article>
-
-        <div class="compose-divider" aria-hidden="true"><span>vs.</span></div>
-
-        <article class="compose-card compose-card--portless">
-          <header>
-            <span aria-hidden="true">02</span>
-            <div><h3>Portless</h3><p>Local application control plane</p></div>
-          </header>
-          <ul>
-            <li><strong>Discover</strong><span>Services and resources across checkouts</span></li>
-            <li><strong>Mix</strong><span>Local processes, managed containers, remote services, and mocks</span></li>
-            <li><strong>Address</strong><span>Stable service names while runtime ports stay private</span></li>
-            <li><strong>Observe</strong><span>Topology, traffic, recordings, mocks, and edge faults</span></li>
-          </ul>
-        </article>
-      </div>
-
-      <div class="compose-runtime-note">
-        <span>Docker still fits.</span>
-        <p>Portless can use Docker Engine or Podman for managed PostgreSQL, Valkey, MySQL, and NATS dependencies. The container runtime stays a runtime choice—not the shape of your application.</p>
-        <code><b>portless</b><i aria-hidden="true">→</i> Docker / Podman <i aria-hidden="true">→</i> managed resources</code>
       </div>
     </section>
 
@@ -315,16 +282,11 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       </div>
       <div class="demo-copy">
         <p class="eyebrow">Run it · see it · break it</p>
-        <h2 id="demo-title">See the whole workflow.</h2>
+        <h2 id="demo-title">
+          <span class="demo-title__line">One system.</span>{' '}
+          <span class="demo-title__line demo-title__accent">Ready to debug.</span>
+        </h2>
         <p>From port collisions to clean endpoints, live topology, traffic inspection, recordings, and targeted faults.</p>
-        <details class="transcript">
-          <summary>Read the transcript</summary>
-          <p>Local development gets messy fast. Projects compete for Postgres, Redis, and the same ports. Understanding what is happening means bouncing between terminals.</p>
-          <p>Portless turns your environment into one control plane. Run Portless up. It starts processes and containers, then gives every application a clean localhost address.</p>
-          <p>Watch traffic flow from checkout to orders, Postgres, and Redis. Open a request to inspect status, timing, headers, and response.</p>
-          <p>Record a workflow, or introduce latency, errors, and aborted connections on one edge.</p>
-          <p>One project. Multiple environments. Run it, see it, and break it—Locally</p>
-        </details>
       </div>
     </section>
 
@@ -342,10 +304,6 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <a class="brand-link" href="#top"><BrandMark compact /></a>
     <p>A local application-environment control plane.</p>
     <nav aria-label="Footer navigation">
-      <a href="#how-it-works">Run it</a>
-      <a href="#control-plane">See it</a>
-      <a href="#experiments">Break it</a>
-      <a href="#demo">Demo</a>
       {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
     </nav>
     <small>© {new Date().getFullYear()} Portless</small>

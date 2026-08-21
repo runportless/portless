@@ -7,22 +7,22 @@ export const problemCards = [
 
 export const principles = [
   {
-    index: '01',
+    icon: 'file-off',
     title: 'No required project file',
     copy: 'Bounded, read-only discovery understands supported application frameworks and managed resources without running project code.',
   },
   {
-    index: '02',
+    icon: 'link',
     title: 'Readable endpoints',
     copy: 'Every service gets a stable project and environment-aware address while private runtime ports stay private.',
   },
   {
-    index: '03',
+    icon: 'branches',
     title: 'One application, many sources',
     copy: 'Model a project across repositories, then choose a local, container, remote, or mock provider for each component.',
   },
   {
-    index: '04',
+    icon: 'machine',
     title: 'Local by design',
     copy: 'There is no account or hosted control plane. Environment state, traffic, recordings, and faults stay on your machine.',
   },

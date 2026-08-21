@@ -1,0 +1,41 @@
+---
+interface Props {
+  name: 'file-off' | 'link' | 'branches' | 'machine';
+}
+
+const {name} = Astro.props;
+---
+
+<span class="principle-icon" aria-hidden="true">
+  {name === 'file-off' && (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+      <path d="M6 3.5h7l5 5v9" />
+      <path d="M13 3.5v5h5" />
+      <path d="M6 8v12.5h9" />
+      <path d="M4 4l16 16" />
+    </svg>
+  )}
+  {name === 'link' && (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+      <path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 0 0-5.7-5.7l-1.3 1.3" />
+      <path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.3 2.3a4 4 0 0 0 5.7 5.7l1.3-1.3" />
+    </svg>
+  )}
+  {name === 'branches' && (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="18" cy="7" r="2" />
+      <circle cx="18" cy="18" r="2" />
+      <path d="M6 7v5a6 6 0 0 0 6 6h4" />
+      <path d="M6 10a5 5 0 0 1 5-5h5" />
+    </svg>
+  )}
+  {name === 'machine' && (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+      <rect x="3" y="4" width="18" height="13" rx="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+      <path d="M9 10.5l3-2.5 3 2.5v3.5h-6z" />
+    </svg>
+  )}
+</span>
