@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 
-import {primaryCallToAction} from '../src/data/site.ts';
+import {frameworks, primaryCallToAction, resources} from '../src/data/site.ts';
 
 const siteRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -30,11 +30,17 @@ test('the primary call to action accepts a configured early-access URL', () => {
 
 test('the hero explains automatic discovery without required config', async () => {
   const page = await readFile(`${siteRoot}src/pages/index.astro`, 'utf8');
+  const styles = await readFile(`${siteRoot}src/styles/global.css`, 'utf8');
   const hero = page.slice(page.indexOf('class="hero"'), page.indexOf('id="problem"'));
 
-  assert.match(hero, /automatically discovers and runs your services<br \/>/);
-  assert.match(hero, /and dependencies — no config required — so you can trace<br \/>/);
-  assert.match(hero, /without leaving your<br \/>local development workflow/);
+  assert.match(hero, /<span>Portless automatically discovers and runs your services<\/span>/);
+  assert.match(hero, /<span>and dependencies — no config required — so you can trace<\/span>/);
+  assert.match(hero, /<span>every interaction and reproduce failures, without leaving your<\/span>/);
+  assert.match(hero, /<span>local development workflow\.<\/span>/);
+  assert.match(styles, /\.hero__lede span \{\s+display: block;/);
+  assert.match(styles, /@media \(max-width: 620px\)[\s\S]*?\.hero__lede span \{\s+display: inline;/);
+  assert.match(styles, /@media \(max-width: 620px\)[\s\S]*?\.hero \{\s+padding: 58px 0 0;/);
+  assert.match(styles, /@media \(max-width: 620px\)[\s\S]*?\.problem \{\s+padding-top: 48px;/);
 });
 
 test('all marketing product media are live-app captures', async () => {
@@ -69,6 +75,16 @@ test('all marketing product media are live-app captures', async () => {
   assert.doesNotMatch(page, /flow-dot/, 'live topology motion must come from the captured application');
 });
 
+test('the supported stack uses bundled technology logos', async () => {
+  const logos = await readFile(`${siteRoot}src/components/TechnologyLogo.astro`, 'utf8');
+
+  for (const technology of [...frameworks, ...resources]) {
+    assert.ok(logos.includes(JSON.stringify(technology.name)), `missing bundled logo for ${technology.name}`);
+    assert.ok(technology.href.startsWith('https://'), `missing secure product link for ${technology.name}`);
+  }
+  assert.doesNotMatch(logos, /https?:\/\//);
+});
+
 test('the published explainer uses the neural-voice master', async () => {
   const [published, neuralMaster, naturalMaster] = await Promise.all([
     readFile(`${siteRoot}public/demo/portless-explainer.mp4`),
@@ -88,6 +104,7 @@ test('the explainer plays inline with captions initially disabled', async () => 
   assert.match(page, /data-demo-play[^>]*aria-label="Play demo"/);
   assert.match(page, /<span class="demo-title__line">One system\.<\/span>/);
   assert.match(page, /<span class="demo-title__line demo-title__accent">Ready to debug\.<\/span>/);
+  assert.match(page, /Start the whole application, follow service interactions, and test failures without changing code\./);
   assert.doesNotMatch(page, /VideoDialog|data-open-video|<dialog/);
   assert.doesNotMatch(page, /Read the transcript|class="transcript"/);
   assert.doesNotMatch(page, /<track[^>]*\bdefault\b[^>]*>/);
@@ -103,6 +120,9 @@ test('the page moves from the problem and solution into the product pillars', as
   const projectsStart = page.indexOf('class="section product-section"');
   const projectsEnd = page.indexOf('id="control-plane"');
   const projectsSection = page.slice(projectsStart, projectsEnd);
+  const locallyStart = page.indexOf('class="section principles-section"');
+  const locallyEnd = page.indexOf('class="section demo-section"');
+  const locallySection = page.slice(locallyStart, locallyEnd);
   const orderedMarkers = [
     'id="problem"',
     'id="why-portless"',
@@ -115,7 +135,10 @@ test('the page moves from the problem and solution into the product pillars', as
   assert.ok(positions.every((position) => position >= 0), 'every narrative section must be present');
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
   assert.doesNotMatch(footer, /href="#(?:how-it-works|control-plane|experiments|demo)"/);
+  assert.match(footer, /class="site-footer__back-to-top" href="#top">Back to Top<\/a>/);
   assert.match(footer, />GitHub<\/a>/);
+  assert.doesNotMatch(footer, /A local application-environment control plane\./);
+  assert.doesNotMatch(page, /Portless is preparing for its first public release\./);
   assert.match(page, /<a href="#why-portless">Why Portless<\/a>/);
   assert.match(page, /eyebrow eyebrow--danger eyebrow--pillar">The problem/);
   assert.match(page, /eyebrow eyebrow--pillar">Why Portless/);
@@ -125,6 +148,7 @@ test('the page moves from the problem and solution into the product pillars', as
   assert.match(page, /Portless runs locally with no account or hosted service required\. Environment state, traffic, recordings, mocks, and faults stay on your machine\./);
   assert.match(page, /<PrincipleIcon name={principle\.icon} \/>/);
   assert.doesNotMatch(page, /principle\.index/);
+  assert.doesNotMatch(locallySection, /Application discovery|Managed resources|frameworks\.map|resources\.map/);
   assert.match(page, /topology-title__line">Every service\.<\/span>/);
   assert.match(page, /topology-title__line">Every interaction\.<\/span>/);
   assert.match(page, /topology-title__line topology-title__line--accent">One live view\.<\/span>/);
@@ -141,6 +165,17 @@ test('the page moves from the problem and solution into the product pillars', as
   assert.doesNotMatch(projectsSection, /Projects \+ environments/);
   assert.match(projectsSection, /<span>One application\.<\/span><br \/><span class="product-copy__accent">Many shapes\.<\/span>/);
   assert.match(projectsSection, /Mix local, container, remote, and mock providers/);
+  assert.match(projectsSection, /<h4 class="framework-support__label">Supported frameworks<\/h4>[\s\S]*?frameworks\.map/);
+  assert.match(projectsSection, /<span>Automatic discovery<\/span> for your stack\./);
+  assert.match(projectsSection, /Portless identifies runnable services from the project files already in your checkout\. No config required\./);
+  assert.match(projectsSection, /More frameworks and resources coming soon/);
+  assert.match(projectsSection, /frameworks\.map\(\(framework\) => \(/);
+  assert.match(projectsSection, /<a href=\{framework\.href\} target="_blank" rel="noreferrer">/);
+  assert.match(projectsSection, /<TechnologyLogo name=\{framework\.name\}/);
+  assert.match(projectsSection, /<h4 class="framework-support__label">Managed resources<\/h4>[\s\S]*?resources\.map/);
+  assert.match(projectsSection, /resources\.map\(\(resource\) => \(/);
+  assert.match(projectsSection, /<a href=\{resource\.href\} target="_blank" rel="noreferrer">/);
+  assert.match(projectsSection, /<TechnologyLogo name=\{resource\.name\}/);
   assert.doesNotMatch(projectsSection, /Keep remote targets behind explicit write policies/);
   assert.ok(projectsSection.indexOf('product-window--projects') < projectsSection.indexOf('product-copy'));
   assert.doesNotMatch(page, /How it works/);
@@ -156,7 +191,7 @@ test('the solution resolves collisions before Run it explains the command', asyn
   const trafficSection = page.slice(trafficStart, trafficEnd);
 
   assert.match(page, /id="why-portless"/);
-  assert.match(page, /Every service gets/);
+  assert.match(page, /Keep the defaults\.<br \/><span>Lose the collisions\.<\/span>/);
   assert.match(page, /<strong>orders<\/strong><code>localhost:8080/);
   assert.match(page, /<strong>inventory<\/strong><code>localhost:8080/);
   assert.match(page, /<strong>orders-db<\/strong><code>localhost:5432/);

@@ -2,6 +2,7 @@
 import {Image} from 'astro:assets';
 import BrandMark from '../components/BrandMark.astro';
 import PrincipleIcon from '../components/PrincipleIcon.astro';
+import TechnologyLogo from '../components/TechnologyLogo.astro';
 import SiteLayout from '../layouts/SiteLayout.astro';
 import {frameworks, primaryCallToAction, principles, problemCards, resources} from '../data/site';
 import faultsImage from '../assets/product/faults.jpg';
@@ -36,7 +37,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <div class="hero__grid" aria-hidden="true"></div>
       <div class="hero__copy">
         <h1 id="hero-title">Your application<br />is a system.<span>Develop it like one.</span></h1>
-        <p class="hero__lede">Portless automatically discovers and runs your services<br />and dependencies — no config required — so you can trace<br />every interaction and reproduce failures, without leaving your<br />local development workflow.</p>
+        <p class="hero__lede"><span>Portless automatically discovers and runs your services</span>{' '}<span>and dependencies — no config required — so you can trace</span>{' '}<span>every interaction and reproduce failures, without leaving your</span>{' '}<span>local development workflow.</span></p>
         <div class="hero__actions">
           <a class="button" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
         </div>
@@ -87,7 +88,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <div class="solution-heading">
         <div>
           <p class="eyebrow eyebrow--pillar">Why Portless</p>
-          <h2 id="solution-title">Every service gets<br /><span>a stable local identity.</span></h2>
+          <h2 id="solution-title">Keep the defaults.<br /><span>Lose the collisions.</span></h2>
         </div>
         <p>Portless keeps process and container ports private, then publishes service-scoped HTTP and TCP addresses. Orders and inventory can both default to <code>:8080</code>, while both PostgreSQL dependencies remain available on <code>:5432</code>.</p>
       </div>
@@ -145,6 +146,37 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
           <li>Switch one provider without restarting its callers</li>
         </ul>
       </div>
+      <section class="framework-support" aria-labelledby="frameworks-title">
+        <div class="framework-support__intro">
+          <h3 id="frameworks-title"><span>Automatic discovery</span> for your stack.</h3>
+          <p class="framework-support__copy">Portless identifies runnable services from the project files already in your checkout. No config required.</p>
+          <p class="framework-support__more"><span aria-hidden="true">+</span> More frameworks and resources coming soon</p>
+        </div>
+        <div class="framework-support__catalog">
+          <h4 class="framework-support__label">Supported frameworks</h4>
+          <ul class="framework-support__list">
+            {frameworks.map((framework) => (
+              <li>
+                <a href={framework.href} target="_blank" rel="noreferrer">
+                  <TechnologyLogo name={framework.name} /><span>{framework.name}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+          <div class="framework-support__resources">
+            <h4 class="framework-support__label">Managed resources</h4>
+            <ul class="framework-support__list framework-support__list--resources">
+              {resources.map((resource) => (
+                <li>
+                  <a href={resource.href} target="_blank" rel="noreferrer">
+                    <TechnologyLogo name={resource.name} /><span>{resource.name}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </section>
     </section>
 
     <section class="section topology-section narrative-section" id="control-plane" aria-labelledby="topology-title">
@@ -250,16 +282,6 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
           </article>
         ))}
       </div>
-      <div class="support-grid">
-        <div>
-          <span>Application discovery</span>
-          <ul>{frameworks.map((framework) => <li>{framework}</li>)}</ul>
-        </div>
-        <div>
-          <span>Managed resources</span>
-          <ul>{resources.map((resource) => <li>{resource}</li>)}</ul>
-        </div>
-      </div>
     </section>
 
     <section class="section demo-section" id="demo" aria-labelledby="demo-title">
@@ -286,7 +308,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
           <span class="demo-title__line">One system.</span>{' '}
           <span class="demo-title__line demo-title__accent">Ready to debug.</span>
         </h2>
-        <p>From port collisions to clean endpoints, live topology, traffic inspection, recordings, and targeted faults.</p>
+        <p>Start the whole application, follow service interactions, and test failures without changing code.</p>
       </div>
     </section>
 
@@ -296,17 +318,20 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <h2 id="cta-title"><span>Run it.</span><span>See it.</span><span>Break it.</span></h2>
       <p>Locally</p>
       <a class="button" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
-      {!primaryCTA.external && <small>Portless is preparing for its first public release.</small>}
     </section>
   </main>
 
   <footer class="site-footer">
-    <a class="brand-link" href="#top"><BrandMark compact /></a>
-    <p>A local application-environment control plane.</p>
-    <nav aria-label="Footer navigation">
-      {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
-    </nav>
-    <small>© {new Date().getFullYear()} Portless</small>
+    <div class="site-footer__identity">
+      <a class="brand-link" href="#top"><BrandMark compact /></a>
+    </div>
+    <a class="site-footer__back-to-top" href="#top">Back to Top</a>
+    <div class="site-footer__meta">
+      <nav aria-label="Footer navigation">
+        {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
+      </nav>
+      <small>© {new Date().getFullYear()} Portless</small>
+    </div>
   </footer>
 
 </SiteLayout>

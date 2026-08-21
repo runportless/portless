@@ -28,8 +28,22 @@ export const principles = [
   },
 ] as const;
 
-export const frameworks = ['Spring Boot', 'NestJS', 'Express', 'Fastify', 'Next.js', 'Go HTTP/RPC', 'FastAPI'] as const;
-export const resources = ['PostgreSQL', 'Valkey', 'MySQL', 'NATS'] as const;
+export const frameworks = [
+  {name: 'Spring Boot', href: 'https://spring.io/projects/spring-boot/'},
+  {name: 'NestJS', href: 'https://nestjs.com/'},
+  {name: 'Express', href: 'https://expressjs.com/'},
+  {name: 'Fastify', href: 'https://fastify.dev/'},
+  {name: 'Next.js', href: 'https://nextjs.org/'},
+  {name: 'Go HTTP/RPC', href: 'https://go.dev/'},
+  {name: 'FastAPI', href: 'https://fastapi.tiangolo.com/'},
+] as const;
+
+export const resources = [
+  {name: 'PostgreSQL', href: 'https://www.postgresql.org/'},
+  {name: 'Valkey', href: 'https://valkey.io/'},
+  {name: 'MySQL', href: 'https://www.mysql.com/'},
+  {name: 'NATS', href: 'https://nats.io/'},
+] as const;
 
 export function primaryCallToAction(earlyAccessURL?: string) {
   const href = earlyAccessURL?.trim();

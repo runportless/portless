@@ -246,13 +246,17 @@ summary:focus-visible {
 .final-cta__grid {
   position: absolute;
   z-index: -1;
-  inset: 0 -12vw;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 100vw;
   opacity: 0.36;
   background-image:
     linear-gradient(rgb(49 195 181 / 6%) 1px, transparent 1px),
     linear-gradient(90deg, rgb(49 195 181 / 6%) 1px, transparent 1px);
   background-size: 34px 34px;
   mask-image: radial-gradient(circle at 68% 50%, #000, transparent 63%);
+  transform: translateX(-50%);
 }
 
 .hero h1 {
@@ -276,6 +280,10 @@ summary:focus-visible {
   color: var(--muted);
   font-size: 17px;
   line-height: 1.72;
+}
+
+.hero__lede span {
+  display: block;
 }
 
 .hero__actions {
@@ -649,6 +657,10 @@ summary:focus-visible {
   border-top: 2px solid var(--red);
 }
 
+.solution-proof__side--before header span {
+  color: var(--red);
+}
+
 .solution-proof__side--before code,
 .solution-proof__side small {
   font-family: var(--mono);
@@ -861,6 +873,118 @@ summary:focus-visible {
   color: var(--teal);
 }
 
+.framework-support {
+  grid-column: 1 / -1;
+  padding-top: 42px;
+  display: grid;
+  grid-template-columns: minmax(340px, 0.95fr) minmax(0, 1.05fr);
+  align-items: end;
+  gap: 64px;
+}
+
+.framework-support__intro h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: clamp(32px, 3.8vw, 46px);
+  line-height: 1.1;
+  letter-spacing: -0.055em;
+}
+
+.framework-support__intro h3 span {
+  color: var(--teal);
+}
+
+.framework-support__copy {
+  max-width: 520px;
+  margin: 17px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.framework-support__more {
+  max-width: 440px;
+  margin: 18px 0 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.framework-support__more span {
+  margin-right: 5px;
+  color: var(--teal);
+  font-weight: 800;
+}
+
+.framework-support__list {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  list-style: none;
+}
+
+.framework-support__catalog {
+  min-width: 0;
+}
+
+.framework-support__label {
+  margin: 0 0 14px;
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.framework-support__list li {
+  min-height: 46px;
+}
+
+.framework-support__list a {
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  background: rgb(13 23 26 / 65%);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-decoration: none;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.framework-support__list a:hover {
+  border-color: var(--teal);
+  background: rgb(20 42 44 / 80%);
+}
+
+.framework-support__list--resources a:hover {
+  border-color: var(--amber);
+}
+
+.framework-support__list .technology-logo {
+  width: 20px;
+  height: 20px;
+  color: var(--teal);
+  flex: 0 0 auto;
+}
+
+.framework-support__resources {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.framework-support__list--resources .technology-logo {
+  color: var(--amber);
+}
+
 .check-list {
   margin: 0;
   padding: 0;
@@ -961,8 +1085,7 @@ summary:focus-visible {
   backdrop-filter: blur(10px);
 }
 
-.product-callout span,
-.support-grid > div > span {
+.product-callout span {
   color: var(--teal);
   font-family: var(--mono);
   font-size: 9px;
@@ -1190,31 +1313,6 @@ summary:focus-visible {
   line-height: 1.68;
 }
 
-.support-grid {
-  margin-top: 64px;
-  display: grid;
-  grid-template-columns: 1.45fr 0.85fr;
-  gap: 64px;
-}
-
-.support-grid ul {
-  margin: 22px 0 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-  list-style: none;
-}
-
-.support-grid li {
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  background: rgb(13 23 26 / 65%);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 9px;
-}
-
 .demo-section {
   display: grid;
   grid-template-columns: 1.25fr 0.75fr;
@@ -1348,18 +1446,15 @@ summary:focus-visible {
   letter-spacing: -0.07em;
 }
 
+.final-cta h2 span {
+  white-space: nowrap;
+}
+
 .final-cta p {
   margin: 17px 0 42px;
   color: var(--teal);
   font-family: var(--mono);
   font-size: clamp(22px, 3vw, 31px);
-}
-
-.final-cta small {
-  margin-top: 17px;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 9px;
 }
 
 .site-footer {
@@ -1368,7 +1463,7 @@ summary:focus-visible {
   margin: 0 auto;
   border-top: 1px solid var(--line);
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 34px;
   color: var(--faint);
@@ -1376,8 +1471,19 @@ summary:focus-visible {
   font-size: 9px;
 }
 
-.site-footer p {
-  margin: 0;
+.site-footer__identity,
+.site-footer__meta {
+  display: flex;
+  align-items: center;
+  gap: 34px;
+}
+
+.site-footer__meta {
+  justify-content: flex-end;
+}
+
+.site-footer__back-to-top {
+  white-space: nowrap;
 }
 
 .site-footer nav {
@@ -1563,18 +1669,11 @@ summary:focus-visible {
     border-bottom: 0;
   }
 
-  .support-grid {
+  .framework-support {
     grid-template-columns: 1fr;
-    gap: 40px;
+    gap: 30px;
   }
 
-  .site-footer {
-    grid-template-columns: auto 1fr auto;
-  }
-
-  .site-footer p {
-    display: none;
-  }
 }
 
 @media (max-width: 620px) {
@@ -1597,7 +1696,7 @@ summary:focus-visible {
   }
 
   .hero {
-    padding: 58px 0 74px;
+    padding: 58px 0 0;
   }
 
   .hero h1 {
@@ -1606,6 +1705,10 @@ summary:focus-visible {
 
   .hero__lede {
     font-size: 15px;
+  }
+
+  .hero__lede span {
+    display: inline;
   }
 
   .hero__actions {
@@ -1640,6 +1743,10 @@ summary:focus-visible {
   .section,
   .final-cta {
     padding-block: 80px;
+  }
+
+  .problem {
+    padding-top: 48px;
   }
 
   .one-command {
@@ -1754,6 +1861,10 @@ summary:focus-visible {
     gap: 45px;
   }
 
+  .framework-support {
+    padding-top: 34px;
+  }
+
   .product-callout {
     position: relative;
     right: auto;
@@ -1811,14 +1922,15 @@ summary:focus-visible {
   .site-footer {
     min-height: 170px;
     padding-block: 35px;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-content: center;
+    gap: 14px;
   }
 
-  .site-footer nav {
-    order: 3;
-    grid-column: 1 / -1;
-    flex-wrap: wrap;
+  .site-footer__meta {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 10px;
   }
 
 }
