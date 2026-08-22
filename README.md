@@ -31,28 +31,6 @@ redis.local.billing.portless.test:6379
 
 Processes and managed resource containers still receive private dynamic runtime ports. Portless allocates a distinct loopback IP to each public TCP endpoint and each directed service connection, so multiple projects can all expose conventional resource ports without conflicts. A process receives a source-aware name such as `postgres.via-orders.local.billing.portless.test`; this preserves the exact caller for traffic, recordings, and faults. The first release reserves 64 such endpoint addresses across the installation and rejects a configuration atomically if that pool is exhausted.
 
-## What is implemented
-
-- One lazily started, machine-local Go daemon with an authenticated installation/instance/build handshake, plus one native Cobra CLI executable with generated nested help and shell completion.
-- Bounded, plugin-driven framework discovery for Spring Boot (Gradle and Maven), NestJS, Express, Fastify, Next.js, Go HTTP/RPC services, and FastAPI.
-- A separate managed-resource plugin registry in which each plugin owns static detection, declarative container provisioning, readiness, credentials, and process bindings. The built-in registry supports PostgreSQL 17, Valkey 8, MySQL 8.4, and NATS 2.
-- Reusable projects with independently runnable environments, per-environment checkout paths, and local, managed-container, remote HTTP(S), or deterministic mock providers.
-- Explicit remote classification and write policy; read-only targets reject unsafe methods before traffic leaves the machine.
-- Readable project and service names throughout the CLI, API, URLs, and UI; immutable ownership keys remain private.
-- Persistent per-service supervisors, dynamic ports, HTTP/TCP readiness, bounded structured process/container logs, dependency-aware environment and individual-service lifecycle, daemon-crash reconciliation, and durable operations.
-- Context-aware debug startup: from a supported service directory, `portless up` starts that service under Portless with its debugger enabled and starts the rest normally.
-- Generic declarative Docker Engine or Podman networks, named volumes, generated local credentials, commands, and TCP/exec readiness. Docker Compose is not used.
-- Stable `.localhost` HTTP ingress, scoped `.portless.test` TCP DNS, and source-aware per-edge HTTP/TCP proxies.
-- Trace-first HTTP/TCP inspection with explicit correlation confidence, expandable service waterfalls, raw exchange mode, exact request targets, repeated request/response headers, bounded body detail, and durable lookup through recordings.
-- Named, bounded local recordings with opt-in bounded body capture, JSON export, and mock-profile import.
-- Environment-scoped HTTP mock profiles with method, parameterized-path, required-query matching, fixed headers/status/body/delay, preview, OpenAPI import, and service-scoped hot binding.
-- Named fault rules for latency, jitter, HTTP status, abort, probability, method/path scope, and optional expiry.
-- SQLite WAL state, project timeline, CLI bearer auth, one-use browser claims, session cookies, CSRF, Origin checks, and strict control/application Host separation.
-- A workspace-scoped, read-only-by-default MCP server launched as `portless mcp serve`, with separately gated lifecycle, traffic-control, and sensitive-traffic capabilities.
-- An embedded React/TypeScript control plane styled as a dense local operations console.
-
-See [docs/implementation-status.md](docs/implementation-status.md) for the explicit boundary of this initial implementation.
-
 ## Repository structure
 
 The source tree follows the running product rather than a generic `internal`
