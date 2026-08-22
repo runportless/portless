@@ -204,7 +204,7 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 		}
 		_ = s.serviceEvent(scope, operation, serviceName, "stopping", "Stopping "+serviceName)
 		current := runtimeFor(environment, serviceName)
-		if err := s.processes.Stop(ctx, scope, serviceName, 10*time.Second); err != nil {
+		if err := s.stopProcessRuntime(ctx, scope, serviceName, current); err != nil {
 			s.failOperation(scope, operation, err)
 			return
 		}
@@ -254,6 +254,27 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 	s.completeOperation(scope, operation, "Environment stopped")
 	snapshot, _ := s.Environment(ctx, environment.Project, environment.Name)
 	s.publish(scope, "environment.state", snapshot)
+}
+
+func (s *Service) stopProcessRuntime(ctx context.Context, scope, serviceName string, current model.Service) error {
+	if current.Status == model.ServiceStopped || current.Status == model.ServicePlanned || current.Generation == 0 {
+		return nil
+	}
+	if s.processes.IsRunning(scope, serviceName) {
+		return s.processes.Stop(ctx, scope, serviceName, 10*time.Second)
+	}
+	runtime, err := s.database.ServiceRuntime(ctx, scope, serviceName)
+	if err != nil {
+		return err
+	}
+	inspection, err := s.processes.StopPersistedRun(ctx, persistedProcessRun(scope, runtime), 12*time.Second)
+	if err != nil {
+		return fmt.Errorf("cannot safely stop %s: %w", serviceName, err)
+	}
+	if inspection.State != processruntime.RecoveryTerminal && inspection.State != processruntime.RecoveryGone {
+		return fmt.Errorf("cannot safely stop %s: persisted runtime is %s", serviceName, inspection.State)
+	}
+	return nil
 }
 
 func (s *Service) startContainer(ctx context.Context, environment model.Environment, definition model.ServiceDefinition, restartIncrement int64) error {

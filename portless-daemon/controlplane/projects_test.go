@@ -555,6 +555,90 @@ func TestPrepareResetStopsAuthenticatedLingeringSupervisor(t *testing.T) {
 	}
 }
 
+func TestPrepareResetAcceptsProvablyGoneReadySupervisor(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
+		t.Fatal(err)
+	}
+	const deadPID = 1 << 30
+	statePath := filepath.Join(data, "runs", "stale.state.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	status := supervisor.Status{
+		ProtocolVersion: supervisor.ProtocolVersion, Scope: "billing/local", Service: "checkout", Generation: 3,
+		SupervisorPID: deadPID + 1, PID: deadPID, Port: 43123, LaunchMode: model.LaunchManaged, State: "ready",
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetServiceRuntime(ctx, "billing/local", "checkout", database.ServiceRuntimeUpdate{
+		Status: model.ServiceUnknown, Generation: 3, PID: deadPID, UpstreamPort: status.Port,
+		PrivateRunKey: "private-run-key", OwnerInstanceID: "daemon-before-reboot",
+		SupervisorSocket: filepath.Join(data, "missing.sock"), SupervisorState: statePath,
+		SupervisorPID: deadPID + 1, LaunchMode: model.LaunchManaged,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentUnknown, "checkout state cannot be verified"); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	result, err := app.PrepareReset(ctx, true)
+	if err != nil {
+		t.Fatalf("forced reset rejected a provably gone runtime: %v", err)
+	}
+	if result.Processes != 0 {
+		t.Fatalf("forced reset reported stopping an absent supervisor: %#v", result)
+	}
+	app.CancelReset()
+}
+
+func TestPrepareResetRefusesIncompletePersistedProcessOwnership(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess, Required: true}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetServiceRuntime(ctx, "billing/local", "checkout", database.ServiceRuntimeUpdate{
+		Status: model.ServiceUnknown, Generation: 2, PID: 1 << 30, OwnerInstanceID: "daemon-before-reboot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentUnknown, "previous ownership is incomplete"); err != nil {
+		t.Fatal(err)
+	}
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	if _, err := app.PrepareReset(ctx, true); err == nil || !strings.Contains(err.Error(), "persisted supervisor ownership record is incomplete") {
+		t.Fatalf("forced reset accepted incomplete process ownership: %v", err)
+	}
+}
+
 func TestCreateProjectRejectsDaemonRelativeSourcePath(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()

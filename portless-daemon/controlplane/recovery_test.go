@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,10 @@ import (
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/events"
 	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/portless-run/portless/portless-daemon/providers"
+	resourcebuiltin "github.com/portless-run/portless/portless-daemon/providers/builtin"
+	"github.com/portless-run/portless/portless-daemon/runtime/container"
+	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
 )
 
 func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
@@ -115,6 +120,251 @@ func TestApplicationRestoresTrafficSequenceFromRetainedRecordings(t *testing.T) 
 	if exchange.Sequence != 42 {
 		t.Fatalf("restored sequence = %d, want 42", exchange.Sequence)
 	}
+}
+
+func TestReconcileMarksProvablyGoneReadyProcessStoppedAndUpRestartsIt(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{
+		Name: "checkout", Kind: model.ServiceProcess, Required: true,
+		Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+		PortEnvironment: "PORT", Health: model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+	}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, sources, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}); err != nil {
+		t.Fatal(err)
+	}
+	runs := filepath.Join(data, "runs")
+	if err := os.MkdirAll(runs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const deadPID = 1 << 30
+	statePath := filepath.Join(runs, "stale.state.json")
+	status := supervisor.Status{
+		ProtocolVersion: supervisor.ProtocolVersion, Scope: "billing/local", Service: "checkout", Generation: 4,
+		SupervisorPID: deadPID + 1, PID: deadPID, Port: 43123, LaunchMode: model.LaunchManaged, State: "ready",
+		StartedAt: time.Now().UTC().Add(-time.Hour), LogDirectory: filepath.Join(data, "logs", "checkout", "4"),
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetServiceRuntime(ctx, "billing/local", "checkout", database.ServiceRuntimeUpdate{
+		Status: model.ServiceReady, Generation: 4, PID: deadPID, UpstreamPort: status.Port,
+		StartedAt: &status.StartedAt, LogPath: status.LogDirectory, PrivateRunKey: "private-run-key",
+		OwnerInstanceID: "daemon-before-reboot", SupervisorSocket: filepath.Join(t.TempDir(), "missing.sock"),
+		SupervisorState: statePath, SupervisorPID: deadPID + 1, LaunchMode: model.LaunchManaged,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentHealthy, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-after-reboot", Executable: os.Args[0]})
+	defer app.Close(ctx)
+	report, err := app.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unverifiable) != 0 {
+		t.Fatalf("provably gone process remained unverifiable: %#v", report)
+	}
+	recovered, err := app.Environment(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := runtimeFor(recovered, "checkout")
+	if recovered.Status != model.EnvironmentStopped || stopped.Status != model.ServiceStopped || stopped.PID != 0 || stopped.Generation != 4 || !strings.Contains(stopped.Reason, "no longer running") {
+		t.Fatalf("stale process was not converted to stopped: %#v", recovered)
+	}
+	if ready, problems := app.CanHandoff(ctx); !ready || len(problems) != 0 {
+		t.Fatalf("known-absent runtime blocked handoff: ready=%v problems=%v", ready, problems)
+	}
+
+	operation, err := app.Up(ctx, "billing", "local", "test", "reboot-recovery", UpOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation = waitForOperation(t, app, operation)
+	if operation.State != "succeeded" {
+		t.Fatalf("up after reboot recovery = %#v", operation)
+	}
+	service := serviceSnapshot(t, app, "checkout")
+	if service.Status != model.ServiceReady || service.Generation != 5 || service.PID == 0 || service.PID == deadPID {
+		t.Fatalf("up did not launch a new generation: %#v", service)
+	}
+	defer app.processes.Stop(context.Background(), "billing/local", "checkout", time.Second)
+}
+
+func TestReconcileMarksOwnedStoppedContainerStoppedAndUpRecreatesIt(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{
+		SuggestedName: "store",
+		Services: []model.ServiceDefinition{
+			{
+				Name: "checkout", Kind: model.ServiceProcess, Required: true,
+				Command: []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"}, Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"},
+				PortEnvironment: "PORT", Health: model.HealthCheck{Kind: "tcp", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
+			},
+			{Name: "postgres", Kind: model.ServiceResource, Required: true, Port: 5432, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}},
+		},
+		Connections: []model.Connection{{Source: "checkout", Target: "postgres", Protocol: model.ProtocolTCP, Environment: "DATABASE_URL", Required: true}},
+	}
+	if _, err := controlStore.CreateProject(ctx, "store", definition, []model.ProjectSource{{Name: "checkout", Services: []string{"checkout"}}}); err != nil {
+		t.Fatal(err)
+	}
+	sources := []model.SourceBinding{{Name: "checkout", Path: t.TempDir(), Status: "ready", Definition: definition}}
+	bindings := []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}, {Service: "postgres", Provider: model.ProviderContainer}}
+	if _, err := controlStore.CreateEnvironment(ctx, "store", "local", definition, sources, bindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetServiceRuntime(ctx, "store/local", "postgres", database.ServiceRuntimeUpdate{
+		Status: model.ServiceReady, Generation: 2, UpstreamPort: 45432,
+		OwnerInstanceID: "daemon-before-reboot", ContainerName: "portless-store-local-postgres",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "store", "local", model.EnvironmentHealthy, ""); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &recoveryContainerRuntime{name: container.RuntimeDocker, inspection: container.RecoveryInspection{
+		State: container.RecoveryStopped, ContainerName: "portless-store-local-postgres",
+	}}
+	containers := container.NewManager(filepath.Join(data, "runtime.json"), resourcebuiltin.Registry(), runtime)
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", DaemonInstanceID: "daemon-after-reboot", PrivateTCPIngress: true})
+	app.containers.Close()
+	app.containers = containers
+	defer app.Close(ctx)
+
+	report, err := app.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unverifiable) != 0 {
+		t.Fatalf("owned stopped container remained unverifiable: %#v", report)
+	}
+	recovered, err := app.Environment(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := runtimeFor(recovered, "postgres")
+	if recovered.Status != model.EnvironmentStopped || stopped.Status != model.ServiceStopped || stopped.Generation != 2 {
+		t.Fatalf("stopped container was not converted to stopped runtime: %#v", recovered)
+	}
+
+	operation, err := app.Up(ctx, "store", "local", "test", "container-recovery", UpOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation = waitForOperation(t, app, operation)
+	if operation.State != "succeeded" {
+		t.Fatalf("up after stopped container recovery = %#v", operation)
+	}
+	healthy, err := app.Environment(ctx, "store", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := runtimeFor(healthy, "postgres")
+	if service.Status != model.ServiceReady || service.Generation != 3 || service.UpstreamPort == 0 || runtime.startCalls != 1 {
+		t.Fatalf("container was not recreated at the next generation: service=%#v starts=%d", service, runtime.startCalls)
+	}
+	defer app.processes.Stop(context.Background(), "store/local", "checkout", time.Second)
+}
+
+func TestDownRefusesToForgetUnverifiablePersistedProcess(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	definition := model.ProjectModel{SuggestedName: "billing", Services: []model.ServiceDefinition{{
+		Name: "checkout", Kind: model.ServiceProcess, Required: true, Command: []string{"unused"},
+	}}}
+	if _, err := controlStore.CreateProject(ctx, "billing", definition, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlStore.CreateEnvironment(ctx, "billing", "local", definition, nil, []model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetServiceRuntime(ctx, "billing/local", "checkout", database.ServiceRuntimeUpdate{
+		Status: model.ServiceUnknown, Reason: "previous ownership is incomplete", Generation: 3,
+		PID: 43002, SupervisorPID: 43001, OwnerInstanceID: "daemon-before-reboot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controlStore.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentUnknown, "previous ownership is incomplete"); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	operation, err := app.Down(ctx, "billing", "local", "test", "unverifiable-down", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation = waitForOperation(t, app, operation)
+	if operation.State != "failed" || !strings.Contains(operation.Error, "persisted supervisor ownership record is incomplete") {
+		t.Fatalf("down did not fail closed for unverifiable ownership: %#v", operation)
+	}
+	persisted, err := controlStore.ServiceRuntime(ctx, "billing/local", "checkout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != model.ServiceUnknown || persisted.Generation != 3 || persisted.PID != 43002 || persisted.SupervisorPID != 43001 {
+		t.Fatalf("down forgot unverifiable persisted ownership: %#v", persisted)
+	}
+}
+
+type recoveryContainerRuntime struct {
+	name       container.RuntimeName
+	inspection container.RecoveryInspection
+	startCalls int
+}
+
+func (r *recoveryContainerRuntime) Name() container.RuntimeName { return r.name }
+func (r *recoveryContainerRuntime) Probe(context.Context) container.ProbeResult {
+	return container.ProbeResult{Name: r.name, State: "ready"}
+}
+func (r *recoveryContainerRuntime) StartHost(ctx context.Context) container.ProbeResult {
+	return r.Probe(ctx)
+}
+func (r *recoveryContainerRuntime) Start(_ context.Context, _, _ string, service model.ServiceDefinition, _ providers.ContainerPlan, generation int64, logsRoot string) (container.StartResult, error) {
+	r.startCalls++
+	return container.StartResult{
+		ContainerName: "recreated-" + service.Name, Port: 45433, StartedAt: time.Now().UTC(), LogDirectory: filepath.Join(logsRoot, service.Name, "3"),
+		Environment: map[string]string{"POSTGRES_USER": "portless", "POSTGRES_DB": "portless", "POSTGRES_PASSWORD": "private"},
+	}, nil
+}
+func (r *recoveryContainerRuntime) Adopt(context.Context, string, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (container.StartResult, error) {
+	return container.StartResult{ContainerName: r.inspection.ContainerName, Port: r.inspection.Port}, nil
+}
+func (r *recoveryContainerRuntime) InspectRecovery(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (container.RecoveryInspection, error) {
+	return r.inspection, nil
+}
+func (r *recoveryContainerRuntime) StopEnvironment(context.Context, string, bool) error { return nil }
+func (r *recoveryContainerRuntime) StopService(context.Context, string, string) error   { return nil }
+func (r *recoveryContainerRuntime) ResetInstallation(context.Context) (container.ResetResult, error) {
+	return container.ResetResult{Runtime: r.name}, nil
 }
 
 func TestIndividualServiceStartHonorsCrossEnvironmentSourceLeases(t *testing.T) {

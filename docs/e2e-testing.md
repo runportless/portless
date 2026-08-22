@@ -77,6 +77,9 @@ The CLI E2E suite protects these product contracts:
   processes and proxy routes;
 - hard daemon crashes and executable replacement with exact process adoption,
   plus service crashes, degraded state, retained logs, and recovery;
+- reboot-shaped loss where durable supervisor files still say `ready` but the
+  authenticated supervisor PIDs and application process groups are gone,
+  including automatic restart by one `portless up` and direct forced reset;
 - `down --all` from an ambiguous checkout and across multiple simultaneously
   active worktrees;
 - several source repositories compiled into one project, environment cloning,
@@ -161,6 +164,9 @@ runtime selection. It verifies:
 - real readiness and protocol probes for PostgreSQL, Valkey, MySQL, and NATS;
 - generated connection values delivered to the consuming service;
 - exact container adoption across daemon restart;
+- reboot-shaped recovery of dead process supervisors and an externally stopped
+  fully owned Valkey container, including recreation at new generations and
+  preservation of data in the managed volume;
 - ordinary `down`/`up` behavior and Valkey volume persistence;
 - explicit `down --volumes --yes` data removal; and
 - endpoint, upstream, and data isolation between two active environments,

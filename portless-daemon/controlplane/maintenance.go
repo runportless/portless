@@ -11,7 +11,7 @@ import (
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/runtime/container"
-	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
+	processruntime "github.com/portless-run/portless/portless-daemon/runtime/process"
 )
 
 // RuntimeStatus reports the configured and currently selected container runtime.
@@ -164,58 +164,45 @@ func (s *Service) CancelReset() {
 }
 
 func (s *Service) stopResetSupervisors(ctx context.Context, environments []database.EnvironmentRuntimeInventory) (int, error) {
-	stopped := 0
+	type action struct {
+		scope   string
+		service string
+		run     processruntime.PersistedRun
+	}
+	var actions []action
 	for _, environment := range environments {
 		scope := model.EnvironmentSelector(environment.Project, environment.Environment)
 		for _, runtime := range environment.Services {
 			serviceName := runtime.ServiceName
-			if runtime.SupervisorSocket == "" && runtime.PrivateRunKey == "" && runtime.SupervisorState == "" {
+			if runtime.SupervisorSocket == "" && runtime.PrivateRunKey == "" && runtime.SupervisorState == "" && runtime.SupervisorPID == 0 && runtime.PID == 0 {
 				continue
-			}
-			if runtime.SupervisorSocket == "" || runtime.PrivateRunKey == "" || runtime.SupervisorState == "" {
-				return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s because its supervisor ownership record is incomplete", scope, serviceName)
 			}
 			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			status, liveErr := supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
+			inspection := s.processes.InspectPersistedRun(probeCtx, persistedProcessRun(scope, runtime))
 			cancel()
-			if liveErr != nil {
-				var statusErr error
-				status, statusErr = supervisor.StatusFor(ctx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
-				if statusErr != nil {
-					return stopped, fmt.Errorf("cannot verify previous process runtime %s/%s: %w", scope, serviceName, liveErr)
-				}
-				if err := validateResetSupervisor(status, scope, serviceName, runtime.Generation); err != nil {
-					return stopped, err
-				}
-				if !supervisorTerminalState(status.State) {
-					return stopped, fmt.Errorf("cannot stop previous process runtime %s/%s because its supervisor is unavailable and persisted state is %s", scope, serviceName, status.State)
-				}
+			switch inspection.State {
+			case processruntime.RecoveryTerminal, processruntime.RecoveryGone:
 				continue
+			case processruntime.RecoveryLive:
+				actions = append(actions, action{scope: scope, service: serviceName, run: persistedProcessRun(scope, runtime)})
+			case processruntime.RecoveryUnverifiable:
+				detail := inspection.Err
+				if detail == nil {
+					detail = errors.New("persisted process state cannot be verified")
+				}
+				return 0, fmt.Errorf("cannot verify previous process runtime %s/%s: %w", scope, serviceName, detail)
+			default:
+				return 0, fmt.Errorf("cannot verify previous process runtime %s/%s: invalid recovery state", scope, serviceName)
 			}
-			if err := validateResetSupervisor(status, scope, serviceName, runtime.Generation); err != nil {
-				return stopped, err
-			}
-			if supervisorTerminalState(status.State) {
-				continue
-			}
-			stopCtx, stopCancel := context.WithTimeout(ctx, 12*time.Second)
-			status, stopErr := supervisor.Stop(stopCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
-			stopCancel()
-			if stopErr != nil {
-				return stopped, fmt.Errorf("stop previous process runtime %s/%s: %w", scope, serviceName, stopErr)
-			}
-			if err := validateResetSupervisor(status, scope, serviceName, runtime.Generation); err != nil {
-				return stopped, err
-			}
-			stopped++
 		}
 	}
-	return stopped, nil
-}
-
-func validateResetSupervisor(status supervisor.Status, scope, service string, generation int64) error {
-	if status.Scope != scope || status.Service != service || status.Generation != generation {
-		return fmt.Errorf("previous process supervisor identity does not match %s/%s generation %d", scope, service, generation)
+	for index, item := range actions {
+		stopCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		_, stopErr := s.processes.StopPersistedRun(stopCtx, item.run, 0)
+		cancel()
+		if stopErr != nil {
+			return index, fmt.Errorf("stop previous process runtime %s/%s: %w", item.scope, item.service, stopErr)
+		}
 	}
-	return nil
+	return len(actions), nil
 }

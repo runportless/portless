@@ -13,8 +13,10 @@ import (
 	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/networking"
+	"github.com/portless-run/portless/portless-daemon/runtime/container"
 	"github.com/portless-run/portless/portless-daemon/runtime/debuglaunch"
 	"github.com/portless-run/portless/portless-daemon/runtime/health"
+	processruntime "github.com/portless-run/portless/portless-daemon/runtime/process"
 	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
 )
 
@@ -110,11 +112,23 @@ func (s *Service) Reconcile(ctx context.Context) (ReconciliationReport, error) {
 		}
 		if current.Status == model.EnvironmentHealthy {
 			report.Recovered = append(report.Recovered, scope)
-		} else {
+		} else if environmentRecoveryUnverifiable(current) {
 			report.Unverifiable = append(report.Unverifiable, scope+": "+current.Reason)
 		}
 	}
 	return report, nil
+}
+
+func environmentRecoveryUnverifiable(environment model.Environment) bool {
+	if environment.Status == model.EnvironmentUnknown || environment.Status == model.EnvironmentRecovering {
+		return true
+	}
+	for _, service := range environment.Services {
+		if service.Status == model.ServiceUnknown || service.Status == model.ServiceRecovering {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) reconcileActiveEnvironment(ctx context.Context, environment model.Environment) error {
@@ -291,56 +305,36 @@ func (s *Service) acquireRecoveredSourceLeases(scope string, environment model.E
 }
 
 func (s *Service) reconcileProcess(ctx context.Context, scope string, definition model.ServiceDefinition, runtime database.ServiceRuntimeRecord) error {
-	if runtime.SupervisorSocket == "" || runtime.PrivateRunKey == "" || runtime.Generation <= 0 {
-		return errors.New("service was not started by a recoverable Portless supervisor")
-	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var live supervisor.Status
+	expected := persistedProcessRun(scope, runtime)
+	var inspection processruntime.RecoveryInspection
 	for {
-		var liveErr error
-		live, liveErr = supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
-		if liveErr == nil {
+		inspection = s.processes.InspectPersistedRun(probeCtx, expected)
+		if inspection.State != processruntime.RecoveryUnverifiable {
 			break
-		}
-		persisted, stateErr := supervisor.StatusFor(probeCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
-		if stateErr == nil && persisted.Scope == scope && persisted.Service == definition.Name && persisted.Generation == runtime.Generation {
-			if status, terminal := recoveredTerminalStatus(persisted.State); terminal {
-				reason := persisted.Error
-				if reason == "" && status == model.ServiceExited {
-					reason = "process exited while the Portless daemon was unavailable"
-				}
-				now := time.Now().UTC()
-				started := runtime.StartedAt
-				if started == nil && !persisted.StartedAt.IsZero() {
-					started = &persisted.StartedAt
-				}
-				debugger := cloneDebugger(runtime.Debugger)
-				if debugger != nil {
-					debugger.State = "stopped"
-				}
-				s.proxy.RemoveTarget(scope, definition.Name)
-				return s.database.SetServiceRuntime(ctx, scope, definition.Name, database.ServiceRuntimeUpdate{
-					Status: status, Reason: reason, Generation: runtime.Generation, PID: persisted.PID,
-					UpstreamPort: persisted.Port, StartedAt: started, RestartCount: runtime.RestartCount,
-					LogPath: persisted.LogDirectory, PrivateRunKey: runtime.PrivateRunKey,
-					OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: runtime.SupervisorSocket,
-					SupervisorState: runtime.SupervisorState, SupervisorPID: persisted.SupervisorPID, ObservedAt: &now,
-					LaunchMode: runtime.LaunchMode, Debugger: debugger,
-				})
-			}
 		}
 		select {
 		case <-probeCtx.Done():
-			return fmt.Errorf("supervisor did not become available during recovery: %w", liveErr)
+			if inspection.Err == nil {
+				inspection.Err = errors.New("persisted process state cannot be verified")
+			}
+			return fmt.Errorf("supervisor did not become available during recovery: %w", inspection.Err)
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	if live.Scope != scope || live.Service != definition.Name || live.Generation != runtime.Generation {
-		return errors.New("supervisor identity does not match persisted service run")
-	}
-	if live.LaunchMode != runtime.LaunchMode || !debuggersEqual(live.Debugger, runtime.Debugger) {
-		return errors.New("supervisor launch mode does not match persisted service run")
+	switch inspection.State {
+	case processruntime.RecoveryTerminal:
+		return s.restoreTerminalProcess(ctx, scope, definition.Name, runtime, inspection.Status)
+	case processruntime.RecoveryGone:
+		return s.markRecoveredRuntimeStopped(ctx, scope, definition.Name, runtime, "previous process runtime is no longer running", "")
+	case processruntime.RecoveryLive:
+		// Continue with authenticated attachment below.
+	default:
+		if inspection.Err != nil {
+			return inspection.Err
+		}
+		return errors.New("persisted process state cannot be verified")
 	}
 	result, err := s.processes.Attach(probeCtx, scope, definition.Name, runtime.Generation, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
 	if err != nil {
@@ -371,6 +365,55 @@ func (s *Service) reconcileProcess(ctx context.Context, scope string, definition
 	})
 }
 
+func (s *Service) restoreTerminalProcess(ctx context.Context, scope, serviceName string, runtime database.ServiceRuntimeRecord, persisted supervisor.Status) error {
+	status, terminal := recoveredTerminalStatus(persisted.State)
+	if !terminal {
+		return fmt.Errorf("supervisor returned non-terminal state %s", persisted.State)
+	}
+	if status == model.ServiceStopped {
+		return s.markRecoveredRuntimeStopped(ctx, scope, serviceName, runtime, persisted.Error, "")
+	}
+	reason := persisted.Error
+	if reason == "" && status == model.ServiceExited {
+		reason = "process exited while the Portless daemon was unavailable"
+	}
+	now := time.Now().UTC()
+	started := runtime.StartedAt
+	if started == nil && !persisted.StartedAt.IsZero() {
+		started = &persisted.StartedAt
+	}
+	debugger := cloneDebugger(runtime.Debugger)
+	if debugger != nil {
+		debugger.State = "stopped"
+	}
+	s.proxy.RemoveTarget(scope, serviceName)
+	return s.database.SetServiceRuntime(ctx, scope, serviceName, database.ServiceRuntimeUpdate{
+		Status: status, Reason: reason, Generation: runtime.Generation, PID: persisted.PID,
+		UpstreamPort: persisted.Port, StartedAt: started, RestartCount: runtime.RestartCount,
+		LogPath: persisted.LogDirectory, PrivateRunKey: runtime.PrivateRunKey,
+		OwnerInstanceID: s.daemonInstanceID, SupervisorSocket: runtime.SupervisorSocket,
+		SupervisorState: runtime.SupervisorState, SupervisorPID: persisted.SupervisorPID, ObservedAt: &now,
+		LaunchMode: runtime.LaunchMode, Debugger: debugger,
+	})
+}
+
+func (s *Service) markRecoveredRuntimeStopped(ctx context.Context, scope, serviceName string, runtime database.ServiceRuntimeRecord, reason, containerName string) error {
+	now := time.Now().UTC()
+	debugger := cloneDebugger(runtime.Debugger)
+	if debugger != nil {
+		debugger.State = "stopped"
+	}
+	s.proxy.RemoveTarget(scope, serviceName)
+	s.mu.Lock()
+	delete(s.containerEnvironment, targetEnvironmentKey(scope, serviceName))
+	s.mu.Unlock()
+	return s.database.SetServiceRuntime(ctx, scope, serviceName, database.ServiceRuntimeUpdate{
+		Status: model.ServiceStopped, Reason: reason, Generation: runtime.Generation,
+		StartedAt: runtime.StartedAt, RestartCount: runtime.RestartCount, LogPath: runtime.LogPath,
+		ContainerName: containerName, ObservedAt: &now, LaunchMode: runtime.LaunchMode, Debugger: debugger,
+	})
+}
+
 func debuggersEqual(left, right *model.DebuggerRuntime) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -394,6 +437,20 @@ func recoveredTerminalStatus(state string) (model.ServiceStatus, bool) {
 func (s *Service) reconcileContainer(ctx context.Context, scope string, environment model.Environment, definition model.ServiceDefinition, runtime database.ServiceRuntimeRecord, privateEnvironmentKey, logsRoot string) error {
 	if runtime.Generation <= 0 {
 		return errors.New("container generation is missing")
+	}
+	inspection, err := s.containers.InspectRecovery(ctx, privateEnvironmentKey, definition, runtime.Generation, runtime.ContainerName)
+	if err != nil {
+		return err
+	}
+	switch inspection.State {
+	case container.RecoveryStopped:
+		return s.markRecoveredRuntimeStopped(ctx, scope, definition.Name, runtime, "previous managed container is stopped", inspection.ContainerName)
+	case container.RecoveryMissing:
+		return s.markRecoveredRuntimeStopped(ctx, scope, definition.Name, runtime, "previous managed container is no longer present", "")
+	case container.RecoveryRunning:
+		// Continue with adoption below.
+	default:
+		return errors.New("managed container recovery returned an invalid state")
 	}
 	result, err := s.containers.Adopt(ctx, environment.Project+"-"+environment.Name, privateEnvironmentKey, definition, runtime.Generation, logsRoot)
 	if err != nil {

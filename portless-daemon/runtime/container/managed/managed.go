@@ -204,6 +204,11 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	}, nil
 }
 
+// InspectRecovery verifies ownership and classifies a persisted container without changing it.
+func (m *Manager) InspectRecovery(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, expectedName string) (container.RecoveryInspection, error) {
+	return m.inspectRecoverableContainer(ctx, environmentKey, service, plan, generation, expectedName)
+}
+
 // Verify checks an existing container's ownership, resource identity, generation, and port.
 func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, containerName string) error {
 	_, _, err := m.verifyAdoptableContainer(ctx, environmentKey, service, plan, generation, containerName)
@@ -211,47 +216,87 @@ func (m *Manager) Verify(ctx context.Context, environmentKey string, service mod
 }
 
 func (m *Manager) verifyAdoptableContainer(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, expectedName string) (string, int, error) {
-	if service.Kind != model.ServiceResource || service.Resource == nil {
-		return "", 0, errors.New("only resource services can be verified")
-	}
-	if result := m.Probe(ctx); result.State != "ready" {
-		return "", 0, errors.New(result.Reason)
-	}
-	names, err := m.ownedServiceContainers(ctx, environmentKey, service.Name)
+	inspection, err := m.inspectRecoverableContainer(ctx, environmentKey, service, plan, generation, expectedName)
 	if err != nil {
 		return "", 0, err
 	}
-	if len(names) == 0 {
+	switch inspection.State {
+	case container.RecoveryRunning:
+		return inspection.ContainerName, inspection.Port, nil
+	case container.RecoveryStopped:
+		return "", 0, fmt.Errorf("managed %s container is not running", service.Name)
+	case container.RecoveryMissing:
 		return "", 0, fmt.Errorf("managed %s container is missing", service.Name)
+	default:
+		return "", 0, fmt.Errorf("managed %s container recovery returned an invalid state", service.Name)
+	}
+}
+
+func (m *Manager) inspectRecoverableContainer(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, expectedName string) (container.RecoveryInspection, error) {
+	if service.Kind != model.ServiceResource || service.Resource == nil {
+		return container.RecoveryInspection{}, errors.New("only resource services can be verified")
+	}
+	if result := m.Probe(ctx); result.State != "ready" {
+		return container.RecoveryInspection{}, errors.New(result.Reason)
+	}
+	names, err := m.ownedServiceContainers(ctx, environmentKey, service.Name)
+	if err != nil {
+		return container.RecoveryInspection{}, err
+	}
+	if len(names) == 0 {
+		if expectedName == "" {
+			return container.RecoveryInspection{}, fmt.Errorf("managed %s container ownership is missing", service.Name)
+		}
+		exists, err := m.containerNameExists(ctx, expectedName)
+		if err != nil {
+			return container.RecoveryInspection{}, fmt.Errorf("verify expected managed %s container is absent: %w", service.Name, err)
+		}
+		if exists {
+			return container.RecoveryInspection{}, fmt.Errorf("container name %s is in use without the expected Portless ownership labels", expectedName)
+		}
+		return container.RecoveryInspection{State: container.RecoveryMissing, ContainerName: expectedName}, nil
 	}
 	if len(names) != 1 {
-		return "", 0, fmt.Errorf("found %d managed %s containers; refusing ambiguous adoption", len(names), service.Name)
+		return container.RecoveryInspection{}, fmt.Errorf("found %d managed %s containers; refusing ambiguous adoption", len(names), service.Name)
 	}
 	name := names[0]
 	if expectedName != "" && name != expectedName {
-		return "", 0, fmt.Errorf("managed container %s does not match persisted container %s", name, expectedName)
+		return container.RecoveryInspection{}, fmt.Errorf("managed container %s does not match persisted container %s", name, expectedName)
+	}
+	if _, err := m.verifiedContainerID(ctx, name, environmentKey, service.Name); err != nil {
+		return container.RecoveryInspection{}, err
 	}
 	encodedGeneration, labelErr := m.inspectLabel(ctx, name, labelGeneration)
 	if labelErr != nil || encodedGeneration == "" {
-		return "", 0, fmt.Errorf("managed %s container has no recoverable generation label", service.Name)
+		return container.RecoveryInspection{}, fmt.Errorf("managed %s container has no recoverable generation label", service.Name)
 	}
 	actual, parseErr := strconv.ParseInt(encodedGeneration, 10, 64)
 	if parseErr != nil || actual != generation {
-		return "", 0, fmt.Errorf("managed %s container generation does not match persisted generation %d", service.Name, generation)
+		return container.RecoveryInspection{}, fmt.Errorf("managed %s container generation does not match persisted generation %d", service.Name, generation)
 	}
 	for label, expected := range map[string]string{
 		labelResourceType: service.Resource.Type, labelResourceVersion: service.Resource.Version, labelResourceImage: plan.Image,
 	} {
 		actual, labelErr := m.inspectLabel(ctx, name, label)
 		if labelErr != nil || actual != expected {
-			return "", 0, fmt.Errorf("managed %s container resource identity does not match %s %s", service.Name, service.Resource.Type, service.Resource.Version)
+			return container.RecoveryInspection{}, fmt.Errorf("managed %s container resource identity does not match %s %s", service.Name, service.Resource.Type, service.Resource.Version)
 		}
 	}
-	running, port := m.inspectRunning(ctx, name, plan.ClientPort)
-	if !running || port == 0 {
-		return "", 0, fmt.Errorf("managed %s container is not running", service.Name)
+	running, err := m.containerRunning(ctx, name)
+	if err != nil {
+		return container.RecoveryInspection{}, fmt.Errorf("inspect managed %s container state: %w", service.Name, err)
 	}
-	return name, port, nil
+	if !running {
+		return container.RecoveryInspection{State: container.RecoveryStopped, ContainerName: name}, nil
+	}
+	port, err := m.publishedPort(ctx, name, plan.ClientPort)
+	if err != nil {
+		return container.RecoveryInspection{}, fmt.Errorf("inspect managed %s published port: %w", service.Name, err)
+	}
+	if port == 0 {
+		return container.RecoveryInspection{}, fmt.Errorf("managed %s container has no published port", service.Name)
+	}
+	return container.RecoveryInspection{State: container.RecoveryRunning, ContainerName: name, Port: port}, nil
 }
 
 func (m *Manager) ownedServiceContainers(ctx context.Context, environmentKey, serviceName string) ([]string, error) {
@@ -265,6 +310,19 @@ func (m *Manager) ownedServiceContainers(ctx context.Context, environmentKey, se
 		return nil, fmt.Errorf("find managed %s container: %w", serviceName, err)
 	}
 	return nonemptyLines(string(output)), nil
+}
+
+func (m *Manager) containerNameExists(ctx context.Context, expectedName string) (bool, error) {
+	output, err := m.output(ctx, "ps", "-a", "--format", "{{.Names}}")
+	if err != nil {
+		return false, err
+	}
+	for _, name := range nonemptyLines(string(output)) {
+		if name == expectedName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *Manager) verifiedContainerID(ctx context.Context, name, environmentKey, serviceName string) (string, error) {
@@ -502,13 +560,19 @@ func (m *Manager) verifyResourceLabels(ctx context.Context, kind, name string, e
 	return nil
 }
 
-func (m *Manager) inspectRunning(ctx context.Context, name string, containerPort int) (bool, int) {
+func (m *Manager) containerRunning(ctx context.Context, name string) (bool, error) {
 	output, err := m.output(ctx, "inspect", "--format", "{{.State.Running}}", name)
-	if err != nil || strings.TrimSpace(string(output)) != "true" {
-		return false, 0
+	if err != nil {
+		return false, err
 	}
-	port, err := m.publishedPort(ctx, name, containerPort)
-	return err == nil, port
+	switch strings.TrimSpace(string(output)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, errors.New("container returned an invalid running state")
+	}
 }
 
 func (m *Manager) inspectEnvironment(ctx context.Context, name string) (map[string]string, error) {

@@ -150,6 +150,26 @@ func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey str
 	return adopter.Adopt(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
 }
 
+// InspectRecovery verifies whether a persisted managed container is running, stopped, or conclusively missing.
+func (m *Manager) InspectRecovery(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) (RecoveryInspection, error) {
+	plan, err := m.resourcePlan(service)
+	if err != nil {
+		return RecoveryInspection{}, err
+	}
+	runtime, err := m.readyRuntime(ctx)
+	if err != nil {
+		return RecoveryInspection{}, err
+	}
+	inspector, ok := runtime.(RecoveryInspector)
+	if !ok {
+		return RecoveryInspection{}, errors.New("selected container runtime does not support recovery inspection")
+	}
+	if err := m.markUsed(runtime.Name()); err != nil {
+		return RecoveryInspection{}, fmt.Errorf("record used container runtime: %w", err)
+	}
+	return inspector.InspectRecovery(ctx, environmentKey, service, plan, generation, containerName)
+}
+
 // Verify checks persisted container identity and ownership through the selected runtime.
 func (m *Manager) Verify(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) error {
 	plan, err := m.resourcePlan(service)

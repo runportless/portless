@@ -4,17 +4,20 @@ package e2e_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/model"
 )
 
@@ -103,6 +106,75 @@ func TestCLIManagedResourcePluginLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCLIManagedResourceRebootRecovery(t *testing.T) {
+	if os.Getenv(managedResourceE2EEnvironment) != "1" {
+		t.Skip(managedResourceE2EEnvironment + "=1 is required for real container lifecycle coverage")
+	}
+	binary := e2eBinary(t)
+	home, checkout := isolatedFixture(t, "store-lite")
+	defer cleanupInstallation(t, binary, home, checkout)
+	appendResourceMarker(t, checkout, "REDIS_URL=redis://redis\n")
+	selectRequestedRuntime(t, binary, home, checkout)
+
+	if output, err := runCLIAt(binary, home, checkout, "up", "--name", "resource-reboot-e2e", "--no-open", "--timeout", "4m"); err != nil {
+		t.Fatalf("start managed-resource reboot environment: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	before := environmentStatus(t, binary, home, checkout)
+	redisBefore := requireService(t, before, "redis")
+	if response := valkeyCommand(t, managedResourceProbeAddress(t, redisBefore), "SET", "reboot-proof", "preserved"); response != "OK" {
+		t.Fatalf("Valkey SET response = %q", response)
+	}
+	if response := valkeyCommand(t, managedResourceProbeAddress(t, redisBefore), "SAVE"); response != "OK" {
+		t.Fatalf("Valkey SAVE response = %q", response)
+	}
+	selector := "resource-reboot-e2e/local"
+	processes := persistedProcessRuntimes(t, home, selector)
+	resource := persistedServiceRuntime(t, home, selector, "redis")
+	if resource.ContainerName == "" {
+		t.Fatal("managed Valkey runtime has no persisted container name")
+	}
+	runtimeName := selectedManagedRuntime(t, binary, home, checkout)
+	daemon := daemonStatus(t, binary, home, checkout)
+	strandReadyProcessRuntimes(t, daemon.PID, processes)
+
+	stopContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	stopCommand := exec.CommandContext(stopContext, runtimeName, "stop", resource.ContainerName)
+	stopOutput, stopErr := stopCommand.CombinedOutput()
+	cancel()
+	if stopErr != nil {
+		t.Fatalf("stop isolated managed container %s with %s: %v\n%s", resource.ContainerName, runtimeName, stopErr, stopOutput)
+	}
+
+	output, err := runCLIAt(binary, home, checkout, "up", "--no-open", "--timeout", "4m")
+	if err != nil {
+		t.Fatalf("up did not recover stopped managed resource: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
+	}
+	after := environmentStatus(t, binary, home, checkout)
+	if after.Status != model.EnvironmentHealthy {
+		t.Fatalf("managed-resource environment after reboot recovery = %s: %#v", after.Status, after)
+	}
+	redisAfter := requireService(t, after, "redis")
+	if redisAfter.Status != model.ServiceReady || redisAfter.Generation != redisBefore.Generation+1 || redisAfter.UpstreamPort == 0 {
+		t.Fatalf("Valkey container was not recreated at the next generation: before=%#v after=%#v", redisBefore, redisAfter)
+	}
+	if value := valkeyCommand(t, managedResourceProbeAddress(t, redisAfter), "GET", "reboot-proof"); value != "preserved" {
+		t.Fatalf("Valkey volume did not survive reboot recovery: %q", value)
+	}
+	for _, previous := range before.Services {
+		if previous.Kind != model.ServiceProcess {
+			continue
+		}
+		current := requireService(t, after, previous.Name)
+		if current.Status != model.ServiceReady || current.PID == 0 || current.PID == previous.PID || current.Generation != previous.Generation+1 {
+			t.Fatalf("process service %s was not restarted after reboot: before=%#v after=%#v", previous.Name, previous, current)
+		}
+	}
+	recoveredDaemon := daemonStatus(t, binary, home, checkout)
+	if recoveredDaemon.RuntimeState != "ready" || !recoveredDaemon.HandoffReady || len(recoveredDaemon.RecoveryProblems) != 0 {
+		t.Fatalf("daemon remained unhealthy after managed-resource recovery: %#v", recoveredDaemon)
 	}
 }
 
@@ -197,6 +269,42 @@ func selectRequestedRuntime(t *testing.T, binary, home, checkout string) {
 	if preference != "auto" && status.Selected != preference {
 		t.Fatalf("runtime selected %q, want %q: %#v", status.Selected, preference, status)
 	}
+}
+
+func selectedManagedRuntime(t *testing.T, binary, home, checkout string) string {
+	t.Helper()
+	output, err := runCLIAt(binary, home, checkout, "--json", "runtime", "status")
+	if err != nil {
+		t.Fatalf("inspect selected runtime: %v\n%s", err, output)
+	}
+	var status struct {
+		Selected string `json:"selected"`
+		State    string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("decode selected runtime: %v\n%s", err, output)
+	}
+	if status.State != "ready" || status.Selected == "" {
+		t.Fatalf("managed runtime is not ready: %#v", status)
+	}
+	return status.Selected
+}
+
+func persistedServiceRuntime(t *testing.T, home, selector, service string) database.ServiceRuntimeRecord {
+	t.Helper()
+	controlStore, err := database.Open(filepath.Join(home, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, runtimeErr := controlStore.ServiceRuntime(context.Background(), selector, service)
+	closeErr := controlStore.Close()
+	if runtimeErr != nil {
+		t.Fatal(runtimeErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	return runtime
 }
 
 func appendResourceMarker(t *testing.T, checkout, marker string) {

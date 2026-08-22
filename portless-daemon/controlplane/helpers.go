@@ -13,10 +13,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/portless-run/portless/portless-daemon/database"
 	"github.com/portless-run/portless/portless-daemon/events"
 	"github.com/portless-run/portless/portless-daemon/model"
 	"github.com/portless-run/portless/portless-daemon/networking"
 	"github.com/portless-run/portless/portless-daemon/providers"
+	processruntime "github.com/portless-run/portless/portless-daemon/runtime/process"
 )
 
 func (s *Service) decorateProject(project model.Project) model.Project {
@@ -187,6 +189,15 @@ func nonNilStrings(values []string) []string {
 		return []string{}
 	}
 	return values
+}
+
+func persistedProcessRun(scope string, runtime database.ServiceRuntimeRecord) processruntime.PersistedRun {
+	return processruntime.PersistedRun{
+		Scope: scope, Service: runtime.ServiceName, Generation: runtime.Generation,
+		PID: runtime.PID, SupervisorPID: runtime.SupervisorPID,
+		SupervisorSocket: runtime.SupervisorSocket, SupervisorState: runtime.SupervisorState,
+		PrivateRunKey: runtime.PrivateRunKey, LaunchMode: runtime.LaunchMode, Debugger: cloneDebugger(runtime.Debugger),
+	}
 }
 
 func serviceDefinitionForEnvironment(environment model.Environment, name string) (model.ServiceDefinition, bool) {

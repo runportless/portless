@@ -79,12 +79,13 @@ type Manager struct {
 	supervised bool
 	monitorCtx context.Context
 	cancel     context.CancelFunc
+	recovery   recoveryHooks
 }
 
 // NewManager constructs an in-process manager without restart-surviving supervisors.
 func NewManager(onExit func(ExitEvent)) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{runs: make(map[string]*managedProcess), onExit: onExit, monitorCtx: ctx, cancel: cancel}
+	return &Manager{runs: make(map[string]*managedProcess), onExit: onExit, monitorCtx: ctx, cancel: cancel, recovery: defaultRecoveryHooks()}
 }
 
 // NewSupervisedManager constructs a manager whose child supervisors survive daemon replacement.

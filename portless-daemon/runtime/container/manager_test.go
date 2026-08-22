@@ -15,13 +15,16 @@ import (
 )
 
 type fakeRuntime struct {
-	name       RuntimeName
-	probe      ProbeResult
-	startCalls int
-	adoptCalls int
-	resetCalls int
-	resetError error
-	lastPlan   providers.ContainerPlan
+	name         RuntimeName
+	probe        ProbeResult
+	startCalls   int
+	adoptCalls   int
+	inspectCalls int
+	resetCalls   int
+	resetError   error
+	lastPlan     providers.ContainerPlan
+	inspection   RecoveryInspection
+	inspectError error
 }
 
 func (r *fakeRuntime) Name() RuntimeName { return r.name }
@@ -41,6 +44,10 @@ func (r *fakeRuntime) Start(_ context.Context, _, _ string, _ model.ServiceDefin
 func (r *fakeRuntime) Adopt(context.Context, string, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (StartResult, error) {
 	r.adoptCalls++
 	return StartResult{ContainerName: "adopted", Port: 54321}, nil
+}
+func (r *fakeRuntime) InspectRecovery(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (RecoveryInspection, error) {
+	r.inspectCalls++
+	return r.inspection, r.inspectError
 }
 
 func newTestManager(statePath string, runtimes ...Runtime) *Manager {
@@ -107,6 +114,23 @@ func TestAdoptUsesThePersistedSelectedRuntime(t *testing.T) {
 	}
 	if result.ContainerName != "adopted" || docker.adoptCalls != 1 || podman.adoptCalls != 0 {
 		t.Fatalf("adoption used the wrong runtime: result=%#v docker=%d podman=%d", result, docker.adoptCalls, podman.adoptCalls)
+	}
+}
+
+func TestRecoveryInspectionUsesThePersistedSelectedRuntime(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "runtime.json")
+	docker := &fakeRuntime{name: RuntimeDocker, probe: ProbeResult{State: "ready"}, inspection: RecoveryInspection{State: RecoveryStopped, ContainerName: "postgres"}}
+	podman := &fakeRuntime{name: RuntimePodman, probe: ProbeResult{State: "ready"}}
+	manager := newTestManager(statePath, docker, podman)
+	if err := manager.SetPreference(RuntimeDocker); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := manager.InspectRecovery(context.Background(), "private", model.ServiceDefinition{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432}, 2, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != RecoveryStopped || docker.inspectCalls != 1 || podman.inspectCalls != 0 {
+		t.Fatalf("inspection=%#v docker=%d podman=%d", inspection, docker.inspectCalls, podman.inspectCalls)
 	}
 }
 

@@ -61,6 +61,25 @@ type StartResult struct {
 	LogDirectory  string
 }
 
+// RecoveryState classifies the persisted state of one managed resource container.
+type RecoveryState string
+
+const (
+	// RecoveryRunning means the expected owned container is running and can be adopted.
+	RecoveryRunning RecoveryState = "running"
+	// RecoveryStopped means the expected owned container exists with matching identity but is stopped.
+	RecoveryStopped RecoveryState = "stopped"
+	// RecoveryMissing means the expected container is conclusively absent from the reachable persisted runtime.
+	RecoveryMissing RecoveryState = "missing"
+)
+
+// RecoveryInspection describes a verified running, stopped, or missing managed container.
+type RecoveryInspection struct {
+	State         RecoveryState
+	ContainerName string
+	Port          int
+}
+
 // ResetResult counts installation-owned artifacts removed from a runtime.
 type ResetResult struct {
 	Runtime    RuntimeName `json:"runtime"`
@@ -91,6 +110,12 @@ type Runtime interface {
 type Adopter interface {
 	// Adopt verifies ownership and resumes observation of an existing container.
 	Adopt(context.Context, string, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (StartResult, error)
+}
+
+// RecoveryInspector verifies container ownership and distinguishes safe inactivity from ambiguity.
+type RecoveryInspector interface {
+	// InspectRecovery checks one persisted resource container without adopting or changing it.
+	InspectRecovery(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (RecoveryInspection, error)
 }
 
 // Verifier checks that a persisted container still matches expected ownership and identity.
