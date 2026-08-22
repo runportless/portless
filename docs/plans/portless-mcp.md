@@ -632,8 +632,8 @@ redaction, and size behavior cannot drift.
 
 ### Documentation
 
-- Add a user guide at `docs/mcp.md` covering client configuration, default
-  workspace scope, permission flags, tool inventory, data sensitivity,
+- Add a user guide at `portless-mcp/README.md` covering client configuration,
+  default workspace scope, permission flags, tool inventory, data sensitivity,
   troubleshooting, and example diagnostic flows.
 - Update `README.md` with the implemented capability and a generic MCP client
   configuration:

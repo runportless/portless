@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ func TestCanonicalModuleAndReleaseConfiguration(t *testing.T) {
 		".goreleaser.yaml",
 		filepath.Join(".github", "workflows", "ci.yml"),
 		filepath.Join(".github", "workflows", "release.yml"),
+		filepath.Join(".github", "dependabot.yml"),
 	} {
 		content, err := os.ReadFile(filepath.Join(root, relative))
 		if err != nil {
@@ -37,6 +39,35 @@ func TestCanonicalModuleAndReleaseConfiguration(t *testing.T) {
 		}
 		if strings.Contains(string(content), "github.com/portless-run/portless") {
 			t.Errorf("%s contains the retired repository identity", relative)
+		}
+	}
+}
+
+func TestReleaseWorkflowActionsAreCommitPinned(t *testing.T) {
+	root := repositoryRoot(t)
+	commit := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	for _, relative := range []string{
+		filepath.Join(".github", "workflows", "ci.yml"),
+		filepath.Join(".github", "workflows", "release.yml"),
+	} {
+		content, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "uses: ") {
+				continue
+			}
+			action, reference, ok := strings.Cut(strings.TrimPrefix(line, "uses: "), "@")
+			if !ok {
+				t.Errorf("%s action %q has no reference", relative, action)
+				continue
+			}
+			reference, _, _ = strings.Cut(reference, " ")
+			if !commit.MatchString(reference) {
+				t.Errorf("%s action %s is not pinned to a full commit: %q", relative, action, reference)
+			}
 		}
 	}
 }

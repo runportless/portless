@@ -168,6 +168,10 @@ func TestLauncherClassifierPreservesHomebrewLauncher(t *testing.T) {
 	if removed, err := command.RemoveLauncher(plan); err != nil || removed {
 		t.Fatalf("Homebrew launcher removal = %v, %v; want preserved", removed, err)
 	}
+	plan = command.ClassifyLauncher(executable, executable, []string{filepath.Dir(executable)}, "homebrew")
+	if plan.Action != "preserve" || plan.Kind != "regular-file" || !strings.Contains(plan.Reason, "brew uninstall runportless/tap/portless") {
+		t.Fatalf("Homebrew Cellar executable was not preserved for Homebrew: %#v", plan)
+	}
 }
 
 func TestExecuteUninstallStepsUsesSafeOrderAndDoesNotCancelAfterStateRemoval(t *testing.T) {

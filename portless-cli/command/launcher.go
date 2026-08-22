@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const homebrewLauncherReason = "launcher is managed by Homebrew; run `brew uninstall runportless/tap/portless` after Portless state removal"
+
 // InspectLauncher builds a conservative uninstall plan for the launcher used
 // to invoke the current process. A package-managed distribution is preserved
 // for its package manager to remove.
@@ -81,7 +83,7 @@ func ClassifyLauncher(invocation, executable string, installDirectories []string
 		plan.Target = target
 		if SameFile(target, executable) {
 			if distribution == "homebrew" {
-				plan.Reason = "launcher is managed by Homebrew; run `brew uninstall runportless/tap/portless` after Portless state removal"
+				plan.Reason = homebrewLauncherReason
 				return plan
 			}
 			plan.Action = "remove"
@@ -104,6 +106,10 @@ func ClassifyLauncher(invocation, executable string, installDirectories []string
 	}
 	if !DirectoryRecognized(filepath.Dir(plan.Path), installDirectories) {
 		plan.Reason = "running executable is outside a recognized CLI install directory; source-tree builds are never removed automatically"
+		return plan
+	}
+	if distribution == "homebrew" {
+		plan.Reason = homebrewLauncherReason
 		return plan
 	}
 	plan.Action = "remove"

@@ -5,6 +5,10 @@ host over stdin/stdout. It is a client adapter over the same authenticated,
 typed daemon API used by the CLI. It does not open a network listener, expose
 the daemon token, or add an MCP route to the daemon.
 
+`portless-mcp` is a library consumed only by `portless-cli/administration`;
+it is not installed as another executable. The public entry point remains
+`portless mcp serve` in the distributed `portless` binary.
+
 The safe default is deliberate: the server is read-only and limited to
 environments associated with the workspace in which the MCP process starts.
 Capability flags and scope are fixed at startup, so an MCP tool call cannot
@@ -257,3 +261,25 @@ For an asynchronous restart with lifecycle permission:
 
 Closing stdin cleanly stops the MCP server. Portless writes no human output to
 stdout while serving because that stream belongs exclusively to the protocol.
+
+## Development
+
+Run focused checks from the repository root:
+
+```bash
+go test ./portless-mcp
+go test ./portless-cli/administration
+go test ./tests/architecture
+```
+
+The package depends on the official MCP Go SDK and only the daemon API client
+and contract. It must not import CLI or daemon implementation packages. Update
+the tool inventory, scope and capability documentation, result bounds, and
+nearby tests together when the MCP surface changes.
+
+## Further reading
+
+- [Repository overview](../README.md)
+- [CLI command reference](../portless-cli/COMMANDS.md#mcp-server)
+- [Daemon boundary](../portless-daemon/README.md)
+- [MCP implementation plan](../docs/plans/portless-mcp.md)

@@ -175,4 +175,4 @@ separate explicit authorization.
 - [Public names and private ownership keys](../docs/architecture/decisions/0002-names-public-keys-private.md)
 - [Source-aware edge proxy decision](../docs/architecture/decisions/0003-edge-proxy.md)
 - [Package ownership and dependency direction](../docs/plans/package-structure-refactor.md)
-- [MCP boundary](../docs/mcp.md)
+- [MCP boundary](../portless-mcp/README.md)
