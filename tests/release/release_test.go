@@ -72,6 +72,45 @@ func TestReleaseWorkflowActionsAreCommitPinned(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowRequiresApprovalOnlyForFinalPublication(t *testing.T) {
+	root := repositoryRoot(t)
+	content, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Needs       string `yaml:"needs"`
+			Environment string `yaml:"environment"`
+			Steps       []struct {
+				Name string `yaml:"name"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(content, &workflow); err != nil {
+		t.Fatal(err)
+	}
+
+	release := workflow.Jobs["release"]
+	publish := workflow.Jobs["publish"]
+	homebrew := workflow.Jobs["homebrew"]
+	if release.Environment != "" {
+		t.Fatalf("release staging job unexpectedly uses environment %q", release.Environment)
+	}
+	if publish.Needs != "release" || publish.Environment != "release" {
+		t.Fatalf("publish job must depend on release staging and use the release environment: %#v", publish)
+	}
+	if homebrew.Needs != "publish" {
+		t.Fatalf("Homebrew proposal must wait for publication, got needs %q", homebrew.Needs)
+	}
+	if !workflowHasStep(publish.Steps, "Publish release") {
+		t.Fatal("publish job does not contain the final release publication step")
+	}
+	if workflowHasStep(release.Steps, "Publish release") {
+		t.Fatal("release staging job publishes without the approval environment")
+	}
+}
+
 func TestHomebrewFormulaRenderer(t *testing.T) {
 	root := repositoryRoot(t)
 	output := filepath.Join(t.TempDir(), "Formula", "portless.rb")
@@ -112,11 +151,37 @@ func TestHomebrewFormulaRenderer(t *testing.T) {
 	}
 }
 
-func TestHomebrewFormulaRendererRejectsUnstableVersionAndInvalidChecksum(t *testing.T) {
+func TestHomebrewFormulaRendererAcceptsPrereleaseVersion(t *testing.T) {
+	root := repositoryRoot(t)
+	output := filepath.Join(t.TempDir(), "Formula", "portless.rb")
+	checksum := strings.Repeat("cd", 32)
+	command := exec.Command(filepath.Join(root, "scripts", "render-homebrew-formula.sh"), "0.1.0-alpha.1", checksum, output)
+	command.Dir = root
+	if result, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("render prerelease formula: %v\n%s", err, result)
+	}
+	content, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formula := string(content)
+	for _, expected := range []string{
+		"releases/download/v0.1.0-alpha.1/portless_0.1.0-alpha.1_source.tar.gz",
+		`version "0.1.0-alpha.1"`,
+	} {
+		if !strings.Contains(formula, expected) {
+			t.Errorf("rendered prerelease formula does not contain %q", expected)
+		}
+	}
+}
+
+func TestHomebrewFormulaRendererRejectsInvalidVersionAndChecksum(t *testing.T) {
 	root := repositoryRoot(t)
 	script := filepath.Join(root, "scripts", "render-homebrew-formula.sh")
 	for _, arguments := range [][]string{
-		{"1.2.3-rc.1", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
+		{"v1.2.3", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
+		{"1.2.3-alpha.01", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
+		{"1.2", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
 		{"1.2.3", "not-a-checksum", filepath.Join(t.TempDir(), "portless.rb")},
 	} {
 		command := exec.Command(script, arguments...)
@@ -125,6 +190,17 @@ func TestHomebrewFormulaRendererRejectsUnstableVersionAndInvalidChecksum(t *test
 			t.Fatalf("renderer accepted invalid arguments %#v", arguments)
 		}
 	}
+}
+
+func workflowHasStep(steps []struct {
+	Name string `yaml:"name"`
+}, name string) bool {
+	for _, step := range steps {
+		if step.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func repositoryRoot(t *testing.T) string {

@@ -25,8 +25,10 @@ Portless currently targets macOS and systemd-based Linux on AMD64 and ARM64.
 Docker Engine or Podman is needed only for environments with managed container
 resources.
 
-There is not yet a tagged public release. Build the current implementation
-from source with Go 1.26 or newer, Node.js 22.12 or newer, and npm:
+There is not yet a stable public release. Build the current implementation
+from source with Go 1.26 or newer, Node.js 22.12 or newer, and npm. Prerelease
+artifacts, when present, are intended for release-pipeline validation and early
+evaluation:
 
 ```bash
 git clone https://github.com/runportless/portless.git

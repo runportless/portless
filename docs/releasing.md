@@ -2,17 +2,20 @@
 
 Portless publishes from the canonical
 [`runportless/portless`](https://github.com/runportless/portless) repository
-under the Apache-2.0 license. Stable `vMAJOR.MINOR.PATCH` tags create macOS and
-Linux archives for AMD64 and ARM64, SHA-256 checksums, SPDX JSON SBOMs, and
-GitHub build-provenance attestations. The same workflow proposes the
-source-built macOS formula `portless` to
+under the Apache-2.0 license. Stable `vMAJOR.MINOR.PATCH` and prerelease
+`vMAJOR.MINOR.PATCH-PRERELEASE` tags create macOS and Linux archives for AMD64
+and ARM64, SHA-256 checksums, SPDX JSON SBOMs, and GitHub build-provenance
+attestations. The same workflow proposes the source-built macOS formula
+`portless` to
 `runportless/homebrew-tap`.
 
-The release is intentionally split at one review boundary:
+The release has two explicit review boundaries:
 
-1. The tag workflow tests and publishes the immutable GitHub artifacts.
-2. A scoped GitHub App opens or updates a tap pull request.
-3. A maintainer reviews the tap checks and publishes Homebrew bottles with the
+1. The tag workflow tests and stages an immutable draft GitHub release.
+2. A required reviewer approves the `release` environment immediately before
+   the workflow makes that draft public.
+3. A scoped GitHub App opens or updates a tap pull request.
+4. A maintainer reviews the tap checks and publishes Homebrew bottles with the
    tap's generated `brew pr-pull` workflow.
 
 The formula is always installed as `runportless/tap/portless`. An unrelated
@@ -49,8 +52,11 @@ In `runportless/portless`, configure:
 
 - Actions variable `HOMEBREW_TAP_APP_CLIENT_ID` with the App's client ID.
 - Actions secret `HOMEBREW_TAP_APP_PRIVATE_KEY` with one App private key.
-- Optional protected environments named `release` and `homebrew` if a manual
-  approval gate is desired.
+- A protected environment named `release` with the publishing maintainer as a
+  required reviewer. Allow self-review when that maintainer also pushes the
+  release tag. The `homebrew` environment does not require a reviewer because
+  its job only opens a pull request; the `pr-pull` label remains the bottle
+  publication gate.
 
 The workflow requests a short-lived installation token scoped again to
 `runportless/homebrew-tap`; the normal repository `GITHUB_TOKEN` publishes only
@@ -80,14 +86,25 @@ of `origin/main`.
 
 ## Publish a release
 
-Create an annotated stable SemVer tag and push only that tag:
+Create an annotated SemVer tag and push only that tag:
 
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v1.2.3 -m "Portless 1.2.3"
+git tag -s v1.2.3 -m "Portless 1.2.3"
 git push origin v1.2.3
 ```
+
+Prereleases use the same flow with a SemVer prerelease suffix:
+
+```bash
+git tag -s v0.1.0-alpha.1 -m "Portless 0.1.0 alpha 1"
+git push origin v0.1.0-alpha.1
+```
+
+GitHub marks a prerelease tag accordingly. To validate Homebrew proposal
+plumbing without making the prerelease the tap's default formula, let its tap
+pull request finish testing but do not apply the `pr-pull` label.
 
 Signing the annotated tag is recommended when maintainer signing is available.
 The release workflow then:
@@ -97,8 +114,9 @@ The release workflow then:
 3. builds reproducible, CGO-disabled archives with GoReleaser;
 4. checks every SHA-256 digest and runs the Linux AMD64 artifact;
 5. creates SBOM and provenance attestations;
-6. publishes the GitHub release that GoReleaser staged as a draft; and
-7. renders `Formula/portless.rb` from the released source-archive checksum and
+6. waits for the required `release` environment approval;
+7. publishes the GitHub release that GoReleaser staged as a draft; and
+8. renders `Formula/portless.rb` from the released source-archive checksum and
    opens a pull request in the tap.
 
 The source archive is the Homebrew formula input. The formula compiles the
@@ -112,7 +130,7 @@ tracked embedded web assets with the current Go toolchain and links:
 
 In the tap pull request:
 
-1. Confirm the URL points to `runportless/portless` and the expected stable tag.
+1. Confirm the URL points to `runportless/portless` and the expected release tag.
 2. Confirm the SHA-256 matches `checksums.txt` on the GitHub release.
 3. Require the generated macOS formula and bottle checks to pass.
 4. Apply the `pr-pull` label. The tap's generated workflow runs `brew pr-pull`,
