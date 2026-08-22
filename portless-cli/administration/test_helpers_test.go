@@ -5,10 +5,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-cli/doctor"
-	"github.com/portless-run/portless/portless-daemon/control"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-daemon/control"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 func newTestCommands(t *testing.T) (*Commands, *bytes.Buffer, *bytes.Buffer) {

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-cli/doctor"
-	"github.com/portless-run/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-daemon/identity"
 )
 
 func TestConfigHelpShowsColorAndReset(t *testing.T) {

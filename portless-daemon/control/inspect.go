@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/lifecycle"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/lifecycle"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // Inspection compares an authenticated running daemon with its discovery

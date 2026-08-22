@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/database"
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/runtime/container"
-	processruntime "github.com/portless-run/portless/portless-daemon/runtime/process"
+	"github.com/runportless/portless/portless-daemon/database"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/runtime/container"
+	processruntime "github.com/runportless/portless/portless-daemon/runtime/process"
 )
 
 // RuntimeStatus reports the configured and currently selected container runtime.

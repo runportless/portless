@@ -7,9 +7,9 @@ import (
 	"io"
 	"strings"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-relay"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-relay"
 )
 
 // PrintStatus writes the human-readable status table for an environment.

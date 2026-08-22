@@ -49,6 +49,9 @@ export interface RelayStatus {
   running: boolean
   healthy: boolean
   httpHealthy: boolean
+  helperCurrent: boolean
+  helperBuildId?: string
+  currentBuildId?: string
   dnsHealthy: boolean
   resolverPresent: boolean
   resolverHealthy: boolean

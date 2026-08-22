@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/networking"
+	"github.com/runportless/portless/portless-daemon/networking"
 )
 
 func TestRenderLaunchdPlistEscapesSocketAndUsesFixedHelper(t *testing.T) {

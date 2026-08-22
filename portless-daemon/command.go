@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/runtime/supervisor"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // Command parses and runs the private daemon process mode.

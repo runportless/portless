@@ -3,9 +3,9 @@ package administration
 import (
 	"time"
 
-	shared "github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-cli/doctor"
-	"github.com/portless-run/portless/portless-daemon/control"
+	shared "github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-daemon/control"
 	"github.com/spf13/cobra"
 )
 

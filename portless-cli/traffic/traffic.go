@@ -4,9 +4,9 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func (c *Commands) traffic(ctx context.Context, options trafficOptions) error {

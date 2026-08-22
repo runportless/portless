@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func TestExchangeTraceContextPreservesValidParentAndCreatesChild(t *testing.T) {

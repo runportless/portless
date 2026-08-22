@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func (c *Commands) timeline(ctx context.Context, limit int) error {

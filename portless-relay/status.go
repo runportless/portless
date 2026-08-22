@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // InstallationStatus is the complete inspectable state of the platform relay,
@@ -18,6 +20,9 @@ type InstallationStatus struct {
 	Healthy              bool       `json:"healthy"`
 	HTTPHealthy          bool       `json:"httpHealthy"`
 	HelperPresent        bool       `json:"helperPresent"`
+	HelperCurrent        bool       `json:"helperCurrent"`
+	HelperBuildID        string     `json:"helperBuildId,omitempty"`
+	CurrentBuildID       string     `json:"currentBuildId,omitempty"`
 	ConfigurationPresent bool       `json:"configurationPresent"`
 	ReceiptPresent       bool       `json:"receiptPresent"`
 	ResolverPresent      bool       `json:"resolverPresent"`
@@ -90,6 +95,15 @@ func Inspect(ctx context.Context) (InstallationStatus, error) {
 		return status, fmt.Errorf("inspect Portless resolver configuration: %w", err)
 	}
 	status.HelperPresent = helperPresent
+	if helperPresent {
+		helperBuildID, currentBuildID, current, buildErr := inspectHelperBuild(details.HelperPath)
+		status.HelperBuildID = helperBuildID
+		status.CurrentBuildID = currentBuildID
+		status.HelperCurrent = current
+		if buildErr != nil {
+			status.Problem = appendProblem(status.Problem, buildErr.Error())
+		}
+	}
 	status.ConfigurationPresent = configurationPresent
 	status.ReceiptPresent = receiptPresent
 	status.ResolverPresent = resolverPresent
@@ -148,6 +162,18 @@ func Inspect(ctx context.Context) (InstallationStatus, error) {
 		status.Healthy = httpErr == nil && dnsErr == nil && resolverErr == nil && resolverPresent && poolReady && poolErr == nil
 	}
 	return status, nil
+}
+
+func inspectHelperBuild(helperPath string) (helperBuildID, currentBuildID string, current bool, err error) {
+	helperBuildID, err = installation.BuildIDForPath(helperPath)
+	if err != nil {
+		return "", "", false, fmt.Errorf("fingerprint installed relay helper: %w", err)
+	}
+	currentBuildID, err = installation.CurrentBuildID()
+	if err != nil {
+		return helperBuildID, "", false, fmt.Errorf("fingerprint current Portless executable: %w", err)
+	}
+	return helperBuildID, currentBuildID, helperBuildID == currentBuildID, nil
 }
 
 func pathExists(path string) (bool, error) {

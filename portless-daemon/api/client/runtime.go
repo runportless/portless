@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
 // RuntimeStatus returns container-runtime preference and probe results.

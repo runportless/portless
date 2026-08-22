@@ -3,7 +3,7 @@ package administration
 import (
 	"fmt"
 
-	"github.com/portless-run/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/command"
 )
 
 func (c *Commands) printUninstallPreview(result uninstallOutput) error {

@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/lifecycle"
-	"github.com/portless-run/portless/portless-daemon/runtime/container"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/lifecycle"
+	"github.com/runportless/portless/portless-daemon/runtime/container"
+	"github.com/runportless/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-relay"
 )
 
 func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
@@ -111,8 +111,33 @@ func TestRelayChecksHealthyInstallation(t *testing.T) {
 		dnsListening:  func(context.Context) (bool, error) { return true, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, uid, dependencies)
-	if !report.Healthy || report.Summary.Passed != 13 || report.Summary.Failed != 0 {
+	if !report.Healthy || report.Summary.Passed != 14 || report.Summary.Failed != 0 {
 		t.Fatalf("unexpected healthy relay report: %#v", report)
+	}
+}
+
+func TestRelayChecksWarnWhenInstalledHelperIsOutdated(t *testing.T) {
+	paths, err := installation.ResolveLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := 501
+	dependencies := dependencies{
+		lookupIP: loopbackLookup,
+		inspectRelay: func(context.Context) (relay.InstallationStatus, error) {
+			status := healthyRelayStatus(paths, uid)
+			status.HelperCurrent = false
+			status.HelperBuildID = "old-helper-build"
+			status.CurrentBuildID = "current-build"
+			return status, nil
+		},
+		portListening: func(context.Context) (bool, error) { return true, nil },
+		dnsListening:  func(context.Context) (bool, error) { return true, nil },
+	}
+	report := run(context.Background(), paths, ScopeRelay, uid, dependencies)
+	check := checkByCode(t, report, "relay.helper_build")
+	if !report.Healthy || report.Summary.Warnings != 1 || check.Status != StatusWarn || !strings.Contains(check.Remediation, "portless setup") {
+		t.Fatalf("unexpected stale helper report: %#v", report)
 	}
 }
 
@@ -182,7 +207,7 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 		dnsListening:  func(context.Context) (bool, error) { return false, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, os.Getuid(), dependencies)
-	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 9 {
+	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 10 {
 		t.Fatalf("unexpected missing relay report: %#v", report)
 	}
 	if checkByCode(t, report, "relay.installation").Remediation != "Run `portless relay install` or `portless setup`." {
@@ -220,6 +245,7 @@ func healthyRelayStatus(paths installation.Layout, uid int) relay.InstallationSt
 	return relay.InstallationStatus{
 		Platform: "launchd", Service: "dev.portless.relay", Installed: true,
 		Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, HelperPresent: true, ConfigurationPresent: true,
+		HelperCurrent: true, HelperBuildID: "current-build", CurrentBuildID: "current-build",
 		ReceiptPresent: true, ResolverPresent: true, ResolverHealthy: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket,
 		EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0",
 		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt", ResolverPath: "/fixed/resolver",

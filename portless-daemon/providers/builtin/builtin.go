@@ -2,11 +2,11 @@
 package builtin
 
 import (
-	"github.com/portless-run/portless/portless-daemon/providers"
-	"github.com/portless-run/portless/portless-daemon/providers/builtin/mysql"
-	"github.com/portless-run/portless/portless-daemon/providers/builtin/nats"
-	"github.com/portless-run/portless/portless-daemon/providers/builtin/postgres"
-	"github.com/portless-run/portless/portless-daemon/providers/builtin/valkey"
+	"github.com/runportless/portless/portless-daemon/providers"
+	"github.com/runportless/portless/portless-daemon/providers/builtin/mysql"
+	"github.com/runportless/portless/portless-daemon/providers/builtin/nats"
+	"github.com/runportless/portless/portless-daemon/providers/builtin/postgres"
+	"github.com/runportless/portless/portless-daemon/providers/builtin/valkey"
 )
 
 // Plugins returns all built-in managed resource plugins.

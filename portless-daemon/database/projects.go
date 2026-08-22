@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/networking"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/networking"
 )
 
 // CreateProject persists a new reusable project topology and source catalog.

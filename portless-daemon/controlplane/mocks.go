@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/database"
-	"github.com/portless-run/portless/portless-daemon/mocks"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/database"
+	"github.com/runportless/portless/portless-daemon/mocks"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // MockProfiles lists the mock profiles owned by one environment.

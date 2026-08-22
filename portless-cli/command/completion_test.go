@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/portless-run/portless/portless-daemon/control"
+	"github.com/runportless/portless/portless-daemon/control"
 	"github.com/spf13/cobra"
 )
 

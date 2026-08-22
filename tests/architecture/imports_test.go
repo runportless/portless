@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	modulePath = "github.com/portless-run/portless"
+	modulePath = "github.com/runportless/portless"
 	cliRoot    = modulePath + "/portless-cli"
 	daemonRoot = modulePath + "/portless-daemon"
 	mcpRoot    = modulePath + "/portless-mcp"

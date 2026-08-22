@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/providers"
-	"github.com/portless-run/portless/portless-daemon/runtime/container"
-	"github.com/portless-run/portless/portless-daemon/runtime/logstore"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/providers"
+	"github.com/runportless/portless/portless-daemon/runtime/container"
+	"github.com/runportless/portless/portless-daemon/runtime/logstore"
 )
 
 type testEngine struct{}

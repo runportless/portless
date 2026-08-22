@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/command"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-relay"
 )
 
 var uninstallRemovalCategories = []string{

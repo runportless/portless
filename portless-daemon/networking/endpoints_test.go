@@ -3,7 +3,7 @@ package networking
 import (
 	"testing"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func TestAllocationSpecsCreatePublicAndDirectedTCPNames(t *testing.T) {

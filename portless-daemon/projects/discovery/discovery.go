@@ -6,11 +6,11 @@ import (
 	"context"
 	"sync"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/builtin"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/engine"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
-	resourcebuiltin "github.com/portless-run/portless/portless-daemon/providers/builtin"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/builtin"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/engine"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/spec"
+	resourcebuiltin "github.com/runportless/portless/portless-daemon/providers/builtin"
 )
 
 // Result is the application-facing discovery result.

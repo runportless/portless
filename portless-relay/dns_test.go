@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	portlessdns "github.com/portless-run/portless/portless-daemon/dns"
+	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 )
 
 type relayResolver struct{}

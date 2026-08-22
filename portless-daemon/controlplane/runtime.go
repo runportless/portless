@@ -1,6 +1,6 @@
 package controlplane
 
-import "github.com/portless-run/portless/portless-daemon/runtime/container"
+import "github.com/runportless/portless/portless-daemon/runtime/container"
 
 // RuntimeName is the application-facing name of a container runtime choice.
 type RuntimeName string

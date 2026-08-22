@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // resetApplicationState serializes against daemon startup, verifies and

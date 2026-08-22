@@ -10,17 +10,18 @@ import (
 )
 
 // InspectLauncher builds a conservative uninstall plan for the launcher used
-// to invoke the current process.
-func InspectLauncher() LauncherPlan {
+// to invoke the current process. A package-managed distribution is preserved
+// for its package manager to remove.
+func InspectLauncher(distribution string) LauncherPlan {
 	invocation, err := ResolveInvocationPath(os.Args[0])
 	if err != nil {
-		return LauncherPlan{Kind: "unknown", Action: "preserve", Reason: err.Error()}
+		return LauncherPlan{Kind: "unknown", Action: "preserve", Reason: err.Error(), Distribution: distribution}
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return LauncherPlan{Path: invocation, Kind: "unknown", Action: "preserve", Reason: err.Error()}
+		return LauncherPlan{Path: invocation, Kind: "unknown", Action: "preserve", Reason: err.Error(), Distribution: distribution}
 	}
-	return ClassifyLauncher(invocation, executable, RecognizedLauncherDirectories())
+	return ClassifyLauncher(invocation, executable, RecognizedLauncherDirectories(), distribution)
 }
 
 // ResolveInvocationPath converts an argv[0]-style executable name or path into
@@ -38,9 +39,10 @@ func ResolveInvocationPath(argument string) (string, error) {
 }
 
 // ClassifyLauncher determines whether invocation is a verified Portless
-// launcher that can be removed without deleting a source-tree build.
-func ClassifyLauncher(invocation, executable string, installDirectories []string) LauncherPlan {
-	plan := LauncherPlan{Path: invocation, Kind: "unknown", Action: "preserve", Reason: "launcher identity could not be verified"}
+// launcher that can be removed without deleting a source-tree build or a
+// package-manager-owned launcher.
+func ClassifyLauncher(invocation, executable string, installDirectories []string, distribution string) LauncherPlan {
+	plan := LauncherPlan{Path: invocation, Kind: "unknown", Action: "preserve", Reason: "launcher identity could not be verified", Distribution: distribution}
 	invocation, invocationErr := filepath.Abs(invocation)
 	if invocationErr != nil {
 		plan.Reason = invocationErr.Error()
@@ -78,6 +80,10 @@ func ClassifyLauncher(invocation, executable string, installDirectories []string
 		}
 		plan.Target = target
 		if SameFile(target, executable) {
+			if distribution == "homebrew" {
+				plan.Reason = "launcher is managed by Homebrew; run `brew uninstall runportless/tap/portless` after Portless state removal"
+				return plan
+			}
 			plan.Action = "remove"
 			plan.Reason = "verified launcher symlink; its target will be preserved"
 			return plan
@@ -111,7 +117,7 @@ func RemoveLauncher(plan LauncherPlan) (bool, error) {
 	if plan.Action != "remove" || plan.Path == "" {
 		return false, nil
 	}
-	fresh := ClassifyLauncher(plan.Path, plan.Executable, RecognizedLauncherDirectories())
+	fresh := ClassifyLauncher(plan.Path, plan.Executable, RecognizedLauncherDirectories(), plan.Distribution)
 	if fresh.Action == "not-found" {
 		return true, nil
 	}

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // DaemonInstance records one daemon process and the build that owns its runtimes.

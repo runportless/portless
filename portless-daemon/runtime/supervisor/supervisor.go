@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/runtime/logstore"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/runtime/logstore"
 )
 
 const (

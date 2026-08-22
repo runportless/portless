@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // removeInstallationState coordinates daemon shutdown and startup exclusion,

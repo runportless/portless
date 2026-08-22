@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/spec"
 )
 
 // Detector discovers Gradle and Maven Spring Boot applications.

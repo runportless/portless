@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-relay"
 )
 
 type relayStatusOutput struct {
@@ -36,7 +36,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 	if status.Installed && status.OwnerUID != uid {
 		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless relay uninstall --force` before installing it for this user", status.OwnerUID)
 	}
-	if status.Healthy && status.TargetSocket == c.Paths.IngressSocket && status.DNSTargetSocket == c.Paths.DNSSocket && status.ReceiptPresent && status.ResolverPresent {
+	if status.Healthy && status.HelperCurrent && status.TargetSocket == c.Paths.IngressSocket && status.DNSTargetSocket == c.Paths.DNSSocket && status.ReceiptPresent && status.ResolverPresent {
 		if jsonOutput {
 			return command.WriteRelayStatusJSON(c.Out, status)
 		}
@@ -127,6 +127,13 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 		fmt.Fprintln(c.Out, "Installed:", status.InstalledAt.Local().Format(time.RFC3339))
 	}
 	fmt.Fprintln(c.Out, "Helper:", status.HelperPath)
+	helperBuildState := "unknown"
+	if status.HelperCurrent {
+		helperBuildState = "current"
+	} else if status.HelperBuildID != "" && status.CurrentBuildID != "" {
+		helperBuildState = "outdated; run `portless setup` to refresh it"
+	}
+	fmt.Fprintln(c.Out, "Helper build:", helperBuildState)
 	fmt.Fprintln(c.Out, "Configuration:", status.ConfigurationPath)
 	fmt.Fprintln(c.Out, "Receipt:", status.ReceiptPath)
 	if status.HealthError != "" {

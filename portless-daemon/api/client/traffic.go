@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
 func trafficValues(query contract.TrafficExchangeQuery) url.Values {

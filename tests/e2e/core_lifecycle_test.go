@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func TestCLIDownAllWorksFromAmbiguousCheckout(t *testing.T) {
@@ -439,7 +439,7 @@ func buildReplacementExecutable(t *testing.T, output string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-tags=e2e", "-trimpath", "-ldflags", "-X github.com/portless-run/portless/portless-cli.Version=replacement-e2e", "-o", output, "./portless-cli/cmd/portless")
+	command := exec.CommandContext(ctx, "go", "build", "-tags=e2e", "-trimpath", "-ldflags", "-X github.com/runportless/portless/portless-cli.Version=replacement-e2e", "-o", output, "./portless-cli/cmd/portless")
 	command.Dir = e2eRepositoryPath(t)
 	command.Env = os.Environ()
 	if result, err := command.CombinedOutput(); err != nil {

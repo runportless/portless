@@ -87,6 +87,9 @@ type RelayStatus struct {
 	Healthy              bool       `json:"healthy"`
 	HTTPHealthy          bool       `json:"httpHealthy"`
 	HelperPresent        bool       `json:"helperPresent"`
+	HelperCurrent        bool       `json:"helperCurrent"`
+	HelperBuildID        string     `json:"helperBuildId,omitempty"`
+	CurrentBuildID       string     `json:"currentBuildId,omitempty"`
 	ConfigurationPresent bool       `json:"configurationPresent"`
 	ReceiptPresent       bool       `json:"receiptPresent"`
 	ResolverPresent      bool       `json:"resolverPresent"`

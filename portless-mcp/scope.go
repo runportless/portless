@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
 type selectedEnvironment struct {

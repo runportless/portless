@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/providers"
-	resourcebuiltin "github.com/portless-run/portless/portless-daemon/providers/builtin"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/providers"
+	resourcebuiltin "github.com/runportless/portless/portless-daemon/providers/builtin"
 )
 
 type fakeRuntime struct {

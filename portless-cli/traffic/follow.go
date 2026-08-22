@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-cli/command"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func (c *Commands) followTraffic(ctx context.Context, client *apiclient.Client, environment model.Environment, options trafficOptions, seen map[int64]struct{}, jsonOutput bool) error {

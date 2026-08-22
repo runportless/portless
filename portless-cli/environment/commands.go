@@ -2,7 +2,7 @@
 // Portless environment.
 package environment
 
-import "github.com/portless-run/portless/portless-cli/command"
+import "github.com/runportless/portless/portless-cli/command"
 
 // Commands implements the environment-focused CLI surface.
 type Commands struct {

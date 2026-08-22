@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/networking"
+	"github.com/runportless/portless/portless-daemon/networking"
 )
 
 const (

@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/runtime/container"
-	"github.com/portless-run/portless/portless-daemon/runtime/container/managed"
+	"github.com/runportless/portless/portless-daemon/runtime/container"
+	"github.com/runportless/portless/portless-daemon/runtime/container/managed"
 )
 
 type engine struct {

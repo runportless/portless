@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/runtime/supervisor"
 )
 
 // RecoveryState classifies the evidence available for one persisted process run.

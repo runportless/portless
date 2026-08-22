@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 func (m *Manager) connect(ctx context.Context) (*apiclient.Client, identity.Record, error) {

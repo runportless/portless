@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func (c *Commands) logs(ctx context.Context, requestedService string, options logsOptions) error {

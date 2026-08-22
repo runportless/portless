@@ -3,6 +3,7 @@ SHELL := /bin/bash
 
 GO ?= go
 NPM ?= npm
+GORELEASER ?= goreleaser
 BINARY ?= bin/portless
 E2E_BINARY ?= bin/portless-e2e
 RELAY_E2E_BINARY ?= bin/portless-relay-e2e
@@ -10,6 +11,9 @@ RESOURCE_E2E_RUNTIME ?= auto
 WEB_PROJECT := portless-web
 SITE_PROJECT := portless-site
 CLI_PACKAGE := ./portless-cli/cmd/portless
+VERSION ?= dev
+DISTRIBUTION ?= source
+PORTLESS_LDFLAGS := -X github.com/runportless/portless/portless-cli.Version=$(VERSION) -X github.com/runportless/portless/portless-cli.Distribution=$(DISTRIBUTION)
 WEB_DEPENDENCIES := $(WEB_PROJECT)/node_modules/.package-lock.json
 WEB_MANIFESTS := $(WEB_PROJECT)/package.json $(WEB_PROJECT)/package-lock.json
 SITE_DEPENDENCIES := $(SITE_PROJECT)/node_modules/.package-lock.json
@@ -17,12 +21,12 @@ SITE_MANIFESTS := $(SITE_PROJECT)/package.json $(SITE_PROJECT)/package-lock.json
 SITE_NPM_CACHE := $(abspath $(SITE_PROJECT)/.npm-cache)
 
 # Declare command-style targets phony so matching files never suppress their recipes.
-.PHONY: build web site site-dev test test-go test-web test-site e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install clean reinstall-web-dependencies reinstall-site-dependencies
+.PHONY: build web site site-dev test test-go test-web test-site e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
 
 # Build the web control plane and the Portless executable.
 build: web
 	@mkdir -p "$(dir $(BINARY))"
-	$(GO) build -trimpath -o "$(BINARY)" $(CLI_PACKAGE)
+	$(GO) build -trimpath -ldflags "$(PORTLESS_LDFLAGS)" -o "$(BINARY)" $(CLI_PACKAGE)
 
 # Install locked web development dependencies when their manifests change.
 $(WEB_DEPENDENCIES): $(WEB_MANIFESTS)
@@ -67,12 +71,12 @@ test-site: $(SITE_DEPENDENCIES)
 # Build the Portless executable used by the ordinary end-to-end suites.
 e2e-binary: web
 	@mkdir -p "$(dir $(E2E_BINARY))"
-	$(GO) build -tags=e2e -trimpath -o "$(E2E_BINARY)" $(CLI_PACKAGE)
+	$(GO) build -tags=e2e -trimpath -ldflags "$(PORTLESS_LDFLAGS)" -o "$(E2E_BINARY)" $(CLI_PACKAGE)
 
 # Build the Portless executable used by destructive relay end-to-end suites.
 relay-e2e-binary: web
 	@mkdir -p "$(dir $(RELAY_E2E_BINARY))"
-	$(GO) build -trimpath -o "$(RELAY_E2E_BINARY)" $(CLI_PACKAGE)
+	$(GO) build -trimpath -ldflags "$(PORTLESS_LDFLAGS)" -o "$(RELAY_E2E_BINARY)" $(CLI_PACKAGE)
 
 # Run the ordinary CLI and browser end-to-end suites.
 test-e2e: test-e2e-cli test-e2e-ui
@@ -116,6 +120,14 @@ install: build
 	mkdir -p "$$install_directory"; \
 	install -m 0755 "$(BINARY)" "$$install_directory/portless"; \
 	echo "Installed $$install_directory/portless"
+
+# Validate the GoReleaser configuration without creating artifacts.
+release-check:
+	$(GORELEASER) check
+
+# Build local macOS and Linux release archives without publishing or requiring Syft.
+release-snapshot: web release-check
+	$(GORELEASER) release --snapshot --clean --skip=sbom
 
 # Reinstall the locked web dependencies even when the dependency stamp is current.
 reinstall-web-dependencies:

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/doctor"
 )
 
 func (c *Commands) doctor(ctx context.Context, scope doctor.Scope, jsonOutput bool) error {

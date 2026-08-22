@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-relay"
 )
 
 func TestRuntimeStatusUsesHumanReadableOutput(t *testing.T) {

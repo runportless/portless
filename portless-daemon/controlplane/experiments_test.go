@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	resourcebuiltin "github.com/portless-run/portless/portless-daemon/providers/builtin"
+	"github.com/runportless/portless/portless-daemon/model"
+	resourcebuiltin "github.com/runportless/portless/portless-daemon/providers/builtin"
 )
 
 func TestValidateExperimentScopeUsesConfiguredDirectedConnections(t *testing.T) {

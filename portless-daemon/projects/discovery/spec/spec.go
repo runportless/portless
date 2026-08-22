@@ -9,7 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // Severity classifies a discovery diagnostic.

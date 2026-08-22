@@ -1,8 +1,8 @@
 package projects
 
 import (
-	shared "github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/model"
+	shared "github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/spf13/cobra"
 )
 

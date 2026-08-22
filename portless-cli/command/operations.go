@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/model"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // InvocationKey returns a cryptographically random idempotency key prefixed

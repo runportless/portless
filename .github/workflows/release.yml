@@ -1,0 +1,213 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish GitHub release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate stable tag and main ancestry
+        run: |
+          if ! printf '%s\n' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "release tags must use vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            portless-web/package-lock.json
+            portless-site/package-lock.json
+
+      - name: Run release tests
+        run: |
+          make test
+          make test-e2e-cli
+          git diff --check
+          git diff --exit-code -- portless-web/dist
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Build draft release
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify checksums and runnable Linux archive
+        run: |
+          cd dist
+          sha256sum -c checksums.txt
+          archive=$(find . -maxdepth 1 -name 'portless_*_linux_amd64.tar.gz' -print -quit)
+          test -n "$archive"
+          mkdir -p /tmp/portless-release-smoke
+          tar -xzf "$archive" -C /tmp/portless-release-smoke
+          test "$(/tmp/portless-release-smoke/portless --version)" = "portless ${GITHUB_REF_NAME#v}"
+
+      - name: Attest release archives
+        uses: actions/attest@v4
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - name: Attest release metadata
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/checksums.txt
+            dist/*.sbom.json
+
+      - name: Save Homebrew release metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: homebrew-release-metadata
+          path: dist/checksums.txt
+          if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo runportless/portless --draft=false
+
+  homebrew:
+    name: Propose Homebrew tap update
+    needs: release
+    runs-on: ubuntu-latest
+    environment: homebrew
+    permissions:
+      contents: read
+    steps:
+      - name: Check out Portless release automation
+        uses: actions/checkout@v6
+        with:
+          path: source
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: homebrew-release-metadata
+          path: release-metadata
+
+      - name: Create scoped tap token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HOMEBREW_TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: runportless
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out Homebrew tap
+        uses: actions/checkout@v6
+        with:
+          repository: runportless/homebrew-tap
+          token: ${{ steps.app-token.outputs.token }}
+          path: homebrew-tap
+          fetch-depth: 0
+
+      - name: Resolve formula release metadata
+        id: metadata
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          archive="portless_${version}_source.tar.gz"
+          checksum_count=$(awk -v target="$archive" '$2 == target { count++ } END { print count+0 }' release-metadata/checksums.txt)
+          source_sha256=$(awk -v target="$archive" '$2 == target { print $1 }' release-metadata/checksums.txt)
+          if [ "$checksum_count" -ne 1 ] || ! printf '%s\n' "$source_sha256" | grep -Eq '^[[:xdigit:]]{64}$'; then
+            echo "could not resolve exactly one SHA-256 checksum for $archive" >&2
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "source_sha256=$source_sha256" >>"$GITHUB_OUTPUT"
+          echo "branch=portless-v$version" >>"$GITHUB_OUTPUT"
+
+      - name: Prepare tap branch
+        env:
+          BRANCH: ${{ steps.metadata.outputs.branch }}
+        run: |
+          if git -C homebrew-tap ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git -C homebrew-tap fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
+            git -C homebrew-tap checkout -b "$BRANCH" "refs/remotes/origin/$BRANCH"
+          else
+            git -C homebrew-tap checkout -b "$BRANCH"
+          fi
+
+      - name: Render formula
+        run: |
+          source/scripts/render-homebrew-formula.sh \
+            "${{ steps.metadata.outputs.version }}" \
+            "${{ steps.metadata.outputs.source_sha256 }}" \
+            homebrew-tap/Formula/portless.rb
+          ruby -c homebrew-tap/Formula/portless.rb
+
+      - name: Commit and push formula
+        id: formula
+        env:
+          BRANCH: ${{ steps.metadata.outputs.branch }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          git -C homebrew-tap config user.name "portless-release[bot]"
+          git -C homebrew-tap config user.email "portless-release[bot]@users.noreply.github.com"
+          if ! git -C homebrew-tap diff --quiet -- Formula/portless.rb; then
+            git -C homebrew-tap add Formula/portless.rb
+            git -C homebrew-tap commit -m "portless $VERSION"
+            git -C homebrew-tap push --set-upstream origin "$BRANCH"
+          fi
+          if git -C homebrew-tap diff --quiet origin/main -- Formula/portless.rb; then
+            echo "needs_pr=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "needs_pr=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Open formula pull request
+        if: steps.formula.outputs.needs_pr == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ steps.metadata.outputs.branch }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          if [ -z "$(gh pr list --repo runportless/homebrew-tap --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create \
+              --repo runportless/homebrew-tap \
+              --base main \
+              --head "$BRANCH" \
+              --title "portless $VERSION" \
+              --body "Updates the portless formula to the attested Portless v$VERSION source release. Review the tap checks, then publish bottles with the tap's brew pr-pull workflow."
+          fi

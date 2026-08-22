@@ -1,6 +1,6 @@
 package contract
 
-import "github.com/portless-run/portless/portless-daemon/model"
+import "github.com/runportless/portless/portless-daemon/model"
 
 // ParseEnvironmentSelector validates and separates a public
 // project/environment selector.

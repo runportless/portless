@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func matchesTrafficOptions(exchange model.TrafficExchange, options trafficOptions) bool {

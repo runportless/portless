@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/spec"
 )
 
 var environmentURLPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)_URL\b`)

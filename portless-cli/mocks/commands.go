@@ -1,7 +1,7 @@
 // Package mocks owns CLI commands for environment-scoped HTTP mock providers.
 package mocks
 
-import "github.com/portless-run/portless/portless-cli/command"
+import "github.com/runportless/portless/portless-cli/command"
 
 // Commands implements the mock-provider CLI surface.
 type Commands struct {

@@ -7,22 +7,27 @@ import (
 	"os"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/administration"
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-cli/doctor"
-	"github.com/portless-run/portless/portless-cli/environment"
-	"github.com/portless-run/portless/portless-cli/mocks"
-	"github.com/portless-run/portless/portless-cli/observe"
-	"github.com/portless-run/portless/portless-cli/projects"
-	"github.com/portless-run/portless/portless-cli/traffic"
-	"github.com/portless-run/portless/portless-daemon/control"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/administration"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-cli/environment"
+	"github.com/runportless/portless/portless-cli/mocks"
+	"github.com/runportless/portless/portless-cli/observe"
+	"github.com/runportless/portless/portless-cli/projects"
+	"github.com/runportless/portless/portless-cli/traffic"
+	"github.com/runportless/portless/portless-daemon/control"
+	"github.com/runportless/portless/portless-daemon/projects/discovery"
+	"github.com/runportless/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-relay"
 )
 
 // Version is the Portless CLI version reported by the root command.
 var Version = "dev"
+
+// Distribution identifies the package channel that owns the current CLI
+// launcher. Release packaging sets it at link time so uninstall can leave
+// package-manager files to their package manager.
+var Distribution = "source"
 
 // CLI is the composition root for Portless's command-line product. Product
 // behavior belongs to the feature packages; this type owns only shared state
@@ -108,7 +113,11 @@ func defaultLocalDependencies(paths installation.Layout) localDependencies {
 		checkRelaySocket: relay.CheckSocket, diagnose: doctor.Run, inspectState: installation.InspectState,
 		findProjectRoot: discovery.FindRoot, workingDirectory: command.WorkingDirectory,
 		userIDs: command.RequestingUserIDs, effectiveUID: os.Geteuid, resolvedExecutable: command.ResolvedExecutable,
-		launchBrowser: command.LaunchBrowser, inspectLauncher: command.InspectLauncher, removeLauncher: command.RemoveLauncher,
+		launchBrowser: command.LaunchBrowser,
+		inspectLauncher: func() command.LauncherPlan {
+			return command.InspectLauncher(Distribution)
+		},
+		removeLauncher: command.RemoveLauncher,
 	}
 }
 

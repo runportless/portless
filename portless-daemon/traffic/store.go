@@ -6,8 +6,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/portless-run/portless/portless-daemon/events"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/events"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 const defaultExchangeLimit = 5000

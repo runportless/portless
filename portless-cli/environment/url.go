@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/portless-run/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/command"
 )
 
 func (c *Commands) printURL(ctx context.Context, requested string) error {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 func (c *Commands) listFaults(ctx context.Context, limit int) error {

@@ -15,13 +15,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/auth"
-	"github.com/portless-run/portless/portless-daemon/controlplane"
-	"github.com/portless-run/portless/portless-daemon/database"
-	"github.com/portless-run/portless/portless-daemon/events"
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/runtime/logstore"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/auth"
+	"github.com/runportless/portless/portless-daemon/controlplane"
+	"github.com/runportless/portless/portless-daemon/database"
+	"github.com/runportless/portless/portless-daemon/events"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/runtime/logstore"
 )
 
 func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
@@ -57,7 +57,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.inspectRelay = func(context.Context) (contract.RelayStatus, error) {
-		return contract.RelayStatus{Platform: "launchd", Service: "dev.portless.relay", Installed: true, Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, ResolverPresent: true, ResolverHealthy: true, EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0", DNSListenAddress: "127.77.0.1:1053"}, nil
+		return contract.RelayStatus{Platform: "launchd", Service: "dev.portless.relay", Installed: true, Running: true, Healthy: true, HTTPHealthy: true, HelperPresent: true, HelperCurrent: true, HelperBuildID: "build-current", CurrentBuildID: "build-current", DNSHealthy: true, ResolverPresent: true, ResolverHealthy: true, EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0", DNSListenAddress: "127.77.0.1:1053"}, nil
 	}
 
 	unauthenticated := request(server, authManager, http.MethodGet, "/api/v1/projects", "", false)
@@ -194,7 +194,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("daemon status response code=%d body=%s", daemonStatus.Code, daemonStatus.Body.String())
 	}
 	relayStatus := request(server, authManager, http.MethodGet, "/api/v1/relay", "", true)
-	if relayStatus.Code != http.StatusOK || !strings.Contains(relayStatus.Body.String(), `"httpHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"dnsHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"resolverHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"dnsListenAddress":"127.77.0.1:1053"`) {
+	if relayStatus.Code != http.StatusOK || !strings.Contains(relayStatus.Body.String(), `"httpHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"helperCurrent":true`) || !strings.Contains(relayStatus.Body.String(), `"helperBuildId":"build-current"`) || !strings.Contains(relayStatus.Body.String(), `"dnsHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"resolverHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"dnsListenAddress":"127.77.0.1:1053"`) {
 		t.Fatalf("relay status response code=%d body=%s", relayStatus.Code, relayStatus.Body.String())
 	}
 	daemonRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, true)

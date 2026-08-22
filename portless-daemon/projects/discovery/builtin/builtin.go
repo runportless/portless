@@ -1,12 +1,12 @@
 package builtin
 
 import (
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/builtin/fastapi"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/builtin/golang"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/builtin/node"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/builtin/springboot"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/builtin/topology"
-	"github.com/portless-run/portless/portless-daemon/projects/discovery/spec"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/builtin/fastapi"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/builtin/golang"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/builtin/node"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/builtin/springboot"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/builtin/topology"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/spec"
 )
 
 // Detectors returns the built-in framework detectors in registry order.

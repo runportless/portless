@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 var pathParameter = regexp.MustCompile(`^\{[A-Za-z_][A-Za-z0-9_]*\}$`)

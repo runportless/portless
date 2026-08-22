@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/controlplane"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/controlplane"
 )
 
 func (s *Server) writeError(writer http.ResponseWriter, err error, subject map[string]any) {

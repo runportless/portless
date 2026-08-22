@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
 func (c *Commands) runtimeStatus(ctx context.Context, jsonOutput bool) error {

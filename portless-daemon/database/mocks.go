@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // MockProfiles lists the mock profiles configured for an environment.

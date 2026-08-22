@@ -1,6 +1,6 @@
 package contract
 
-import "github.com/portless-run/portless/portless-daemon/model"
+import "github.com/runportless/portless/portless-daemon/model"
 
 // Existing domain values that are already stable wire values are re-exported
 // by the contract package so transport clients do not depend on domain

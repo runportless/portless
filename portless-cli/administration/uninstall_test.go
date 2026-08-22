@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-relay"
 )
 
 func TestUninstallPreviewExplainsExactScopeAndConfirmation(t *testing.T) {
@@ -79,7 +79,7 @@ func TestLauncherClassifierRemovesOnlySymlinkAndPreservesSourceBuild(t *testing.
 		t.Fatal(err)
 	}
 
-	plan := command.ClassifyLauncher(launcher, source, nil)
+	plan := command.ClassifyLauncher(launcher, source, nil, "source")
 	resolvedSource, err := filepath.EvalSymlinks(source)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestLauncherClassifierPreservesSourceTreeAndMismatchedSymlink(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	if plan := command.ClassifyLauncher(source, source, []string{filepath.Join(root, "installed")}); plan.Action != "preserve" || !strings.Contains(plan.Reason, "source-tree") {
+	if plan := command.ClassifyLauncher(source, source, []string{filepath.Join(root, "installed")}, "source"); plan.Action != "preserve" || !strings.Contains(plan.Reason, "source-tree") {
 		t.Fatalf("source build was not preserved: %#v", plan)
 	}
 	launcher := filepath.Join(root, "bin", "portless")
@@ -124,7 +124,7 @@ func TestLauncherClassifierPreservesSourceTreeAndMismatchedSymlink(t *testing.T)
 	if err := os.Symlink(other, launcher); err != nil {
 		t.Fatal(err)
 	}
-	if plan := command.ClassifyLauncher(launcher, source, nil); plan.Action != "preserve" || !strings.Contains(plan.Reason, "does not target") {
+	if plan := command.ClassifyLauncher(launcher, source, nil, "source"); plan.Action != "preserve" || !strings.Contains(plan.Reason, "does not target") {
 		t.Fatalf("mismatched symlink was not preserved: %#v", plan)
 	}
 }
@@ -138,9 +138,35 @@ func TestLauncherClassifierRemovesVerifiedRegularInstall(t *testing.T) {
 	if err := os.WriteFile(launcher, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	plan := command.ClassifyLauncher(launcher, launcher, []string{filepath.Dir(launcher)})
+	plan := command.ClassifyLauncher(launcher, launcher, []string{filepath.Dir(launcher)}, "source")
 	if plan.Action != "remove" || plan.Kind != "regular-file" {
 		t.Fatalf("verified installed executable was not removable: %#v", plan)
+	}
+}
+
+func TestLauncherClassifierPreservesHomebrewLauncher(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "Cellar", "portless", "1.2.3", "bin", "portless")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(root, "bin", "portless")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, launcher); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := command.ClassifyLauncher(launcher, executable, []string{filepath.Dir(launcher)}, "homebrew")
+	if plan.Action != "preserve" || plan.Kind != "symlink" || !strings.Contains(plan.Reason, "brew uninstall runportless/tap/portless") {
+		t.Fatalf("Homebrew launcher was not preserved for Homebrew: %#v", plan)
+	}
+	if removed, err := command.RemoveLauncher(plan); err != nil || removed {
+		t.Fatalf("Homebrew launcher removal = %v, %v; want preserved", removed, err)
 	}
 }
 

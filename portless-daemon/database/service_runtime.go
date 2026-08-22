@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // ServiceRuntimeUpdate contains the complete mutable runtime state for a service.

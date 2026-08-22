@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // Record is the private on-disk discovery snapshot for one daemon instance.

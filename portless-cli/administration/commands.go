@@ -2,7 +2,7 @@
 // preferences, reset, and uninstall commands.
 package administration
 
-import "github.com/portless-run/portless/portless-cli/command"
+import "github.com/runportless/portless/portless-cli/command"
 
 // Commands implements the machine-level administration CLI surface.
 type Commands struct {

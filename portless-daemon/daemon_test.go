@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 func TestListenIngressCreatesPrivateUnixSocket(t *testing.T) {

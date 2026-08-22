@@ -3,9 +3,9 @@ package administration
 import (
 	"context"
 
-	shared "github.com/portless-run/portless/portless-cli/command"
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	portlessmcp "github.com/portless-run/portless/portless-mcp"
+	shared "github.com/runportless/portless/portless-cli/command"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	portlessmcp "github.com/runportless/portless/portless-mcp"
 	"github.com/spf13/cobra"
 )
 

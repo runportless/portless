@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
 type listInput struct {

@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 func watchExecutable(ctx context.Context, executable, currentBuildID string, canHandoff func(context.Context) (bool, []string), replacement chan<- struct{}) {

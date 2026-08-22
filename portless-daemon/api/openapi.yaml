@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 10.6.0
+  version: 10.7.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.6.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.7.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -1256,7 +1256,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.6.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.7.0', description: Stable semantic API version. }
         handoffReady: { type: boolean }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
@@ -1275,7 +1275,7 @@ components:
         path: { type: string, description: Existing absolute directory selected by the user. }
     RelayStatus:
       type: object
-      required: [platform, service, installed, running, healthy, httpHealthy, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress]
+      required: [platform, service, installed, running, healthy, httpHealthy, helperPresent, helperCurrent, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress]
       properties:
         platform: { type: string, enum: [launchd, systemd, unsupported] }
         service: { type: string }
@@ -1283,6 +1283,10 @@ components:
         running: { type: boolean }
         healthy: { type: boolean }
         httpHealthy: { type: boolean }
+        helperPresent: { type: boolean }
+        helperCurrent: { type: boolean, description: Whether the installed relay helper matches the current Portless executable. }
+        helperBuildId: { type: string, description: SHA-256 identity of the installed relay helper. }
+        currentBuildId: { type: string, description: SHA-256 identity of the current Portless executable. }
         dnsHealthy: { type: boolean }
         resolverPresent: { type: boolean }
         resolverHealthy: { type: boolean }

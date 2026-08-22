@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux tests and release snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            portless-web/package-lock.json
+            portless-site/package-lock.json
+
+      - name: Run tests
+        run: make test
+
+      - name: Run isolated CLI end-to-end tests
+        run: make test-e2e-cli
+
+      - name: Check generated assets and whitespace
+        run: |
+          git diff --check
+          git diff --exit-code -- portless-web/dist
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.17.1
+          install-only: true
+
+      - name: Build release snapshot
+        run: make release-snapshot
+
+      - name: Smoke-test Linux archive
+        run: |
+          archive=$(find dist -maxdepth 1 -name 'portless_*_linux_amd64.tar.gz' -print -quit)
+          test -n "$archive"
+          mkdir -p /tmp/portless-release-smoke
+          tar -xzf "$archive" -C /tmp/portless-release-smoke
+          /tmp/portless-release-smoke/portless --version
+
+  macos:
+    name: macOS tests and Homebrew formula
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run Go tests
+        run: make test-go
+
+      - name: Test Homebrew build metadata
+        run: |
+          make VERSION=0.0.0 DISTRIBUTION=homebrew
+          test "$(./bin/portless --version)" = "portless 0.0.0"
+
+      - name: Render and lint formula
+        run: |
+          scripts/render-homebrew-formula.sh 0.0.0 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef /tmp/portless.rb
+          ruby -c /tmp/portless.rb
+          brew style /tmp/portless.rb

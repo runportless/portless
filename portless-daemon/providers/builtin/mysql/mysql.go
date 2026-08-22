@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/providers"
-	"github.com/portless-run/portless/portless-daemon/providers/builtin/common"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/providers"
+	"github.com/runportless/portless/portless-daemon/providers/builtin/common"
 )
 
 // Plugin provides MySQL discovery, container planning, and connection binding.

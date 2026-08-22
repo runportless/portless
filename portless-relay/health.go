@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"time"
 
-	portlessdns "github.com/portless-run/portless/portless-daemon/dns"
-	"github.com/portless-run/portless/portless-daemon/networking"
+	portlessdns "github.com/runportless/portless/portless-daemon/dns"
+	"github.com/runportless/portless/portless-daemon/networking"
 )
 
 // ControlOrigin is the clean control-plane origin used for relay health checks.

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/providers"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/providers"
 )
 
 // Detection configures shared marker-based resource discovery.

@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/doctor"
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/networking"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/networking"
+	"github.com/runportless/portless/portless-relay"
 	"golang.org/x/sys/unix"
 )
 

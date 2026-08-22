@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/portless-run/portless/portless-cli"
-	"github.com/portless-run/portless/portless-daemon"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli"
+	"github.com/runportless/portless/portless-daemon"
+	"github.com/runportless/portless/portless-relay"
 )
 
 func main() {

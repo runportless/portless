@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/v2.17.1/www/docs/static/schema.json
+version: 2
+
+project_name: portless
+
+builds:
+  - id: portless
+    main: ./portless-cli/cmd/portless
+    binary: portless
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/runportless/portless/portless-cli.Version={{ .Version }}
+      - -X github.com/runportless/portless/portless-cli.Distribution=release
+
+archives:
+  - id: portless
+    ids:
+      - portless
+    formats:
+      - tar.gz
+    name_template: portless_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE.md
+      - README.md
+
+source:
+  enabled: true
+  name_template: portless_{{ .Version }}_source
+  format: tar.gz
+  prefix_template: portless-{{ .Version }}/
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - id: release-archives
+    artifacts: archive
+    ids:
+      - portless
+    disable: false
+  - id: release-source
+    artifacts: source
+    disable: false
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - '^Merge '
+
+release:
+  github:
+    owner: runportless
+    name: portless
+  draft: true
+  replace_existing_draft: true
+  replace_existing_artifacts: true
+  prerelease: auto
+  mode: replace
+  header: |
+    Portless {{ .Version }} is available for macOS and Linux on AMD64 and ARM64.
+
+    macOS users can install it with `brew install runportless/tap/portless`.
+  footer: |
+    Verify a downloaded archive with `sha256sum -c checksums.txt --ignore-missing`.
+    GitHub build-provenance attestations are attached to the release artifacts.

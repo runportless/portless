@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // Wait polls a loopback TCP or HTTP readiness check until success or timeout.

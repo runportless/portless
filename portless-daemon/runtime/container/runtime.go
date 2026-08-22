@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/providers"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/providers"
 )
 
 // RuntimeName identifies a supported container engine or automatic selection.

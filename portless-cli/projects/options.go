@@ -1,6 +1,6 @@
 package projects
 
-import "github.com/portless-run/portless/portless-daemon/model"
+import "github.com/runportless/portless/portless-daemon/model"
 
 type listOptions struct {
 	limit int

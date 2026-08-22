@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/runtime/supervisor"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/runtime/supervisor"
 )
 
 func TestInspectPersistedRunClassifiesRecoveryEvidence(t *testing.T) {

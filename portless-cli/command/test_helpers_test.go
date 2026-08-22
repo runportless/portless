@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 func newTestContext(t *testing.T, root string) (*Context, *bytes.Buffer, *bytes.Buffer) {

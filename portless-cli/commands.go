@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	shared "github.com/portless-run/portless/portless-cli/command"
+	shared "github.com/runportless/portless/portless-cli/command"
 	"github.com/spf13/cobra"
 )
 

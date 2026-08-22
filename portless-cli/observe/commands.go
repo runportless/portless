@@ -2,7 +2,7 @@
 // commands.
 package observe
 
-import "github.com/portless-run/portless/portless-cli/command"
+import "github.com/runportless/portless/portless-cli/command"
 
 // Commands implements the observability CLI surface.
 type Commands struct {

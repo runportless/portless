@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/command"
-	"github.com/portless-run/portless/portless-daemon/control"
+	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/control"
 )
 
 type daemonStatusOutput struct {

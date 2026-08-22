@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
 )
 
 // BrowserURL creates a single-use browser claim and returns its authenticated

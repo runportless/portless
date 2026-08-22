@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
 func setSecurityHeaders(headers http.Header) {

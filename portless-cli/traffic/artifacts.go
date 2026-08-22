@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-cli/command"
 )
 
 func (c *Commands) showRecording(ctx context.Context, name string) error {

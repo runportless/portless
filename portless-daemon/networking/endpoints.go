@@ -6,7 +6,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 const (

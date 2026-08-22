@@ -1,4 +1,4 @@
-module github.com/portless-run/portless
+module github.com/runportless/portless
 
 go 1.26.0
 

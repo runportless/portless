@@ -10,7 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
 )
 
 // Config fixes the MCP server's environment scope and optional capabilities

@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/control"
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/lifecycle"
-	"github.com/portless-run/portless/portless-daemon/runtime/container"
-	"github.com/portless-run/portless/portless-daemon/runtime/container/docker"
-	"github.com/portless-run/portless/portless-daemon/runtime/container/podman"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/control"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/lifecycle"
+	"github.com/runportless/portless/portless-daemon/runtime/container"
+	"github.com/runportless/portless/portless-daemon/runtime/container/docker"
+	"github.com/runportless/portless/portless-daemon/runtime/container/podman"
+	"github.com/runportless/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-relay"
 )
 
 // Scope identifies the Portless subsystem or collection of subsystems that a
@@ -330,6 +330,17 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 	}
 
 	switch {
+	case !status.HelperPresent:
+		checks = append(checks, skipped("relay.helper_build", "relay", "Relay helper build was not checked"))
+	case status.HelperCurrent:
+		checks = append(checks, passed("relay.helper_build", "relay", "Relay helper matches the current Portless build", shortIdentity(status.HelperBuildID)))
+	case status.HelperBuildID != "" && status.CurrentBuildID != "":
+		checks = append(checks, warned("relay.helper_build", "relay", "Relay helper is from an older Portless build", fmt.Sprintf("helper: %s; current: %s", shortIdentity(status.HelperBuildID), shortIdentity(status.CurrentBuildID)), "Run `portless setup` to refresh the privileged helper after upgrading Portless."))
+	default:
+		checks = append(checks, warned("relay.helper_build", "relay", "Relay helper build could not be verified", status.Problem, "Run `portless setup` to repair the privileged helper."))
+	}
+
+	switch {
 	case !status.ReceiptPresent:
 		checks = append(checks, warned("relay.receipt", "relay", "Relay ownership receipt is missing", "This is a legacy or partially completed installation.", "Run `portless relay install` to create a current receipt."))
 	case status.OwnerUID <= 0:
@@ -422,6 +433,7 @@ func runtimeChecks(ctx context.Context, dependencies dependencies) []Check {
 
 func relaySkippedChecks() []Check {
 	return []Check{
+		skipped("relay.helper_build", "relay", "Relay helper build was not checked"),
 		skipped("relay.receipt", "relay", "Ownership receipt was not checked"),
 		skipped("relay.ownership", "relay", "Relay ownership was not checked"),
 		skipped("relay.target", "relay", "Relay target was not checked"),

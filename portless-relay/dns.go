@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	portlessdns "github.com/portless-run/portless/portless-daemon/dns"
+	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 )
 
 // ServeDNSStreamRelay forwards length-prefixed TCP DNS connections from

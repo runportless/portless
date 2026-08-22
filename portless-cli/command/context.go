@@ -7,14 +7,14 @@ import (
 	"io"
 	"time"
 
-	"github.com/portless-run/portless/portless-cli/doctor"
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/api/contract"
-	"github.com/portless-run/portless/portless-daemon/control"
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-cli/doctor"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/control"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/system/installation"
+	"github.com/runportless/portless/portless-relay"
 )
 
 // DaemonController is the CLI's narrow out-of-process daemon lifecycle
@@ -47,13 +47,14 @@ type DaemonController interface {
 // LauncherPlan describes a launcher that can be safely removed during full
 // uninstall.
 type LauncherPlan struct {
-	Path       string `json:"path,omitempty"`
-	Target     string `json:"target,omitempty"`
-	Kind       string `json:"kind"`
-	Action     string `json:"action"`
-	Reason     string `json:"reason"`
-	Removed    bool   `json:"removed"`
-	Executable string `json:"-"`
+	Path         string `json:"path,omitempty"`
+	Target       string `json:"target,omitempty"`
+	Kind         string `json:"kind"`
+	Action       string `json:"action"`
+	Reason       string `json:"reason"`
+	Removed      bool   `json:"removed"`
+	Executable   string `json:"-"`
+	Distribution string `json:"-"`
 }
 
 // Dependencies contains host operations that cannot be performed through the

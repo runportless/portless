@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/identity"
-	"github.com/portless-run/portless/portless-daemon/system/installation"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
 // Hooks isolates process, clock, and HTTP operations used by daemon control.

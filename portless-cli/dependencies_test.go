@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/portless-run/portless/portless-relay"
+	"github.com/runportless/portless/portless-relay"
 )
 
 func TestLocalDependenciesIsolateRootAndRelayInspection(t *testing.T) {

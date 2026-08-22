@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/database"
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/database"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 const managedResourceE2EEnvironment = "PORTLESS_MANAGED_RESOURCE_E2E"

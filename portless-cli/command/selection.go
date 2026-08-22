@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	apiclient "github.com/portless-run/portless/portless-daemon/api/client"
-	"github.com/portless-run/portless/portless-daemon/model"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // Current connects to the daemon and resolves the environment associated with

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/portless-run/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/model"
 )
 
 // Result contains an effective environment model, normalized bindings, and configuration issues.

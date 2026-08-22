@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/portless-run/portless/portless-daemon/database"
-	"github.com/portless-run/portless/portless-daemon/model"
-	"github.com/portless-run/portless/portless-daemon/projects/compiler"
+	"github.com/runportless/portless/portless-daemon/database"
+	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/projects/compiler"
 )
 
 // DebugService restarts a local process under the Portless supervisor with its
