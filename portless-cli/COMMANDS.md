@@ -1,4 +1,4 @@
-# Portless command reference
+# Portless Command Reference
 
 This document describes the complete public command tree of the `portless`
 executable. For CLI ownership, architecture, and contribution guidance, see
