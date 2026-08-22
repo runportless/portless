@@ -219,6 +219,8 @@ make test-web        # web typecheck, Vitest, and production build
 make site-dev        # run the marketing site development server
 make site            # marketing site typecheck and production build
 make test-site       # marketing site typecheck, tests, and production build
+make release-check   # validate the GoReleaser configuration
+make release-snapshot # build unpublished macOS/Linux release archives
 ```
 
 Use focused checks while iterating:

@@ -31,6 +31,64 @@ redis.local.billing.portless.test:6379
 
 Processes and managed resource containers still receive private dynamic runtime ports. Portless allocates a distinct loopback IP to each public TCP endpoint and each directed service connection, so multiple projects can all expose conventional resource ports without conflicts. A process receives a source-aware name such as `postgres.via-orders.local.billing.portless.test`; this preserves the exact caller for traffic, recordings, and faults. The first release reserves 64 such endpoint addresses across the installation and rejects a configuration atomically if that pool is exhausted.
 
+## Install
+
+### macOS with Homebrew
+
+```bash
+brew install runportless/tap/portless
+portless setup
+```
+
+Use the fully qualified formula name. Homebrew Core already contains an
+unrelated formula named `portless`; the command above selects the official
+Portless formula owned by the `runportless` organization.
+
+Upgrade the CLI and refresh its narrow privileged relay copy with:
+
+```bash
+brew upgrade runportless/tap/portless
+portless setup
+```
+
+`portless setup` is idempotent. After an upgrade it asks for administrator
+approval only when the installed relay helper or machine configuration needs
+refreshing. `portless doctor relay` reports an outdated helper without stopping
+working environments.
+
+To remove Portless, let Portless clean up the state it owns before asking
+Homebrew to remove the package-managed launcher:
+
+```bash
+portless uninstall --yes
+brew uninstall runportless/tap/portless
+```
+
+### Linux release archives
+
+Linux releases are static `amd64` and `arm64` tarballs on the
+[GitHub Releases page](https://github.com/runportless/portless/releases). For a
+release such as `v1.2.3`, choose the architecture reported by `uname -m`
+(`x86_64` is `amd64`; `aarch64` is `arm64`), then verify and install it:
+
+```bash
+version=1.2.3
+arch=amd64
+curl -LO "https://github.com/runportless/portless/releases/download/v${version}/portless_${version}_linux_${arch}.tar.gz"
+curl -LO "https://github.com/runportless/portless/releases/download/v${version}/checksums.txt"
+sha256sum -c checksums.txt --ignore-missing
+tar -xzf "portless_${version}_linux_${arch}.tar.gz"
+mkdir -p "$HOME/.local/bin"
+install -m 0755 portless "$HOME/.local/bin/portless"
+portless setup
+```
+
+Ensure `$HOME/.local/bin` is on `PATH`. The Linux relay currently targets
+systemd hosts using `systemd-resolved`; `portless setup` fails closed without
+changing the machine when that platform boundary is unavailable. Release
+archives can be verified further with `gh attestation verify` against
+`runportless/portless`.
+
 ## Repository structure
 
 The source tree follows the running product rather than a generic `internal`
@@ -91,6 +149,11 @@ make test-site
 
 The GitHub Pages workflow publishes `portless-site/dist` after pushes to
 `main`; pull requests run the same site checks without deploying.
+
+Release maintainers can validate the packaging configuration with
+`make release-check` and build an unpublished cross-platform snapshot with
+`make release-snapshot`. See [docs/releasing.md](docs/releasing.md) for the tag,
+GitHub Release, and Homebrew tap workflow.
 
 ## First run
 
@@ -558,6 +621,7 @@ machine-integration boundary.
 API reference: [portless-daemon/api/openapi.yaml](portless-daemon/api/openapi.yaml). Live event contract: [portless-daemon/api/events.md](portless-daemon/api/events.md).
 
 ## License
+
 Copyright 2026 Portless
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -571,3 +635,5 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+See [LICENSE.md](LICENSE.md) for the complete Apache License 2.0 text.
