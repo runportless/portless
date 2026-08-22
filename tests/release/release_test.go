@@ -87,6 +87,9 @@ func TestHomebrewFormulaRenderer(t *testing.T) {
 	}
 	formula := string(content)
 	for _, expected := range []string{
+		"# typed: strict",
+		"# frozen_string_literal: true",
+		"# Portless installs the local application-environment control plane.",
 		"class Portless < Formula",
 		"releases/download/v1.2.3/portless_1.2.3_source.tar.gz",
 		`sha256 "` + checksum + `"`,
@@ -101,6 +104,11 @@ func TestHomebrewFormulaRenderer(t *testing.T) {
 	}
 	if strings.Contains(formula, "@VERSION@") || strings.Contains(formula, "@SHA256@") {
 		t.Fatal("rendered formula still contains a template placeholder")
+	}
+	goDependency := strings.Index(formula, `depends_on "go" => :build`)
+	macOSDependency := strings.Index(formula, "depends_on :macos")
+	if goDependency == -1 || macOSDependency == -1 || goDependency > macOSDependency {
+		t.Fatal("rendered formula must declare the Go build dependency before the macOS dependency")
 	}
 }
 
