@@ -1,4 +1,4 @@
-name: Portless website
+name: Portless Website
 
 on:
   push:
