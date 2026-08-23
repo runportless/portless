@@ -189,14 +189,14 @@ jobs:
         run: |
           git -C homebrew-tap config user.name "portless-release[bot]"
           git -C homebrew-tap config user.email "portless-release[bot]@users.noreply.github.com"
-          if ! git -C homebrew-tap diff --quiet -- Formula/portless.rb; then
-            git -C homebrew-tap add Formula/portless.rb
+          git -C homebrew-tap add Formula/portless.rb
+          if ! git -C homebrew-tap diff --cached --quiet -- Formula/portless.rb; then
             git -C homebrew-tap commit -m "portless $VERSION"
-            git -C homebrew-tap push --set-upstream origin "$BRANCH"
           fi
-          if git -C homebrew-tap diff --quiet origin/main -- Formula/portless.rb; then
+          if git -C homebrew-tap diff --quiet origin/main HEAD -- Formula/portless.rb; then
             echo "needs_pr=false" >>"$GITHUB_OUTPUT"
           else
+            git -C homebrew-tap push --set-upstream origin "$BRANCH"
             echo "needs_pr=true" >>"$GITHUB_OUTPUT"
           fi
 

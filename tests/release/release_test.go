@@ -192,6 +192,81 @@ func TestHomebrewFormulaRendererRejectsInvalidVersionAndChecksum(t *testing.T) {
 	}
 }
 
+func TestHomebrewProposalCommitsAnInitiallyUntrackedFormula(t *testing.T) {
+	root := repositoryRoot(t)
+	content, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(content, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	var proposalScript string
+	for _, step := range workflow.Jobs["homebrew"].Steps {
+		if step.Name == "Commit and push formula" {
+			proposalScript = step.Run
+			break
+		}
+	}
+	if proposalScript == "" {
+		t.Fatal("release workflow does not contain the formula commit step")
+	}
+
+	workspace := t.TempDir()
+	remote := filepath.Join(workspace, "tap.git")
+	seed := filepath.Join(workspace, "seed")
+	tap := filepath.Join(workspace, "homebrew-tap")
+	runGit(t, workspace, "init", "--bare", remote)
+	runGit(t, workspace, "init", "--initial-branch=main", seed)
+	runGit(t, seed, "config", "user.name", "release-test")
+	runGit(t, seed, "config", "user.email", "release-test@example.com")
+	runGit(t, seed, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("# Tap\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "Initialize tap")
+	runGit(t, seed, "remote", "add", "origin", remote)
+	runGit(t, seed, "push", "origin", "main")
+	runGit(t, workspace, "clone", "--branch", "main", remote, tap)
+	runGit(t, tap, "config", "commit.gpgsign", "false")
+	branch := "portless-v0.1.0-alpha.3"
+	runGit(t, tap, "checkout", "-b", branch)
+	formula := []byte("class Portless < Formula\nend\n")
+	if err := os.MkdirAll(filepath.Join(tap, "Formula"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tap, "Formula", "portless.rb"), formula, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	githubOutput := filepath.Join(workspace, "github-output")
+	command := exec.Command("bash", "-e", "-c", proposalScript)
+	command.Dir = workspace
+	command.Env = append(os.Environ(), "BRANCH="+branch, "VERSION=0.1.0-alpha.3", "GITHUB_OUTPUT="+githubOutput)
+	if result, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run formula proposal step: %v\n%s", err, result)
+	}
+	output, err := os.ReadFile(githubOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "needs_pr=true\n" {
+		t.Fatalf("formula proposal output = %q, want needs_pr=true", output)
+	}
+	committed := runGitOutput(t, tap, "show", "origin/"+branch+":Formula/portless.rb")
+	if !bytes.Equal(committed, formula) {
+		t.Fatalf("committed formula = %q, want %q", committed, formula)
+	}
+}
+
 func workflowHasStep(steps []struct {
 	Name string `yaml:"name"`
 }, name string) bool {
@@ -210,4 +285,24 @@ func repositoryRoot(t *testing.T) string {
 		t.Fatal("locate release test")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func runGit(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	if result, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, result)
+	}
+}
+
+func runGitOutput(t *testing.T, directory string, arguments ...string) []byte {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	result, err := command.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(arguments, " "), err)
+	}
+	return result
 }
