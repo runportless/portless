@@ -165,13 +165,12 @@ func TestHomebrewFormulaRendererAcceptsPrereleaseVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	formula := string(content)
-	for _, expected := range []string{
-		"releases/download/v0.1.0-alpha.1/portless_0.1.0-alpha.1_source.tar.gz",
-		`version "0.1.0-alpha.1"`,
-	} {
-		if !strings.Contains(formula, expected) {
-			t.Errorf("rendered prerelease formula does not contain %q", expected)
-		}
+	expectedURL := "releases/download/v0.1.0-alpha.1/portless_0.1.0-alpha.1_source.tar.gz"
+	if !strings.Contains(formula, expectedURL) {
+		t.Errorf("rendered prerelease formula does not contain %q", expectedURL)
+	}
+	if strings.Contains(formula, `version "`) {
+		t.Fatal("rendered prerelease formula redundantly declares the version inferred from its URL")
 	}
 }
 
