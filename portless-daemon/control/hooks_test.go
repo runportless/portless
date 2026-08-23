@@ -76,3 +76,34 @@ func TestForcedStopUsesInjectedProcessOperations(t *testing.T) {
 		t.Fatalf("control record still exists after injected stop: %v", err)
 	}
 }
+
+func TestWaitForInstanceStopRequiresInstanceLockReleaseAfterControlRecordRemoval(t *testing.T) {
+	layout, err := installation.ResolveLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(layout.InstanceLock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	record := identity.Record{PID: 4242, InstanceID: "fixture"}
+	waits := 0
+	manager := NewWithHooks(layout, Hooks{
+		Wait: func(context.Context, time.Duration) error {
+			waits++
+			return syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		},
+	})
+
+	if err := manager.waitForInstanceStop(context.Background(), record, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if waits != 1 {
+		t.Fatalf("waits = %d, want 1", waits)
+	}
+}

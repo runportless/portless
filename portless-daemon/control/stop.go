@@ -189,14 +189,17 @@ func (m *Manager) waitForInstanceStop(ctx context.Context, expected identity.Rec
 	deadline := m.hooks.Now().Add(timeout)
 	for {
 		current, err := identity.Read(paths)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
 		if err == nil && (current.PID != expected.PID || current.InstanceID != expected.InstanceID) {
 			return nil
 		}
-		alive, aliveErr := m.hooks.ProcessAlive(expected.PID)
-		if aliveErr == nil && !alive {
+		// The daemon removes its discovery record before closing every owned
+		// resource. Its instance lock is the authoritative boundary after which a
+		// replacement can safely start, even when the old PID remains as a zombie.
+		stopped, lockErr := daemonInstanceStopped(paths)
+		if lockErr != nil {
+			return lockErr
+		}
+		if stopped {
 			identity.RemoveMatching(paths, expected)
 			return nil
 		}

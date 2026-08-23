@@ -93,15 +93,32 @@ func (m *Manager) prepareStoppedDaemonForReset(ctx context.Context, inspectErr e
 }
 
 func verifyDaemonInstanceStopped(paths installation.Layout) error {
+	stopped, err := daemonInstanceStopped(paths)
+	if err != nil {
+		return err
+	}
+	if !stopped {
+		return errors.New("the daemon instance lock is still held; refusing to erase application state without an authenticated daemon shutdown")
+	}
+	return nil
+}
+
+func daemonInstanceStopped(paths installation.Layout) (bool, error) {
 	lock, err := os.OpenFile(paths.InstanceLock, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return fmt.Errorf("open daemon instance lock: %w", err)
+		return false, fmt.Errorf("open daemon instance lock: %w", err)
 	}
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("the daemon instance lock is still held; refusing to erase application state without an authenticated daemon shutdown")
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect daemon instance lock: %w", err)
 	}
-	return syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		return false, fmt.Errorf("release daemon instance lock probe: %w", err)
+	}
+	return true, nil
 }
 
 func (m *Manager) waitForResetDaemon(ctx context.Context) (identity.Record, error) {
