@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+  title: Dispatch notifier API
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200': { description: NATS subscriber readiness }
+  /events:
+    get:
+      operationId: listEvents
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: Recent delivery events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/Event' }
+components:
+  schemas:
+    Event:
+      type: object
+      required: [schemaVersion, eventId, type, deliveryId, status, occurredAt]
+      properties:
+        schemaVersion: { const: 1 }
+        eventId: { type: string }
+        type: { type: string, enum: [delivery.created, delivery.status_changed] }
+        deliveryId: { type: string }
+        status: { type: string }
+        occurredAt: { type: string, format: date-time }
+        traceId: { type: string }
+

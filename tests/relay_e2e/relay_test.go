@@ -571,7 +571,7 @@ func assertRelayAbsent(t *testing.T, status relayStatus) {
 	if status.State != "not installed" || status.Installed || status.Running || status.HelperPresent || status.ConfigurationPresent || status.ReceiptPresent || status.ResolverPresent {
 		t.Fatalf("relay artifacts remain after uninstall: %#v", status)
 	}
-	for _, path := range []string{status.HelperPath, status.ConfigurationPath, status.ReceiptPath, status.ResolverPath} {
+	for _, path := range []string{status.HelperPath, status.ConfigurationPath, status.ReceiptPath, status.ResolverPath, status.LocalhostResolverPath} {
 		if path == "" {
 			continue
 		}

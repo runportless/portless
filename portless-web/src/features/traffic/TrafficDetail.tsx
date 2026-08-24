@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DrawerSizeButton } from '../../components/DrawerSizeButton'
 import { duration } from '../../components/Status'
 import type { TrafficExchange } from '../../types'
 
@@ -61,12 +62,12 @@ export function TrafficDetail({ exchange, onClose }: { exchange: TrafficExchange
     return () => window.removeEventListener('keydown', keydown)
   }, [maximized, onClose])
   return <aside className={`traffic-detail${maximized ? ' traffic-detail--maximized' : ''}`} role="dialog" aria-label={`Traffic request and response ${exchange.sequence}`}>
-    <header><div><span className="eyebrow">{exchange.protocol.toUpperCase()} EXCHANGE #{exchange.sequence}</span><h3>{exchange.method || exchange.protocol.toUpperCase()} {exchange.requestTarget || exchange.path || `${exchange.source} → ${exchange.target}`}</h3></div><div className="traffic-detail__actions"><button type="button" onClick={() => setMaximized((value) => !value)} aria-label={maximized ? 'Restore traffic details' : 'Maximize traffic details'} title={maximized ? 'Restore' : 'Maximize'}>{maximized ? '↙' : '↗'}</button><button type="button" onClick={onClose} aria-label="Close traffic details" title="Close">×</button></div></header>
-    <div className="detail-grid"><Detail label="EDGE" value={`${exchange.source} → ${exchange.target}`} /><Detail label="STATUS" value={exchange.error ? 'error' : String(exchange.status || 'ok')} /><Detail label="DURATION" value={duration(exchange.durationMs)} /><Detail label="PROVIDER" value={exchange.targetProvider || '—'} />{exchange.mockProfile && <Detail label="MOCK PROFILE" value={exchange.mockProfile} />}{exchange.mockRoute && <Detail label="MOCK ROUTE" value={exchange.mockRoute} />}<Detail label="FAULT" value={exchange.fault || 'none'} /><Detail label="RECORDING" value={exchange.recording || 'none'} /></div>
-    {exchange.traceId && <div className="traffic-detail__trace"><span>TRACE CONTEXT</span><code>{exchange.traceId}</code>{exchange.spanId && <small>span {exchange.spanId}{exchange.parentSpanId ? ` · parent ${exchange.parentSpanId}` : ''}</small>}</div>}
+    <header><div><span className="eyebrow">{exchange.protocol.toUpperCase()} EXCHANGE #{exchange.sequence}</span><h3>{exchange.method || exchange.protocol.toUpperCase()} {exchange.requestTarget || exchange.path || `${exchange.source} → ${exchange.target}`}</h3></div><div className="traffic-detail__actions"><DrawerSizeButton fullScreen={maximized} subject="traffic details" onToggle={() => setMaximized((value) => !value)} /><button type="button" onClick={onClose} aria-label="Close traffic details" title="Close">×</button></div></header>
+    <div className="detail-grid"><Detail label="EDGE" value={`${exchange.source} → ${exchange.target}`} /><Detail label="STATUS" value={exchange.error ? 'error' : String(exchange.status || 'ok')} /><Detail label="DURATION" value={duration(exchange.durationMs)} /><Detail label="ENVIRONMENT" value={exchange.environment} />{exchange.mockProfile && <Detail label="MOCK PROFILE" value={exchange.mockProfile} />}{exchange.mockRoute && <Detail label="MOCK ROUTE" value={exchange.mockRoute} />}<Detail label="FAULT" value={exchange.fault || 'none'} /><Detail label="RECORDING" value={exchange.recording || 'none'} /></div>
     {exchange.error && <div className="traffic-detail__error"><span>REQUEST ERROR</span><strong>{exchange.error}</strong></div>}
     {exchange.protocol === 'http'
       ? <div className="traffic-exchange"><TrafficMessage exchange={exchange} direction="request" /><TrafficMessage exchange={exchange} direction="response" /></div>
       : <div className="traffic-detail__notice"><span>TCP SESSION</span><strong>Payload content is not captured.</strong><small>{formatBytes(Math.max(0, exchange.requestBytes))} sent · {formatBytes(Math.max(0, exchange.responseBytes))} received</small></div>}
+    {exchange.traceId && <div className="traffic-detail__trace"><span>TRACE CONTEXT</span><code>{exchange.traceId}</code>{exchange.spanId && <small>span {exchange.spanId}{exchange.parentSpanId ? ` · parent ${exchange.parentSpanId}` : ''}</small>}</div>}
   </aside>
 }

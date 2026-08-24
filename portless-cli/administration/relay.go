@@ -42,6 +42,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 		}
 		fmt.Fprintln(c.Out, "Clean local endpoints are already configured.")
 		fmt.Fprintln(c.Out, c.Accent(c.Out, relay.ControlOrigin))
+		fmt.Fprintln(c.Out, c.Accent(c.Out, "*.localhost"))
 		fmt.Fprintln(c.Out, c.Accent(c.Out, "*.portless.test"))
 		return nil
 	}
@@ -51,9 +52,9 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 	}
 	if !jsonOutput {
 		if status.Installed {
-			fmt.Fprintln(c.Out, "Repairing Portless HTTP ingress and TCP endpoint DNS requires administrator approval.")
+			fmt.Fprintln(c.Out, "Repairing Portless HTTP ingress and endpoint DNS requires administrator approval.")
 		} else {
-			fmt.Fprintln(c.Out, "Portless needs administrator approval once to install HTTP ingress and scoped TCP endpoint DNS.")
+			fmt.Fprintln(c.Out, "Portless needs administrator approval once to install HTTP ingress and scoped endpoint DNS.")
 		}
 	}
 	installOutput := c.Out
@@ -78,6 +79,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 	}
 	fmt.Fprintln(c.Out, "Clean local endpoints are", c.Success(c.Out, "ready")+".")
 	fmt.Fprintln(c.Out, c.Accent(c.Out, relay.ControlOrigin))
+	fmt.Fprintln(c.Out, c.Accent(c.Out, "*.localhost"))
 	fmt.Fprintln(c.Out, c.Accent(c.Out, "*.portless.test"))
 	return nil
 }
@@ -94,7 +96,7 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 	fmt.Fprintln(c.Out, "Platform:", status.Platform)
 	fmt.Fprintln(c.Out, "HTTP listener:", relay.DefaultListenAddress)
 	fmt.Fprintln(c.Out, "Control URL:", relay.ControlOrigin)
-	fmt.Fprintln(c.Out, "DNS domain:", "portless.test")
+	fmt.Fprintln(c.Out, "DNS domains:", "localhost, portless.test")
 	fmt.Fprintln(c.Out, "DNS listener:", relay.DefaultDNSAddress, "(UDP and TCP)")
 	if !status.Installed {
 		fmt.Fprintln(c.Out, "Run `portless relay install` or `portless setup` to install it.")
@@ -113,7 +115,10 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 		fmt.Fprintln(c.Out, "DNS forwards to:", status.DNSTargetSocket)
 	}
 	if status.ResolverPath != "" {
-		fmt.Fprintln(c.Out, "Resolver:", status.ResolverPath)
+		fmt.Fprintln(c.Out, "TCP resolver:", status.ResolverPath)
+	}
+	if status.LocalhostResolverPath != "" {
+		fmt.Fprintln(c.Out, "HTTP resolver:", status.LocalhostResolverPath)
 	}
 	poolState := "not ready"
 	if status.EndpointPoolReady {
@@ -230,6 +235,12 @@ func (c *Commands) uninstallRelay(ctx context.Context, force, jsonOutput bool) e
 		fmt.Fprintln(c.Out, "Removing the Portless clean-URL relay:")
 		fmt.Fprintln(c.Out, "  service:", status.Service)
 		fmt.Fprintln(c.Out, "  helper: ", status.HelperPath)
+		if status.ResolverPath != "" {
+			fmt.Fprintln(c.Out, "  TCP resolver:", status.ResolverPath)
+		}
+		if status.LocalhostResolverPath != "" {
+			fmt.Fprintln(c.Out, "  HTTP resolver:", status.LocalhostResolverPath)
+		}
 		fmt.Fprintln(c.Out, "Projects, containers, volumes, recordings, and Portless user data will not be removed.")
 		fmt.Fprintln(c.Out, "Administrator approval is required to remove the system service.")
 	}
@@ -253,7 +264,7 @@ func (c *Commands) uninstallRelay(ctx context.Context, force, jsonOutput bool) e
 	if jsonOutput {
 		return command.WriteJSON(c.Out, command.ActionOutput{Action: "uninstall", Name: status.Service, Status: "removed"})
 	}
-	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80, "+relay.DefaultDNSAddress+", its reserved loopback endpoint pool, or the portless.test resolver entry.")
+	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80, "+relay.DefaultDNSAddress+", its reserved loopback endpoint pool, or its scoped resolver entries.")
 	fmt.Fprintln(c.Out, "Running environments were not stopped, but their clean localhost URLs are unavailable until `portless relay install` or `portless setup` is run.")
 	return nil
 }

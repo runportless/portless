@@ -1,4 +1,4 @@
-# Portless daemon
+# Portless Daemon
 
 `portless-daemon` owns the unprivileged, per-user control plane behind
 Portless. It discovers application topology, persists project and environment
@@ -49,7 +49,7 @@ Adjacent products keep separate responsibilities:
 | `projects` | Project compilation and bounded, root-confined static discovery. |
 | `providers` | Managed-resource plugin contracts, bounded discovery, declarative container plans, and safe bindings. |
 | `runtime` | Process supervisors, containers, debugging, health checks, and log storage. |
-| `networking`, `dns` | Stable endpoint allocation and authoritative `portless.test` DNS data. |
+| `networking`, `dns` | Stable endpoint allocation, fixed localhost answers, and authoritative `portless.test` DNS data. |
 | `traffic`, `mocks` | Source-aware proxies, traffic and trace capture, and deterministic HTTP responses. |
 | `events` | Bounded, nonblocking environment event publication. |
 | `auth`, `identity`, `lifecycle` | Local authentication, private daemon identity, and guarded replacement or shutdown. |
@@ -76,7 +76,7 @@ control plane -> database + runtimes + source-aware proxies
 private HTTP/DNS sockets
         |
         v
-privileged relay -> clean HTTP URLs and portless.test endpoints
+privileged relay -> system-resolvable clean HTTP URLs and portless.test endpoints
 ```
 
 The lifecycle controller starts one daemon per user data directory behind a

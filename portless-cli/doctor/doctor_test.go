@@ -248,7 +248,7 @@ func healthyRelayStatus(paths installation.Layout, uid int) relay.InstallationSt
 		HelperCurrent: true, HelperBuildID: "current-build", CurrentBuildID: "current-build",
 		ReceiptPresent: true, ResolverPresent: true, ResolverHealthy: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket,
 		EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0",
-		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt", ResolverPath: "/fixed/resolver",
+		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt", ResolverPath: "/fixed/resolver", LocalhostResolverPath: "/fixed/localhost-resolver",
 	}
 }
 

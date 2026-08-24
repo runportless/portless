@@ -9,6 +9,23 @@ import { TrafficDetail } from './traffic'
 const service = (name: string): Service => ({ name } as Service)
 
 describe('environment topology', () => {
+  it('places the infrequently used bindings tab immediately before timeline', () => {
+    const environment = {
+      project: 'billing', name: 'local', status: 'healthy', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [], connections: [],
+    } as Environment
+
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+    const tabs = markup.match(/<nav class="tabs" aria-label="Environment views">(.*?)<\/nav>/)?.[1] ?? ''
+
+    expect(tabs).toContain('>faults<')
+    expect(tabs.indexOf('>faults<')).toBeLessThan(tabs.indexOf('>bindings<'))
+    expect(tabs.indexOf('>bindings<')).toBeLessThan(tabs.indexOf('>timeline<'))
+  })
+
   it('renders an inspected HTTP event as a request and response exchange', () => {
     const event = {
       project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
@@ -22,11 +39,19 @@ describe('environment topology', () => {
       responseBody: '{"order":42,"state":"created"}',
       requestCapturedBytes: 32,
       responseCapturedBytes: 30,
+      traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+      spanId: '00f067aa0ba902b7',
+      parentSpanId: 'b7ad6b7169203331',
     } as TrafficExchange
 
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: event, onClose: () => undefined }))
 
     expect(markup).toContain('aria-label="Traffic request and response 7"')
+    expect(markup).toContain('class="drawer-size-button"')
+    expect(markup).toContain('aria-label="Full screen traffic details"')
+    expect(markup).toContain('d="M6 2H2v4M10 2h4v4M2 10v4h4M14 10v4h-4"')
+    expect(markup).not.toContain('↗')
+    expect(markup).not.toContain('↙')
     expect(markup).toContain('>REQUEST<')
     expect(markup).toContain('POST /orders')
     expect(markup).toContain('Host: orders.local.billing.localhost')
@@ -40,6 +65,10 @@ describe('environment topology', () => {
     expect(markup).toContain('sold-out')
     expect(markup).toContain('MOCK ROUTE')
     expect(markup).toContain('reject-order')
+    expect(markup).toContain('<span>ENVIRONMENT</span><strong>local</strong>')
+    expect(markup).not.toContain('<span>PROVIDER</span>')
+    expect(markup).toContain('<span>TRACE CONTEXT</span><code>4bf92f3577b34da6a3ce929d0e0e4736</code>')
+    expect(markup.indexOf('class="traffic-exchange"')).toBeLessThan(markup.indexOf('class="traffic-detail__trace"'))
     expect(markup).toContain('&quot;sku&quot;: &quot;coffee&quot;')
     expect(markup).toContain('&quot;order&quot;: 42')
     expect(markup).not.toContain('{&quot;Authorization&quot;')

@@ -50,6 +50,35 @@ func TestDNSPacketRelayForwardsToPrivateDaemonSocket(t *testing.T) {
 	}
 }
 
+func TestDNSPacketRelaySynthesizesLocalhostWithoutDaemon(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	packet, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer packet.Close()
+	go func() { _ = ServeDNSPacketRelay(ctx, packet, filepath.Join(t.TempDir(), "missing.sock"), 4) }()
+
+	query, _ := portlessdns.Query("checkout.local.store.localhost", portlessdns.TypeA, 34)
+	connection, err := net.DialTimeout("udp", packet.LocalAddr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	_, _ = connection.Write(query)
+	buffer := make([]byte, portlessdns.MaxMessage)
+	count, err := connection.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, code, err := portlessdns.ParseAResponse(buffer[:count], 34)
+	if err != nil || code != 0 || address != portlessdns.LocalhostAddress {
+		t.Fatalf("address=%s code=%d err=%v", address, code, err)
+	}
+}
+
 func TestDNSStreamRelayPreservesTCPFraming(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -81,6 +110,39 @@ func TestDNSStreamRelayPreservesTCPFraming(t *testing.T) {
 	address, _, err := portlessdns.ParseAResponse(response, 32)
 	if err != nil || address.String() != "127.77.2.3" {
 		t.Fatalf("address=%s err=%v", address, err)
+	}
+}
+
+func TestDNSStreamRelaySynthesizesLocalhostWithoutDaemon(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() { _ = ServeDNSStreamRelay(ctx, listener, filepath.Join(t.TempDir(), "missing.sock"), 4) }()
+
+	connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	query, _ := portlessdns.Query("checkout.local.store.localhost", portlessdns.TypeA, 35)
+	var header [2]byte
+	binary.BigEndian.PutUint16(header[:], uint16(len(query)))
+	_, _ = connection.Write(header[:])
+	_, _ = connection.Write(query)
+	if _, err := io.ReadFull(connection, header[:]); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, int(binary.BigEndian.Uint16(header[:])))
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatal(err)
+	}
+	address, code, err := portlessdns.ParseAResponse(response, 35)
+	if err != nil || code != 0 || address != portlessdns.LocalhostAddress {
+		t.Fatalf("address=%s code=%d err=%v", address, code, err)
 	}
 }
 

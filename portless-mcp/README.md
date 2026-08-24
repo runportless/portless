@@ -1,4 +1,4 @@
-# Portless MCP server
+# Portless MCP Server
 
 `portless mcp serve` exposes the machine-local Portless control plane to an MCP
 host over stdin/stdout. It is a client adapter over the same authenticated,

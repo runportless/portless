@@ -1,0 +1,24 @@
+[project]
+name = "dispatch-api"
+version = "0.1.0"
+description = "Operations API for the Portless multi-checkout example"
+requires-python = ">=3.12"
+dependencies = [
+  "aiomysql==0.3.2",
+  "cryptography==50.0.0",
+  "fastapi==0.141.1",
+  "httpx==0.28.1",
+  "nats-py==2.15.0",
+  "uvicorn==0.52.4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]

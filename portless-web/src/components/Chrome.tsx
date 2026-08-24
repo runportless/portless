@@ -4,7 +4,7 @@ import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
-export type EnvironmentView = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'timeline'
+export type EnvironmentView = 'overview' | 'topology' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'bindings' | 'timeline'
 export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const expandedProjectsKey = 'portless.expanded-projects'
@@ -116,11 +116,11 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>
             <ViewButton label="Overview" view="overview" activeView={activeView} environment={activeEnvironment} icon={<GridIcon />} onNavigate={onNavigate} />
             <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} onNavigate={onNavigate} />
             <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} onNavigate={onNavigate} />
             <ViewButton label="Mocks" view="mocks" activeView={activeView} environment={activeEnvironment} icon={<MockIcon />} onNavigate={onNavigate} />
             <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} onNavigate={onNavigate} />
             <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} onNavigate={onNavigate} />
+            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} onNavigate={onNavigate} />
             <ViewButton label="Timeline" view="timeline" activeView={activeView} environment={activeEnvironment} icon={<TimelineIcon />} onNavigate={onNavigate} />
           </nav>
         </>}

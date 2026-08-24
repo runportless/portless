@@ -105,8 +105,8 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
             <div className="daemon-section-heading"><span className="eyebrow">LOCAL NETWORKING</span><StatusMark status={relay?.healthy ? 'ready' : relay?.installed ? 'degraded' : 'missing'} /></div>
             <div className="daemon-network-grid">
               <NetworkDetail label="HTTP INGRESS" value="127.0.0.1:80" healthy={relay?.httpHealthy === true} />
-              <NetworkDetail label="TCP DNS" value={relay?.dnsListenAddress || '127.77.0.1:1053'} healthy={relay?.dnsHealthy === true} />
-              <NetworkDetail label="DNS ZONE" value="portless.test" healthy={relay?.resolverHealthy === true} />
+              <NetworkDetail label="ENDPOINT DNS" value={relay?.dnsListenAddress || '127.77.0.1:1053'} healthy={relay?.dnsHealthy === true} />
+              <NetworkDetail label="DNS ZONES" value="localhost · portless.test" healthy={relay?.resolverHealthy === true} />
               <NetworkDetail label="TCP ADDRESS POOL" value={relay?.endpointPoolDetail || 'not provisioned'} healthy={relay?.endpointPoolReady === true} />
               <NetworkDetail label="DAEMON SOCKETS" value={relay?.targetSocket && relay?.dnsTargetSocket ? 'connected' : 'unavailable'} healthy={Boolean(relay?.targetSocket && relay?.dnsTargetSocket)} />
               <NetworkDetail label="SYSTEM SERVICE" value={relay?.service || 'not installed'} healthy={relay?.running === true} />
@@ -169,8 +169,8 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
     `Active environments:${environments}`,
     `Recovery problems:${problems}`,
     `HTTP ingress: ${relay?.httpHealthy ? 'ready' : 'not ready'} (127.0.0.1:80)`,
-    `TCP DNS: ${relay?.dnsHealthy ? 'ready' : 'not ready'} (${relay?.dnsListenAddress || '127.77.0.1:1053'})`,
-    `DNS resolver: ${relay?.resolverHealthy ? 'ready' : 'not ready'} (portless.test)`,
+    `Endpoint DNS: ${relay?.dnsHealthy ? 'ready' : 'not ready'} (${relay?.dnsListenAddress || '127.77.0.1:1053'})`,
+    `DNS resolver: ${relay?.resolverHealthy ? 'ready' : 'not ready'} (localhost, portless.test)`,
     `TCP endpoint pool: ${relay?.endpointPoolReady ? 'ready' : 'not ready'}${relay?.endpointPoolDetail ? ` (${relay.endpointPoolDetail})` : ''}`,
   ].join('\n')
 }

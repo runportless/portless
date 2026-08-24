@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 )
 
 func TestCheckAtRecognizesPortlessHealth(t *testing.T) {
@@ -34,7 +36,7 @@ func TestCheckAtRecognizesPortlessHealth(t *testing.T) {
 }
 
 func TestResolverValidationRequiresOnlyThePortlessHealthAddress(t *testing.T) {
-	if err := validateResolverAddresses([]net.IPAddr{{IP: net.ParseIP("127.77.0.1")}}); err != nil {
+	if err := validateResolverAddresses("portless.test", []net.IPAddr{{IP: net.ParseIP("127.77.0.1")}}, portlessdns.HealthAddress); err != nil {
 		t.Fatal(err)
 	}
 	for _, addresses := range [][]net.IPAddr{
@@ -42,8 +44,29 @@ func TestResolverValidationRequiresOnlyThePortlessHealthAddress(t *testing.T) {
 		{{IP: net.ParseIP("127.0.0.1")}},
 		{{IP: net.ParseIP("127.77.0.1")}, {IP: net.ParseIP("203.0.113.10")}},
 	} {
-		if err := validateResolverAddresses(addresses); err == nil {
+		if err := validateResolverAddresses("portless.test", addresses, portlessdns.HealthAddress); err == nil {
 			t.Fatalf("unexpected resolver addresses were accepted: %#v", addresses)
+		}
+	}
+}
+
+func TestLocalhostResolverValidationAcceptsOnlyLoopbackAddresses(t *testing.T) {
+	for _, addresses := range [][]net.IPAddr{
+		{{IP: net.ParseIP("127.0.0.1")}},
+		{{IP: net.ParseIP("::1")}},
+		{{IP: net.ParseIP("127.0.0.1")}, {IP: net.ParseIP("::1")}},
+	} {
+		if err := validateLocalhostResolverAddresses("resolver.portless.localhost", addresses); err != nil {
+			t.Fatalf("loopback addresses were rejected: %#v: %v", addresses, err)
+		}
+	}
+	for _, addresses := range [][]net.IPAddr{
+		nil,
+		{{IP: net.ParseIP("203.0.113.10")}},
+		{{IP: net.ParseIP("127.0.0.1")}, {IP: net.ParseIP("203.0.113.10")}},
+	} {
+		if err := validateLocalhostResolverAddresses("resolver.portless.localhost", addresses); err == nil {
+			t.Fatalf("unexpected localhost addresses were accepted: %#v", addresses)
 		}
 	}
 }

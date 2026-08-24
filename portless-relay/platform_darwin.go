@@ -18,17 +18,19 @@ import (
 )
 
 const (
-	launchdLabel      = "dev.portless.relay"
-	launchdHelperPath = "/Library/PrivilegedHelperTools/dev.portless.relay"
-	launchdPlistPath  = "/Library/LaunchDaemons/dev.portless.relay.plist"
-	launchdReceipt    = "/var/db/portless/relay.json"
-	launchdResolver   = "/etc/resolver/portless.test"
+	launchdLabel             = "dev.portless.relay"
+	launchdHelperPath        = "/Library/PrivilegedHelperTools/dev.portless.relay"
+	launchdPlistPath         = "/Library/LaunchDaemons/dev.portless.relay.plist"
+	launchdReceipt           = "/var/db/portless/relay.json"
+	launchdResolver          = "/etc/resolver/portless.test"
+	launchdLocalhostResolver = "/etc/resolver/portless.localhost"
 )
 
 func currentPlatformInstallation() platformInstallation {
 	return platformInstallation{
 		Name: "launchd", Service: launchdLabel, HelperPath: launchdHelperPath,
 		ConfigurationPath: launchdPlistPath, ReceiptPath: launchdReceipt, ResolverPath: launchdResolver,
+		LocalhostResolverPath: launchdLocalhostResolver,
 	}
 }
 
@@ -53,7 +55,7 @@ func installPlatform(ctx context.Context, request SetupRequest) (resultErr error
 			if resultErr != nil {
 				if !receiptExists {
 					_ = runCommand(context.Background(), "/bin/launchctl", "bootout", "system/"+launchdLabel)
-					for _, path := range []string{launchdPlistPath, launchdHelperPath, launchdResolver} {
+					for _, path := range []string{launchdPlistPath, launchdHelperPath, launchdResolver, launchdLocalhostResolver} {
 						_ = removeExactFile(path)
 					}
 				}
@@ -75,6 +77,9 @@ func installPlatform(ctx context.Context, request SetupRequest) (resultErr error
 	if err := writeRootFileAtomically(launchdResolver, renderDarwinResolverConfiguration(), 0o644); err != nil {
 		return fmt.Errorf("install scoped portless.test resolver: %w", err)
 	}
+	if err := writeRootFileAtomically(launchdLocalhostResolver, renderDarwinLocalhostResolverConfiguration(), 0o644); err != nil {
+		return fmt.Errorf("install scoped localhost resolver: %w", err)
+	}
 	_ = runCommand(ctx, "/bin/launchctl", "bootout", "system/"+launchdLabel)
 	if err := waitForRelayAddressesAvailable(ctx, 2*time.Second); err != nil {
 		return err
@@ -92,6 +97,10 @@ func installPlatform(ctx context.Context, request SetupRequest) (resultErr error
 func renderDarwinResolverConfiguration() []byte {
 	host, port, _ := net.SplitHostPort(DefaultDNSAddress)
 	return []byte(fmt.Sprintf("nameserver %s\nport %s\n", host, port))
+}
+
+func renderDarwinLocalhostResolverConfiguration() []byte {
+	return append([]byte("domain localhost\n"), renderDarwinResolverConfiguration()...)
 }
 
 func restartPlatform(ctx context.Context) error {
@@ -121,7 +130,7 @@ func uninstallPlatform(ctx context.Context, removeLoopbackPool bool) error {
 			return err
 		}
 	}
-	for _, path := range []string{launchdPlistPath, launchdHelperPath, launchdReceipt, launchdResolver} {
+	for _, path := range []string{launchdPlistPath, launchdHelperPath, launchdReceipt, launchdResolver, launchdLocalhostResolver} {
 		if err := removeExactFile(path); err != nil {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}

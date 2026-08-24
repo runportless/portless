@@ -61,7 +61,10 @@ Replace the overloaded event shape with an exchange model and trace projections.
 - `requestKind`: navigation, subresource, fetch/XHR, service, or unknown, derived from `Sec-Fetch-*` and other bounded request metadata.
 - Complete multi-value request and response headers.
 - Body contents, observed byte counts, captured byte counts, and truncation flags.
-- Optional W3C `traceId`, `spanId`, and `parentSpanId` when trace context is already present.
+- Optional normalized lower-hex `traceId`, `spanId`, and `parentSpanId` derived
+  from W3C/OpenTelemetry, B3 single or multi-header, or Datadog context. B3
+  64-bit and Datadog trace identifiers are left-padded to the API's 128-bit
+  representation; Datadog's `_dd.p.tid` supplies the high 64 bits when present.
 
 ### Traffic trace
 
@@ -75,7 +78,11 @@ The raw exchange remains authoritative. A trace is a projection and can be rebui
 
 ## Correlation strategy
 
-Use exact propagated trace context when it exists. Otherwise apply conservative timing and topology inference:
+Use exact propagated trace context when it exists. W3C context takes precedence
+when several valid formats are present; B3 single-header takes precedence over
+B3 multi-header, followed by Datadog. Portless synchronizes valid alternate
+carriers already present on the request and always emits a W3C bridge. Otherwise
+apply conservative timing and topology inference:
 
 1. An HTTP exchange sourced from `external` is a root candidate.
 2. A child is eligible only when its source service equals the candidate parent's target service.
@@ -151,7 +158,9 @@ portless-web/src/features/traffic/
 - Repeated non-sensitive headers are returned losslessly and credential-bearing
   values are redacted before retention.
 - Bodies stop only at the size cap and report observed/captured bytes and truncation accurately.
-- Existing W3C trace context produces exact parentage.
+- Existing W3C/OpenTelemetry, B3, and Datadog trace context retains one
+  normalized trace identity; directly propagated parent spans produce exact
+  parentage.
 - Store-style HTTP and TCP timing produces the expected inferred tree.
 - Overlapping requests with more than one eligible parent remain ambiguous.
 - Completion order does not change nesting or waterfall order.

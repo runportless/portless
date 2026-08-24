@@ -48,6 +48,13 @@ func TestDarwinResolverUsesDedicatedPortlessDNSPort(t *testing.T) {
 	if actual := string(renderDarwinResolverConfiguration()); actual != "nameserver 127.77.0.1\nport 1053\n" {
 		t.Fatalf("unexpected resolver configuration: %q", actual)
 	}
+	if actual := string(renderDarwinLocalhostResolverConfiguration()); actual != "domain localhost\nnameserver 127.77.0.1\nport 1053\n" {
+		t.Fatalf("unexpected localhost resolver configuration: %q", actual)
+	}
+	details := currentPlatformInstallation()
+	if details.ResolverPath != "/etc/resolver/portless.test" || details.LocalhostResolverPath != "/etc/resolver/portless.localhost" {
+		t.Fatalf("unexpected resolver paths: %#v", details.resolverPaths())
+	}
 }
 
 func TestPlatformConfigurationOwnerReadsLegacyLaunchdPlist(t *testing.T) {

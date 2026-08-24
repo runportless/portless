@@ -61,6 +61,7 @@ export interface RelayStatus {
   dnsTargetSocket?: string
   dnsListenAddress: string
   resolverPath?: string
+  localhostResolverPath?: string
   healthError?: string
   dnsHealthError?: string
   resolverHealthError?: string

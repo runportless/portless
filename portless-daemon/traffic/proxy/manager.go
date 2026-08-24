@@ -338,7 +338,7 @@ func (m *Manager) Close(ctx context.Context) {
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
 	started := time.Now().UTC()
-	traceContext := newExchangeTraceContext(request.Header.Get("Traceparent"))
+	traceContext := newExchangeTraceContext(request.Header)
 	_, recordBodies, recordBodyLimit := m.matchRecording(request.Context(), scope, source, targetName)
 	captureLimit := trafficBodyLimit
 	if recordBodies && recordBodyLimit > int64(captureLimit) {
@@ -377,7 +377,7 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	}
 	outgoing := request.Clone(request.Context())
 	outgoing.RequestURI = ""
-	outgoing.Header.Set("Traceparent", traceContext.header())
+	traceContext.inject(outgoing.Header)
 	if upstream.provider == model.ProviderRemote {
 		outgoing.URL.Scheme = upstream.baseURL.Scheme
 		outgoing.URL.Host = upstream.baseURL.Host

@@ -36,7 +36,10 @@ func (c *Commands) printUninstallPreview(result uninstallOutput) error {
 	}
 	fmt.Fprintln(c.Out)
 	if result.Relay.Installed {
-		fmt.Fprintf(c.Out, "  Resolver: %s\n", result.Relay.ResolverPath)
+		fmt.Fprintf(c.Out, "  TCP resolver: %s\n", result.Relay.ResolverPath)
+		if result.Relay.LocalhostResolverPath != "" {
+			fmt.Fprintf(c.Out, "  HTTP resolver: %s\n", result.Relay.LocalhostResolverPath)
+		}
 		fmt.Fprintf(c.Out, "  Reserved TCP endpoint pool: %s\n", yesNo(result.Relay.EndpointPoolReady))
 		if result.Relay.AdministratorPrompt {
 			fmt.Fprintln(c.Out, "  Administrator approval: required during confirmed removal")
@@ -100,7 +103,7 @@ func (c *Commands) printUninstallComplete(result uninstallOutput) error {
 		fmt.Fprintf(c.Out, "Stopped %d supervised %s.\n", result.ProcessesStopped, counted(result.ProcessesStopped, "process"))
 	}
 	if result.Relay.Removed {
-		fmt.Fprintln(c.Out, "Relay: removed (service, resolver, and loopback endpoint pool)")
+		fmt.Fprintln(c.Out, "Relay: removed (service, resolvers, and loopback endpoint pool)")
 	} else if result.Relay.Installed {
 		fmt.Fprintln(c.Out, "Relay: still installed")
 	} else {

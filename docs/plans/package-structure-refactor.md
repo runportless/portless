@@ -137,11 +137,11 @@ uninstall coordination.
 
 ### `portless-relay`
 
-Owns the narrow machine-wide process that accepts clean HTTP traffic and serves
-the scoped TCP endpoint DNS zone. The same product owns its root-service
-installation, ownership receipt, platform configuration, health probes,
-restart, and removal. There is no nested generic `install` package or separate
-relay command implementation.
+Owns the narrow machine-wide process that accepts clean HTTP traffic, serves
+fixed localhost DNS, and relays the scoped TCP endpoint DNS zone. The same
+product owns its root-service installation, ownership receipt, platform
+configuration, health probes, restart, and removal. There is no nested generic
+`install` package or separate relay command implementation.
 
 ### `portless-web`
 

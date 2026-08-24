@@ -1,0 +1,14 @@
+{
+  "name": "notifier",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@nats-io/transport-node": "3.4.0",
+    "fastify": "5.12.1"
+  }
+}

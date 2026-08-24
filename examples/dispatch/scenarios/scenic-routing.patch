@@ -1,0 +1,56 @@
+diff --git a/cmd/routing/main_test.go b/cmd/routing/main_test.go
+index d7fb76f..05c519e 100644
+--- a/cmd/routing/main_test.go
++++ b/cmd/routing/main_test.go
+@@ -26,7 +26,7 @@ func TestRoutingHandlerPropagatesTraceContext(t *testing.T) {
+ 	response := httptest.NewRecorder()
+ 	handler(geocoderClient{baseURL: geocoder.URL, client: geocoder.Client()}).ServeHTTP(response, request)
+ 
+-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"strategy":"standard"`) {
++	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"strategy":"scenic"`) {
+ 		t.Fatalf("estimate response: status=%d body=%s", response.Code, response.Body.String())
+ 	}
+ 	if len(traceparents) != 2 || traceparents[0] != request.Header.Get("traceparent") || traceparents[1] != request.Header.Get("traceparent") {
+diff --git a/internal/estimate/estimate.go b/internal/estimate/estimate.go
+index 5e70c8c..40b8163 100644
+--- a/internal/estimate/estimate.go
++++ b/internal/estimate/estimate.go
+@@ -32,7 +32,7 @@ func Calculate(pickup, destination city.Location, size, priority string) (Result
+ 		return Result{}, errors.New("priority must be standard or express")
+ 	}
+ 
+-	distance := math.Hypot(destination.X-pickup.X, destination.Y-pickup.Y) * 1.4
++	distance := math.Hypot(destination.X-pickup.X, destination.Y-pickup.Y) * 1.75
+ 	distance = math.Round(distance*10) / 10
+ 	eta := int(math.Ceil(distance / 25 * 60))
+ 	price := 450 + int(math.Round(distance*120)) + surcharge
+@@ -42,6 +42,6 @@ func Calculate(pickup, destination city.Location, size, priority string) (Result
+ 	}
+ 	return Result{
+ 		Pickup: pickup.Code, Destination: destination.Code, DistanceKM: distance,
+-		ETAMinutes: eta, PriceCents: price, Strategy: "standard",
++		ETAMinutes: eta, PriceCents: price, Strategy: "scenic",
+ 	}, nil
+ }
+diff --git a/internal/estimate/estimate_test.go b/internal/estimate/estimate_test.go
+index a999e53..fd96592 100644
+--- a/internal/estimate/estimate_test.go
++++ b/internal/estimate/estimate_test.go
+@@ -13,14 +13,14 @@ func TestCalculateIsDeterministic(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if standard.DistanceKM != 7 || standard.ETAMinutes != 17 || standard.PriceCents != 1540 || standard.Strategy != "standard" {
++	if standard.DistanceKM != 8.8 || standard.ETAMinutes != 22 || standard.PriceCents != 1756 || standard.Strategy != "scenic" {
+ 		t.Fatalf("standard estimate = %#v", standard)
+ 	}
+ 	express, err := Calculate(pickup, destination, "medium", "express")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if express.ETAMinutes != 13 || express.PriceCents != 2079 {
++	if express.ETAMinutes != 16 || express.PriceCents != 2371 {
+ 		t.Fatalf("express estimate = %#v", express)
+ 	}
+ }
+

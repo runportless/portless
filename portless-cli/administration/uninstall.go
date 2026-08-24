@@ -18,7 +18,7 @@ import (
 
 var uninstallRemovalCategories = []string{
 	"all Portless-supervised processes and installation-owned container resources",
-	"the privileged HTTP/DNS relay, resolver entry, and reserved loopback endpoint pool",
+	"the privileged HTTP/DNS relay, resolver entries, and reserved loopback endpoint pool",
 	"all projects, environments, traffic, recordings, faults, logs, preferences, credentials, and installation state",
 	"the CLI launcher when it can be identified without deleting a source-tree build",
 }
@@ -34,19 +34,20 @@ type uninstallDaemonOutput struct {
 }
 
 type uninstallRelayOutput struct {
-	Installed           bool   `json:"installed"`
-	Removed             bool   `json:"removed"`
-	State               string `json:"state"`
-	Service             string `json:"service,omitempty"`
-	OwnerUID            int    `json:"ownerUid,omitempty"`
-	TargetSocket        string `json:"targetSocket,omitempty"`
-	DNSTargetSocket     string `json:"dnsTargetSocket,omitempty"`
-	HelperPath          string `json:"helperPath,omitempty"`
-	ConfigurationPath   string `json:"configurationPath,omitempty"`
-	ReceiptPath         string `json:"receiptPath,omitempty"`
-	ResolverPath        string `json:"resolverPath,omitempty"`
-	EndpointPoolReady   bool   `json:"endpointPoolReady"`
-	AdministratorPrompt bool   `json:"administratorPrompt"`
+	Installed             bool   `json:"installed"`
+	Removed               bool   `json:"removed"`
+	State                 string `json:"state"`
+	Service               string `json:"service,omitempty"`
+	OwnerUID              int    `json:"ownerUid,omitempty"`
+	TargetSocket          string `json:"targetSocket,omitempty"`
+	DNSTargetSocket       string `json:"dnsTargetSocket,omitempty"`
+	HelperPath            string `json:"helperPath,omitempty"`
+	ConfigurationPath     string `json:"configurationPath,omitempty"`
+	ReceiptPath           string `json:"receiptPath,omitempty"`
+	ResolverPath          string `json:"resolverPath,omitempty"`
+	LocalhostResolverPath string `json:"localhostResolverPath,omitempty"`
+	EndpointPoolReady     bool   `json:"endpointPoolReady"`
+	AdministratorPrompt   bool   `json:"administratorPrompt"`
 }
 
 type uninstallDataOutput struct {
@@ -172,7 +173,8 @@ func (c *Commands) inspectUninstall(ctx context.Context) (uninstallOutput, error
 			Installed: status.Installed, State: status.State(), Service: status.Service, OwnerUID: status.OwnerUID,
 			TargetSocket: status.TargetSocket, DNSTargetSocket: status.DNSTargetSocket, HelperPath: status.HelperPath,
 			ConfigurationPath: status.ConfigurationPath, ReceiptPath: status.ReceiptPath, ResolverPath: status.ResolverPath,
-			EndpointPoolReady: status.EndpointPoolReady, AdministratorPrompt: status.Installed && c.Local.EffectiveUID() != 0,
+			LocalhostResolverPath: status.LocalhostResolverPath,
+			EndpointPoolReady:     status.EndpointPoolReady, AdministratorPrompt: status.Installed && c.Local.EffectiveUID() != 0,
 		},
 		Data:       uninstallDataOutput{Path: state.Path, Present: state.Present},
 		Launcher:   launcher,
@@ -356,7 +358,7 @@ func executeUninstallSteps(ctx context.Context, preview uninstallOutput, options
 	result.Relay.State = "not installed"
 	if relayRemoved {
 		result.Changed = true
-		result.Removed = append(result.Removed, "HTTP/DNS relay, resolver, and loopback endpoint pool")
+		result.Removed = append(result.Removed, "HTTP/DNS relay, resolvers, and loopback endpoint pool")
 	}
 
 	state, err := hooks.removeState(ctx, options.force)

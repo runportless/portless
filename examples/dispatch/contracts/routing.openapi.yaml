@@ -1,0 +1,36 @@
+openapi: 3.1.0
+info:
+  title: Dispatch routing API
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200': { description: Ready }
+  /estimates:
+    get:
+      operationId: estimateDelivery
+      parameters:
+        - { name: pickup, in: query, required: true, schema: { type: string } }
+        - { name: destination, in: query, required: true, schema: { type: string } }
+        - { name: size, in: query, required: true, schema: { type: string, enum: [small, medium, large] } }
+        - { name: priority, in: query, required: true, schema: { type: string, enum: [standard, express] } }
+      responses:
+        '200':
+          description: Route estimate
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pickup, destination, distanceKm, etaMinutes, priceCents, strategy]
+                properties:
+                  pickup: { type: string }
+                  destination: { type: string }
+                  distanceKm: { type: number }
+                  etaMinutes: { type: integer }
+                  priceCents: { type: integer }
+                  strategy: { type: string }
+        '422': { description: Invalid estimate request }
+        '502': { description: Geocoder unavailable }
+

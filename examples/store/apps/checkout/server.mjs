@@ -1,11 +1,12 @@
 import http from 'node:http'
+import { forwardedTraceHeaders } from './trace.mjs'
 
 const port = Number(process.env.PORT || 3000)
 const orders = process.env.ORDERS_URL || 'http://127.0.0.1:3001'
 const inventory = process.env.INVENTORY_URL || 'http://127.0.0.1:8080'
 
-async function fetchJSON(name, url) {
-  const upstream = await fetch(url)
+async function fetchJSON(name, url, headers) {
+  const upstream = await fetch(url, { headers })
   const value = await upstream.json()
   if (!upstream.ok) throw new Error(`${name} returned ${upstream.status}: ${JSON.stringify(value)}`)
   return value
@@ -23,12 +24,13 @@ const server = http.createServer(async (request, response) => {
       return response.end(JSON.stringify({ error: 'quantity must be a positive integer' }))
     }
     try {
-      const stock = await fetchJSON('inventory', `${inventory}/inventory/${encodeURIComponent(sku)}?quantity=${quantity}`)
+      const traceHeaders = forwardedTraceHeaders(request.headers)
+      const stock = await fetchJSON('inventory', `${inventory}/inventory/${encodeURIComponent(sku)}?quantity=${quantity}`, traceHeaders)
       if (!stock.available) {
         response.statusCode = 409
         return response.end(JSON.stringify({ checkout: 'rejected', reason: 'insufficient inventory', inventory: stock }))
       }
-      const order = await fetchJSON('orders', `${orders}/orders?sku=${encodeURIComponent(sku)}&quantity=${quantity}`)
+      const order = await fetchJSON('orders', `${orders}/orders?sku=${encodeURIComponent(sku)}&quantity=${quantity}`, traceHeaders)
       return response.end(JSON.stringify({ checkout: 'accepted', inventory: stock, order }))
     } catch (error) {
       response.statusCode = 502

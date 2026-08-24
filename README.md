@@ -66,6 +66,11 @@ http://portless.localhost/environments/billing/local
 loopback HTTP and DNS relay. The application-aware daemon and all project
 runtimes remain unprivileged.
 
+On macOS the same setup installs a scoped resolver for descendant `.localhost`
+names, so native API clients and language runtimes can resolve the advertised
+HTTP URLs even when they do not implement `.localhost` handling themselves.
+Linux `systemd-resolved` provides that mapping natively.
+
 `portless up` statically discovers the checkout. From a registered service
 directory it enables a discovered Node inspector or JVM debug endpoint for
 that service while starting its peers normally. From a project root it
@@ -76,6 +81,12 @@ Next.js, Go HTTP/RPC services, and FastAPI. Managed-resource plugins cover
 PostgreSQL, Valkey, MySQL, and NATS. The
 [implementation boundary](docs/implementation-status.md) is the maintained
 inventory of supported behavior and deferred release work.
+
+For a larger walkthrough, the [Dispatch example](examples/dispatch/README.md)
+materializes one logical courier application as three independent Git
+checkouts. It exercises mixed frameworks, MySQL and NATS, environment-specific
+worktrees, source-aware faults and recordings, mocks, and a read-only remote
+provider without a Portless declaration.
 
 ## How Portless models an application
 

@@ -114,9 +114,9 @@ Accept OTLP traces and merge them with Portless proxy observations. Optionally
 launch supported Node.js and JVM services with standard auto-instrumentation so
 that currently inferred relationships can become exact traces.
 
-This should support:
+The passive proxy already extracts and injects W3C/OpenTelemetry, B3, and
+Datadog HTTP propagation formats. A full OpenTelemetry integration should add:
 
-- W3C trace-context extraction and injection.
 - Exact parent/child relationships across HTTP services.
 - Correlation of application spans with proxy exchanges.
 - Database and messaging spans that cannot be inferred from HTTP alone.
@@ -249,4 +249,3 @@ traffic, controlled failures, and repeatable diagnoses.
 6. Framework-aware watch mode and IDE integration.
 7. Richer TCP and network failures.
 8. Messaging protocols, additional resources, and optional remote intercepts.
-

@@ -1,4 +1,4 @@
-# Portless website
+# Portless Website
 
 This is the static marketing site for [www.portless.run](https://www.portless.run).
 It is intentionally separate from `portless-web`, the React control plane that

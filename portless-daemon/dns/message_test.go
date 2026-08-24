@@ -56,3 +56,38 @@ func TestHealthNameDoesNotNeedApplicationState(t *testing.T) {
 		t.Fatalf("address=%s code=%d err=%v", address, code, err)
 	}
 }
+
+func TestLocalhostNamesAlwaysResolveWithoutApplicationState(t *testing.T) {
+	for index, name := range []string{"localhost", "portless.localhost", "checkout.local.store.localhost"} {
+		query, err := Query(name, TypeA, uint16(20+index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, handled := LocalhostResponse(query)
+		if !handled {
+			t.Fatalf("localhost query %q was not handled", name)
+		}
+		address, code, err := ParseAResponse(response, uint16(20+index))
+		if err != nil || code != ResponseSuccess || address != LocalhostAddress {
+			t.Fatalf("name=%s address=%s code=%d err=%v", name, address, code, err)
+		}
+		address, code, err = ParseAResponse(Response(context.Background(), nil, query), uint16(20+index))
+		if err != nil || code != ResponseSuccess || address != LocalhostAddress {
+			t.Fatalf("authoritative name=%s address=%s code=%d err=%v", name, address, code, err)
+		}
+	}
+
+	query, _ := Query("checkout.local.store.localhost", TypeAAAA, 30)
+	response, handled := LocalhostResponse(query)
+	if !handled {
+		t.Fatal("localhost AAAA query was not handled")
+	}
+	if code, _ := ResponseCode(response); code != ResponseSuccess || response[7] != 0 {
+		t.Fatalf("localhost AAAA response should be NODATA: %x", response)
+	}
+
+	query, _ = Query("example.com", TypeA, 31)
+	if _, handled := LocalhostResponse(query); handled {
+		t.Fatal("outside-zone query was handled as localhost")
+	}
+}

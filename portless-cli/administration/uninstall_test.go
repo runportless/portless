@@ -21,7 +21,7 @@ func TestUninstallPreviewExplainsExactScopeAndConfirmation(t *testing.T) {
 	result := uninstallOutput{
 		Action: "uninstall", Forced: true, Projects: 1, Environments: 2, ManagedVolumeEnvironments: 1,
 		Daemon:     uninstallDaemonOutput{State: "running", PID: 123, InventoryAvailable: true, ActiveEnvironments: []string{"store/local"}},
-		Relay:      uninstallRelayOutput{Installed: true, State: "ready", Service: "dev.portless.relay", ResolverPath: "/etc/resolver/portless.test", EndpointPoolReady: true, AdministratorPrompt: true},
+		Relay:      uninstallRelayOutput{Installed: true, State: "ready", Service: "dev.portless.relay", ResolverPath: "/etc/resolver/portless.test", LocalhostResolverPath: "/etc/resolver/portless.localhost", EndpointPoolReady: true, AdministratorPrompt: true},
 		Data:       uninstallDataOutput{Path: "/Users/test/.portless", Present: true},
 		Launcher:   launcherPlan{Path: "/Users/test/bin/portless", Target: "/src/portless/bin/portless", Kind: "symlink", Action: "remove"},
 		WillRemove: append([]string(nil), uninstallRemovalCategories...),
@@ -31,7 +31,7 @@ func TestUninstallPreviewExplainsExactScopeAndConfirmation(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"Portless uninstall preview", "Daemon: running (PID 123)", "1 project, 2 environments", "dev.portless.relay",
-		"/etc/resolver/portless.test", "Administrator approval", "remove /Users/test/bin/portless", "preserve /src/portless/bin/portless",
+		"/etc/resolver/portless.test", "/etc/resolver/portless.localhost", "Administrator approval", "remove /Users/test/bin/portless", "preserve /src/portless/bin/portless",
 		"store/local", "No changes were made", "portless uninstall --force --yes",
 	} {
 		if !strings.Contains(output.String(), expected) {

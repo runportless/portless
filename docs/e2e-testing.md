@@ -1,6 +1,6 @@
 # End-to-end testing
 
-Portless has two default end-to-end suites and two explicit opt-in integration
+Portless has two default end-to-end suites and three explicit opt-in integration
 boundaries. All of them exercise the compiled product rather than replacing
 the daemon or API with test doubles:
 
@@ -10,14 +10,18 @@ the daemon or API with test doubles:
   Chromium with Playwright.
 - The managed-resource suite additionally provisions real PostgreSQL, Valkey,
   MySQL, and NATS containers with Docker or Podman.
+- The Dispatch example suite runs the real three-source example, including its
+  Next.js, FastAPI, Fastify, and Go services plus MySQL and NATS.
 - The destructive relay suite installs the production machine relay and uses
   the real port-80 and DNS integration.
 
-The default and managed-resource tests receive a temporary `PORTLESS_HOME` and
-temporary source checkouts. Teardown performs a forced Portless reset, stops
-the isolated daemon, and removes the temporary directory. Those suites do not
-read or change the developer's normal `~/.portless` installation. The relay
-suite is the explicit machine-level exception described below.
+The default, managed-resource, and Dispatch tests receive a temporary
+`PORTLESS_HOME`. The first two also receive temporary source checkouts;
+Dispatch runs the tracked templates and writes only their ignored dependency
+and build output. Teardown performs a forced Portless reset, stops the isolated
+daemon, and removes the temporary directory. Those suites do not read or
+change the developer's normal `~/.portless` installation. The relay suite is
+the explicit machine-level exception described below.
 
 ## Run the suites
 
@@ -48,6 +52,15 @@ make test-e2e-resources
 
 # Force one engine when testing runtime-specific behavior:
 make test-e2e-resources RESOURCE_E2E_RUNTIME=podman
+```
+
+The multi-checkout Dispatch application has its own opt-in target. It installs
+the example's locked dependencies, uses the selected container engine, and may
+pull MySQL or NATS images:
+
+```bash
+make test-e2e-dispatch
+make test-e2e-dispatch RESOURCE_E2E_RUNTIME=docker
 ```
 
 `make test` remains the fast unit, component, and build-validation suite. It
@@ -175,6 +188,29 @@ runtime selection. It verifies:
 Each scenario uses a temporary Portless home and cleans up its containers and
 volumes. The suite is safe for normal application state, but it intentionally
 exercises the selected local container engine and may download several images.
+
+## Dispatch example integration
+
+`make test-e2e-dispatch` enables only `TestDispatchExampleEndToEnd` with
+`PORTLESS_DISPATCH_EXAMPLE_E2E=1`. It runs the tracked application templates as
+three source roots against a temporary Portless home and private E2E ingress.
+It verifies:
+
+- compilation of `console`, `operations`, and `maps` into one seven-service
+  project;
+- readiness of five local processes and managed MySQL and NATS;
+- location lookup and a route estimate across the source-aware HTTP graph;
+- a delivery persisted to MySQL with a readable public ID;
+- publication and consumption of the corresponding NATS event; and
+- captured `console:api`, `console:notifier`, `api:geocoder`, `api:routing`,
+  and `routing:geocoder` traffic.
+
+The normal Go suite separately bootstraps temporary independent Git
+repositories, verifies that the bootstrap refuses to overwrite them, applies
+the scenic-routing worktree patch with `git apply --check`, validates the four
+OpenAPI documents, and asserts the statically discovered topology. See the
+[Dispatch walkthrough](../examples/dispatch/README.md) for the interactive
+worktree, fault, recording, mock, and remote-provider scenarios.
 
 ## Destructive relay integration
 

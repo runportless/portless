@@ -374,7 +374,7 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 		checks = append(checks, passed("relay.endpoint_pool", "relay", "TCP endpoint loopback address pool is ready", status.EndpointPoolDetail))
 	}
 	if !status.ResolverPresent {
-		checks = append(checks, failed("relay.portless_dns", "relay", "Scoped portless.test resolver configuration is missing", emptyAsUnknown(status.ResolverPath), "Run `portless relay install` to repair the resolver configuration."))
+		checks = append(checks, failed("relay.portless_dns", "relay", "Scoped endpoint resolver configuration is missing", emptyAsUnknown(joinDetails(status.ResolverPath, status.LocalhostResolverPath)), "Run `portless relay install` to repair the resolver configuration."))
 	} else {
 		resolverContext, cancelResolver := context.WithTimeout(ctx, 2*time.Second)
 		resolved, resolverErr := checkPortlessDNS(resolverContext, dependencies.lookupIP)
@@ -382,7 +382,7 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 		if resolverErr != nil {
 			checks = append(checks, failed("relay.portless_dns", "relay", "System resolver cannot resolve portless.test through Portless", resolverErr.Error(), "Run `portless relay install`, then inspect local resolver or security software."))
 		} else {
-			checks = append(checks, passed("relay.portless_dns", "relay", "System resolver routes portless.test to Portless", resolved))
+			checks = append(checks, passed("relay.portless_dns", "relay", "System resolver routes Portless endpoint names locally", resolved))
 		}
 	}
 

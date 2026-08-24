@@ -167,7 +167,7 @@ export function parseRoute(route: string): { project?: string; environment?: str
   if (parts[0] === 'environments' && parts[1] && parts[2]) { project = parts[1]; environment = parts[2] }
   const settings = parts[0] === 'settings'
   const requested = current.searchParams.get('tab')
-  const tabs: Tab[] = ['overview', 'topology', 'bindings', 'traffic', 'mocks', 'recordings', 'faults', 'timeline']
+  const tabs: Tab[] = ['overview', 'topology', 'traffic', 'mocks', 'recordings', 'faults', 'bindings', 'timeline']
   const tab = tabs.includes(requested as Tab) ? requested as Tab : 'overview'
   const settingsTabs: SettingsTab[] = ['appearance', 'runtime', 'mcp']
   const settingsTab = settings && settingsTabs.includes(requested as SettingsTab) ? requested as SettingsTab : 'appearance'

@@ -586,6 +586,10 @@ func cleanupInstallation(t *testing.T, binary, home, directory string) {
 }
 
 func applicationRequest(t *testing.T, home, host, path string, headers map[string]string) *http.Response {
+	return applicationRequestWithMethod(t, home, host, http.MethodGet, path, "", headers)
+}
+
+func applicationRequestWithMethod(t *testing.T, home, host, method, path, body string, headers map[string]string) *http.Response {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(home, "control.json"))
 	if err != nil {
@@ -597,7 +601,11 @@ func applicationRequest(t *testing.T, home, host, path string, headers map[strin
 	if err := json.Unmarshal(content, &control); err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", control.Port, path), nil)
+	var requestBody io.Reader
+	if body != "" {
+		requestBody = strings.NewReader(body)
+	}
+	request, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", control.Port, path), requestBody)
 	if err != nil {
 		t.Fatal(err)
 	}

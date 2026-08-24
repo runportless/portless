@@ -63,6 +63,8 @@ describe('application navigation', () => {
     expect(markup).toContain('<strong aria-current="page">local</strong>')
     expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><a href="/projects/billing">billing</a><b>/</b><strong aria-current="page">local</strong></nav>')
     expect(markup).toContain('<button class="is-active" aria-current="page"')
+    expect(markup.indexOf('<span>Faults</span>')).toBeLessThan(markup.indexOf('<span>Bindings</span>'))
+    expect(markup.indexOf('<span>Bindings</span>')).toBeLessThan(markup.indexOf('<span>Timeline</span>'))
   })
 
   it('keeps settings globally available and marks the settings route', () => {

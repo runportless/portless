@@ -10,6 +10,9 @@ import (
 )
 
 const (
+	// HTTPZone is the special-use suffix for clean HTTP endpoint names.
+	HTTPZone = "localhost"
+
 	// DNSZone is the authoritative suffix for clean TCP endpoint names.
 	DNSZone = "portless.test"
 
@@ -161,7 +164,7 @@ func EndpointURL(protocol model.Protocol, host string, port int) string {
 
 // HTTPURL returns the clean localhost URL for an application service.
 func HTTPURL(service, environment, project string) string {
-	return "http://" + strings.ToLower(strings.Join([]string{service, environment, project, "localhost"}, "."))
+	return "http://" + strings.ToLower(strings.Join([]string{service, environment, project, HTTPZone}, "."))
 }
 
 // ValidateDNSName verifies lowercase-compatible DNS length and label rules.

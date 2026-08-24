@@ -64,3 +64,14 @@ portless connection show orders:redis
 The public dependency endpoints are `postgres.local.store.portless.test:5432` and `redis.local.store.portless.test:6379`. Orders receives the source-aware variants `postgres.via-orders.local.store.portless.test:5432` and `redis.via-orders.local.store.portless.test:6379`, allowing a rule on one caller-to-dependency edge to stay isolated from every other caller.
 
 Checkout first verifies stock with inventory, then creates the order. The topology shows the external request, `checkout → inventory`, `checkout → orders`, and live `orders → postgres` and `orders → redis` traffic. Try `usb-c-cable` to see an out-of-stock response, or add a latency, rejection, or abort fault to an edge and repeat the request.
+
+Checkout forwards the incoming OpenTelemetry-default W3C `traceparent`,
+`tracestate`, and `baggage` headers, both B3 encodings, and Datadog propagation
+headers to its HTTP dependencies. Portless supplies W3C trace context at the
+ingress proxy and recognizes each supported format, so the external, inventory,
+and orders exchanges retain one normalized trace ID without requiring an
+external tracing backend. Pass-through context produces exact parentage; a
+framework that creates unobserved application spans retains the trace ID while
+Portless labels proxy parentage conservatively. The PostgreSQL and Valkey
+descendants remain timing-correlated because those raw TCP protocols do not
+carry HTTP trace headers.

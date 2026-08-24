@@ -11,7 +11,7 @@ import { MocksPanel } from './mocks'
 import { ConfigureCheckoutModal, RemoveCheckoutModal } from './SourceModals'
 import { ServiceLogs } from './ServiceLogs'
 
-type Tab = 'overview' | 'topology' | 'bindings' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'timeline'
+type Tab = 'overview' | 'topology' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'bindings' | 'timeline'
 type SourcePathMutation = { environment: Environment; warnings: string[] }
 type EnvironmentCheckoutRow = { source: ProjectSource; checkout?: SourceBinding; usedBy: string[]; required: boolean }
 
@@ -78,7 +78,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
       {!!environment.issues?.length && <div className="alert alert--danger"><strong>Configuration needs attention</strong><span>{environment.issues.map((issue) => issue.message).join(' · ')}</span></div>}
       {error && <div className="alert alert--danger"><strong>Action failed</strong><span>{error}</span><button onClick={() => setError('')}>DISMISS</button></div>}
       <nav className="tabs" aria-label="Environment views">
-        {(['overview', 'topology', 'bindings', 'traffic', 'mocks', 'recordings', 'faults', 'timeline'] as Tab[]).map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => onNavigate(environmentUIPath(environment, name))}>{name}<small>{name === 'recordings' ? recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
+        {(['overview', 'topology', 'traffic', 'mocks', 'recordings', 'faults', 'bindings', 'timeline'] as Tab[]).map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => onNavigate(environmentUIPath(environment, name))}>{name}<small>{name === 'recordings' ? recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
       </nav>
       {tab === 'overview' && <Overview environment={environment} timeline={timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, { edge, protocol }))} />}
       {tab === 'topology' && <TopologyView environment={environment} faults={activeFaults} onService={setSelectedService} onTab={(next, edge, protocol) => onNavigate(environmentUIPath(environment, next, { edge, protocol }))} />}

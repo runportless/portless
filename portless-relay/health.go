@@ -20,6 +20,8 @@ import (
 // ControlOrigin is the clean control-plane origin used for relay health checks.
 const ControlOrigin = "http://portless.localhost"
 
+const localhostResolverProbe = "resolver.portless.localhost"
+
 // Check verifies end-to-end HTTP access through the default privileged relay.
 func Check(ctx context.Context) error {
 	return checkAt(ctx, DefaultListenAddress, ControlOrigin)
@@ -61,11 +63,18 @@ func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
 	}
 }
 
-// CheckDNS verifies the privileged UDP DNS listener using the Portless health
-// record.
+// CheckDNS verifies the privileged UDP DNS listener using the dynamic endpoint
+// zone health record and a static localhost record.
 func CheckDNS(ctx context.Context) error {
+	if err := checkDNSRecord(ctx, networking.DNSZone, portlessdns.HealthAddress); err != nil {
+		return err
+	}
+	return checkDNSRecord(ctx, localhostResolverProbe, portlessdns.LocalhostAddress)
+}
+
+func checkDNSRecord(ctx context.Context, name string, expected netip.Addr) error {
 	queryID := uint16(rand.Uint32())
-	query, err := portlessdns.Query(networking.DNSZone, portlessdns.TypeA, queryID)
+	query, err := portlessdns.Query(name, portlessdns.TypeA, queryID)
 	if err != nil {
 		return err
 	}
@@ -86,33 +95,54 @@ func CheckDNS(ctx context.Context) error {
 	}
 	address, rcode, err := portlessdns.ParseAResponse(response[:count], queryID)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse Portless DNS response for %s: %w", name, err)
 	}
-	if rcode != portlessdns.ResponseSuccess || address != portlessdns.HealthAddress {
-		return fmt.Errorf("Portless DNS returned code %d and address %s", rcode, address)
+	if rcode != portlessdns.ResponseSuccess || address != expected {
+		return fmt.Errorf("Portless DNS returned code %d and address %s for %s", rcode, address, name)
 	}
 	return nil
 }
 
-// CheckResolver verifies the OS-level scoped resolver route used by normal
-// applications. Directly reaching the DNS relay is insufficient if the host
-// resolver never sends portless.test queries to it.
+// CheckResolver verifies the OS-level resolver routes used by normal
+// applications for clean HTTP and TCP endpoint names. Directly reaching the
+// DNS relay is insufficient if the host resolver never sends those queries to
+// it or otherwise synthesizes the required loopback answers.
 func CheckResolver(ctx context.Context) error {
 	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, networking.DNSZone)
 	if err != nil {
 		return fmt.Errorf("resolve %s through the system resolver: %w", networking.DNSZone, err)
 	}
-	return validateResolverAddresses(addresses)
+	if err := validateResolverAddresses(networking.DNSZone, addresses, portlessdns.HealthAddress); err != nil {
+		return err
+	}
+	addresses, err = net.DefaultResolver.LookupIPAddr(ctx, localhostResolverProbe)
+	if err != nil {
+		return fmt.Errorf("resolve %s through the system resolver: %w", localhostResolverProbe, err)
+	}
+	return validateLocalhostResolverAddresses(localhostResolverProbe, addresses)
 }
 
-func validateResolverAddresses(addresses []net.IPAddr) error {
+func validateResolverAddresses(name string, addresses []net.IPAddr, expected netip.Addr) error {
 	if len(addresses) == 0 {
-		return fmt.Errorf("resolve %s through the system resolver: no addresses returned", networking.DNSZone)
+		return fmt.Errorf("resolve %s through the system resolver: no addresses returned", name)
 	}
 	for _, address := range addresses {
 		parsed, ok := netip.AddrFromSlice(address.IP)
-		if !ok || parsed.Unmap() != portlessdns.HealthAddress {
-			return fmt.Errorf("resolve %s through the system resolver: unexpected address %s", networking.DNSZone, address.IP)
+		if !ok || parsed.Unmap() != expected {
+			return fmt.Errorf("resolve %s through the system resolver: unexpected address %s", name, address.IP)
+		}
+	}
+	return nil
+}
+
+func validateLocalhostResolverAddresses(name string, addresses []net.IPAddr) error {
+	if len(addresses) == 0 {
+		return fmt.Errorf("resolve %s through the system resolver: no addresses returned", name)
+	}
+	for _, address := range addresses {
+		parsed, ok := netip.AddrFromSlice(address.IP)
+		if !ok || !parsed.Unmap().IsLoopback() {
+			return fmt.Errorf("resolve %s through the system resolver: unexpected non-loopback address %s", name, address.IP)
 		}
 	}
 	return nil

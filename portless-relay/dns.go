@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"path/filepath"
-	"sync"
 	"time"
 
 	portlessdns "github.com/runportless/portless/portless-daemon/dns"
@@ -77,10 +76,7 @@ func ServeDNSPacketRelay(ctx context.Context, connection net.PacketConn, targetS
 		case semaphore <- struct{}{}:
 			go func() {
 				defer func() { <-semaphore }()
-				response, relayErr := queryPrivateDNS(targetSocket, query)
-				if relayErr != nil {
-					response = portlessdns.ServerFailure(query)
-				}
+				response := relayDNSQuery(targetSocket, query)
 				_ = connection.SetWriteDeadline(time.Now().Add(time.Second))
 				_, _ = connection.WriteTo(response, peer)
 			}()
@@ -94,24 +90,28 @@ func ServeDNSPacketRelay(ctx context.Context, connection net.PacketConn, targetS
 
 func relayDNSStream(client net.Conn, targetSocket string) {
 	defer client.Close()
-	upstream, err := net.DialTimeout("unix", targetSocket, time.Second)
-	if err != nil {
-		return
+	reader := bufio.NewReaderSize(client, portlessdns.MaxMessage+2)
+	for {
+		_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+		query, err := readDNSFrame(reader)
+		if err != nil {
+			return
+		}
+		if err := writeDNSFrame(client, relayDNSQuery(targetSocket, query)); err != nil {
+			return
+		}
 	}
-	defer upstream.Close()
-	var copies sync.WaitGroup
-	copies.Add(2)
-	go func() {
-		defer copies.Done()
-		_, _ = io.Copy(upstream, client)
-		closeWrite(upstream)
-	}()
-	go func() {
-		defer copies.Done()
-		_, _ = io.Copy(client, upstream)
-		closeWrite(client)
-	}()
-	copies.Wait()
+}
+
+func relayDNSQuery(targetSocket string, query []byte) []byte {
+	if response, handled := portlessdns.LocalhostResponse(query); handled {
+		return response
+	}
+	response, err := queryPrivateDNS(targetSocket, query)
+	if err != nil {
+		return portlessdns.ServerFailure(query)
+	}
+	return response
 }
 
 func queryPrivateDNS(targetSocket string, query []byte) ([]byte, error) {
@@ -121,15 +121,15 @@ func queryPrivateDNS(targetSocket string, query []byte) ([]byte, error) {
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	var header [2]byte
-	binary.BigEndian.PutUint16(header[:], uint16(len(query)))
-	if _, err := connection.Write(header[:]); err != nil {
-		return nil, err
-	}
-	if _, err := connection.Write(query); err != nil {
+	if err := writeDNSFrame(connection, query); err != nil {
 		return nil, err
 	}
 	reader := bufio.NewReaderSize(connection, portlessdns.MaxMessage+2)
+	return readDNSFrame(reader)
+}
+
+func readDNSFrame(reader io.Reader) ([]byte, error) {
+	var header [2]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return nil, err
 	}
@@ -142,6 +142,26 @@ func queryPrivateDNS(targetSocket string, query []byte) ([]byte, error) {
 		return nil, err
 	}
 	return response, nil
+}
+
+func writeDNSFrame(writer io.Writer, message []byte) error {
+	if len(message) < 12 || len(message) > portlessdns.MaxMessage {
+		return errors.New("DNS message has an invalid size")
+	}
+	frame := make([]byte, 2+len(message))
+	binary.BigEndian.PutUint16(frame[:2], uint16(len(message)))
+	copy(frame[2:], message)
+	for len(frame) > 0 {
+		count, err := writer.Write(frame)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return io.ErrNoProgress
+		}
+		frame = frame[count:]
+	}
+	return nil
 }
 
 // CheckDNSSocket verifies the daemon's private authoritative DNS listener

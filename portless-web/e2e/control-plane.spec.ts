@@ -826,15 +826,17 @@ test('surfaces a failed control-plane refresh and reconnects automatically', asy
 
 test('shows semver daemon details and reconnects after restart', async ({ page }) => {
   await authenticate(page)
-  const before = await controlAPI<{ instanceId: string; pid: number }>('/api/v1/daemon')
+  const before = await controlAPI<{ instanceId: string; pid: number; protocolVersion: string; apiVersion: string }>('/api/v1/daemon')
   const beforeEnvironment = await controlAPI<{ services: Array<{ name: string; pid: number }> }>('/api/v1/environments/ui-e2e/local')
+  expect(before.protocolVersion).toMatch(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
+  expect(before.apiVersion).toMatch(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)
 
   await page.locator('.sidebar__footer').click()
   const drawer = page.getByRole('dialog', { name: 'Portless Daemon' })
   await expect(drawer).toContainText('PROTOCOL')
   await expect(drawer).toContainText('API')
-  await expect(drawer.getByText(/^3\.0\.0$/)).toBeVisible()
-  await expect(drawer.getByText(/^10\.6\.0$/)).toBeVisible()
+  await expect(drawer.getByText(before.protocolVersion, { exact: true })).toBeVisible()
+  await expect(drawer.getByText(before.apiVersion, { exact: true })).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
   const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })

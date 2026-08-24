@@ -427,7 +427,7 @@ repair the narrow machine-wide HTTP and DNS relay.
 
 | Command | Usage |
 | --- | --- |
-| `portless setup` | Configure clean HTTP URLs and `portless.test` TCP endpoint DNS. Idempotent. |
+| `portless setup` | Configure system-resolvable clean HTTP URLs and `portless.test` TCP endpoint DNS. Idempotent. |
 | `portless relay install` | Explicitly install or repair the HTTP and DNS relay. Idempotent. |
 | `portless relay status` | Show relay installation, ownership, HTTP, and DNS health. |
 | `portless relay restart` | Restart an installed relay whose ownership matches the current installation. There is deliberately no force option. |

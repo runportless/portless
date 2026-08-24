@@ -36,8 +36,12 @@ const (
 	MaxMessage = 4096
 )
 
-// HealthAddress is the fixed A record returned for the Portless DNS zone apex.
-var HealthAddress = netip.MustParseAddr("127.77.0.1")
+var (
+	// HealthAddress is the fixed A record returned for the Portless DNS zone apex.
+	HealthAddress = netip.MustParseAddr("127.77.0.1")
+	// LocalhostAddress is the fixed IPv4 loopback record returned for localhost names.
+	LocalhostAddress = netip.MustParseAddr("127.0.0.1")
+)
 
 // Resolver resolves authoritative Portless endpoint names to loopback addresses.
 type Resolver interface {
@@ -53,7 +57,7 @@ type question struct {
 }
 
 // Response parses an authoritative DNS query and returns a bounded wire-format
-// response for the Portless zone.
+// response for the Portless endpoint and localhost zones.
 func Response(ctx context.Context, resolver Resolver, query []byte) []byte {
 	if len(query) < 12 || len(query) > MaxMessage {
 		return errorResponse(query, ResponseFormatError)
@@ -70,6 +74,9 @@ func Response(ctx context.Context, resolver Resolver, query []byte) []byte {
 		return answer(query, parsed, netip.Addr{}, false, ResponseRefused)
 	}
 	name := strings.TrimSuffix(strings.ToLower(parsed.name), ".")
+	if response, handled := localhostResponse(query, parsed, name); handled {
+		return response
+	}
 	if name != networking.DNSZone && !strings.HasSuffix(name, "."+networking.DNSZone) {
 		return answer(query, parsed, netip.Addr{}, false, ResponseRefused)
 	}
@@ -91,6 +98,42 @@ func Response(ctx context.Context, resolver Resolver, query []byte) []byte {
 		return answer(query, parsed, netip.Addr{}, false, ResponseSuccess)
 	}
 	return answer(query, parsed, address, true, ResponseSuccess)
+}
+
+// LocalhostResponse returns a fixed loopback response when query addresses the
+// special-use localhost zone. The boolean reports whether the query was for
+// that zone so a relay can forward every other query to its authoritative
+// daemon without depending on the daemon for static localhost resolution.
+func LocalhostResponse(query []byte) ([]byte, bool) {
+	if len(query) < 12 || len(query) > MaxMessage {
+		return nil, false
+	}
+	flags := binary.BigEndian.Uint16(query[2:4])
+	if flags&0x8000 != 0 || flags&0x7800 != 0 || binary.BigEndian.Uint16(query[4:6]) != 1 {
+		return nil, false
+	}
+	parsed, err := parseQuestion(query)
+	if err != nil {
+		return nil, false
+	}
+	name := strings.TrimSuffix(strings.ToLower(parsed.name), ".")
+	if name != networking.HTTPZone && !strings.HasSuffix(name, "."+networking.HTTPZone) {
+		return nil, false
+	}
+	if parsed.class != ClassIN {
+		return answer(query, parsed, netip.Addr{}, false, ResponseRefused), true
+	}
+	return localhostResponse(query, parsed, name)
+}
+
+func localhostResponse(query []byte, parsed question, name string) ([]byte, bool) {
+	if name != networking.HTTPZone && !strings.HasSuffix(name, "."+networking.HTTPZone) {
+		return nil, false
+	}
+	if parsed.kind != TypeA {
+		return answer(query, parsed, netip.Addr{}, false, ResponseSuccess), true
+	}
+	return answer(query, parsed, LocalhostAddress, true, ResponseSuccess), true
 }
 
 // ServerFailure constructs a server-failure response while preserving a valid

@@ -80,14 +80,14 @@ func (c *Commands) doctorCommand() *cobra.Command {
 }
 
 func (c *Commands) setupCommand() *cobra.Command {
-	return &cobra.Command{Use: "setup", Short: "Configure clean HTTP URLs and TCP endpoint DNS", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+	return &cobra.Command{Use: "setup", Short: "Configure clean HTTP URLs and endpoint DNS", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		return c.installRelay(cmd.Context(), c.JSONOutput)
 	}}
 }
 
 func (c *Commands) relayCommand() *cobra.Command {
 	root := shared.CommandGroup("relay", "Manage clean local endpoint networking")
-	install := &cobra.Command{Use: "install", Short: "Install or repair HTTP ingress and TCP endpoint DNS", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+	install := &cobra.Command{Use: "install", Short: "Install or repair HTTP ingress and endpoint DNS", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		return c.installRelay(cmd.Context(), c.JSONOutput)
 	}}
 	status := &cobra.Command{Use: "status", Short: "Show local HTTP and DNS relay health", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {

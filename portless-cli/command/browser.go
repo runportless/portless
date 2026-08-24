@@ -38,7 +38,7 @@ func (c *Context) RequireIngress(ctx context.Context) error {
 	if ready {
 		return nil
 	}
-	detail := "HTTP ingress, TCP DNS, or the loopback endpoint pool is incomplete"
+	detail := "HTTP ingress, endpoint DNS, or the loopback endpoint pool is incomplete"
 	switch {
 	case !status.Installed:
 		detail = "the Portless relay is not installed"
@@ -51,9 +51,9 @@ func (c *Context) RequireIngress(ctx context.Context) error {
 	case !status.EndpointPoolReady:
 		detail = EmptyAs(status.EndpointPoolDetail, "the loopback endpoint pool is not ready")
 	case !status.ResolverPresent:
-		detail = "the scoped portless.test resolver configuration is missing"
+		detail = "the scoped endpoint resolver configuration is missing"
 	case !status.ResolverHealthy:
-		detail = EmptyAs(status.ResolverHealthError, "the system resolver cannot resolve portless.test")
+		detail = EmptyAs(status.ResolverHealthError, "the system resolver cannot resolve Portless endpoint names")
 	case !status.DNSHealthy:
 		detail = EmptyAs(status.DNSHealthError, "the authoritative DNS relay is not healthy")
 	case !status.HTTPHealthy:

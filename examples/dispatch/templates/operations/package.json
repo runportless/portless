@@ -1,0 +1,8 @@
+{
+  "name": "dispatch-operations",
+  "private": true,
+  "workspaces": ["notifier"],
+  "scripts": {
+    "test": "npm --workspace notifier test"
+  }
+}

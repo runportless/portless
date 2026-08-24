@@ -75,5 +75,7 @@ Exchange detail preserves the exact request target, repeated non-sensitive
 header values, and a bounded prefix of inspectable HTTP bodies. Known
 credential-bearing header values are replaced with `[REDACTED]` before
 retention. Bodies and other values can still contain local application data.
+HTTP trace identifiers are normalized to lower-hex W3C widths after extraction
+from W3C/OpenTelemetry, B3 single or multi-header, or Datadog propagation.
 Trace summaries omit spans; trace detail returns the complete current tree and
 waterfall projection.

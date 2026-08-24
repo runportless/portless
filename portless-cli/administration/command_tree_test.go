@@ -165,7 +165,7 @@ func TestSetupAndRelayCommandSurfaces(t *testing.T) {
 	if err := setup.Help(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Configure clean HTTP URLs and TCP endpoint DNS") {
+	if !strings.Contains(output.String(), "Configure clean HTTP URLs and endpoint DNS") {
 		t.Fatalf("setup help does not describe first-run configuration:\n%s", output.String())
 	}
 	if len(setup.Commands()) != 0 {
