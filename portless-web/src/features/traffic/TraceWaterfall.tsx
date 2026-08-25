@@ -17,10 +17,10 @@ export function TraceWaterfall({ trace, onExchange }: { trace: TrafficTrace; onE
   }, [maximized])
   const total = Math.max(1, trace.durationMs)
   const inspect = (exchange: TrafficExchange) => { setMaximized(false); onExchange(exchange) }
-  return <div className={`trace-waterfall${maximized ? ' panel trace-waterfall--maximized' : ''}`} role="region" aria-label={`Trace ${trace.number} waterfall`}>
-    {maximized && <div className="panel-title trace-waterfall__toolbar"><span>TRACE #{trace.number}</span><div><button className="icon-button" type="button" title={`Restore trace ${trace.number}`} aria-label={`Restore trace ${trace.number}`} aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div></div>}
+  return <div className={`trace-waterfall${maximized ? ' panel trace-waterfall--maximized' : ''}`} role="region" aria-label="Trace waterfall">
+    {maximized && <div className="panel-title trace-waterfall__toolbar"><span>TRACE WATERFALL</span><div><button className="icon-button" type="button" title="Restore trace" aria-label="Restore trace" aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div></div>}
     <div className="trace-waterfall__content">
-    <div className="trace-waterfall__axis"><span>SERVICE / OPERATION</span><div><i>0</i><i>{duration(Math.round(total/2))}</i><i>{duration(total)}</i></div>{!maximized && <button className="trace-waterfall__size" type="button" title={`Maximize trace ${trace.number}`} aria-label={`Maximize trace ${trace.number}`} aria-pressed="false" onClick={() => setMaximized(true)}><TraceSizeIcon /></button>}</div>
+    <div className="trace-waterfall__axis"><span>SERVICE / OPERATION</span><div><i>0</i><i>{duration(Math.round(total/2))}</i><i>{duration(total)}</i></div>{!maximized && <button className="trace-waterfall__size" type="button" title="Maximize trace" aria-label="Maximize trace" aria-pressed="false" onClick={() => setMaximized(true)}><TraceSizeIcon /></button>}</div>
     {(trace.spans || []).map((span) => {
       const exchange = span.exchange
       const left = Math.max(0, Math.min(100, span.startOffsetMs/total*100))

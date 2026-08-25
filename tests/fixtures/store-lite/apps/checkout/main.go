@@ -35,7 +35,7 @@ func main() {
 		}
 		log.Printf("checkout requested sku=%s quantity=%s", sku, quantity)
 
-		stock, err := getJSON(inventory + "/inventory/" + url.PathEscape(sku) + "?quantity=" + url.QueryEscape(quantity))
+		stock, err := getJSON(inventory+"/inventory/"+url.PathEscape(sku)+"?quantity="+url.QueryEscape(quantity), request.Header)
 		if err != nil {
 			writeJSON(writer, http.StatusBadGateway, map[string]any{"error": "inventory: " + err.Error()})
 			return
@@ -44,7 +44,7 @@ func main() {
 			writeJSON(writer, http.StatusConflict, map[string]any{"checkout": "rejected", "inventory": stock})
 			return
 		}
-		order, err := getJSON(orders + "/orders?sku=" + url.QueryEscape(sku) + "&quantity=" + url.QueryEscape(quantity))
+		order, err := getJSON(orders+"/orders?sku="+url.QueryEscape(sku)+"&quantity="+url.QueryEscape(quantity), request.Header)
 		if err != nil {
 			writeJSON(writer, http.StatusBadGateway, map[string]any{"error": "orders: " + err.Error()})
 			return
@@ -56,12 +56,21 @@ func main() {
 	log.Fatal(http.ListenAndServe("127.0.0.1:"+port, nil))
 }
 
-func getJSON(endpoint string) (map[string]any, error) {
+func getJSON(endpoint string, incoming http.Header) (map[string]any, error) {
 	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("X-E2E-Caller", "checkout")
+	for _, name := range []string{
+		"Traceparent", "Tracestate", "Baggage", "B3",
+		"X-B3-TraceId", "X-B3-SpanId", "X-B3-ParentSpanId", "X-B3-Sampled", "X-B3-Flags",
+		"X-Datadog-Trace-Id", "X-Datadog-Parent-Id", "X-Datadog-Sampling-Priority", "X-Datadog-Origin", "X-Datadog-Tags",
+	} {
+		for _, value := range incoming.Values(name) {
+			request.Header.Add(name, value)
+		}
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err

@@ -12,6 +12,7 @@ describe('trace waterfall', () => {
     } as TrafficExchange
     const trace = {
       project: 'store', environment: 'local', number: 11, lastSequence: 12,
+      protocol: 'http', provisional: false,
       startedAt: '2026-08-17T12:00:00Z', completedAt: '2026-08-17T12:00:00.100Z', durationMs: 100,
       source: 'external', target: 'checkout', error: false, faulted: false, background: false, spanCount: 2, correlation: 'inferred',
       spans: [
@@ -21,8 +22,9 @@ describe('trace waterfall', () => {
     } as TrafficTrace
 
     const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} onExchange={() => undefined} />)
-    expect(markup).toContain('aria-label="Trace 11 waterfall"')
-    expect(markup).toContain('aria-label="Maximize trace 11"')
+    expect(markup).toContain('aria-label="Trace waterfall"')
+    expect(markup).toContain('aria-label="Maximize trace"')
+    expect(markup).not.toContain('trace 11')
     expect(markup).toContain('aria-pressed="false"')
     expect(markup).toContain('external <i>→</i> checkout')
     expect(markup).toContain('POST /checkout')

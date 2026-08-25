@@ -128,7 +128,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
       <nav className="sidebar__utility" aria-label="Application">
         <button type="button" className={settingsActive ? 'is-active' : ''} aria-current={settingsActive ? 'page' : undefined} onClick={() => onNavigate('/settings')}><SettingsIcon /><span>Settings</span></button>
       </nav>
-      <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span>{daemonStateLabel}</span><small>DETAILS ›</small></button>
+      <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span className={live ? undefined : 'daemon-state--reconnecting'}>{daemonStateLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
       <header className="topbar"><TopbarBreadcrumbs settingsActive={settingsActive} settingsView={settingsView} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} /><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>

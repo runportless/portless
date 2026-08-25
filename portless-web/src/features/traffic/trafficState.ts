@@ -47,6 +47,7 @@ export function filterExchanges(exchanges: TrafficExchange[], search: string, re
 export function filterTraces(traces: TrafficTrace[], search: string, result: TrafficResultFilter, includeBackground: boolean) {
   const query = search.trim().toLowerCase()
   return traces.filter((trace) => {
+    if (trace.provisional) return false
     if (trace.background && !includeBackground) return false
     if (!matchesResult(trace.error, trace.status, trace.durationMs, trace.faulted ? 'faulted' : '', result)) return false
     if (!query) return true

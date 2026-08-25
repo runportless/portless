@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
 import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, providerDisplayName, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
-import { TrafficDetail } from './traffic'
 
 const service = (name: string): Service => ({ name } as Service)
 
@@ -24,54 +23,6 @@ describe('environment topology', () => {
     expect(tabs).toContain('>faults<')
     expect(tabs.indexOf('>faults<')).toBeLessThan(tabs.indexOf('>bindings<'))
     expect(tabs.indexOf('>bindings<')).toBeLessThan(tabs.indexOf('>timeline<'))
-  })
-
-  it('renders an inspected HTTP event as a request and response exchange', () => {
-    const event = {
-      project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
-      source: 'checkout', target: 'orders', targetProvider: 'mock', mockProfile: 'sold-out', mockRoute: 'reject-order',
-      startedAt: '2026-08-13T12:00:00Z', completedAt: '2026-08-13T12:00:00.024Z',
-      method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
-      durationMs: 24, requestBytes: 42, responseBytes: 118,
-      requestHeaders: { Authorization: ['[REDACTED]'], 'Content-Type': ['application/json'] },
-      responseHeaders: { 'Content-Type': ['application/json'], 'X-Request-Id': ['req-7'] },
-      requestBody: '{"sku":"coffee","quantity":2}',
-      responseBody: '{"order":42,"state":"created"}',
-      requestCapturedBytes: 32,
-      responseCapturedBytes: 30,
-      traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
-      spanId: '00f067aa0ba902b7',
-      parentSpanId: 'b7ad6b7169203331',
-    } as TrafficExchange
-
-    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: event, onClose: () => undefined }))
-
-    expect(markup).toContain('aria-label="Traffic request and response 7"')
-    expect(markup).toContain('class="drawer-size-button"')
-    expect(markup).toContain('aria-label="Full screen traffic details"')
-    expect(markup).toContain('d="M6 2H2v4M10 2h4v4M2 10v4h4M14 10v4h-4"')
-    expect(markup).not.toContain('↗')
-    expect(markup).not.toContain('↙')
-    expect(markup).toContain('>REQUEST<')
-    expect(markup).toContain('POST /orders')
-    expect(markup).toContain('Host: orders.local.billing.localhost')
-	expect(markup).toContain('Authorization: [REDACTED]')
-	expect(markup).not.toContain('Bearer local-dev-token')
-		expect(markup).toContain('>HEADERS<')
-    expect(markup).toContain('>RESPONSE<')
-    expect(markup).toContain('HTTP 201')
-    expect(markup).toContain('X-Request-Id: req-7')
-    expect(markup).toContain('MOCK PROFILE')
-    expect(markup).toContain('sold-out')
-    expect(markup).toContain('MOCK ROUTE')
-    expect(markup).toContain('reject-order')
-    expect(markup).toContain('<span>ENVIRONMENT</span><strong>local</strong>')
-    expect(markup).not.toContain('<span>PROVIDER</span>')
-    expect(markup).toContain('<span>TRACE CONTEXT</span><code>4bf92f3577b34da6a3ce929d0e0e4736</code>')
-    expect(markup.indexOf('class="traffic-exchange"')).toBeLessThan(markup.indexOf('class="traffic-detail__trace"'))
-    expect(markup).toContain('&quot;sku&quot;: &quot;coffee&quot;')
-    expect(markup).toContain('&quot;order&quot;: 42')
-    expect(markup).not.toContain('{&quot;Authorization&quot;')
   })
 
   it('renders the overview topology as a bounded preview that opens the dedicated view', () => {

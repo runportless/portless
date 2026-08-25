@@ -6,6 +6,7 @@ import { duration } from '../../components/Status'
 import type { Environment, TrafficExchange, TrafficTrace } from '../../types'
 import { TrafficDetail } from './TrafficDetail'
 import { TraceWaterfall } from './TraceWaterfall'
+import { loadTrafficSnapshot } from './trafficSnapshot'
 import { filterExchanges, filterTraces, mergeExchanges, mergeTraces, reconcileExchanges, reconcileTraces, trafficWindowSummary, type TrafficProtocolFilter, type TrafficResultFilter } from './trafficState'
 
 type TrafficMode = 'traces' | 'exchanges'
@@ -30,6 +31,12 @@ function traceHasEdge(trace: TrafficTrace, edge: string) {
 
 function exchangeHasEdge(exchange: TrafficExchange, edge: string) {
   return !edge || `${exchange.source}:${exchange.target}` === edge
+}
+
+export function TraceSummaryRow({ trace, expanded, onToggle }: { trace: TrafficTrace; expanded: boolean; onToggle: () => void }) {
+  return <button className="trace-row" type="button" onClick={onToggle} aria-expanded={expanded}>
+    <span>{new Date(trace.startedAt).toLocaleTimeString()}</span><strong className="truncate">{traceRequest(trace)}</strong><span className={resultTone(trace.error, trace.status)}>{trace.error ? 'ERR' : trace.status || 'OK'}</span><span>{duration(trace.durationMs)}</span><span>{trace.spanCount}</span><span className={`correlation-badge correlation-badge--${trace.correlation}`}>{trace.correlation}</span>
+  </button>
 }
 
 export function TrafficPanel({ environment }: { environment: Environment }) {
@@ -76,30 +83,30 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
 
   useEffect(() => {
     let active = true
+    let loading = false
     setTraces([]); setExchanges([]); setSelectedExchange(null); setExpandedTrace(null); setError(null)
     setTracePage(0); setExchangePage(0)
     pausedRef.current = false; setPaused(false); knownExchanges.current.clear()
     exchangeBuffer.current.clear(); traceBuffer.current.clear(); setBufferedCount(0)
-    const traceQuery = `/traffic/traces?background=include&limit=1000${edgeFilter ? `&edge=${encodeURIComponent(edgeFilter)}` : ''}`
     const load = async () => {
+      if (loading) return
+      loading = true
       try {
-        const [exchangeResult, traceResult] = await Promise.all([
-          api<{ exchanges: TrafficExchange[] }>(environmentPath(environment, '/traffic/exchanges?protocol=all&limit=1000')),
-          api<{ traces: TrafficTrace[] }>(environmentPath(environment, traceQuery)),
-        ])
+        const snapshot = await loadTrafficSnapshot(environment, edgeFilter)
         if (!active) return
         setError((current) => current?.code === 'DAEMON_UNAVAILABLE' ? null : current)
         if (pausedRef.current) {
-          for (const exchange of exchangeResult.exchanges) if (!knownExchanges.current.has(exchange.sequence)) exchangeBuffer.current.set(exchange.sequence, exchange)
-          for (const trace of traceResult.traces) traceBuffer.current.set(trace.number, trace)
+          for (const exchange of snapshot.exchanges) if (!knownExchanges.current.has(exchange.sequence)) exchangeBuffer.current.set(exchange.sequence, exchange)
+          for (const trace of snapshot.traces) traceBuffer.current.set(trace.number, trace)
           setBufferedCount(exchangeBuffer.current.size)
         } else {
-          const highWater = exchangeResult.exchanges.reduce((highest, exchange) => Math.max(highest, exchange.sequence), 0)
-          setExchanges((current) => reconcileExchanges(current, exchangeResult.exchanges))
-          setTraces((current) => reconcileTraces(current, traceResult.traces, highWater))
+          setExchanges((current) => reconcileExchanges(current, snapshot.exchanges))
+          setTraces((current) => reconcileTraces(current, snapshot.traces, snapshot.throughSequence))
         }
       } catch (value) {
         if (active) setError(actionError("Traffic couldn't be loaded", value))
+      } finally {
+        loading = false
       }
     }
     void load()
@@ -212,9 +219,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
       {mode === 'traces' ? <div className="trace-list">
         <div className="trace-row trace-row--header"><span>When</span><span>Root request</span><span>Result</span><span>Duration</span><span>Spans</span><span>Correlation</span></div>
         {tracePagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
-          <button className="trace-row" type="button" onClick={() => void toggleTrace(trace)} aria-expanded={expandedTrace === trace.number}>
-            <span><code>#{trace.number}</code>{new Date(trace.startedAt).toLocaleTimeString()}</span><strong className="truncate">{traceRequest(trace)}</strong><span className={resultTone(trace.error, trace.status)}>{trace.error ? 'ERR' : trace.status || 'OK'}</span><span>{duration(trace.durationMs)}</span><span>{trace.spanCount}</span><span className={`correlation-badge correlation-badge--${trace.correlation}`}>{trace.correlation}</span>
-          </button>
+          <TraceSummaryRow trace={trace} expanded={expandedTrace === trace.number} onToggle={() => void toggleTrace(trace)} />
           {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onExchange={(exchange) => void inspectExchange(exchange)} /> : <div className="trace-loading">Loading trace spans…</div>)}
         </div>)}
         {visibleTraces.length === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
@@ -226,6 +231,10 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         <PanelPagination label="exchanges" pagination={exchangePagination} onPage={setExchangePage} />
       </div>}
     </section>
-    {selectedExchange && <TrafficDetail exchange={selectedExchange} onClose={() => setSelectedExchange(null)} />}
+    {selectedExchange && <TrafficDetail
+      exchange={selectedExchange}
+      targetBinding={environment.bindings?.find((binding) => binding.service.toLowerCase() === selectedExchange.target.toLowerCase())}
+      onClose={() => setSelectedExchange(null)}
+    />}
   </div>
 }

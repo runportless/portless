@@ -466,6 +466,28 @@ const (
 	TrafficRequestUnknown TrafficRequestKind = "unknown"
 )
 
+// TrafficTraceContextSource identifies where the trace context selected for an
+// HTTP exchange originated.
+type TrafficTraceContextSource string
+
+const (
+	// TrafficTraceContextGenerated means Portless created a new context because
+	// the incoming request did not contain a valid supported propagation header.
+	TrafficTraceContextGenerated TrafficTraceContextSource = "generated"
+	// TrafficTraceContextPortless means the incoming context matches one that
+	// Portless injected on an earlier exchange.
+	TrafficTraceContextPortless TrafficTraceContextSource = "portless"
+	// TrafficTraceContextW3C means Portless continued an incoming W3C traceparent,
+	// which is also the default OpenTelemetry HTTP propagation format.
+	TrafficTraceContextW3C TrafficTraceContextSource = "w3c"
+	// TrafficTraceContextB3 means Portless continued an incoming B3 single- or
+	// multi-header context.
+	TrafficTraceContextB3 TrafficTraceContextSource = "b3"
+	// TrafficTraceContextDatadog means Portless continued an incoming Datadog
+	// propagation context.
+	TrafficTraceContextDatadog TrafficTraceContextSource = "datadog"
+)
+
 // TrafficCorrelation describes how confidently Portless related an exchange
 // to the other exchanges in a trace.
 type TrafficCorrelation string
@@ -483,41 +505,42 @@ const (
 
 // TrafficExchange records one completed HTTP or TCP exchange observed by Portless.
 type TrafficExchange struct {
-	Project               string               `json:"project"`
-	Environment           string               `json:"environment"`
-	Sequence              int64                `json:"sequence"`
-	Protocol              Protocol             `json:"protocol"`
-	Source                string               `json:"source"`
-	Target                string               `json:"target"`
-	TargetProvider        ProviderKind         `json:"targetProvider,omitempty"`
-	MockProfile           string               `json:"mockProfile,omitempty"`
-	MockRoute             string               `json:"mockRoute,omitempty"`
-	RemoteClassification  RemoteClassification `json:"remoteClassification,omitempty"`
-	StartedAt             time.Time            `json:"startedAt"`
-	CompletedAt           time.Time            `json:"completedAt"`
-	Method                string               `json:"method,omitempty"`
-	Host                  string               `json:"host,omitempty"`
-	Path                  string               `json:"path,omitempty"`
-	RequestTarget         string               `json:"requestTarget,omitempty"`
-	RequestKind           TrafficRequestKind   `json:"requestKind,omitempty"`
-	Status                int                  `json:"status,omitempty"`
-	DurationMS            int64                `json:"durationMs"`
-	RequestBytes          int64                `json:"requestBytes"`
-	ResponseBytes         int64                `json:"responseBytes"`
-	RequestCapturedBytes  int64                `json:"requestCapturedBytes,omitempty"`
-	ResponseCapturedBytes int64                `json:"responseCapturedBytes,omitempty"`
-	Fault                 string               `json:"fault,omitempty"`
-	Recording             string               `json:"recording,omitempty"`
-	Error                 string               `json:"error,omitempty"`
-	TraceID               string               `json:"traceId,omitempty"`
-	SpanID                string               `json:"spanId,omitempty"`
-	ParentSpanID          string               `json:"parentSpanId,omitempty"`
-	RequestHeaders        map[string][]string  `json:"requestHeaders,omitempty"`
-	ResponseHeaders       map[string][]string  `json:"responseHeaders,omitempty"`
-	RequestBody           string               `json:"requestBody,omitempty"`
-	ResponseBody          string               `json:"responseBody,omitempty"`
-	RequestBodyTruncated  bool                 `json:"requestBodyTruncated,omitempty"`
-	ResponseBodyTruncated bool                 `json:"responseBodyTruncated,omitempty"`
+	Project               string                    `json:"project"`
+	Environment           string                    `json:"environment"`
+	Sequence              int64                     `json:"sequence"`
+	Protocol              Protocol                  `json:"protocol"`
+	Source                string                    `json:"source"`
+	Target                string                    `json:"target"`
+	TargetProvider        ProviderKind              `json:"targetProvider,omitempty"`
+	MockProfile           string                    `json:"mockProfile,omitempty"`
+	MockRoute             string                    `json:"mockRoute,omitempty"`
+	RemoteClassification  RemoteClassification      `json:"remoteClassification,omitempty"`
+	StartedAt             time.Time                 `json:"startedAt"`
+	CompletedAt           time.Time                 `json:"completedAt"`
+	Method                string                    `json:"method,omitempty"`
+	Host                  string                    `json:"host,omitempty"`
+	Path                  string                    `json:"path,omitempty"`
+	RequestTarget         string                    `json:"requestTarget,omitempty"`
+	RequestKind           TrafficRequestKind        `json:"requestKind,omitempty"`
+	Status                int                       `json:"status,omitempty"`
+	DurationMS            int64                     `json:"durationMs"`
+	RequestBytes          int64                     `json:"requestBytes"`
+	ResponseBytes         int64                     `json:"responseBytes"`
+	RequestCapturedBytes  int64                     `json:"requestCapturedBytes,omitempty"`
+	ResponseCapturedBytes int64                     `json:"responseCapturedBytes,omitempty"`
+	Fault                 string                    `json:"fault,omitempty"`
+	Recording             string                    `json:"recording,omitempty"`
+	Error                 string                    `json:"error,omitempty"`
+	TraceID               string                    `json:"traceId,omitempty"`
+	SpanID                string                    `json:"spanId,omitempty"`
+	ParentSpanID          string                    `json:"parentSpanId,omitempty"`
+	TraceContextSource    TrafficTraceContextSource `json:"traceContextSource,omitempty"`
+	RequestHeaders        map[string][]string       `json:"requestHeaders,omitempty"`
+	ResponseHeaders       map[string][]string       `json:"responseHeaders,omitempty"`
+	RequestBody           string                    `json:"requestBody,omitempty"`
+	ResponseBody          string                    `json:"responseBody,omitempty"`
+	RequestBodyTruncated  bool                      `json:"requestBodyTruncated,omitempty"`
+	ResponseBodyTruncated bool                      `json:"responseBodyTruncated,omitempty"`
 }
 
 // TrafficTraceSpan places one exchange within a trace tree and waterfall.
@@ -539,6 +562,7 @@ type TrafficTrace struct {
 	LastSequence  int64              `json:"lastSequence"`
 	TraceID       string             `json:"traceId,omitempty"`
 	RootSequence  int64              `json:"rootSequence,omitempty"`
+	Protocol      Protocol           `json:"protocol"`
 	StartedAt     time.Time          `json:"startedAt"`
 	CompletedAt   time.Time          `json:"completedAt"`
 	DurationMS    int64              `json:"durationMs"`
@@ -550,6 +574,7 @@ type TrafficTrace struct {
 	Error         bool               `json:"error"`
 	Faulted       bool               `json:"faulted"`
 	Background    bool               `json:"background"`
+	Provisional   bool               `json:"provisional"`
 	SpanCount     int                `json:"spanCount"`
 	Correlation   TrafficCorrelation `json:"correlation"`
 	Spans         []TrafficTraceSpan `json:"spans,omitempty"`

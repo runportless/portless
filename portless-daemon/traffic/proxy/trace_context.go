@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,13 +18,24 @@ import (
 var fallbackTraceCounter atomic.Uint64
 
 type exchangeTraceContext struct {
-	traceID      string
-	spanID       string
-	parentSpanID string
-	flags        string
-	formats      tracePropagationFormat
-	b3Sampling   string
-	b3TraceWidth int
+	traceID         string
+	spanID          string
+	parentSpanID    string
+	flags           string
+	source          model.TrafficTraceContextSource
+	portlessFormats tracePropagationFormat
+	formats         tracePropagationFormat
+	b3Sampling      string
+	b3TraceWidth    int
+}
+
+const injectedTraceContextLimit = 50000
+
+type injectedTraceContextRegistry struct {
+	mu     sync.Mutex
+	values map[string]struct{}
+	order  []string
+	next   int
 }
 
 type tracePropagationFormat uint8
@@ -44,7 +56,7 @@ type extractedTraceContext struct {
 }
 
 func newExchangeTraceContext(headers http.Header) exchangeTraceContext {
-	context := exchangeTraceContext{spanID: randomTraceHex(8), flags: "01"}
+	context := exchangeTraceContext{spanID: randomTraceHex(8), flags: "01", source: model.TrafficTraceContextGenerated}
 	w3c, w3cOK := extractW3CTraceContext(headers.Get("Traceparent"))
 	b3, b3Formats, b3OK := extractB3TraceContext(headers)
 	datadog, datadogOK := extractDatadogTraceContext(headers)
@@ -67,6 +79,14 @@ func newExchangeTraceContext(headers http.Header) exchangeTraceContext {
 		context.traceID = selected.traceID
 		context.parentSpanID = selected.parentSpanID
 		context.flags = selected.flags
+		switch {
+		case w3cOK:
+			context.source = model.TrafficTraceContextW3C
+		case b3OK:
+			context.source = model.TrafficTraceContextB3
+		case datadogOK:
+			context.source = model.TrafficTraceContextDatadog
+		}
 	}
 	if b3OK {
 		context.b3Sampling = b3.b3Sampling
@@ -103,6 +123,60 @@ func (c exchangeTraceContext) inject(headers http.Header) {
 		headers.Set("X-Datadog-Parent-Id", strconv.FormatUint(span, 10))
 		setDatadogTraceHigh(headers, c.traceID[:16])
 	}
+}
+
+func (r *injectedTraceContextRegistry) remember(scope string, context exchangeTraceContext) {
+	if scope == "" || context.traceID == "" || context.spanID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.values == nil {
+		r.values = make(map[string]struct{})
+	}
+	key := injectedTraceContextKey(scope, context.traceID, context.spanID)
+	if _, exists := r.values[key]; exists {
+		return
+	}
+	if len(r.order) < injectedTraceContextLimit {
+		r.order = append(r.order, key)
+	} else {
+		delete(r.values, r.order[r.next])
+		r.order[r.next] = key
+		r.next = (r.next + 1) % injectedTraceContextLimit
+	}
+	r.values[key] = struct{}{}
+}
+
+func (r *injectedTraceContextRegistry) contains(scope, traceID, parentSpanID string) bool {
+	if scope == "" || traceID == "" || parentSpanID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.values[injectedTraceContextKey(scope, traceID, parentSpanID)]
+	return ok
+}
+
+func (r *injectedTraceContextRegistry) formats(scope string, headers http.Header) tracePropagationFormat {
+	var formats tracePropagationFormat
+	if context, ok := extractW3CTraceContext(headers.Get("Traceparent")); ok && r.contains(scope, context.traceID, context.parentSpanID) {
+		formats |= tracePropagationW3C
+	}
+	if context, ok := parseB3Single(strings.TrimSpace(headers.Get("B3"))); ok && r.contains(scope, context.traceID, context.parentSpanID) {
+		formats |= tracePropagationB3Single
+	}
+	if context, ok := parseB3Multi(headers); ok && r.contains(scope, context.traceID, context.parentSpanID) {
+		formats |= tracePropagationB3Multi
+	}
+	if context, ok := extractDatadogTraceContext(headers); ok && r.contains(scope, context.traceID, context.parentSpanID) {
+		formats |= tracePropagationDatadog
+	}
+	return formats
+}
+
+func injectedTraceContextKey(scope, traceID, spanID string) string {
+	return scope + "\x00" + traceID + "\x00" + spanID
 }
 
 func (c exchangeTraceContext) b3TraceID() string {

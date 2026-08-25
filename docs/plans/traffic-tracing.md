@@ -65,6 +65,11 @@ Replace the overloaded event shape with an exchange model and trace projections.
   from W3C/OpenTelemetry, B3 single or multi-header, or Datadog context. B3
   64-bit and Datadog trace identifiers are left-padded to the API's 128-bit
   representation; Datadog's `_dd.p.tid` supplies the high 64 bits when present.
+- `traceContextSource` distinguishes a context Portless generated, recognized
+  as a context Portless previously injected, or continued from a valid incoming
+  W3C/OpenTelemetry, B3, or Datadog context. Portless-injected propagation
+  carriers remain internal metadata and are omitted from captured
+  `requestHeaders`.
 
 ### Traffic trace
 

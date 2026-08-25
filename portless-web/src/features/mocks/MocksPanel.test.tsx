@@ -14,6 +14,7 @@ describe('MocksPanel', () => {
     const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectProfile={() => undefined} />)
     expect(html).toContain('MOCK PROFILES')
     expect(html).toContain('CREATE PROFILE')
+    expect(html).toContain('<span>Name</span><span>Service</span>')
     expect(html).toContain('Loading mock profiles')
   })
 

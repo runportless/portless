@@ -118,7 +118,8 @@ The Playwright suite protects these browser journeys:
 - starting a real Portless-owned Node debugger from the service drawer,
   displaying its attach endpoint, preserving healthy environment semantics,
   and returning the service to normal mode;
-- captured request and response inspection with repeated headers and redacted credentials;
+- captured request and response inspection with repeated headers, redacted
+  credentials, and Portless-injected trace carriers kept out of header views;
 - recording, mock-provider, and fault workflows, including a URL-addressable,
   maximizable mock-profile route drawer, complete header/body preview input,
   and a live mock handoff that keeps peer service PIDs stable and preserves

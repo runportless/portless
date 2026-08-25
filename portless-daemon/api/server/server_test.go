@@ -122,10 +122,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	}
 
 	started := time.Now().UTC().Add(-time.Second)
-	httpExchange := app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Source: "checkout", Target: "orders", StartedAt: started, CompletedAt: started.Add(12 * time.Millisecond), Method: "GET", Path: "/orders", RequestTarget: "/orders?state=open", Status: 200, RequestHeaders: map[string][]string{"Accept": {"application/json"}}, ResponseHeaders: map[string][]string{"Content-Type": {"application/json"}}})
+	httpExchange := app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Source: "checkout", Target: "orders", StartedAt: started, CompletedAt: started.Add(12 * time.Millisecond), Method: "GET", Path: "/orders", RequestTarget: "/orders?state=open", Status: 200, TraceContextSource: model.TrafficTraceContextGenerated, RequestHeaders: map[string][]string{"Accept": {"application/json"}}, ResponseHeaders: map[string][]string{"Content-Type": {"application/json"}}})
 	app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Source: "checkout", Target: "postgres", StartedAt: started, CompletedAt: started.Add(2 * time.Millisecond)})
 	httpTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=http&service=checkout&limit=10", "", true)
-	if httpTraffic.Code != http.StatusOK || !strings.Contains(httpTraffic.Body.String(), `"target":"orders"`) || strings.Contains(httpTraffic.Body.String(), `"target":"postgres"`) || strings.Contains(httpTraffic.Body.String(), `"requestHeaders"`) {
+	if httpTraffic.Code != http.StatusOK || !strings.Contains(httpTraffic.Body.String(), `"target":"orders"`) || !strings.Contains(httpTraffic.Body.String(), `"traceContextSource":"generated"`) || strings.Contains(httpTraffic.Body.String(), `"target":"postgres"`) || strings.Contains(httpTraffic.Body.String(), `"requestHeaders"`) {
 		t.Fatalf("filtered HTTP traffic response code=%d body=%s", httpTraffic.Code, httpTraffic.Body.String())
 	}
 	tcpTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=tcp&edge=checkout:postgres", "", true)
@@ -133,11 +133,11 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("filtered TCP traffic response code=%d body=%s", tcpTraffic.Code, tcpTraffic.Body.String())
 	}
 	trafficDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges/"+strconv.FormatInt(httpExchange.Sequence, 10), "", true)
-	if trafficDetail.Code != http.StatusOK || !strings.Contains(trafficDetail.Body.String(), `"requestTarget":"/orders?state=open"`) || !strings.Contains(trafficDetail.Body.String(), `"requestHeaders":{"Accept":["application/json"]}`) || !strings.Contains(trafficDetail.Body.String(), `"responseHeaders":{"Content-Type":["application/json"]}`) {
+	if trafficDetail.Code != http.StatusOK || !strings.Contains(trafficDetail.Body.String(), `"requestTarget":"/orders?state=open"`) || !strings.Contains(trafficDetail.Body.String(), `"traceContextSource":"generated"`) || !strings.Contains(trafficDetail.Body.String(), `"requestHeaders":{"Accept":["application/json"]}`) || !strings.Contains(trafficDetail.Body.String(), `"responseHeaders":{"Content-Type":["application/json"]}`) {
 		t.Fatalf("traffic detail response code=%d body=%s", trafficDetail.Code, trafficDetail.Body.String())
 	}
 	traces := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces?background=include", "", true)
-	if traces.Code != http.StatusOK || !strings.Contains(traces.Body.String(), `"traces":[`) || strings.Contains(traces.Body.String(), `"spans"`) {
+	if traces.Code != http.StatusOK || !strings.Contains(traces.Body.String(), `"traces":[`) || !strings.Contains(traces.Body.String(), `"protocol":"http"`) || !strings.Contains(traces.Body.String(), `"provisional":false`) || strings.Contains(traces.Body.String(), `"spans"`) {
 		t.Fatalf("trace summaries response code=%d body=%s", traces.Code, traces.Body.String())
 	}
 	traceDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces/"+strconv.FormatInt(httpExchange.Sequence, 10), "", true)
@@ -426,9 +426,9 @@ func TestApplicationHostRequiresServiceEnvironmentProject(t *testing.T) {
 }
 
 func TestTrafficSummaryOmitsDetailContentWithoutMutatingDetail(t *testing.T) {
-	detail := model.TrafficExchange{RequestHeaders: map[string][]string{"Authorization": {"Bearer local"}}, ResponseHeaders: map[string][]string{"Set-Cookie": {"session=local"}}, RequestBody: `{"request":true}`, ResponseBody: `{"response":true}`, RequestBodyTruncated: true, ResponseBodyTruncated: true}
+	detail := model.TrafficExchange{TraceContextSource: model.TrafficTraceContextGenerated, RequestHeaders: map[string][]string{"Authorization": {"Bearer local"}}, ResponseHeaders: map[string][]string{"Set-Cookie": {"session=local"}}, RequestBody: `{"request":true}`, ResponseBody: `{"response":true}`, RequestBodyTruncated: true, ResponseBodyTruncated: true}
 	summary := trafficSummary(detail)
-	if summary.RequestHeaders != nil || summary.ResponseHeaders != nil || summary.RequestBody != "" || summary.ResponseBody != "" || summary.RequestBodyTruncated || summary.ResponseBodyTruncated {
+	if summary.TraceContextSource != model.TrafficTraceContextGenerated || summary.RequestHeaders != nil || summary.ResponseHeaders != nil || summary.RequestBody != "" || summary.ResponseBody != "" || summary.RequestBodyTruncated || summary.ResponseBodyTruncated {
 		t.Fatalf("summary retained detail content: %#v", summary)
 	}
 	if len(detail.RequestHeaders) != 1 || len(detail.ResponseHeaders) != 1 || detail.RequestBody == "" || detail.ResponseBody == "" || !detail.RequestBodyTruncated || !detail.ResponseBodyTruncated {

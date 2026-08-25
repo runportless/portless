@@ -141,7 +141,7 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
     {warnings.length > 0 && <div className="mock-warning"><strong>IMPORT FINISHED WITH NOTES</strong><span>{warnings.join(' ')}</span><button type="button" onClick={() => setWarnings([])}>DISMISS</button></div>}
     <section className="panel mock-profiles-panel">
       <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" onClick={() => { setCreateOpen(true); setError(null) }}>CREATE PROFILE</button></div>
-      <div className="mock-profile-row mock-profile-row--header" role="row"><span>Profile</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span aria-hidden="true" /></div>
+      <div className="mock-profile-row mock-profile-row--header" role="row"><span>Name</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span aria-hidden="true" /></div>
       {profiles.map((profile) => {
         const active = environment.bindings?.some((binding) => binding.provider === 'mock' && binding.mock?.profile === profile.name)
         return <div className={`mock-profile-row${selected?.name === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => { setDeleteName(''); setError(null); onSelectProfile(profile.name) }}>

@@ -7,7 +7,7 @@ const project = { name: 'billing' } as Project
 const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
 const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
 
-function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview', settingsActive = false, settingsView: SettingsView = 'appearance') {
+function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview', settingsActive = false, settingsView: SettingsView = 'appearance', live = true) {
   return renderToStaticMarkup(
     <AppChrome
       projects={[project]}
@@ -19,6 +19,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       settingsView={settingsView}
       commands={[]}
       daemon={daemon}
+      live={live}
       onNavigate={() => undefined}
       onDaemonRefresh={async () => daemon}
       onDaemonRestart={async (instanceId) => ({ restarting: true, previousInstanceId: instanceId, handoff: true, activeEnvironments: [] })}
@@ -75,5 +76,14 @@ describe('application navigation', () => {
     expect(markup).toContain('<svg class="settings-gear"')
     expect(markup).toContain('<span>Settings</span>')
     expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><a href="/settings">settings</a><b>/</b><strong aria-current="page">mcp</strong></nav>')
+  })
+
+  it('marks only the reconnecting daemon text for animation', () => {
+    const reconnecting = renderChrome(undefined, 'overview', false, 'appearance', false)
+    const ready = renderChrome()
+
+    expect(reconnecting).toContain('<span class="daemon-state--reconnecting">reconnecting</span>')
+    expect(ready).toContain('<span>ready</span>')
+    expect(ready).not.toContain('daemon-state--reconnecting')
   })
 })

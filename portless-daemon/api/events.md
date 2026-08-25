@@ -37,9 +37,11 @@ swapped atomically.
 `traffic.exchange` carries a completed HTTP or TCP summary. Request and response
 headers and bodies are omitted from this notification; clients load the full
 exchange on demand. `traffic.trace` carries an updated trace summary whenever a
-newly completed exchange changes that projection. `traffic.cleared` reports the
-environment-local sequence through which live exchanges and derived traces were
-removed. Durable recordings remain available.
+newly completed exchange changes that projection. Trace summaries identify the
+root `protocol`; a TCP-rooted summary is `provisional` while an active HTTP
+request can still absorb it during correlation. `traffic.cleared` reports the
+environment-local sequence through which live exchanges and derived traces
+were removed. Durable recordings remain available.
 
 `traffic.tcp.activity` is an ephemeral live signal for open TCP connections. It
 reports `open`, `data`, `heartbeat`, and `close` phases with the current active
@@ -77,5 +79,9 @@ credential-bearing header values are replaced with `[REDACTED]` before
 retention. Bodies and other values can still contain local application data.
 HTTP trace identifiers are normalized to lower-hex W3C widths after extraction
 from W3C/OpenTelemetry, B3 single or multi-header, or Datadog propagation.
+Exchange detail identifies whether that context was generated, recognized as a
+context Portless previously injected, or continued from an application-supplied
+format. Portless-injected propagation carriers are internal correlation
+metadata and are omitted from captured `requestHeaders`.
 Trace summaries omit spans; trace detail returns the complete current tree and
 waterfall projection.

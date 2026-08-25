@@ -62,6 +62,9 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 	if len(exchanges) != 1 || exchanges[0].Project != "billing" || exchanges[0].Environment != "local" || exchanges[0].RequestTarget != "/orders/%2Fitem?sku=coffee%20mug&quantity=2" || exchanges[0].TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || exchanges[0].ParentSpanID != "00f067aa0ba902b7" || upstreamTraceparent != "00-"+exchanges[0].TraceID+"-"+exchanges[0].SpanID+"-01" || firstHeader(exchanges[0].RequestHeaders, "Authorization") != "[REDACTED]" || len(exchanges[0].RequestHeaders["X-Trace"]) != 2 || firstHeader(exchanges[0].RequestHeaders, "X-Trace") != "visible" || firstHeader(exchanges[0].ResponseHeaders, "Set-Cookie") != "[REDACTED]" || len(exchanges[0].ResponseHeaders["X-Upstream"]) != 2 || firstHeader(exchanges[0].ResponseHeaders, "X-Upstream") != "checkout" || exchanges[0].RequestBody != `{"sku":"coffee"}` || exchanges[0].ResponseBody != `{"created":true}` {
 		t.Fatalf("unexpected traffic %#v", exchanges)
 	}
+	if exchanges[0].TraceContextSource != model.TrafficTraceContextW3C {
+		t.Fatalf("unexpected propagated trace metadata: %#v", exchanges[0])
+	}
 
 	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "checkout-debug"}); err != nil {
 		t.Fatal(err)
@@ -69,7 +72,7 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 	response = httptest.NewRecorder()
 	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/recorded", nil), scope, "checkout")
 	recorded, err := controlStore.RecordedTraffic(ctx, scope, "checkout-debug", 10)
-	if err != nil || len(recorded) != 1 || recorded[0].Recording != "checkout-debug" || recorded[0].RequestBody != "" || recorded[0].ResponseBody != "" {
+	if err != nil || len(recorded) != 1 || recorded[0].Recording != "checkout-debug" || recorded[0].RequestBody != "" || recorded[0].ResponseBody != "" || recorded[0].TraceContextSource != model.TrafficTraceContextGenerated || recorded[0].ParentSpanID != "" {
 		t.Fatalf("recorded traffic=%#v err=%v", recorded, err)
 	}
 
@@ -80,6 +83,72 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/faulted", nil), scope, "checkout")
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-Portless-Fault") != "checkout-down" {
 		t.Fatalf("fault response code=%d headers=%v", response.Code, response.Header())
+	}
+	faulted := trafficStore.RecentExchanges(scope, 1)
+	if len(faulted) != 1 || faulted[0].TraceContextSource != model.TrafficTraceContextGenerated {
+		t.Fatalf("faulted request unexpectedly reported forwarded trace context: %#v", faulted)
+	}
+}
+
+func TestPortlessInjectedTraceContextRemainsInternalToHeaderCapture(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("store", "local")
+	var upstreamTraceparent string
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamTraceparent = request.Header.Get("Traceparent")
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	broker := events.NewBroker()
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
+	manager.SetTarget(scope, "checkout", port)
+
+	manager.ServeIngress(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://checkout.local.store.localhost/root", nil), scope, "checkout")
+	if upstreamTraceparent == "" {
+		t.Fatal("Portless did not inject a root traceparent")
+	}
+	downstream := httptest.NewRequest(http.MethodGet, "http://checkout.local.store.localhost/downstream", nil)
+	downstream.Header.Set("Traceparent", upstreamTraceparent)
+	downstream.Header.Set("Tracestate", "vendor=value")
+	downstream.Header.Set("X-Request-Id", "application-value")
+	manager.ServeIngress(httptest.NewRecorder(), downstream, scope, "checkout")
+
+	exchanges := trafficStore.RecentExchanges(scope, 2)
+	if len(exchanges) != 2 || exchanges[0].TraceContextSource != model.TrafficTraceContextPortless {
+		t.Fatalf("downstream context was not recognized as Portless: %#v", exchanges)
+	}
+	if firstHeader(exchanges[0].RequestHeaders, "Traceparent") != "" {
+		t.Fatalf("Portless traceparent leaked into captured headers: %#v", exchanges[0].RequestHeaders)
+	}
+	if firstHeader(exchanges[0].RequestHeaders, "Tracestate") != "vendor=value" || firstHeader(exchanges[0].RequestHeaders, "X-Request-Id") != "application-value" {
+		t.Fatalf("application headers were removed: %#v", exchanges[0].RequestHeaders)
+	}
+}
+
+func TestCaptureRequestHeadersRemovesOnlyMatchingPortlessCarrierFormats(t *testing.T) {
+	headers := http.Header{
+		"Traceparent":         {"00-11111111111111111111111111111111-2222222222222222-01"},
+		"B3":                  {"33333333333333333333333333333333-4444444444444444-1"},
+		"X-B3-TraceId":        {"55555555555555555555555555555555"},
+		"X-B3-SpanId":         {"6666666666666666"},
+		"X-Datadog-Trace-Id":  {"7"},
+		"X-Datadog-Parent-Id": {"8"},
+		"X-Datadog-Tags":      {"_dd.p.dm=-0"},
+		"X-B3-Sampled":        {"1"},
+		"X-Application-Trace": {"visible"},
+	}
+	captured := captureRequestHeaders(headers, tracePropagationW3C|tracePropagationB3Multi)
+	if firstHeader(captured, "Traceparent") != "" || firstHeader(captured, "X-B3-TraceId") != "" || firstHeader(captured, "X-B3-SpanId") != "" {
+		t.Fatalf("Portless carriers were retained: %#v", captured)
+	}
+	for _, name := range []string{"B3", "X-Datadog-Trace-Id", "X-Datadog-Parent-Id", "X-Datadog-Tags", "X-B3-Sampled", "X-Application-Trace"} {
+		if firstHeader(captured, name) == "" {
+			t.Fatalf("application header %s was removed: %#v", name, captured)
+		}
 	}
 }
 

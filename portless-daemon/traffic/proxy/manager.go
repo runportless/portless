@@ -56,6 +56,7 @@ type Manager struct {
 	targets   map[string]target
 	edges     map[string]*edge
 	transport *http.Transport
+	contexts  injectedTraceContextRegistry
 	closed    atomic.Bool
 }
 
@@ -338,7 +339,13 @@ func (m *Manager) Close(ctx context.Context) {
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
 	started := time.Now().UTC()
+	activeRequest := m.traffic.BeginHTTPRequest(scope, targetName, started)
+	defer m.traffic.AbandonHTTPRequest(activeRequest)
 	traceContext := newExchangeTraceContext(request.Header)
+	traceContext.portlessFormats = m.contexts.formats(scope, request.Header)
+	if m.contexts.contains(scope, traceContext.traceID, traceContext.parentSpanID) {
+		traceContext.source = model.TrafficTraceContextPortless
+	}
 	_, recordBodies, recordBodyLimit := m.matchRecording(request.Context(), scope, source, targetName)
 	captureLimit := trafficBodyLimit
 	if recordBodies && recordBodyLimit > int64(captureLimit) {
@@ -354,30 +361,31 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		if fault.StatusCode != 0 {
 			writer.Header().Set("X-Portless-Fault", fault.Name)
 			http.Error(writer, "Portless fault "+fault.Name, fault.StatusCode)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header(), requestCapture, nil, traceContext)
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header(), requestCapture, nil, traceContext)
 			return
 		}
 		if fault.Abort {
 			m.abortHTTP(writer)
-			m.finishHTTP(request.Context(), scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil, requestCapture, nil, traceContext)
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil, requestCapture, nil, traceContext)
 			return
 		}
 	}
 	upstream, ok := m.target(scope, targetName)
 	if !ok {
 		http.Error(writer, "Portless: "+targetName+" is not available", http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil, traceContext)
+		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	if upstream.provider == model.ProviderRemote && upstream.writePolicy == model.WriteReadOnly && !safeMethod(request.Method) {
 		writer.Header().Set("X-Portless-Remote-Policy", string(model.WriteReadOnly))
 		http.Error(writer, "Portless: remote target is read-only", http.StatusForbidden)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header(), requestCapture, nil, traceContext)
+		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	outgoing := request.Clone(request.Context())
 	outgoing.RequestURI = ""
 	traceContext.inject(outgoing.Header)
+	m.contexts.remember(scope, traceContext)
 	if upstream.provider == model.ProviderRemote {
 		outgoing.URL.Scheme = upstream.baseURL.Scheme
 		outgoing.URL.Host = upstream.baseURL.Host
@@ -392,7 +400,7 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	response, err := m.transport.RoundTrip(outgoing)
 	if err != nil {
 		http.Error(writer, "Portless upstream error: "+err.Error(), http.StatusBadGateway)
-		m.finishHTTP(request.Context(), scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil, traceContext)
+		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	defer response.Body.Close()
@@ -415,10 +423,10 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	if copyErr != nil {
 		errorText = copyErr.Error()
 	}
-	m.finishHTTP(request.Context(), scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header, requestCapture, responseCapture, traceContext)
+	m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header, requestCapture, responseCapture, traceContext)
 }
 
-func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header, requestCapture, responseCapture *bodyCapture, traceContext exchangeTraceContext) {
+func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header, requestCapture, responseCapture *bodyCapture, traceContext exchangeTraceContext) {
 	completed := time.Now().UTC()
 	project, environment := scopeNames(scope)
 	requestBytes := request.ContentLength
@@ -438,7 +446,8 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
 		RequestCapturedBytes: capturedBytes(requestCapture), ResponseCapturedBytes: capturedBytes(responseCapture),
 		TraceID: traceContext.traceID, SpanID: traceContext.spanID, ParentSpanID: traceContext.parentSpanID,
-		RequestHeaders: captureHeaders(request.Header), ResponseHeaders: captureHeaders(responseHeaders),
+		TraceContextSource: traceContext.source,
+		RequestHeaders:     captureRequestHeaders(request.Header, traceContext.portlessFormats), ResponseHeaders: captureHeaders(responseHeaders),
 		RequestBody: requestCapture.text(), ResponseBody: responseCapture.text(),
 		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
 	}
@@ -463,7 +472,7 @@ func (m *Manager) finishHTTP(ctx context.Context, scope, source, targetName stri
 	exchange.ResponseBody, exchange.ResponseBodyTruncated = boundedBody(exchange.ResponseBody, exchange.ResponseBodyTruncated, trafficBodyLimit)
 	exchange.RequestCapturedBytes = boundedCapturedBytes(exchange.RequestCapturedBytes, trafficBodyLimit)
 	exchange.ResponseCapturedBytes = boundedCapturedBytes(exchange.ResponseCapturedBytes, trafficBodyLimit)
-	exchange = m.traffic.AddExchange(exchange)
+	exchange = m.traffic.CompleteHTTPRequest(activeRequest, exchange)
 	if exchange.Recording != "" {
 		persisted.Sequence = exchange.Sequence
 		_ = m.database.PersistTraffic(context.Background(), persisted)
@@ -813,6 +822,30 @@ func captureHeaders(headers http.Header) map[string][]string {
 		result[canonical] = append([]string(nil), values...)
 	}
 	return result
+}
+
+func captureRequestHeaders(headers http.Header, portlessFormats tracePropagationFormat) map[string][]string {
+	if portlessFormats == 0 {
+		return captureHeaders(headers)
+	}
+	filtered := headers.Clone()
+	if portlessFormats&tracePropagationW3C != 0 {
+		filtered.Del("Traceparent")
+	}
+	if portlessFormats&tracePropagationB3Single != 0 {
+		filtered.Del("B3")
+	}
+	if portlessFormats&tracePropagationB3Multi != 0 {
+		for _, name := range []string{"X-B3-TraceId", "X-B3-SpanId", "X-B3-ParentSpanId"} {
+			filtered.Del(name)
+		}
+	}
+	if portlessFormats&tracePropagationDatadog != 0 {
+		for _, name := range []string{"X-Datadog-Trace-Id", "X-Datadog-Parent-Id"} {
+			filtered.Del(name)
+		}
+	}
+	return captureHeaders(filtered)
 }
 
 func sensitiveTrafficHeader(name string) bool {

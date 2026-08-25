@@ -73,6 +73,62 @@ func TestTraceProjectionUsesStartTimeAndTopologyAcrossCompletionOrder(t *testing
 	}
 }
 
+func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T) {
+	broker := events.NewBroker()
+	store := NewStore(broker)
+	scope := model.EnvironmentSelector("store", "local")
+	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.trace"})
+	defer subscription.Close()
+	base := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	activeRequest := store.BeginHTTPRequest(scope, "orders", base)
+
+	store.AddExchange(model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
+		Source: "orders", Target: "redis", StartedAt: base.Add(5 * time.Millisecond), CompletedAt: base.Add(10 * time.Millisecond),
+	})
+	provisional := store.Traces(scope, 10)
+	if len(provisional) != 1 || provisional[0].Protocol != model.ProtocolTCP || !provisional[0].Provisional {
+		t.Fatalf("active-parent TCP trace = %#v, want one provisional TCP root", provisional)
+	}
+	select {
+	case event := <-subscription.C:
+		live, ok := event.Data.(model.TrafficTrace)
+		if !ok || live.Protocol != model.ProtocolTCP || !live.Provisional {
+			t.Fatalf("live TCP trace = %#v, want provisional TCP root", event.Data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for provisional TCP trace")
+	}
+
+	store.CompleteHTTPRequest(activeRequest, model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolHTTP,
+		Source: "external", Target: "orders", StartedAt: base, CompletedAt: base.Add(20 * time.Millisecond), Method: "GET", RequestTarget: "/orders",
+	})
+	settled := store.Traces(scope, 10)
+	if len(settled) != 1 || settled[0].Protocol != model.ProtocolHTTP || settled[0].Provisional || settled[0].SpanCount != 2 {
+		t.Fatalf("completed-parent trace = %#v, want one settled HTTP-rooted trace", settled)
+	}
+	select {
+	case event := <-subscription.C:
+		live, ok := event.Data.(model.TrafficTrace)
+		if !ok || live.Protocol != model.ProtocolHTTP || live.Provisional || live.SpanCount != 2 {
+			t.Fatalf("live settled trace = %#v, want settled HTTP root", event.Data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for settled HTTP trace")
+	}
+
+	standalone := NewStore(nil)
+	standalone.AddExchange(model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
+		Source: "worker", Target: "redis", StartedAt: base, CompletedAt: base.Add(time.Millisecond),
+	})
+	standaloneTraces := standalone.Traces(scope, 10)
+	if len(standaloneTraces) != 1 || standaloneTraces[0].Protocol != model.ProtocolTCP || standaloneTraces[0].Provisional {
+		t.Fatalf("standalone TCP trace = %#v, want one settled TCP root", standaloneTraces)
+	}
+}
+
 func TestTraceProjectionUsesExactContextAndRefusesAmbiguousInference(t *testing.T) {
 	base := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	exact := buildTraces([]model.TrafficExchange{

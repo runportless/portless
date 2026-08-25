@@ -15,7 +15,7 @@ func TestExchangeTraceContextPreservesW3CParentAndCreatesChild(t *testing.T) {
 	parent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
 	headers := http.Header{"Traceparent": {parent}}
 	context := newExchangeTraceContext(headers)
-	if context.traceID != "4bf92f3577b34da6a3ce929d0e0e4736" || context.parentSpanID != "00f067aa0ba902b7" || context.flags != "00" {
+	if context.traceID != "4bf92f3577b34da6a3ce929d0e0e4736" || context.parentSpanID != "00f067aa0ba902b7" || context.flags != "00" || context.source != model.TrafficTraceContextW3C {
 		t.Fatalf("unexpected context: %#v", context)
 	}
 	if !validTraceHex(context.spanID, 8) || context.spanID == context.parentSpanID {
@@ -33,7 +33,7 @@ func TestExchangeTraceContextExtractsAndInjectsB3Single(t *testing.T) {
 		"B3": {"80f198ee56343ba864fe8b2a57d3eff7-e457b5a2e4d86bd1-d-05e3ac9a4f6e3b90"},
 	}
 	context := newExchangeTraceContext(headers)
-	if context.traceID != "80f198ee56343ba864fe8b2a57d3eff7" || context.parentSpanID != "e457b5a2e4d86bd1" || context.flags != "01" {
+	if context.traceID != "80f198ee56343ba864fe8b2a57d3eff7" || context.parentSpanID != "e457b5a2e4d86bd1" || context.flags != "01" || context.source != model.TrafficTraceContextB3 {
 		t.Fatalf("unexpected B3 single context: %#v", context)
 	}
 	outgoing := headers.Clone()
@@ -53,7 +53,7 @@ func TestExchangeTraceContextExtractsAndInjectsB3Multi(t *testing.T) {
 	headers.Set("X-B3-ParentSpanId", "0020000000000001")
 	headers.Set("X-B3-Sampled", "0")
 	context := newExchangeTraceContext(headers)
-	if context.traceID != "000000000000000048485a3953bb6124" || context.parentSpanID != "a2fb4a1d1a96d312" || context.flags != "00" {
+	if context.traceID != "000000000000000048485a3953bb6124" || context.parentSpanID != "a2fb4a1d1a96d312" || context.flags != "00" || context.source != model.TrafficTraceContextB3 {
 		t.Fatalf("unexpected B3 multi context: %#v", context)
 	}
 	outgoing := headers.Clone()
@@ -90,7 +90,7 @@ func TestExchangeTraceContextExtractsAndInjectsDatadog(t *testing.T) {
 		"X-Datadog-Tags":              {"_dd.p.dm=-0,_dd.p.tid=463ac35c9f6413ad"},
 	}
 	context := newExchangeTraceContext(headers)
-	if context.traceID != "463ac35c9f6413ad0000000000000001" || context.parentSpanID != "0000000000000002" || context.flags != "00" {
+	if context.traceID != "463ac35c9f6413ad0000000000000001" || context.parentSpanID != "0000000000000002" || context.flags != "00" || context.source != model.TrafficTraceContextDatadog {
 		t.Fatalf("unexpected Datadog context: %#v", context)
 	}
 	outgoing := headers.Clone()
@@ -136,7 +136,7 @@ func TestExchangeTraceContextRejectsInvalidParentsAndClassifiesRequests(t *testi
 		"X-Datadog-Parent-Id": {"2"},
 	}
 	context := newExchangeTraceContext(headers)
-	if !validTraceHex(context.traceID, 16) || context.parentSpanID != "" || !validTraceHex(context.spanID, 8) {
+	if !validTraceHex(context.traceID, 16) || context.parentSpanID != "" || !validTraceHex(context.spanID, 8) || context.source != model.TrafficTraceContextGenerated {
 		t.Fatalf("invalid parent was accepted: %#v", context)
 	}
 
@@ -147,6 +147,28 @@ func TestExchangeTraceContextRejectsInvalidParentsAndClassifiesRequests(t *testi
 	}
 	if kind := classifyRequest("checkout", request); kind != model.TrafficRequestService {
 		t.Fatalf("service request kind = %q", kind)
+	}
+}
+
+func TestInjectedTraceContextRegistryRecognizesEachCarrierWithinItsScope(t *testing.T) {
+	context := exchangeTraceContext{traceID: "00000000000000000000000000000001", spanID: "0000000000000002"}
+	var registry injectedTraceContextRegistry
+	registry.remember("store/local", context)
+
+	headers := make(http.Header)
+	headers.Set("Traceparent", "00-00000000000000000000000000000001-0000000000000002-01")
+	headers.Set("B3", "00000000000000000000000000000001-0000000000000002-1")
+	headers.Set("X-B3-TraceId", "00000000000000000000000000000001")
+	headers.Set("X-B3-SpanId", "0000000000000002")
+	headers.Set("X-Datadog-Trace-Id", "1")
+	headers.Set("X-Datadog-Parent-Id", "2")
+	headers.Set("X-Datadog-Sampling-Priority", "1")
+	want := tracePropagationW3C | tracePropagationB3Single | tracePropagationB3Multi | tracePropagationDatadog
+	if got := registry.formats("store/local", headers); got != want {
+		t.Fatalf("recognized formats = %04b, want %04b", got, want)
+	}
+	if got := registry.formats("store/qa", headers); got != 0 {
+		t.Fatalf("cross-environment formats = %04b", got)
 	}
 }
 

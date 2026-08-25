@@ -178,6 +178,7 @@ func projectTrace(members []*traceNode, all map[int64]*traceNode) model.TrafficT
 	return model.TrafficTrace{
 		Project: rootExchange.Project, Environment: rootExchange.Environment,
 		Number: number, LastSequence: lastSequence, TraceID: rootExchange.TraceID, RootSequence: rootExchange.Sequence,
+		Protocol:  rootExchange.Protocol,
 		StartedAt: started, CompletedAt: completed, DurationMS: completed.Sub(started).Milliseconds(),
 		Method: rootExchange.Method, RequestTarget: requestTarget, Source: rootExchange.Source, Target: rootExchange.Target,
 		Status: rootExchange.Status, Error: errorResult, Faulted: faulted,

@@ -211,6 +211,11 @@ message-level delay, rejection, or loss.
 
 ## Smaller improvements
 
+The detailed proposal for
+[edge-scoped TypeScript traffic transforms](traffic-transforms.md) is retained
+separately so its execution boundary, proxy semantics, and rollout gates can be
+reviewed before it is scheduled.
+
 - HAR export and import.
 - Configurable traffic capture and retention limits.
 - Saved fault presets such as slow network, unavailable database, and flaky API.

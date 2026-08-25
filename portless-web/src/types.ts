@@ -247,6 +247,7 @@ export interface Operation { project: string; environment: string; number: numbe
 export interface LogEntry { timestamp: string; service: string; stream: string; generation: number; message: string }
 
 export type TrafficRequestKind = 'navigation' | 'subresource' | 'fetch' | 'service' | 'unknown'
+export type TrafficTraceContextSource = 'generated' | 'portless' | 'w3c' | 'b3' | 'datadog'
 export type TrafficCorrelation = 'exact' | 'inferred' | 'partial' | 'ambiguous'
 
 export interface TrafficExchange {
@@ -279,6 +280,7 @@ export interface TrafficExchange {
   traceId?: string
   spanId?: string
   parentSpanId?: string
+  traceContextSource?: TrafficTraceContextSource
   requestHeaders?: Record<string, string[]>
   responseHeaders?: Record<string, string[]>
   requestBody?: string
@@ -302,6 +304,7 @@ export interface TrafficTrace {
   lastSequence: number
   traceId?: string
   rootSequence?: number
+  protocol: string
   startedAt: string
   completedAt: string
   durationMs: number
@@ -313,6 +316,7 @@ export interface TrafficTrace {
   error: boolean
   faulted: boolean
   background: boolean
+  provisional: boolean
   spanCount: number
   correlation: TrafficCorrelation
   spans?: TrafficTraceSpan[]
