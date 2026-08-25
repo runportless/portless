@@ -1,13 +1,13 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TrafficExchange } from '../../types'
-import { defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, rawTrafficMessage, trafficTargetBinding, TrafficDetail } from './TrafficDetail'
+import type { TrafficExchange, TrafficTrace } from '../../types'
+import { defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, orderedTraceExchanges, rawTrafficMessage, trafficStartedTime, trafficTargetBinding, TrafficDetail } from './TrafficDetail'
 
 const exchange = {
   project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
   source: 'checkout', target: 'orders', targetProvider: 'mock', mockProfile: 'sold-out', mockRoute: 'reject-order',
-  startedAt: '2026-08-13T12:00:00Z', completedAt: '2026-08-13T12:00:00.024Z',
+  startedAt: '2026-08-13T12:00:00.123Z', completedAt: '2026-08-13T12:00:00.147Z',
   method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
   durationMs: 24, requestBytes: 42, responseBytes: 118,
   requestHeaders: { Authorization: ['[REDACTED]'], 'Content-Type': ['application/json'], Traceparent: ['00-4bf92f3577b34da6a3ce929d0e0e4736-b7ad6b7169203331-01'] },
@@ -58,16 +58,51 @@ describe('TrafficDetail', () => {
     expect(markup).not.toContain('CAPTURE COMPLETE')
     expect(markup).toContain('<span>ENVIRONMENT</span><strong>local</strong>')
     expect(markup).toContain('<span>TARGET BINDING</span><strong>sold-out · mock</strong>')
+    expect(trafficStartedTime(exchange.startedAt)).toMatch(/\.123(?:\s|$)/)
+    expect(markup).toContain(`<span>STARTED</span><strong>${trafficStartedTime(exchange.startedAt)}</strong>`)
     expect(markup).not.toContain('TARGET PROVIDER')
     expect(markup).toContain('<span>COMPLETED</span><strong>24ms</strong>')
     expect(markup).not.toContain('<span>COMPLETED</span><strong>+24ms</strong>')
     expect(markup).not.toContain('traffic-trace-context')
     expect(markup).not.toContain('TRACE ID')
     expect(markup).not.toContain('4bf92f3577b34da6a3ce929d0e0e4736')
+    expect(markup).not.toContain('Trace exchange navigation')
     expect(markup).toContain('sold-out / reject-order')
     expect(markup).not.toContain('aria-label="Transfer summary"')
     expect(markup).not.toContain('traffic-message-workbench--response')
     expect(markup).not.toContain('&quot;order&quot;: 42')
+  })
+
+  it('navigates a multi-exchange trace in chronological order', () => {
+    const first = { ...exchange, sequence: 6, source: 'external', target: 'checkout' } as TrafficExchange
+    const last = { ...exchange, sequence: 9, source: 'orders', target: 'inventory' } as TrafficExchange
+    const trace = {
+      project: 'billing', environment: 'local', number: 6, lastSequence: 9, rootSequence: 6,
+      protocol: 'http', startedAt: first.startedAt, completedAt: last.completedAt, durationMs: 24,
+      source: 'external', target: 'checkout', status: 201, error: false, faulted: false, background: false, provisional: false,
+      spanCount: 3, correlation: 'exact',
+      spans: [
+        { exchange: last, depth: 2, startOffsetMs: 12, correlation: 'exact' },
+        { exchange, parentSequence: 6, depth: 1, startOffsetMs: 5, correlation: 'exact' },
+        { exchange: first, depth: 0, startOffsetMs: 0, correlation: 'exact' },
+      ],
+    } as TrafficTrace
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+      exchange,
+      trace,
+      onTraceNavigate: () => undefined,
+      onClose: () => undefined,
+    }))
+
+    expect(orderedTraceExchanges(trace).map((candidate) => candidate.sequence)).toEqual([6, 7, 9])
+    expect(markup).toContain('aria-label="Trace exchange navigation"')
+    expect(markup).toContain('aria-label="First exchange in trace"')
+    expect(markup).toContain('aria-label="Previous exchange in trace"')
+    expect(markup).toContain('aria-label="Exchange 2 of 3"')
+    expect(markup).toContain('aria-label="Next exchange in trace"')
+    expect(markup).toContain('aria-label="Last exchange in trace"')
+    expect(markup).toContain('<strong>2</strong><span>OF</span><strong>3</strong>')
+    expect(markup).not.toContain('>TRACE<')
   })
 
   it('formats body, header, and raw payload representations without exposing secrets', () => {

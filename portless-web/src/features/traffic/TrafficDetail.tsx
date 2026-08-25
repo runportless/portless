@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useId, useState } from 'react'
 import { DrawerSizeButton } from '../../components/DrawerSizeButton'
 import { duration } from '../../components/Status'
-import type { ComponentBinding, TrafficExchange } from '../../types'
+import type { ComponentBinding, TrafficExchange, TrafficTrace } from '../../types'
 
 type TrafficDirection = 'request' | 'response'
 type TrafficDetailView = TrafficDirection | 'compare'
@@ -13,6 +13,44 @@ function CopyIcon() {
 
 function CompareIcon() {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="5" height="10" /><rect x="9" y="3" width="5" height="10" /></svg>
+}
+
+function TraceArrowIcon({ direction, boundary = false }: { direction: 'previous' | 'next'; boundary?: boolean }) {
+  const previous = direction === 'previous'
+  return <svg viewBox="0 0 16 16" aria-hidden="true">
+    {boundary && <path d={previous ? 'M3 3v10' : 'M13 3v10'} />}
+    <path d={previous ? 'm10.5 3.5-4.5 4.5 4.5 4.5' : 'm5.5 3.5 4.5 4.5-4.5 4.5'} />
+  </svg>
+}
+
+export function orderedTraceExchanges(trace: TrafficTrace | null | undefined) {
+  return [...(trace?.spans || [])]
+    .sort((left, right) => left.startOffsetMs - right.startOffsetMs || left.exchange.sequence - right.exchange.sequence)
+    .map((span) => span.exchange)
+}
+
+function TraceNavigator({ trace, exchange, pending, onNavigate }: {
+  trace?: TrafficTrace | null
+  exchange: TrafficExchange
+  pending: boolean
+  onNavigate?: (exchange: TrafficExchange) => void
+}) {
+  const exchanges = orderedTraceExchanges(trace)
+  const index = exchanges.findIndex((candidate) => candidate.sequence === exchange.sequence)
+  if (!onNavigate || exchanges.length < 2 || index < 0) return null
+  const first = index === 0
+  const last = index === exchanges.length - 1
+  const navigate = (target: number) => onNavigate(exchanges[target])
+
+  return <nav className="traffic-trace-navigator" aria-label="Trace exchange navigation" aria-busy={pending}>
+    <div role="group" aria-label="Navigate trace exchanges">
+      <button type="button" title="First exchange in trace" aria-label="First exchange in trace" disabled={pending || first} onClick={() => navigate(0)}><TraceArrowIcon direction="previous" boundary /></button>
+      <button type="button" title="Previous exchange in trace" aria-label="Previous exchange in trace" disabled={pending || first} onClick={() => navigate(index - 1)}><TraceArrowIcon direction="previous" /></button>
+      <output aria-live="polite" aria-label={`Exchange ${index + 1} of ${exchanges.length}`}><strong>{index + 1}</strong><span>OF</span><strong>{exchanges.length}</strong></output>
+      <button type="button" title="Next exchange in trace" aria-label="Next exchange in trace" disabled={pending || last} onClick={() => navigate(index + 1)}><TraceArrowIcon direction="next" /></button>
+      <button type="button" title="Last exchange in trace" aria-label="Last exchange in trace" disabled={pending || last} onClick={() => navigate(exchanges.length - 1)}><TraceArrowIcon direction="next" boundary /></button>
+    </div>
+  </nav>
 }
 
 function OverviewDetail({ label, value }: { label: string; value: string }) {
@@ -184,12 +222,18 @@ export function trafficTargetBinding(exchange: TrafficExchange, binding?: Compon
   return [configuration, provider].filter(Boolean).join(' · ') || 'not reported'
 }
 
+export function trafficStartedTime(timestamp: string) {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: 'numeric', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3,
+  })
+}
+
 function TrafficOverview({ exchange, targetBinding }: { exchange: TrafficExchange; targetBinding?: ComponentBinding }) {
   return <section className="traffic-overview" aria-label="Exchange overview">
     <div className="traffic-overview__context">
       <OverviewDetail label="ENVIRONMENT" value={exchange.environment} />
       <OverviewDetail label="TARGET BINDING" value={trafficTargetBinding(exchange, targetBinding)} />
-      <OverviewDetail label="STARTED" value={new Date(exchange.startedAt).toLocaleTimeString()} />
+      <OverviewDetail label="STARTED" value={trafficStartedTime(exchange.startedAt)} />
       <OverviewDetail label="COMPLETED" value={duration(exchange.durationMs)} />
     </div>
     {exchange.error && <div className="traffic-detail__error"><span>REQUEST ERROR</span><strong>{exchange.error}</strong></div>}
@@ -203,7 +247,14 @@ function statusTone(exchange: TrafficExchange) {
   return 'is-success'
 }
 
-export function TrafficDetail({ exchange, targetBinding, onClose }: { exchange: TrafficExchange; targetBinding?: ComponentBinding; onClose: () => void }) {
+export function TrafficDetail({ exchange, trace, traceNavigationPending = false, targetBinding, onTraceNavigate, onClose }: {
+  exchange: TrafficExchange
+  trace?: TrafficTrace | null
+  traceNavigationPending?: boolean
+  targetBinding?: ComponentBinding
+  onTraceNavigate?: (exchange: TrafficExchange) => void
+  onClose: () => void
+}) {
   const http = exchange.protocol === 'http'
   const [maximized, setMaximized] = useState(false)
   const [view, setView] = useState<TrafficDetailView>('request')
@@ -211,8 +262,6 @@ export function TrafficDetail({ exchange, targetBinding, onClose }: { exchange: 
   const [responseView, setResponseView] = useState<TrafficPayloadView>(() => defaultTrafficPayloadView(exchange, 'response'))
 
   useEffect(() => {
-    setMaximized(false)
-    setView('request')
     setRequestView(defaultTrafficPayloadView(exchange, 'request'))
     setResponseView(defaultTrafficPayloadView(exchange, 'response'))
   }, [exchange.project, exchange.environment, exchange.sequence])
@@ -245,7 +294,10 @@ export function TrafficDetail({ exchange, targetBinding, onClose }: { exchange: 
       <div className="traffic-detail__heading"><span className="eyebrow">{exchange.protocol.toUpperCase()} EXCHANGE #{exchange.sequence}</span><h3>{http && <span>{exchange.method || 'HTTP'}</span>} <code>{http ? requestTarget : 'TCP session'}</code></h3><small><code>{exchange.source}</code><i>→</i><code>{exchange.target}</code></small></div>
       <div className="traffic-detail__outcome"><b className={statusTone(exchange)}>{status}</b><span><strong>{duration(exchange.durationMs)}</strong></span><span><strong>{formatTrafficBytes(totalBytes)}</strong></span></div>
       <div className="traffic-detail__actions"><DrawerSizeButton fullScreen={maximized} subject="traffic details" onToggle={toggleMaximized} /><button type="button" onClick={onClose} aria-label="Close traffic details" title="Close">×</button></div>
-      <InterventionBadges exchange={exchange} />
+      <div className="traffic-detail__header-context">
+        <TraceNavigator trace={trace} exchange={exchange} pending={traceNavigationPending} onNavigate={onTraceNavigate} />
+        <InterventionBadges exchange={exchange} />
+      </div>
     </header>
 
     <div className="traffic-detail__content">

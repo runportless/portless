@@ -4,7 +4,7 @@ import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../c
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { duration } from '../../components/Status'
 import type { Environment, TrafficExchange, TrafficTrace } from '../../types'
-import { TrafficDetail } from './TrafficDetail'
+import { trafficStartedTime, TrafficDetail } from './TrafficDetail'
 import { TraceWaterfall } from './TraceWaterfall'
 import { loadTrafficSnapshot } from './trafficSnapshot'
 import { filterExchanges, filterTraces, mergeExchanges, mergeTraces, reconcileExchanges, reconcileTraces, trafficWindowSummary, type TrafficProtocolFilter, type TrafficResultFilter } from './trafficState'
@@ -33,9 +33,29 @@ function exchangeHasEdge(exchange: TrafficExchange, edge: string) {
   return !edge || `${exchange.source}:${exchange.target}` === edge
 }
 
+function traceContainsExchange(trace: TrafficTrace, sequence: number) {
+  return Boolean(trace.spans?.some((span) => span.exchange.sequence === sequence))
+}
+
+export function traceCandidatesForExchange(traces: TrafficTrace[], exchange: TrafficExchange, hint?: TrafficTrace) {
+  const candidates = new Map<number, TrafficTrace>()
+  for (const trace of traces) candidates.set(trace.number, trace)
+  if (hint) candidates.set(hint.number, hint)
+  const priority = (trace: TrafficTrace) => {
+    if (traceContainsExchange(trace, exchange.sequence)) return 0
+    if (exchange.traceId && trace.traceId === exchange.traceId) return 1
+    if (trace.rootSequence === exchange.sequence) return 2
+    if (trace.number <= exchange.sequence && trace.lastSequence >= exchange.sequence) return 3
+    return 4
+  }
+  return [...candidates.values()]
+    .filter((trace) => priority(trace) < 4)
+    .sort((left, right) => priority(left) - priority(right) || (left.lastSequence - left.number) - (right.lastSequence - right.number) || right.number - left.number)
+}
+
 export function TraceSummaryRow({ trace, expanded, onToggle }: { trace: TrafficTrace; expanded: boolean; onToggle: () => void }) {
   return <button className="trace-row" type="button" onClick={onToggle} aria-expanded={expanded}>
-    <span>{new Date(trace.startedAt).toLocaleTimeString()}</span><strong className="truncate">{traceRequest(trace)}</strong><span className={resultTone(trace.error, trace.status)}>{trace.error ? 'ERR' : trace.status || 'OK'}</span><span>{duration(trace.durationMs)}</span><span>{trace.spanCount}</span><span className={`correlation-badge correlation-badge--${trace.correlation}`}>{trace.correlation}</span>
+    <span>{trafficStartedTime(trace.startedAt)}</span><strong className="truncate">{traceRequest(trace)}</strong><span className={resultTone(trace.error, trace.status)}>{trace.error ? 'ERR' : trace.status || 'OK'}</span><span>{duration(trace.durationMs)}</span><span>{trace.spanCount}</span><span className={`correlation-badge correlation-badge--${trace.correlation}`}>{trace.correlation}</span>
   </button>
 }
 
@@ -45,6 +65,8 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   const [traces, setTraces] = useState<TrafficTrace[]>([])
   const [exchanges, setExchanges] = useState<TrafficExchange[]>([])
   const [selectedExchange, setSelectedExchange] = useState<TrafficExchange | null>(null)
+  const [selectedTrace, setSelectedTrace] = useState<TrafficTrace | null>(null)
+  const [traceNavigationPending, setTraceNavigationPending] = useState(false)
   const [expandedTrace, setExpandedTrace] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [edgeFilter, setEdgeFilter] = useState(() => requested.get('edge') || '')
@@ -65,11 +87,15 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   const exchangeBuffer = useRef(new Map<number, TrafficExchange>())
   const traceBuffer = useRef(new Map<number, TrafficTrace>())
   const expandedRef = useRef<number | null>(null)
+  const selectionRequest = useRef(0)
 
   const applyTrafficClear = (throughSequence: number) => {
     setExchanges((current) => current.filter((exchange) => exchange.sequence > throughSequence))
     setTraces((current) => current.filter((trace) => trace.lastSequence > throughSequence))
     setSelectedExchange((current) => current && current.sequence <= throughSequence ? null : current)
+    setSelectedTrace((current) => current && current.lastSequence <= throughSequence ? null : current)
+    setTraceNavigationPending(false)
+    selectionRequest.current += 1
     setExpandedTrace((current) => current !== null && current <= throughSequence ? null : current)
     for (const sequence of knownExchanges.current) if (sequence <= throughSequence) knownExchanges.current.delete(sequence)
     for (const sequence of exchangeBuffer.current.keys()) if (sequence <= throughSequence) exchangeBuffer.current.delete(sequence)
@@ -84,7 +110,8 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   useEffect(() => {
     let active = true
     let loading = false
-    setTraces([]); setExchanges([]); setSelectedExchange(null); setExpandedTrace(null); setError(null)
+    setTraces([]); setExchanges([]); setSelectedExchange(null); setSelectedTrace(null); setTraceNavigationPending(false); setExpandedTrace(null); setError(null)
+    selectionRequest.current += 1
     setTracePage(0); setExchangePage(0)
     pausedRef.current = false; setPaused(false); knownExchanges.current.clear()
     exchangeBuffer.current.clear(); traceBuffer.current.clear(); setBufferedCount(0)
@@ -164,13 +191,43 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     }
   }
 
-  const inspectExchange = async (exchange: TrafficExchange) => {
+  const resolveTrace = async (exchange: TrafficExchange, hint?: TrafficTrace) => {
+    for (const candidate of traceCandidatesForExchange(traces, exchange, hint)) {
+      let detail = candidate
+      if ((candidate.spans?.length || 0) !== candidate.spanCount) {
+        try { detail = await api<TrafficTrace>(environmentPath(environment, `/traffic/traces/${candidate.number}`)) } catch { continue }
+      }
+      if (traceContainsExchange(detail, exchange.sequence)) return detail
+    }
+    return null
+  }
+
+  const inspectExchange = async (exchange: TrafficExchange, traceHint?: TrafficTrace) => {
+    const request = ++selectionRequest.current
+    setTraceNavigationPending(true)
+    if (!traceHint) setSelectedTrace(null)
     try {
       setError(null)
-      setSelectedExchange(await api<TrafficExchange>(environmentPath(environment, `/traffic/exchanges/${exchange.sequence}`)))
+      const [detail, trace] = await Promise.all([
+        api<TrafficExchange>(environmentPath(environment, `/traffic/exchanges/${exchange.sequence}`)),
+        resolveTrace(exchange, traceHint),
+      ])
+      if (selectionRequest.current !== request) return
+      setSelectedExchange(detail)
+      setSelectedTrace(trace)
+      if (trace) setTraces((current) => mergeTraces(current, [trace]))
     } catch (value) {
-      setError(actionError("Traffic details aren't available", value))
+      if (selectionRequest.current === request) setError(actionError("Traffic details aren't available", value))
+    } finally {
+      if (selectionRequest.current === request) setTraceNavigationPending(false)
     }
+  }
+
+  const closeExchange = () => {
+    selectionRequest.current += 1
+    setSelectedExchange(null)
+    setSelectedTrace(null)
+    setTraceNavigationPending(false)
   }
 
   const toggleTrace = async (trace: TrafficTrace) => {
@@ -220,7 +277,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         <div className="trace-row trace-row--header"><span>When</span><span>Root request</span><span>Result</span><span>Duration</span><span>Spans</span><span>Correlation</span></div>
         {tracePagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
           <TraceSummaryRow trace={trace} expanded={expandedTrace === trace.number} onToggle={() => void toggleTrace(trace)} />
-          {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onExchange={(exchange) => void inspectExchange(exchange)} /> : <div className="trace-loading">Loading trace spans…</div>)}
+          {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onExchange={(exchange) => void inspectExchange(exchange, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
         </div>)}
         {visibleTraces.length === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
         <PanelPagination label="traces" pagination={tracePagination} onPage={setTracePage} />
@@ -233,8 +290,11 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     </section>
     {selectedExchange && <TrafficDetail
       exchange={selectedExchange}
+      trace={selectedTrace}
+      traceNavigationPending={traceNavigationPending}
       targetBinding={environment.bindings?.find((binding) => binding.service.toLowerCase() === selectedExchange.target.toLowerCase())}
-      onClose={() => setSelectedExchange(null)}
+      onTraceNavigate={(exchange) => void inspectExchange(exchange, selectedTrace || undefined)}
+      onClose={closeExchange}
     />}
   </div>
 }

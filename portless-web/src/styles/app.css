@@ -487,8 +487,19 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .traffic-detail__actions { flex:0 0 auto; display:flex; align-items:center; gap:7px; }
 .traffic-detail__actions button { min-height:29px; padding:0 8px; border:1px solid var(--line); background:transparent; color:var(--muted); font-size:8px; cursor:pointer; }
 .traffic-detail__actions button:hover { border-color:var(--line-bright); color:var(--text); }
-.traffic-detail__actions button:focus-visible,.traffic-detail__tabs button:focus-visible,.traffic-payload-tabs button:focus-visible,.traffic-copy-button:focus-visible { outline:1px solid var(--teal); outline-offset:2px; }
+.traffic-detail__actions button:focus-visible,.traffic-trace-navigator button:focus-visible,.traffic-detail__tabs button:focus-visible,.traffic-payload-tabs button:focus-visible,.traffic-copy-button:focus-visible { outline:1px solid var(--teal); outline-offset:2px; }
 .traffic-detail__actions button:last-child { width:30px; padding:0; font-size:17px; }
+.traffic-detail__header-context { min-width:0; grid-column:1 / -1; grid-row:2; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:7px 16px; }
+.traffic-detail__header-context:empty { display:none; }
+.traffic-trace-navigator { min-width:0; display:flex; align-items:center; }
+.traffic-trace-navigator > div { height:29px; border:1px solid var(--line-bright); display:flex; align-items:stretch; background:var(--surface-3); box-shadow:0 2px 8px var(--shadow-soft); }
+.traffic-detail__header .traffic-trace-navigator button { width:27px; height:27px; min-height:0; padding:0; border:0; border-right:1px solid var(--line-bright); background:transparent; color:var(--teal); display:grid; place-items:center; cursor:pointer; }
+.traffic-detail__header .traffic-trace-navigator button:last-child { border-right:0; }
+.traffic-detail__header .traffic-trace-navigator button:hover:not(:disabled) { background:var(--accent-soft); color:var(--text); }
+.traffic-detail__header .traffic-trace-navigator button:disabled { color:var(--muted); cursor:default; opacity:.4; }
+.traffic-trace-navigator svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.35; stroke-linecap:square; stroke-linejoin:miter; }
+.traffic-trace-navigator output { min-width:58px; padding:0 8px; border-right:1px solid var(--line-bright); background:var(--accent-soft); display:flex; align-items:center; justify-content:center; gap:5px; color:var(--muted); font-size:7px; font-weight:800; letter-spacing:.06em; }
+.traffic-trace-navigator output strong { color:var(--text); font-size:9px; font-weight:700; }
 .traffic-detail__tabs { min-height:45px; padding:0 17px; flex:0 0 auto; border-bottom:1px solid var(--line); display:flex; align-items:stretch; gap:22px; background:var(--panel-bg-strong); }
 .traffic-detail__tabs > button { position:relative; padding:1px 0 0; border:0; background:transparent; color:var(--faint); display:flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.08em; cursor:pointer; }
 .traffic-detail__tabs > button:hover,.traffic-detail__tabs > button.is-active,.traffic-detail__tabs > button[aria-selected="true"] { color:var(--text); }
@@ -497,7 +508,7 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .traffic-detail__compare svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.2; }
 .traffic-detail__content { min-height:0; flex:1 1 auto; overflow:auto; scrollbar-color:var(--line-bright) transparent; scrollbar-width:thin; }
 .traffic-detail__content > .traffic-detail__tabs { position:sticky; top:0; z-index:2; }
-.traffic-detail__header > .traffic-intervention-badges { min-width:0; grid-column:1 / -1; grid-row:2; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:7px; align-items:center; }
+.traffic-detail__header-context > .traffic-intervention-badges { min-width:0; margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:7px; align-items:center; }
 .traffic-intervention-badge { min-width:0; max-width:100%; padding:4px 7px; border:1px solid; display:inline-flex; align-items:center; gap:6px; font-size:8px; line-height:1.2; }
 .traffic-intervention-badge b { flex:0 0 auto; color:inherit; font-size:7px; letter-spacing:.08em; }
 .traffic-intervention-badge > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -694,7 +705,7 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
   .traffic-detail .traffic-detail__header { grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:start; }
   .traffic-detail__outcome { grid-column:1 / -1; grid-row:2; }
   .traffic-detail__actions { grid-column:2; grid-row:1; flex-wrap:nowrap; }
-  .traffic-detail__header > .traffic-intervention-badges { grid-row:3; }
+  .traffic-detail__header-context { grid-column:1 / -1; grid-row:3; }
   .traffic-detail__tabs { gap:17px; overflow-x:auto; }
   .traffic-overview__context { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .traffic-overview__context > div:nth-child(2) { border-right:0; }
