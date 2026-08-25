@@ -528,6 +528,9 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .traffic-payload-tabs button.is-active::after { content:''; position:absolute; right:0; bottom:0; left:0; height:2px; background:var(--teal); }
 .traffic-payload { min-height:300px; padding:15px; background:var(--log-surface); }
 .traffic-payload pre { margin:0; color:var(--log-text); font-size:10px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+.traffic-headers__key { color:var(--log-text); }
+.traffic-headers__separator { color:var(--log-gutter); }
+.traffic-headers__value { color:var(--green); }
 .traffic-json__string { color:var(--green); }
 .traffic-json__number { color:var(--amber); }
 .traffic-json__boolean { color:var(--purple); }

@@ -353,6 +353,18 @@ test('inspects captured request and response details in the exchange workbench',
   await expect(request.locator('.traffic-message-workbench__summary')).not.toContainText(/captured|transferred/i)
   await expect(request.locator('.traffic-message-workbench__summary')).not.toContainText('content type not reported')
   await expect(request.getByRole('tab', { name: 'HEADERS', exact: true })).toHaveAttribute('aria-selected', 'true')
+  const headerKey = request.locator('.traffic-headers__key').first()
+  const headerValue = request.locator('.traffic-headers__value').first()
+  await expect(headerKey).toBeVisible()
+  await expect(headerValue).toBeVisible()
+  await expect.poll(() => headerKey.evaluate((element) => getComputedStyle(element).color === getComputedStyle(element.parentElement as HTMLElement).color)).toBe(true)
+  await expect.poll(async () => {
+    const [keyColor, valueColor] = await Promise.all([
+      headerKey.evaluate((element) => getComputedStyle(element).color),
+      headerValue.evaluate((element) => getComputedStyle(element).color),
+    ])
+    return valueColor !== keyColor
+  }).toBe(true)
   await expect(request).toContainText('Authorization: [REDACTED]')
   await expect(request).not.toContainText('Bearer browser-e2e-secret')
   await expect(request).toContainText(/X-E2E-Trace: visible/i)

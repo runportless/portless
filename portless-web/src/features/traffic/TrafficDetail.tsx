@@ -27,6 +27,23 @@ export function formattedTrafficHeaders(headers: Record<string, string[]> | unde
     : 'No headers captured'
 }
 
+function highlightedTrafficHeaders(headers: string) {
+  const lines = headers.split('\n')
+  const nodes: ReactNode[] = []
+  for (const [index, line] of lines.entries()) {
+    const separator = line.indexOf(':')
+    if (separator > 0) {
+      nodes.push(<span className="traffic-headers__key" key={`${index}:key`}>{line.slice(0, separator)}</span>)
+      nodes.push(<span className="traffic-headers__separator" key={`${index}:separator`}>:</span>)
+      nodes.push(<span className="traffic-headers__value" key={`${index}:value`}>{line.slice(separator + 1)}</span>)
+    } else {
+      nodes.push(line)
+    }
+    if (index < lines.length - 1) nodes.push('\n')
+  }
+  return nodes
+}
+
 export function formatTrafficBytes(value: number) {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`
@@ -139,7 +156,7 @@ function TrafficMessageInspector({ exchange, direction, view, onView, compact = 
       {view === 'body' && (formattedBody
         ? <><pre className={bodyPresentation.json ? 'traffic-json' : undefined}>{bodyPresentation.json ? highlightedJSON(formattedBody) : formattedBody}</pre>{values.truncated && <small>Showing the first {formatTrafficBytes(values.capturedBytes)} of the {direction} body.</small>}</>
         : <div className="traffic-payload__empty"><strong>{trafficBodySummary(values.bytes, values.capturedBytes, direction)}</strong></div>)}
-      {view === 'headers' && <pre>{values.headers}</pre>}
+      {view === 'headers' && <pre className="traffic-headers">{highlightedTrafficHeaders(values.headers)}</pre>}
       {view === 'raw' && <pre>{raw}</pre>}
     </div>
     {values.truncated && <footer><span>CAPTURE TRUNCATED</span><span>{captureSummary(values.bytes, values.capturedBytes)}</span></footer>}

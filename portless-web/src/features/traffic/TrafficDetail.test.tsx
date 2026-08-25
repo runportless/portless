@@ -80,6 +80,19 @@ describe('TrafficDetail', () => {
     expect(defaultTrafficPayloadView({ ...exchange, requestBody: undefined }, 'request')).toBe('headers')
   })
 
+  it('highlights header names separately from their values', () => {
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+      exchange: { ...exchange, requestBody: undefined },
+      onClose: () => undefined,
+    }))
+
+    expect(markup).toContain('<pre class="traffic-headers">')
+    expect(markup).toContain('<span class="traffic-headers__key">Authorization</span>')
+    expect(markup).toContain('<span class="traffic-headers__separator">:</span>')
+    expect(markup).toContain('<span class="traffic-headers__value"> [REDACTED]</span>')
+    expect(markup).toContain('<span class="traffic-headers__key">Content-Type</span>')
+  })
+
   it('keeps trace metadata out of the exchange overview', () => {
     const generated = {
       ...exchange,
