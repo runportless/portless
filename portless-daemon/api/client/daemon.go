@@ -14,6 +14,18 @@ func (c *Client) DaemonStatus(ctx context.Context) (contract.DaemonStatus, error
 	return result, err
 }
 
+// DaemonDiagnostics returns bounded operational metadata and optionally
+// includes the more expensive storage inspection.
+func (c *Client) DaemonDiagnostics(ctx context.Context, includeStorage bool) (contract.DaemonDiagnostics, error) {
+	path := "/api/v1/daemon/diagnostics"
+	if includeStorage {
+		path += "?include=storage"
+	}
+	var result contract.DaemonDiagnostics
+	err := c.do(ctx, http.MethodGet, path, nil, &result)
+	return result, err
+}
+
 // DaemonLogs returns one bounded, safely redacted tail of the daemon log.
 func (c *Client) DaemonLogs(ctx context.Context) (contract.DaemonLogSnapshot, error) {
 	var result contract.DaemonLogSnapshot

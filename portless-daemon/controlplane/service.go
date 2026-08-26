@@ -118,6 +118,8 @@ type Service struct {
 	daemonInstanceID     string
 	privateTCPIngress    bool
 	mu                   sync.RWMutex
+	recoveryMu           sync.RWMutex
+	recovery             ReconciliationStatus
 	resetGate            sync.RWMutex
 	resetting            bool
 	projectLocks         map[string]*sync.Mutex

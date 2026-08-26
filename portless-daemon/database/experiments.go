@@ -12,6 +12,23 @@ import (
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
+const (
+	// DefaultRecordingEventLimit is the event bound applied when a recording
+	// request does not specify one.
+	DefaultRecordingEventLimit int64 = 10_000
+	// DefaultRecordingPayloadLimit is the per-exchange payload bound applied
+	// when a recording request does not specify one.
+	DefaultRecordingPayloadLimit int64 = 64 * 1024
+)
+
+// RecordingStorageStats summarizes retained recording rows and their encoded
+// traffic payload stored inside SQLite.
+type RecordingStorageStats struct {
+	Recordings int64
+	Events     int64
+	Bytes      int64
+}
+
 // CreateRecording persists the sole active bounded recording for an environment.
 func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) (model.Recording, error) {
 	scope := scopeFromFields(recording.Project, recording.Environment)
@@ -23,10 +40,10 @@ func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) 
 		recording.StartedAt = time.Now().UTC()
 	}
 	if recording.MaxEvents <= 0 {
-		recording.MaxEvents = 10_000
+		recording.MaxEvents = DefaultRecordingEventLimit
 	}
 	if recording.MaxPayloadBytes <= 0 {
-		recording.MaxPayloadBytes = 64 * 1024
+		recording.MaxPayloadBytes = DefaultRecordingPayloadLimit
 	}
 	var activeName string
 	err = s.db.QueryRowContext(ctx, `SELECT name FROM recordings WHERE environment_key = ? AND status = 'active' LIMIT 1`, environmentKey).Scan(&activeName)
@@ -53,6 +70,19 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, recording.Name, recording
 		return model.Recording{}, err
 	}
 	return recording, nil
+}
+
+// RecordingStorage returns aggregate retained recording usage without
+// decoding application payloads.
+func (s *Store) RecordingStorage(ctx context.Context) (RecordingStorageStats, error) {
+	var result RecordingStorageStats
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM recordings`).Scan(&result.Recordings); err != nil {
+		return RecordingStorageStats{}, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(LENGTH(event_json)), 0) FROM traffic_events`).Scan(&result.Events, &result.Bytes); err != nil {
+		return RecordingStorageStats{}, err
+	}
+	return result, nil
 }
 
 // Recordings lists retained recording sessions for an environment.

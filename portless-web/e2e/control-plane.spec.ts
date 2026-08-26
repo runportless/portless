@@ -440,6 +440,34 @@ test('inspects captured request and response details in the exchange workbench',
   await expect(downstreamRequest).not.toContainText(/Traceparent:|\bB3:|X-B3-Trace-Id:|X-Datadog-Trace-Id:/i)
 })
 
+test('keeps short trace payloads pinned to the pullout bottom while navigating', async ({ page }) => {
+  await authenticate(page)
+  const response = await applicationRequest(`/checkout?sku=coffee-mug&quantity=1&layout=${Date.now()}`)
+  expect(response.status).toBe(200)
+
+  await page.getByRole('navigation', { name: 'ui-e2e/local views' }).getByRole('button', { name: 'Traffic' }).click()
+  const row = page.locator('button.trace-row').filter({ hasText: '/checkout' }).first()
+  await expect(row).toBeVisible()
+  await row.click()
+  await page.getByRole('region', { name: 'Trace waterfall' }).getByRole('button', { name: /Inspect external to checkout GET \/checkout/ }).click()
+
+  const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
+  const tracePosition = detail.getByRole('navigation', { name: 'Trace exchange navigation' }).locator('output')
+  const payloadBottomGap = () => detail.evaluate((element) => {
+    const payload = element.querySelector('.traffic-payload, .traffic-protocol-messages')
+    if (!(payload instanceof HTMLElement)) return null
+    return Math.round(element.getBoundingClientRect().bottom - payload.getBoundingClientRect().bottom)
+  })
+
+  const initialPayloadBottomGap = await payloadBottomGap()
+  expect(initialPayloadBottomGap).toBeGreaterThanOrEqual(15)
+  expect(initialPayloadBottomGap).toBeLessThanOrEqual(18)
+
+  await detail.getByRole('button', { name: 'Next exchange in trace' }).click()
+  await expect(tracePosition).toHaveAttribute('aria-label', /Exchange 2 of \d+/)
+  expect(await payloadBottomGap()).toBe(initialPayloadBottomGap)
+})
+
 test('creates, captures, exports, and deletes a recording', async ({ page }) => {
   await authenticate(page, environmentPath('recordings'))
   await page.getByLabel('NAME').fill('ui-recording')
@@ -778,6 +806,63 @@ test('shows a concise traffic error while the daemon reconnects', async ({ page 
 
   unavailable = false
   await expect(notice).toHaveCount(0, { timeout: 8_000 })
+})
+
+test('collapses database transactions and hides successful background spans', async ({ page }) => {
+  await authenticate(page, environmentPath('traffic'))
+  const marker = `/transaction-waterfall-${Date.now()}`
+  expect((await applicationRequest(marker)).status).toBe(404)
+
+  const filter = page.getByPlaceholder('filter path, service, edge, status…')
+  await filter.fill(marker)
+  const row = page.locator('button.trace-row').filter({ hasText: marker }).first()
+  await expect(row).toBeVisible()
+
+  await page.route('**/traffic/traces/*', async (route) => {
+    const response = await route.fetch()
+    const trace = await response.json() as {
+      lastSequence: number
+      spans: Array<{ exchange: Record<string, unknown>; depth: number; startOffsetMs: number; correlation: string }>
+    }
+    const root = trace.spans[0]
+    const rootExchange = root.exchange as { sequence: number; project: string; environment: string; startedAt: string; completedAt: string }
+    const tcpSpan = (offset: number, operation: string, background = false, transactionGroup?: number) => ({
+      exchange: {
+        project: rootExchange.project, environment: rootExchange.environment, sequence: rootExchange.sequence + offset,
+        protocol: 'tcp', source: 'inventory', target: 'inventory-postgres', background,
+        startedAt: rootExchange.startedAt, completedAt: rootExchange.completedAt, durationMs: 2,
+        requestBytes: 6, responseBytes: 6,
+        tcp: { kind: 'operation', applicationProtocol: 'postgresql', operation, inspection: 'decoded', outcome: 'success' },
+      },
+      parentSequence: rootExchange.sequence, depth: 1, startOffsetMs: offset * 2, correlation: 'inferred', transactionGroup,
+    })
+    const spans = [
+      root,
+      tcpSpan(1, 'QUERY', true),
+      tcpSpan(2, 'BEGIN', false, 1),
+      tcpSpan(3, 'UPDATE', false, 1),
+      tcpSpan(4, 'COMMIT', false, 1),
+    ]
+    await route.fulfill({ response, json: { ...trace, lastSequence: rootExchange.sequence + 4, spanCount: spans.length, spans } })
+  })
+
+  await row.click()
+  const waterfall = page.getByRole('region', { name: 'Trace waterfall' })
+  const transaction = waterfall.locator('.trace-span--transaction')
+  await expect(transaction).toBeVisible()
+  await expect(transaction).toHaveAccessibleName(/Expand inventory to inventory-postgres POSTGRESQL transaction with 3 operations/)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL QUERY/ })).toHaveCount(0)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL BEGIN/ })).toHaveCount(0)
+
+  await transaction.click()
+  await expect(transaction).toHaveAttribute('aria-expanded', 'true')
+  await expect(transaction).toHaveAccessibleName(/Collapse inventory to inventory-postgres POSTGRESQL transaction with 3 operations/)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL BEGIN/ })).toBeVisible()
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL UPDATE/ })).toBeVisible()
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL COMMIT/ })).toBeVisible()
+
+  await page.getByRole('button', { name: 'SHOW BACKGROUND' }).click()
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL QUERY/ })).toBeVisible()
 })
 
 test('paginates traces and exchanges at 25 rows', async ({ page }) => {

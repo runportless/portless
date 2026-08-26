@@ -70,6 +70,13 @@ Snapshot endpoints are authoritative after a reconnect. Traffic clients merge
 snapshots and stream notifications by environment-local exchange sequence or
 trace number.
 
+Browser clients derive event-stream health from the `EventSource` lifecycle:
+a newly opened or errored source is reconnecting, `open` marks it connected,
+and closing the final source returns the client to idle. Idle means the current
+page does not require a stream; it is not a daemon failure. An `error` event may
+be followed by the browser's automatic reconnect, so clients should continue
+to treat snapshots as authoritative when the next `open` arrives.
+
 Traffic snapshots use separate exchange and trace resources:
 
 ```text
@@ -104,4 +111,6 @@ context Portless previously injected, or continued from an application-supplied
 format. Portless-injected propagation carriers are internal correlation
 metadata and are omitted from captured `requestHeaders`.
 Trace summaries omit spans; trace detail returns the complete current tree and
-waterfall projection.
+waterfall projection. Decoded operations from one explicit database transaction
+on one TCP connection share a trace-local `transactionGroup`; raw exchanges
+remain independent and inspectable.

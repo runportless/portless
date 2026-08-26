@@ -45,6 +45,71 @@ type DaemonStatus struct {
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 }
 
+// DaemonDiagnostics is one bounded operational snapshot collected for the
+// authenticated daemon drawer.
+type DaemonDiagnostics struct {
+	CollectedAt time.Time              `json:"collectedAt"`
+	Inventory   DaemonManagedInventory `json:"inventory"`
+	Recovery    DaemonRecoveryStatus   `json:"recovery"`
+	Build       DaemonBuildProvenance  `json:"build"`
+	Storage     *DaemonStorageStatus   `json:"storage,omitempty"`
+}
+
+// DaemonManagedInventory counts active ownership-proven runtime resources.
+type DaemonManagedInventory struct {
+	Processes          int      `json:"processes"`
+	Containers         int      `json:"containers"`
+	ProxyListeners     int      `json:"proxyListeners"`
+	ActiveEnvironments int      `json:"activeEnvironments"`
+	Problems           []string `json:"problems"`
+}
+
+// DaemonRecoveryStatus describes the last startup reconciliation completed by
+// the running daemon.
+type DaemonRecoveryStatus struct {
+	Result      string     `json:"result"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	DurationMS  int64      `json:"durationMs"`
+	Recovered   int        `json:"recovered"`
+	Problems    []string   `json:"problems"`
+}
+
+// DaemonBuildProvenance identifies the linked build and whether the running
+// process matches its executable currently present on disk.
+type DaemonBuildProvenance struct {
+	Version        string `json:"version"`
+	Distribution   string `json:"distribution"`
+	Commit         string `json:"commit"`
+	RunningBuildID string `json:"runningBuildId"`
+	OnDiskBuildID  string `json:"onDiskBuildId,omitempty"`
+	Current        bool   `json:"current"`
+	Problem        string `json:"problem,omitempty"`
+}
+
+// DaemonStorageStatus summarizes retained data, fixed limits, and actual
+// automatic-pruning timestamps without exposing filesystem paths.
+type DaemonStorageStatus struct {
+	DatabaseBytes                      int64      `json:"databaseBytes"`
+	RecordingCount                     int64      `json:"recordingCount"`
+	RecordedEventCount                 int64      `json:"recordedEventCount"`
+	RecordedBytes                      int64      `json:"recordedBytes"`
+	LiveTrafficExchanges               int        `json:"liveTrafficExchanges"`
+	LiveTrafficBytes                   int64      `json:"liveTrafficBytes"`
+	ServiceLogBytes                    int64      `json:"serviceLogBytes"`
+	DaemonLogBytes                     int64      `json:"daemonLogBytes"`
+	TrafficExchangeLimitPerEnvironment int        `json:"trafficExchangeLimitPerEnvironment"`
+	TrafficPayloadLimitPerEnvironment  int64      `json:"trafficPayloadLimitPerEnvironment"`
+	RecordingDefaultEventLimit         int64      `json:"recordingDefaultEventLimit"`
+	RecordingMaximumEventLimit         int64      `json:"recordingMaximumEventLimit"`
+	RecordingDefaultPayloadLimit       int64      `json:"recordingDefaultPayloadLimit"`
+	RecordingMaximumPayloadLimit       int64      `json:"recordingMaximumPayloadLimit"`
+	ServiceLogGenerationLimit          int        `json:"serviceLogGenerationLimit"`
+	ServiceLogStreamLimitBytes         int64      `json:"serviceLogStreamLimitBytes"`
+	TrafficPrunedAt                    *time.Time `json:"trafficPrunedAt,omitempty"`
+	ServiceLogsPrunedAt                *time.Time `json:"serviceLogsPrunedAt,omitempty"`
+	Problems                           []string   `json:"problems"`
+}
+
 // DaemonLogSnapshot is one bounded, safely redacted tail of the fixed daemon log.
 type DaemonLogSnapshot struct {
 	Content   string `json:"content"`

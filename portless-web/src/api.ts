@@ -1,4 +1,5 @@
 import type { APIErrorShape, Environment } from './types'
+import type { ControlPlaneHealth } from './types'
 
 export class APIError extends Error {
   status: number
@@ -17,6 +18,10 @@ export class APIError extends Error {
 }
 
 let csrf = ''
+let nextEventStream = 0
+let lastEventStreamConnection = ''
+const eventStreams = new Map<number, 'connected' | 'reconnecting'>()
+const eventHealthSubscribers = new Set<(health: ControlPlaneHealth['events']) => void>()
 const daemonUnavailable: APIErrorShape = {
   code: 'DAEMON_UNAVAILABLE',
   message: 'Portless is reconnecting to the local daemon. Try again in a moment.',
@@ -94,9 +99,45 @@ export function environmentPath(environment: Pick<Environment, 'project' | 'name
   return `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}${suffix}`
 }
 
+export function eventStreamHealth(): ControlPlaneHealth['events'] {
+  const connections = eventStreams.size
+  let connected = 0
+  for (const state of eventStreams.values()) if (state === 'connected') connected++
+  return {
+    state: connections === 0 ? 'idle' : connected === connections ? 'connected' : 'reconnecting',
+    connections,
+    connected,
+    ...(lastEventStreamConnection ? { lastConnectedAt: lastEventStreamConnection } : {}),
+  }
+}
+
+export function subscribeEventStreamHealth(listener: (health: ControlPlaneHealth['events']) => void) {
+  eventHealthSubscribers.add(listener)
+  listener(eventStreamHealth())
+  return () => { eventHealthSubscribers.delete(listener) }
+}
+
+function publishEventStreamHealth() {
+  const health = eventStreamHealth()
+  for (const listener of eventHealthSubscribers) listener(health)
+}
+
 export function connectEvents(environment: Pick<Environment, 'project' | 'name'>, topics: string[], onEvent: (type: string, value: unknown) => void) {
   const query = topics.map((topic) => `topic=${encodeURIComponent(topic)}`).join('&')
   const source = new EventSource(`/api/v1${environmentPath(environment, '/stream')}?${query}`)
+  const identifier = ++nextEventStream
+  eventStreams.set(identifier, 'reconnecting')
+  publishEventStreamHealth()
+  source.onopen = () => {
+    eventStreams.set(identifier, 'connected')
+    lastEventStreamConnection = new Date().toISOString()
+    publishEventStreamHealth()
+  }
+  source.onerror = () => {
+    if (!eventStreams.has(identifier)) return
+    eventStreams.set(identifier, 'reconnecting')
+    publishEventStreamHealth()
+  }
   for (const topic of topics) {
     source.addEventListener(topic, (event) => {
       try {
@@ -106,5 +147,9 @@ export function connectEvents(environment: Pick<Environment, 'project' | 'name'>
       }
     })
   }
-  return () => source.close()
+  return () => {
+    source.close()
+    eventStreams.delete(identifier)
+    publishEventStreamHealth()
+  }
 }

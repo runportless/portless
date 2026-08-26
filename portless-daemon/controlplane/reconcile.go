@@ -64,8 +64,10 @@ func (s *Service) environmentRuntimeVerified(ctx context.Context, environment mo
 }
 
 // Reconcile verifies persisted runtime ownership and reconstructs proxy routes after startup.
-func (s *Service) Reconcile(ctx context.Context) (ReconciliationReport, error) {
-	report := ReconciliationReport{Recovered: []string{}, Unverifiable: []string{}}
+func (s *Service) Reconcile(ctx context.Context) (report ReconciliationReport, resultErr error) {
+	startedAt := time.Now().UTC()
+	report = ReconciliationReport{Recovered: []string{}, Unverifiable: []string{}}
+	defer func() { s.recordReconciliation(startedAt, report, resultErr) }()
 	if s.daemonInstanceID == "" {
 		return report, nil
 	}

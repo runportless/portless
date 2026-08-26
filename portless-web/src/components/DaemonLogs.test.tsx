@@ -12,6 +12,8 @@ describe('daemon logs', () => {
     expect(markup).toContain('aria-pressed="true"')
     expect(markup).toContain('aria-label="Daemon log tail active"')
     expect(markup).toContain('Loading daemon logs…')
+    expect(markup).not.toContain('DAEMON.LOG')
+    expect(markup).not.toContain('Retained daemon output')
   })
 
   it('renders raw content and explains when older output was omitted', () => {
@@ -20,6 +22,7 @@ describe('daemon logs', () => {
 
     expect(markup).toContain('aria-label="Daemon logs"')
     expect(markup).toContain('Latest 256 KiB · older output omitted')
+    expect(markup).not.toContain('DAEMON.LOG')
     expect(markup).toContain('ready &lt;locally&gt;')
     expect(markup).toContain('aria-label="Resume daemon log tail"')
     expect(markup).not.toContain('aria-label="Daemon log tail active"')

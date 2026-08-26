@@ -609,6 +609,10 @@ type TrafficTCPExchange struct {
 	ResponseMessages     []TrafficMessage    `json:"responseMessages,omitempty"`
 	RequestTruncated     bool                `json:"requestTruncated,omitempty"`
 	ResponseTruncated    bool                `json:"responseTruncated,omitempty"`
+	// SessionSequence is private in-process correlation metadata for one decoded TCP connection.
+	SessionSequence uint64 `json:"-"`
+	// TransactionSequence is private decoder-local correlation metadata for one database transaction.
+	TransactionSequence uint64 `json:"-"`
 }
 
 // TrafficExchange records one completed HTTP request, decoded TCP operation,
@@ -656,11 +660,12 @@ type TrafficExchange struct {
 
 // TrafficTraceSpan places one exchange within a trace tree and waterfall.
 type TrafficTraceSpan struct {
-	Exchange       TrafficExchange    `json:"exchange"`
-	ParentSequence int64              `json:"parentSequence,omitempty"`
-	Depth          int                `json:"depth"`
-	StartOffsetMS  int64              `json:"startOffsetMs"`
-	Correlation    TrafficCorrelation `json:"correlation"`
+	Exchange         TrafficExchange    `json:"exchange"`
+	ParentSequence   int64              `json:"parentSequence,omitempty"`
+	Depth            int                `json:"depth"`
+	StartOffsetMS    int64              `json:"startOffsetMs"`
+	Correlation      TrafficCorrelation `json:"correlation"`
+	TransactionGroup int                `json:"transactionGroup,omitempty"`
 }
 
 // TrafficTrace is a rebuildable projection of related exchanges. Number is

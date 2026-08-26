@@ -76,7 +76,7 @@ export function DaemonLogView({ snapshot, loaded, tailing, viewportRef, onRaw, o
   const tailAction = tailing ? 'Pause daemon log tail' : 'Resume daemon log tail'
   return <div className="log-view daemon-log-view">
     <div className="log-view__toolbar">
-      <div className="log-view__meta"><strong>DAEMON.LOG</strong><span>{snapshot.truncated ? 'Latest 256 KiB · older output omitted' : 'Retained daemon output'}</span></div>
+      {snapshot.truncated && <div className="log-view__meta"><span>Latest 256 KiB · older output omitted</span></div>}
       <div className="log-view__controls" role="group" aria-label="Daemon log controls">
         <button className="log-view__control" type="button" aria-label="Open raw daemon logs in new tab" title="Open raw daemon logs in new tab" disabled={!loaded} onClick={onRaw}>RAW ↗</button>
         <button className="log-view__control log-view__control--tail" type="button" aria-label={tailAction} title={tailAction} aria-pressed={tailing} onClick={onTail}><TailIcon active={tailing} />{tailing ? 'TAILING' : 'TAIL'}</button>

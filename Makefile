@@ -15,7 +15,8 @@ SITE_PROJECT := portless-site
 CLI_PACKAGE := ./portless-cli/cmd/portless
 VERSION ?= dev
 DISTRIBUTION ?= source
-PORTLESS_LDFLAGS := -X github.com/runportless/portless/portless-cli.Version=$(VERSION) -X github.com/runportless/portless/portless-cli.Distribution=$(DISTRIBUTION)
+COMMIT ?= $(shell git rev-parse --verify HEAD 2>/dev/null || printf unknown)
+PORTLESS_LDFLAGS := -X github.com/runportless/portless/portless-cli.Version=$(VERSION) -X github.com/runportless/portless/portless-cli.Distribution=$(DISTRIBUTION) -X github.com/runportless/portless/portless-cli.Commit=$(COMMIT)
 WEB_DEPENDENCIES := $(WEB_PROJECT)/node_modules/.package-lock.json
 WEB_MANIFESTS := $(WEB_PROJECT)/package.json $(WEB_PROJECT)/package-lock.json
 SITE_DEPENDENCIES := $(SITE_PROJECT)/node_modules/.package-lock.json

@@ -34,6 +34,76 @@ export interface DaemonStatus {
   activeEnvironments: string[]
 }
 
+export interface DaemonManagedInventory {
+  processes: number
+  containers: number
+  proxyListeners: number
+  activeEnvironments: number
+  problems: string[]
+}
+
+export interface DaemonRecoveryStatus {
+  result: 'not-run' | 'healthy' | 'degraded' | 'failed'
+  completedAt?: string
+  durationMs: number
+  recovered: number
+  problems: string[]
+}
+
+export interface DaemonBuildProvenance {
+  version: string
+  distribution: string
+  commit: string
+  runningBuildId: string
+  onDiskBuildId?: string
+  current: boolean
+  problem?: string
+}
+
+export interface DaemonStorageStatus {
+  databaseBytes: number
+  recordingCount: number
+  recordedEventCount: number
+  recordedBytes: number
+  liveTrafficExchanges: number
+  liveTrafficBytes: number
+  serviceLogBytes: number
+  daemonLogBytes: number
+  trafficExchangeLimitPerEnvironment: number
+  trafficPayloadLimitPerEnvironment: number
+  recordingDefaultEventLimit: number
+  recordingMaximumEventLimit: number
+  recordingDefaultPayloadLimit: number
+  recordingMaximumPayloadLimit: number
+  serviceLogGenerationLimit: number
+  serviceLogStreamLimitBytes: number
+  trafficPrunedAt?: string
+  serviceLogsPrunedAt?: string
+  problems: string[]
+}
+
+export interface DaemonDiagnostics {
+  collectedAt: string
+  inventory: DaemonManagedInventory
+  recovery: DaemonRecoveryStatus
+  build: DaemonBuildProvenance
+  storage?: DaemonStorageStatus
+}
+
+export interface ControlPlaneHealth {
+  api: {
+    state: 'ready' | 'unreachable'
+    latencyMs?: number
+    checkedAt?: string
+  }
+  events: {
+    state: 'connected' | 'reconnecting' | 'idle'
+    connections: number
+    connected: number
+    lastConnectedAt?: string
+  }
+}
+
 export interface DaemonLogSnapshot {
   content: string
   truncated: boolean
@@ -348,6 +418,7 @@ export interface TrafficTraceSpan {
   depth: number
   startOffsetMs: number
   correlation: TrafficCorrelation
+  transactionGroup?: number
 }
 
 export interface TrafficTrace {

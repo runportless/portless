@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, APIError, environmentPath, jsonBody, setCSRF } from './api'
+import { api, APIError, environmentPath, eventStreamHealth, jsonBody, setCSRF, subscribeEventStreamHealth } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
-import type { DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
 
 interface Session { actor: string; browser: boolean; csrf: string }
 type Tab = EnvironmentView
@@ -16,7 +16,10 @@ export function App() {
   const [environments, setEnvironments] = useState<Environment[]>([])
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus | null>(null)
+  const [daemonDiagnostics, setDaemonDiagnostics] = useState<DaemonDiagnostics | null>(null)
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null)
+  const [apiHealth, setAPIHealth] = useState<ControlPlaneHealth['api']>({ state: 'unreachable' })
+  const [eventsHealth, setEventsHealth] = useState<ControlPlaneHealth['events']>(eventStreamHealth)
   const [route, setRoute] = useState(() => `${location.pathname}${location.search}`)
   const [loading, setLoading] = useState(true)
   const [authRequired, setAuthRequired] = useState(false)
@@ -52,9 +55,22 @@ export function App() {
   }, [])
 
   const refreshDaemon = useCallback(async () => {
-    const status = await api<DaemonStatus>('/daemon')
-    setDaemonStatus(status)
-    return status
+    const started = Date.now()
+    try {
+      const status = await api<DaemonStatus>('/daemon')
+      setDaemonStatus(status)
+      setAPIHealth({ state: 'ready', latencyMs: Math.max(0, Date.now() - started), checkedAt: new Date().toISOString() })
+      return status
+    } catch (error) {
+      setAPIHealth({ state: 'unreachable', checkedAt: new Date().toISOString() })
+      throw error
+    }
+  }, [])
+
+  const refreshDaemonDiagnostics = useCallback(async (includeStorage = false) => {
+    const next = await api<DaemonDiagnostics>(`/daemon/diagnostics${includeStorage ? '?include=storage' : ''}`)
+    setDaemonDiagnostics((current) => next.storage || !current?.storage ? next : { ...next, storage: current.storage })
+    return next
   }, [])
 
   const refreshRuntime = useCallback(async () => {
@@ -94,6 +110,8 @@ export function App() {
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
   }, [refreshCore, refreshDaemon, refreshRelay, refreshRuntime])
+
+  useEffect(() => subscribeEventStreamHealth(setEventsHealth), [])
 
   useEffect(() => {
     if (!session) return
@@ -160,7 +178,7 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

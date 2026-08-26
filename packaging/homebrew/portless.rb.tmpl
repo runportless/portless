@@ -17,6 +17,7 @@ class Portless < Formula
     ldflags = %W[
       -X github.com/runportless/portless/portless-cli.Version=#{version}
       -X github.com/runportless/portless/portless-cli.Distribution=homebrew
+      -X github.com/runportless/portless/portless-cli.Commit=@COMMIT@
     ]
     system "go", "build", *std_go_args(ldflags: ldflags, output: bin/"portless"), "./portless-cli/cmd/portless"
     generate_completions_from_executable(bin/"portless", "completion")

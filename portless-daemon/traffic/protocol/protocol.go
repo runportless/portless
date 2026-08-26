@@ -107,19 +107,20 @@ type State struct {
 
 // Operation is one completed logical application operation emitted by a decoder.
 type Operation struct {
-	StartedAt        time.Time
-	CompletedAt      time.Time
-	Name             string
-	Background       bool
-	Inspection       model.TrafficInspection
-	InspectionReason string
-	Outcome          model.TrafficTCPOutcome
-	RequestMessages  []model.TrafficMessage
-	ResponseMessages []model.TrafficMessage
-	RequestBytes     int64
-	ResponseBytes    int64
-	Error            string
-	Policy           CapturePolicy
+	StartedAt           time.Time
+	CompletedAt         time.Time
+	Name                string
+	Background          bool
+	TransactionSequence uint64
+	Inspection          model.TrafficInspection
+	InspectionReason    string
+	Outcome             model.TrafficTCPOutcome
+	RequestMessages     []model.TrafficMessage
+	ResponseMessages    []model.TrafficMessage
+	RequestBytes        int64
+	ResponseBytes       int64
+	Error               string
+	Policy              CapturePolicy
 }
 
 // Session incrementally observes both directions of one TCP connection.

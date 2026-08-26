@@ -193,10 +193,13 @@ Both can inspect services and effective connections, tail structured logs,
 follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
 
-The control plane's daemon drawer also exposes a live, bounded tail of the
-fixed private daemon log. Older output is explicitly marked when omitted, and
-known installation authentication and ownership secrets are redacted again at
-the inspection boundary.
+The control plane's daemon drawer groups identity, build provenance,
+control-plane health, recovery, managed runtime inventory, local networking,
+handoff safety, and retained storage into focused Status, Runtime, and Storage
+tabs. Storage inspection is loaded only when requested. A separate Logs tab
+exposes a live, bounded tail of the fixed private daemon log; older output is
+explicitly marked when omitted, and known installation authentication and
+ownership secrets are redacted again at the inspection boundary.
 
 HTTP exchanges retain bounded inspectable headers and bodies. Declared
 PostgreSQL, Redis/Valkey, MySQL, and NATS connections are decoded into bounded
@@ -208,8 +211,10 @@ TCP traffic remains byte-count-only and never interrupts forwarding.
 Successful driver and connection-pool housekeeping is marked as background:
 for example, PostgreSQL session setup and validation queries or Redis handshakes
 and client metadata. Raw Exchanges and recordings still retain those operations,
-while standalone housekeeping traces and topology animation are hidden by
-default. Failed or faulted housekeeping always remains visible.
+while standalone housekeeping traces, housekeeping spans inside foreground
+traces, and topology animation are hidden by default. Failed or faulted
+housekeeping always remains visible. Explicit database transactions remain
+individually inspectable in Exchanges and are grouped in the trace waterfall.
 
 The [command reference](portless-cli/COMMANDS.md) contains complete CLI usage.
 Traffic payloads can contain application data; see

@@ -16,6 +16,11 @@ import (
 	"github.com/runportless/portless/portless-daemon/runtime/logstore"
 )
 
+const (
+	maximumRecordingEventLimit   int64 = 100_000
+	maximumRecordingPayloadLimit int64 = 1 << 20
+)
+
 // TrafficExchanges returns the most recent in-memory traffic exchanges for an environment.
 func (s *Service) TrafficExchanges(project, environment string, limit int) []model.TrafficExchange {
 	return s.traffic.RecentExchanges(model.EnvironmentSelector(project, environment), limit)
@@ -82,10 +87,10 @@ func (s *Service) StartRecording(ctx context.Context, recording model.Recording,
 	if err := validateExperimentScope(definition, recording.Source, recording.Target, true); err != nil {
 		return model.Recording{}, err
 	}
-	if recording.MaxEvents < 0 || recording.MaxEvents > 100_000 {
+	if recording.MaxEvents < 0 || recording.MaxEvents > maximumRecordingEventLimit {
 		return model.Recording{}, errors.New("maxEvents must be between 1 and 100000")
 	}
-	if recording.MaxPayloadBytes < 0 || recording.MaxPayloadBytes > 1<<20 {
+	if recording.MaxPayloadBytes < 0 || recording.MaxPayloadBytes > maximumRecordingPayloadLimit {
 		return model.Recording{}, errors.New("maxPayloadBytes must not exceed 1048576")
 	}
 	if recording.ExpiresAt == nil {

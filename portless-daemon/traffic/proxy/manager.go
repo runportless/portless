@@ -53,17 +53,18 @@ type target struct {
 
 // Manager owns source-scoped HTTP and TCP proxies, targets, capture, and fault behavior.
 type Manager struct {
-	database               *database.Store
-	broker                 *events.Broker
-	traffic                *traffic.Store
-	mu                     sync.RWMutex
-	targets                map[string]target
-	edges                  map[string]*edge
-	transport              *http.Transport
-	contexts               injectedTraceContextRegistry
-	protocols              *protocol.Registry
-	activeProtocolSessions atomic.Int64
-	closed                 atomic.Bool
+	database                *database.Store
+	broker                  *events.Broker
+	traffic                 *traffic.Store
+	mu                      sync.RWMutex
+	targets                 map[string]target
+	edges                   map[string]*edge
+	transport               *http.Transport
+	contexts                injectedTraceContextRegistry
+	protocols               *protocol.Registry
+	activeProtocolSessions  atomic.Int64
+	protocolSessionSequence atomic.Uint64
+	closed                  atomic.Bool
 }
 
 const (
@@ -300,6 +301,14 @@ func (m *Manager) HasEdgeAtAddress(scope, source, targetName, address string) bo
 	defer m.mu.RUnlock()
 	current := m.edges[edgeKey(scope, source, targetName)]
 	return current != nil && current.listener != nil && current.listener.Addr().String() == address
+}
+
+// ListenerCount returns the number of live source-aware proxy listeners owned
+// by this daemon.
+func (m *Manager) ListenerCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.edges)
 }
 
 // ServeIngress forwards an external HTTP request through capture, fault, and policy controls.
@@ -745,10 +754,11 @@ func (m *Manager) protocolObservation(current *edge, fault string) (*tcpProtocol
 		m.activeProtocolSessions.Add(-1)
 		return nil, model.TrafficInspectionUnsupported, "no decoder is registered for " + string(current.applicationProtocol)
 	}
+	sessionSequence := m.protocolSessionSequence.Add(1)
 	observation := &tcpProtocolObservation{session: session}
 	observation.emit = func(operations []protocol.Operation) {
 		for _, operation := range operations {
-			m.finishTCPOperation(current, operation, fault)
+			m.finishTCPOperation(current, operation, fault, sessionSequence)
 		}
 	}
 	return observation, "", ""
@@ -830,7 +840,7 @@ func (m *Manager) finishTCPSession(current *edge, started time.Time, requestByte
 	}
 }
 
-func (m *Manager) finishTCPOperation(current *edge, operation protocol.Operation, fault string) {
+func (m *Manager) finishTCPOperation(current *edge, operation protocol.Operation, fault string, sessionSequence uint64) {
 	if operation.StartedAt.IsZero() {
 		operation.StartedAt = time.Now().UTC()
 	}
@@ -854,6 +864,7 @@ func (m *Manager) finishTCPOperation(current *edge, operation protocol.Operation
 			Operation: operation.Name, Inspection: operation.Inspection, InspectionReason: operation.InspectionReason, Outcome: operation.Outcome,
 			RequestMessageCount: len(operation.RequestMessages), ResponseMessageCount: len(operation.ResponseMessages),
 			RequestMessages: operation.RequestMessages, ResponseMessages: operation.ResponseMessages,
+			SessionSequence: sessionSequence, TransactionSequence: operation.TransactionSequence,
 		},
 	}
 	if upstream, ok := m.target(current.scope, current.target); ok {

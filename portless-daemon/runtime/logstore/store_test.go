@@ -89,6 +89,10 @@ func TestOpenSinkPrunesOldGenerations(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(serviceRoot, "3")); err != nil {
 		t.Fatalf("expected retained generation 3: %v", err)
 	}
+	retention := Retention()
+	if retention.RetainedRuns != retainedRuns || retention.MaxStreamBytes != maxLogFileBytes || retention.LastPrunedAt == nil {
+		t.Fatalf("retention status after pruning = %#v", retention)
+	}
 }
 
 func TestFullSinkDropsAdditionalLinesWithoutBreakingWriter(t *testing.T) {

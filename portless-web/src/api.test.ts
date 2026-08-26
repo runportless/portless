@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, APIError } from './api'
+import { api, APIError, connectEvents, eventStreamHealth, subscribeEventStreamHealth } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -62,5 +62,39 @@ describe('API response handling', () => {
       code: 'RESOURCE_NOT_FOUND',
       message: 'traffic exchange was not found',
     })
+  })
+})
+
+describe('event-stream health', () => {
+  it('reports reconnecting, connected, and idle from actual EventSource state', () => {
+    class FakeEventSource {
+      static instances: FakeEventSource[] = []
+      onopen: (() => void) | null = null
+      onerror: (() => void) | null = null
+      close = vi.fn()
+
+      constructor(readonly url: string) {
+        FakeEventSource.instances.push(this)
+      }
+
+      addEventListener() {}
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const observed: Array<ReturnType<typeof eventStreamHealth>> = []
+    const unsubscribe = subscribeEventStreamHealth((health) => observed.push(health))
+    const disconnect = connectEvents({ project: 'store', name: 'local' }, ['traffic'], () => undefined)
+    const source = FakeEventSource.instances[0]
+
+    expect(source.url).toContain('/api/v1/environments/store/local/stream?topic=traffic')
+    expect(observed.at(-1)).toMatchObject({ state: 'reconnecting', connections: 1, connected: 0 })
+    source.onopen?.()
+    expect(observed.at(-1)).toMatchObject({ state: 'connected', connections: 1, connected: 1 })
+    expect(observed.at(-1)?.lastConnectedAt).toBeTruthy()
+    source.onerror?.()
+    expect(observed.at(-1)).toMatchObject({ state: 'reconnecting', connections: 1, connected: 0 })
+    disconnect()
+    expect(source.close).toHaveBeenCalledOnce()
+    expect(observed.at(-1)).toMatchObject({ state: 'idle', connections: 0, connected: 0 })
+    unsubscribe()
   })
 })

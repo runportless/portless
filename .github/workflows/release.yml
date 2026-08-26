@@ -178,6 +178,7 @@ jobs:
           source/scripts/render-homebrew-formula.sh \
             "${{ steps.metadata.outputs.version }}" \
             "${{ steps.metadata.outputs.source_sha256 }}" \
+            "$GITHUB_SHA" \
             homebrew-tap/Formula/portless.rb
           ruby -c homebrew-tap/Formula/portless.rb
 

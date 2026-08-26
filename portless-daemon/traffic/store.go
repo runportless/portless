@@ -28,6 +28,17 @@ type Store struct {
 	nextHTTPRequest    uint64
 	limit              int
 	payloadLimit       int64
+	lastPrunedAt       *time.Time
+}
+
+// RetentionStats summarizes the live in-memory traffic window and its fixed
+// per-environment bounds.
+type RetentionStats struct {
+	Exchanges         int
+	PayloadBytes      int64
+	ExchangeLimit     int
+	PayloadLimitBytes int64
+	LastPrunedAt      *time.Time
 }
 
 type activeHTTPRequest struct {
@@ -92,9 +103,15 @@ func (s *Store) addExchange(completedHTTPRequest uint64, exchange model.TrafficE
 	exchange.Sequence = s.sequences[scope]
 	items := append(s.exchanges[scope], exchange)
 	payloadBytes := s.payloadBytes[scope] + exchangePayloadBytes(exchange)
+	pruned := false
 	for len(items) > 0 && (len(items) > s.limit || payloadBytes > s.payloadLimit) {
 		payloadBytes -= exchangePayloadBytes(items[0])
 		items = items[1:]
+		pruned = true
+	}
+	if pruned {
+		prunedAt := time.Now().UTC()
+		s.lastPrunedAt = &prunedAt
 	}
 	s.exchanges[scope] = append([]model.TrafficExchange(nil), items...)
 	s.payloadBytes[scope] = payloadBytes
@@ -111,6 +128,25 @@ func (s *Store) addExchange(completedHTTPRequest uint64, exchange model.TrafficE
 		}
 	}
 	return cloneExchange(exchange)
+}
+
+// RetentionStats returns aggregate live traffic usage without copying retained
+// exchanges or application payloads.
+func (s *Store) RetentionStats() RetentionStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := RetentionStats{ExchangeLimit: s.limit, PayloadLimitBytes: s.payloadLimit}
+	for _, exchanges := range s.exchanges {
+		result.Exchanges += len(exchanges)
+	}
+	for _, bytes := range s.payloadBytes {
+		result.PayloadBytes += bytes
+	}
+	if s.lastPrunedAt != nil {
+		value := *s.lastPrunedAt
+		result.LastPrunedAt = &value
+	}
+	return result
 }
 
 // EnsureSequence restores an environment's durable traffic high-water mark so

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TrafficExchange, TrafficTrace } from '../../types'
-import { TraceWaterfall } from './TraceWaterfall'
+import { traceWaterfallItems, TraceWaterfall } from './TraceWaterfall'
 
 describe('trace waterfall', () => {
   it('renders nested, protocol-aware spans with correlation confidence', () => {
@@ -33,5 +33,39 @@ describe('trace waterfall', () => {
     expect(markup).toContain('class="trace-span is-tcp"')
     expect(markup).toContain('--span-depth:1')
     expect(markup).toContain('correlation-badge--inferred')
+  })
+
+  it('hides background spans and collapses one database transaction', () => {
+    const startedAt = '2026-08-25T12:00:00Z'
+    const tcpExchange = (sequence: number, operation: string, background = false): TrafficExchange => ({
+      project: 'store', environment: 'local', sequence, protocol: 'tcp', source: 'inventory', target: 'inventory-postgres', background,
+      startedAt, completedAt: startedAt, durationMs: 2, requestBytes: 6, responseBytes: 6,
+      tcp: { kind: 'operation', applicationProtocol: 'postgresql', operation, inspection: 'decoded', outcome: 'success' },
+    })
+    const trace = {
+      project: 'store', environment: 'local', number: 1, lastSequence: 6, protocol: 'http',
+      startedAt, completedAt: startedAt, durationMs: 20, source: 'external', target: 'inventory',
+      error: false, faulted: false, background: false, provisional: false, spanCount: 6, correlation: 'inferred',
+      spans: [
+        { exchange: { ...tcpExchange(2, 'QUERY', true) }, depth: 1, startOffsetMs: 1, correlation: 'inferred' },
+        ...['BEGIN', 'UPDATE', 'INSERT', 'COMMIT'].map((operation, index) => ({
+          exchange: tcpExchange(index + 3, operation), depth: 1, startOffsetMs: index * 3 + 3, correlation: 'inferred' as const, transactionGroup: 1,
+        })),
+      ],
+    } as TrafficTrace
+
+    const items = traceWaterfallItems(trace)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'transaction', group: 1 })
+    if (items[0].kind === 'transaction') expect(items[0].spans).toHaveLength(4)
+
+    const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} onExchange={() => undefined} />)
+    expect(markup).toContain('POSTGRESQL TRANSACTION · 4 OPERATIONS')
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).not.toContain('POSTGRESQL QUERY')
+    expect(markup).not.toContain('POSTGRESQL BEGIN')
+
+    const backgroundMarkup = renderToStaticMarkup(<TraceWaterfall trace={trace} includeBackground onExchange={() => undefined} />)
+    expect(backgroundMarkup).toContain('POSTGRESQL QUERY')
   })
 })

@@ -64,6 +64,25 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 		writeJSON(writer, http.StatusOK, snapshot)
 		return
 	}
+	if len(segments) == 2 && segments[1] == "diagnostics" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
+			return
+		}
+		includeStorage := request.URL.Query().Get("include") == "storage"
+		status, err := s.daemonControl.Diagnostics(request.Context(), includeStorage)
+		if err != nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, contract.APIError{Code: "DAEMON_DIAGNOSTICS_UNAVAILABLE", Message: err.Error(), Remediation: []contract.Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+			return
+		}
+		status.Inventory.Problems = nonNil(append([]string(nil), status.Inventory.Problems...))
+		status.Recovery.Problems = nonNil(append([]string(nil), status.Recovery.Problems...))
+		if status.Storage != nil {
+			status.Storage.Problems = nonNil(append([]string(nil), status.Storage.Problems...))
+		}
+		writeJSON(writer, http.StatusOK, status)
+		return
+	}
 	if len(segments) == 2 && segments[1] == "handoff" {
 		if request.Method != http.MethodGet {
 			methodNotAllowed(writer, http.MethodGet)
@@ -120,7 +139,7 @@ func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request,
 			methodNotAllowed(writer, http.MethodGet)
 			return
 		}
-		writeJSON(writer, http.StatusOK, contract.SystemStatus{Name: "portless", Version: "dev", APIVersion: contract.APIVersion, Telemetry: false})
+		writeJSON(writer, http.StatusOK, contract.SystemStatus{Name: "portless", Version: s.systemVersion, APIVersion: contract.APIVersion, Telemetry: false})
 		return
 	}
 	if len(segments) != 3 || segments[1] != "directories" || segments[2] != "select" {

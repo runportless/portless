@@ -73,6 +73,29 @@ func TestTraceProjectionUsesStartTimeAndTopologyAcrossCompletionOrder(t *testing
 	}
 }
 
+func TestTraceProjectionGroupsTransactionsWithinOneTCPConnection(t *testing.T) {
+	base := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	exchanges := []model.TrafficExchange{
+		{Sequence: 1, Project: "store", Environment: "local", Protocol: model.ProtocolHTTP, Source: "external", Target: "inventory", StartedAt: base, CompletedAt: base.Add(20 * time.Millisecond)},
+		{Sequence: 2, Project: "store", Environment: "local", Protocol: model.ProtocolTCP, Source: "inventory", Target: "inventory-postgres", StartedAt: base.Add(time.Millisecond), CompletedAt: base.Add(2 * time.Millisecond), TCP: &model.TrafficTCPExchange{SessionSequence: 7, TransactionSequence: 1}},
+		{Sequence: 3, Project: "store", Environment: "local", Protocol: model.ProtocolTCP, Source: "inventory", Target: "inventory-postgres", StartedAt: base.Add(3 * time.Millisecond), CompletedAt: base.Add(4 * time.Millisecond), TCP: &model.TrafficTCPExchange{SessionSequence: 7, TransactionSequence: 1}},
+		{Sequence: 4, Project: "store", Environment: "local", Protocol: model.ProtocolTCP, Source: "inventory", Target: "inventory-postgres", StartedAt: base.Add(5 * time.Millisecond), CompletedAt: base.Add(6 * time.Millisecond), TCP: &model.TrafficTCPExchange{SessionSequence: 7, TransactionSequence: 1}},
+		{Sequence: 5, Project: "store", Environment: "local", Protocol: model.ProtocolTCP, Source: "inventory", Target: "inventory-postgres", StartedAt: base.Add(7 * time.Millisecond), CompletedAt: base.Add(8 * time.Millisecond), TCP: &model.TrafficTCPExchange{SessionSequence: 8, TransactionSequence: 1}},
+	}
+
+	traces := buildTraces(exchanges)
+	if len(traces) != 1 || len(traces[0].Spans) != 5 {
+		t.Fatalf("traces = %#v, want one five-span trace", traces)
+	}
+	groups := make(map[int64]int)
+	for _, span := range traces[0].Spans {
+		groups[span.Exchange.Sequence] = span.TransactionGroup
+	}
+	if groups[1] != 0 || groups[2] != 1 || groups[3] != 1 || groups[4] != 1 || groups[5] != 2 {
+		t.Fatalf("transaction groups = %#v, want connection-scoped groups", groups)
+	}
+}
+
 func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T) {
 	broker := events.NewBroker()
 	store := NewStore(broker)
@@ -232,6 +255,10 @@ func TestStoreClonesDecodedTCPMessagesAndEvictsByPayloadBytes(t *testing.T) {
 	store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local", RequestBody: "abcdefgh"})
 	if _, exists := store.Exchange(model.EnvironmentSelector("billing", "local"), first.Sequence); exists {
 		t.Fatal("oldest exchange was not evicted by the retained payload limit")
+	}
+	stats := store.RetentionStats()
+	if stats.Exchanges != 1 || stats.PayloadBytes != int64(len("abcdefgh")) || stats.ExchangeLimit != defaultExchangeLimit || stats.PayloadLimitBytes != 20 || stats.LastPrunedAt == nil {
+		t.Fatalf("retention stats after eviction = %#v", stats)
 	}
 }
 

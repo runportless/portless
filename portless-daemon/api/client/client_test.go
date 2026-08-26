@@ -135,7 +135,7 @@ func TestDoHonorsCancellationAndResponseLimit(t *testing.T) {
 }
 
 func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
-	requests := make(chan string, 4)
+	requests := make(chan string, 6)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests <- request.Method + " " + request.URL.Path
 		writer.Header().Set("Content-Type", "application/json")
@@ -144,6 +144,8 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"state":"ready","pid":42,"startedAt":"2026-08-25T12:00:00Z","instanceId":"instance","buildId":"build","protocolVersion":"4.0.0","apiVersion":"12.2.0","recoveryProblems":[],"activeEnvironments":["store/local"]}`)
 		case "/api/v1/daemon/logs":
 			_, _ = io.WriteString(writer, `{"content":"daemon ready\n","truncated":true}`)
+		case "/api/v1/daemon/diagnostics":
+			_, _ = io.WriteString(writer, `{"collectedAt":"2026-08-25T12:00:01Z","inventory":{"processes":1,"containers":2,"proxyListeners":3,"activeEnvironments":1,"problems":[]},"recovery":{"result":"healthy","durationMs":12,"recovered":1,"problems":[]},"build":{"version":"dev","distribution":"source","commit":"abc","runningBuildId":"build","current":true}}`)
 		case "/api/v1/daemon/handoff":
 			_, _ = io.WriteString(writer, `{"state":"ready","verifiedAt":"2026-08-25T12:00:01Z","problems":[],"activeEnvironments":["store/local"]}`)
 		case "/api/v1/daemon/restart":
@@ -163,6 +165,14 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 	if err != nil || logs.Content != "daemon ready\n" || !logs.Truncated {
 		t.Fatalf("daemon logs = %#v, %v", logs, err)
 	}
+	diagnostics, err := client.DaemonDiagnostics(context.Background(), false)
+	if err != nil || diagnostics.Inventory.Processes != 1 || diagnostics.Storage != nil {
+		t.Fatalf("daemon diagnostics = %#v, %v", diagnostics, err)
+	}
+	diagnostics, err = client.DaemonDiagnostics(context.Background(), true)
+	if err != nil || diagnostics.Inventory.ProxyListeners != 3 {
+		t.Fatalf("daemon storage diagnostics = %#v, %v", diagnostics, err)
+	}
 	handoff, err := client.DaemonHandoffStatus(context.Background())
 	if err != nil || handoff.State != "ready" || handoff.VerifiedAt.IsZero() {
 		t.Fatalf("daemon handoff = %#v, %v", handoff, err)
@@ -171,7 +181,7 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 	if err != nil || !restart.Restarting || !restart.Handoff {
 		t.Fatalf("daemon restart = %#v, %v", restart, err)
 	}
-	for _, expected := range []string{"GET /api/v1/daemon", "GET /api/v1/daemon/logs", "GET /api/v1/daemon/handoff", "POST /api/v1/daemon/restart"} {
+	for _, expected := range []string{"GET /api/v1/daemon", "GET /api/v1/daemon/logs", "GET /api/v1/daemon/diagnostics", "GET /api/v1/daemon/diagnostics", "GET /api/v1/daemon/handoff", "POST /api/v1/daemon/restart"} {
 		if actual := <-requests; actual != expected {
 			t.Fatalf("request = %q, want %q", actual, expected)
 		}

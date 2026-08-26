@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Project, RelayStatus, RuntimeStatus } from '../types'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Project, RelayStatus, RuntimeStatus } from '../types'
 import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
@@ -9,7 +9,7 @@ export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
@@ -19,12 +19,15 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   settingsView?: SettingsView
   runtime?: RuntimeStatus | null
   daemon: DaemonStatus | null
+  diagnostics: DaemonDiagnostics | null
+  controlPlaneHealth: ControlPlaneHealth
   relay?: RelayStatus | null
   children: ReactNode
   onNavigate: (path: string) => void
   commands: Command[]
   live?: boolean
   onDaemonRefresh: () => Promise<DaemonStatus>
+  onDaemonDiagnosticsRefresh: (includeStorage?: boolean) => Promise<DaemonDiagnostics>
   onDaemonHandoffVerify: () => Promise<DaemonHandoffStatus>
   onDaemonRestart: (instanceId: string) => Promise<DaemonRestart>
   onDaemonReconnected: () => Promise<void>
@@ -82,6 +85,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     setPaletteOpen(false)
     setDaemonOpen(true)
     void onDaemonRefresh().catch(() => undefined)
+    void onDaemonDiagnosticsRefresh(false).catch(() => undefined)
   }
 
   const daemonStateLabel = live ? daemon?.state ?? 'connected' : 'reconnecting'
@@ -136,7 +140,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
-    {daemonOpen && <DaemonDrawer status={daemon} runtime={runtime ?? null} relay={relay ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onVerifyHandoff={onDaemonHandoffVerify} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
+    {daemonOpen && <DaemonDrawer status={daemon} diagnostics={diagnostics} controlPlaneHealth={controlPlaneHealth} runtime={runtime ?? null} relay={relay ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onRefreshDiagnostics={onDaemonDiagnosticsRefresh} onVerifyHandoff={onDaemonHandoffVerify} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
   </div>
 }
 
@@ -179,9 +183,11 @@ function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: (
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
   const input = useRef<HTMLInputElement>(null)
+  const selectedCommand = useRef<HTMLButtonElement>(null)
   const filtered = commands.filter((command) => `${command.label} ${command.detail ?? ''} ${command.group}`.toLowerCase().includes(query.toLowerCase()))
   useEffect(() => input.current?.focus(), [])
   useEffect(() => setSelected(0), [query])
+  useEffect(() => scrollCommandIntoView(selectedCommand.current), [query, selected])
   const execute = (command?: Command) => { if (!command) return; onClose(); command.run() }
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
     <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}>
@@ -190,10 +196,14 @@ function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: (
         if (event.key === 'ArrowUp') { event.preventDefault(); setSelected((value) => Math.max(value - 1, 0)) }
         if (event.key === 'Enter') execute(filtered[selected])
       }} /><small>{filtered.length} results</small></div>
-      <div className="command-palette__results">{filtered.map((command, index) => { const previous = filtered[index - 1]; return <div key={`${command.group}:${command.label}:${index}`}>{(!previous || previous.group !== command.group) && <div className="command-group">{command.group}</div>}<button className={index === selected ? 'command is-selected' : 'command'} onMouseEnter={() => setSelected(index)} onClick={() => execute(command)}><span>{command.label}</span><small>{command.detail}</small></button></div> })}{filtered.length === 0 && <div className="command-empty">No matching project, environment, or action.</div>}</div>
+      <div className="command-palette__results">{filtered.map((command, index) => { const previous = filtered[index - 1]; return <div key={`${command.group}:${command.label}:${index}`}>{(!previous || previous.group !== command.group) && <div className="command-group">{command.group}</div>}<button ref={index === selected ? selectedCommand : undefined} className={index === selected ? 'command is-selected' : 'command'} onMouseEnter={() => setSelected(index)} onClick={() => execute(command)}><span>{command.label}</span><small>{command.detail}</small></button></div> })}{filtered.length === 0 && <div className="command-empty">No matching project, environment, or action.</div>}</div>
       <footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> dismiss</span></footer>
     </section>
   </div>
+}
+
+export function scrollCommandIntoView(command: Pick<Element, 'scrollIntoView'> | null) {
+  command?.scrollIntoView({ block: 'nearest' })
 }
 
 function environmentRoute(environment: Pick<Environment, 'project' | 'name'>) { return `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}` }

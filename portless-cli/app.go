@@ -29,6 +29,9 @@ var Version = "dev"
 // package-manager files to their package manager.
 var Distribution = "source"
 
+// Commit identifies the source revision linked into the Portless executable.
+var Commit = "unknown"
+
 // CLI is the composition root for Portless's command-line product. Product
 // behavior belongs to the feature packages; this type owns only shared state
 // and command assembly.

@@ -16,8 +16,15 @@ import (
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
+// BuildInfo identifies the linked Portless version and package provenance.
+type BuildInfo struct {
+	Version      string
+	Distribution string
+	Commit       string
+}
+
 // Command parses and runs the private daemon process mode.
-func Command(args []string, stderr io.Writer) int {
+func Command(args []string, stderr io.Writer, build BuildInfo) int {
 	set := flag.NewFlagSet("__daemon", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	dataDirectory := set.String("data-dir", "", "internal data directory")
@@ -29,7 +36,7 @@ func Command(args []string, stderr io.Writer) int {
 	if err == nil {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		err = Run(ctx, Config{Layout: layout, PreferredPort: *port})
+		err = Run(ctx, Config{Layout: layout, PreferredPort: *port, Build: build})
 	}
 	if errors.Is(err, ErrExecutableChanged) || errors.Is(err, ErrRestartRequested) {
 		executable, executableErr := os.Executable()

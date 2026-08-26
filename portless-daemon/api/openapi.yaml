@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.2.0
+  version: 12.4.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.2.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.4.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -95,6 +95,25 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DaemonLogSnapshot' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /daemon/diagnostics:
+    get:
+      operationId: daemonDiagnostics
+      description: >-
+        Returns a bounded operational snapshot for the daemon drawer without
+        performing the fail-closed runtime handoff audit. Storage inspection is
+        opt-in so ordinary status views do not walk retained log directories.
+      parameters:
+        - in: query
+          name: include
+          schema: { type: string, enum: [storage] }
+          description: Include storage footprint, configured retention limits, and pruning timestamps.
+      responses:
+        '200':
+          description: Current daemon diagnostics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DaemonDiagnostics' }
         '503': { $ref: '#/components/responses/Unavailable' }
   /daemon/handoff:
     get:
@@ -1288,9 +1307,87 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.2.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.4.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    DaemonDiagnostics:
+      type: object
+      required: [collectedAt, inventory, recovery, build]
+      properties:
+        collectedAt: { type: string, format: date-time }
+        inventory: { $ref: '#/components/schemas/DaemonManagedInventory' }
+        recovery: { $ref: '#/components/schemas/DaemonRecoveryStatus' }
+        build: { $ref: '#/components/schemas/DaemonBuildProvenance' }
+        storage: { $ref: '#/components/schemas/DaemonStorageStatus' }
+    DaemonManagedInventory:
+      type: object
+      required: [processes, containers, proxyListeners, activeEnvironments, problems]
+      properties:
+        processes: { type: integer, minimum: 0 }
+        containers: { type: integer, minimum: 0 }
+        proxyListeners: { type: integer, minimum: 0 }
+        activeEnvironments: { type: integer, minimum: 0 }
+        problems: { type: array, items: { type: string } }
+    DaemonRecoveryStatus:
+      type: object
+      required: [result, durationMs, recovered, problems]
+      properties:
+        result: { type: string, enum: [not-run, healthy, degraded, failed] }
+        completedAt: { type: string, format: date-time }
+        durationMs: { type: integer, format: int64, minimum: 0 }
+        recovered: { type: integer, minimum: 0 }
+        problems: { type: array, items: { type: string } }
+    DaemonBuildProvenance:
+      type: object
+      required: [version, distribution, commit, runningBuildId, current]
+      properties:
+        version: { type: string, description: Semantic Portless release version or dev for a source build. }
+        distribution: { type: string, example: homebrew }
+        commit: { type: string, description: Source revision linked into the executable, or unknown when unavailable. }
+        runningBuildId: { type: string, description: SHA-256 identity captured by the running daemon. }
+        onDiskBuildId: { type: string, description: Current SHA-256 identity at the daemon executable's resolved path. }
+        current: { type: boolean, description: Whether the running process matches the executable currently present on disk. }
+        problem: { type: string }
+    DaemonStorageStatus:
+      type: object
+      required:
+        - databaseBytes
+        - recordingCount
+        - recordedEventCount
+        - recordedBytes
+        - liveTrafficExchanges
+        - liveTrafficBytes
+        - serviceLogBytes
+        - daemonLogBytes
+        - trafficExchangeLimitPerEnvironment
+        - trafficPayloadLimitPerEnvironment
+        - recordingDefaultEventLimit
+        - recordingMaximumEventLimit
+        - recordingDefaultPayloadLimit
+        - recordingMaximumPayloadLimit
+        - serviceLogGenerationLimit
+        - serviceLogStreamLimitBytes
+        - problems
+      properties:
+        databaseBytes: { type: integer, format: int64, minimum: 0, description: SQLite database, WAL, and shared-memory disk footprint. }
+        recordingCount: { type: integer, format: int64, minimum: 0 }
+        recordedEventCount: { type: integer, format: int64, minimum: 0 }
+        recordedBytes: { type: integer, format: int64, minimum: 0, description: Encoded recording traffic bytes retained inside SQLite. }
+        liveTrafficExchanges: { type: integer, minimum: 0 }
+        liveTrafficBytes: { type: integer, format: int64, minimum: 0 }
+        serviceLogBytes: { type: integer, format: int64, minimum: 0 }
+        daemonLogBytes: { type: integer, format: int64, minimum: 0 }
+        trafficExchangeLimitPerEnvironment: { type: integer, minimum: 1 }
+        trafficPayloadLimitPerEnvironment: { type: integer, format: int64, minimum: 1 }
+        recordingDefaultEventLimit: { type: integer, format: int64, minimum: 1 }
+        recordingMaximumEventLimit: { type: integer, format: int64, minimum: 1 }
+        recordingDefaultPayloadLimit: { type: integer, format: int64, minimum: 1 }
+        recordingMaximumPayloadLimit: { type: integer, format: int64, minimum: 1 }
+        serviceLogGenerationLimit: { type: integer, minimum: 1 }
+        serviceLogStreamLimitBytes: { type: integer, format: int64, minimum: 1 }
+        trafficPrunedAt: { type: string, format: date-time }
+        serviceLogsPrunedAt: { type: string, format: date-time }
+        problems: { type: array, items: { type: string } }
     DaemonLogSnapshot:
       type: object
       required: [content, truncated]
@@ -1712,6 +1809,7 @@ components:
         depth: { type: integer, minimum: 0 }
         startOffsetMs: { type: integer, format: int64, minimum: 0 }
         correlation: { type: string, enum: [exact, inferred, partial, ambiguous] }
+        transactionGroup: { type: integer, minimum: 1, description: Trace-local group shared by decoded operations from one explicit database transaction on one TCP connection. }
     TrafficTrace:
       type: object
       required: [project, environment, number, lastSequence, protocol, startedAt, completedAt, durationMs, source, target, error, faulted, background, provisional, spanCount, correlation]

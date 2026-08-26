@@ -115,7 +115,8 @@ func TestHomebrewFormulaRenderer(t *testing.T) {
 	root := repositoryRoot(t)
 	output := filepath.Join(t.TempDir(), "Formula", "portless.rb")
 	checksum := strings.Repeat("ab", 32)
-	command := exec.Command(filepath.Join(root, "scripts", "render-homebrew-formula.sh"), "1.2.3", checksum, output)
+	commit := strings.Repeat("cd", 20)
+	command := exec.Command(filepath.Join(root, "scripts", "render-homebrew-formula.sh"), "1.2.3", checksum, commit, output)
 	command.Dir = root
 	if result, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("render formula: %v\n%s", err, result)
@@ -135,13 +136,14 @@ func TestHomebrewFormulaRenderer(t *testing.T) {
 		`license "Apache-2.0"`,
 		"github.com/runportless/portless/portless-cli.Version=#{version}",
 		"github.com/runportless/portless/portless-cli.Distribution=homebrew",
+		"github.com/runportless/portless/portless-cli.Commit=" + commit,
 		"brew uninstall runportless/tap/portless",
 	} {
 		if !strings.Contains(formula, expected) {
 			t.Errorf("rendered formula does not contain %q", expected)
 		}
 	}
-	if strings.Contains(formula, "@VERSION@") || strings.Contains(formula, "@SHA256@") {
+	if strings.Contains(formula, "@VERSION@") || strings.Contains(formula, "@SHA256@") || strings.Contains(formula, "@COMMIT@") {
 		t.Fatal("rendered formula still contains a template placeholder")
 	}
 	goDependency := strings.Index(formula, `depends_on "go" => :build`)
@@ -155,7 +157,7 @@ func TestHomebrewFormulaRendererAcceptsPrereleaseVersion(t *testing.T) {
 	root := repositoryRoot(t)
 	output := filepath.Join(t.TempDir(), "Formula", "portless.rb")
 	checksum := strings.Repeat("cd", 32)
-	command := exec.Command(filepath.Join(root, "scripts", "render-homebrew-formula.sh"), "0.1.0-alpha.1", checksum, output)
+	command := exec.Command(filepath.Join(root, "scripts", "render-homebrew-formula.sh"), "0.1.0-alpha.1", checksum, strings.Repeat("cd", 20), output)
 	command.Dir = root
 	if result, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("render prerelease formula: %v\n%s", err, result)
@@ -174,14 +176,16 @@ func TestHomebrewFormulaRendererAcceptsPrereleaseVersion(t *testing.T) {
 	}
 }
 
-func TestHomebrewFormulaRendererRejectsInvalidVersionAndChecksum(t *testing.T) {
+func TestHomebrewFormulaRendererRejectsInvalidMetadata(t *testing.T) {
 	root := repositoryRoot(t)
 	script := filepath.Join(root, "scripts", "render-homebrew-formula.sh")
+	commit := strings.Repeat("cd", 20)
 	for _, arguments := range [][]string{
-		{"v1.2.3", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
-		{"1.2.3-alpha.01", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
-		{"1.2", strings.Repeat("ab", 32), filepath.Join(t.TempDir(), "portless.rb")},
-		{"1.2.3", "not-a-checksum", filepath.Join(t.TempDir(), "portless.rb")},
+		{"v1.2.3", strings.Repeat("ab", 32), commit, filepath.Join(t.TempDir(), "portless.rb")},
+		{"1.2.3-alpha.01", strings.Repeat("ab", 32), commit, filepath.Join(t.TempDir(), "portless.rb")},
+		{"1.2", strings.Repeat("ab", 32), commit, filepath.Join(t.TempDir(), "portless.rb")},
+		{"1.2.3", "not-a-checksum", commit, filepath.Join(t.TempDir(), "portless.rb")},
+		{"1.2.3", strings.Repeat("ab", 32), "not-a-commit", filepath.Join(t.TempDir(), "portless.rb")},
 	} {
 		command := exec.Command(script, arguments...)
 		command.Dir = root

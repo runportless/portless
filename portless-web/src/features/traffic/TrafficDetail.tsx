@@ -248,14 +248,29 @@ function protocolMessageText(message: TrafficMessage) {
   return [message.summary, fields, message.content].filter(Boolean).join('\n')
 }
 
-function TCPProtocolMessage({ message }: { message: TrafficMessage }) {
+function displayedProtocolMessageSummary(message: TrafficMessage) {
+  const summary = (message.summary || message.type).trim()
+  const content = message.content?.trim()
+  if (!content) return summary
+  const normalizedSummary = summary.replace(/\s+/g, ' ').toLowerCase()
+  const normalizedContent = content.replace(/\s+/g, ' ').toLowerCase()
+  return normalizedSummary.includes(normalizedContent) ? '' : summary
+}
+
+function TCPProtocolMessage({ message, index }: { message: TrafficMessage; index: number }) {
   const presentation = message.content && message.encoding !== 'base64'
     ? trafficBodyPresentation(message.content, message.contentType || '')
     : { text: message.content || '', json: false }
-  return <article className="traffic-protocol-message">
-    <header><div><span>{message.type.toUpperCase()}</span><strong>{message.summary || message.type}</strong></div><small>{message.offsetMs} ms · {formatTrafficBytes(Math.max(0, message.wireBytes))}</small></header>
-    {(message.fields || []).length > 0 && <dl>{message.fields?.map((field, index) => <div key={`${field.name}:${index}`}><dt>{field.name}</dt><dd>{field.value}</dd></div>)}</dl>}
-    {presentation.text && <div className="traffic-protocol-message__content"><div>{message.contentType && <span>{message.contentType}</span>}{message.encoding === 'base64' && <span>BINARY · BASE64</span>}</div><pre className={presentation.json ? 'traffic-json' : undefined}>{presentation.json ? highlightedJSON(presentation.text) : presentation.text}</pre></div>}
+  const summary = displayedProtocolMessageSummary(message)
+  const fields = (message.fields || []).filter((field) => field.value.trim())
+  return <article className="traffic-protocol-message" aria-label={`Message ${index + 1}: ${message.type}`}>
+    <header>
+      <span className="traffic-protocol-message__index" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+      <div><span>{message.type.toUpperCase()}</span>{summary && <strong>{summary}</strong>}</div>
+      <small><span>+{message.offsetMs}ms</span><span>{formatTrafficBytes(Math.max(0, message.wireBytes))}</span></small>
+    </header>
+    {fields.length > 0 && <dl aria-label="Message fields">{fields.map((field, fieldIndex) => <div key={`${field.name}:${fieldIndex}`}><dt>{field.name}</dt><dd>{field.value}</dd></div>)}</dl>}
+    {presentation.text && <div className="traffic-protocol-message__content"><div>{message.contentType && <code>{message.contentType}</code>}{message.encoding === 'base64' && <span>BINARY · BASE64</span>}</div><pre className={presentation.json ? 'traffic-json' : undefined}>{presentation.json ? highlightedJSON(presentation.text) : presentation.text}</pre></div>}
     {message.truncated && <footer>PAYLOAD TRUNCATED · {formatTrafficBytes(message.capturedBytes || 0)} OF {formatTrafficBytes(message.contentBytes || 0)}</footer>}
   </article>
 }
@@ -269,7 +284,7 @@ function TCPMessageInspector({ exchange, direction, compact = false }: { exchang
   const copy = () => navigator.clipboard.writeText(messages.map(protocolMessageText).join('\n\n')).catch(() => undefined)
   return <section className={`traffic-message-workbench traffic-message-workbench--${direction} traffic-protocol-workbench${compact ? ' traffic-message-workbench--compact' : ''}`} aria-label={`${direction} protocol messages`}>
     <div className="traffic-message-workbench__summary"><code>{messageCount} {messageCount === 1 ? 'MESSAGE' : 'MESSAGES'}</code><div><span>{formatTrafficBytes(bytes)}</span><button className="traffic-copy-button" type="button" onClick={copy} aria-label={`Copy ${direction} messages`} title={`Copy ${direction} messages`} disabled={messages.length === 0}><CopyIcon /><span>COPY</span></button></div></div>
-    <div className="traffic-protocol-messages">{messages.length > 0 ? messages.map((message, index) => <TCPProtocolMessage message={message} key={`${message.offsetMs}:${message.type}:${index}`} />) : <div className="traffic-payload__empty"><strong>No decoded {direction} messages.</strong><small>{formatTrafficBytes(bytes)} transferred</small></div>}</div>
+    <div className="traffic-protocol-messages">{messages.length > 0 ? messages.map((message, index) => <TCPProtocolMessage message={message} index={index} key={`${message.offsetMs}:${message.type}:${index}`} />) : <div className="traffic-payload__empty"><strong>No decoded {direction} messages.</strong><small>{formatTrafficBytes(bytes)} transferred</small></div>}</div>
     {truncated && <footer><span>CAPTURE TRUNCATED</span><span>{captureSummary(bytes, request ? exchange.requestCapturedBytes || 0 : exchange.responseCapturedBytes || 0)}</span></footer>}
   </section>
 }

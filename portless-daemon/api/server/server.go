@@ -27,12 +27,15 @@ type Server struct {
 	indexHTML       []byte
 	inspectRelay    func(context.Context) (contract.RelayStatus, error)
 	selectDirectory func(context.Context, string, string) (string, bool, error)
+	systemVersion   string
 }
 
 // DaemonControl exposes process lifecycle operations to the authenticated API.
 type DaemonControl interface {
 	// Status returns the current shallow daemon identity and recovery state.
 	Status(context.Context) (contract.DaemonStatus, error)
+	// Diagnostics returns one bounded operational snapshot, optionally including storage inspection.
+	Diagnostics(context.Context, bool) (contract.DaemonDiagnostics, error)
 	// Logs returns one bounded, safely redacted daemon-log tail.
 	Logs(context.Context) (contract.DaemonLogSnapshot, error)
 	// HandoffStatus performs a fresh runtime-adoption safety audit.
@@ -49,6 +52,7 @@ type Dependencies struct {
 	DaemonControl   DaemonControl
 	InspectRelay    func(context.Context) (contract.RelayStatus, error)
 	SelectDirectory func(context.Context, string, string) (string, bool, error)
+	SystemVersion   string
 }
 
 // New validates dependencies and constructs an HTTP server with embedded UI assets.
@@ -57,10 +61,14 @@ func New(dependencies Dependencies) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded UI: %w", err)
 	}
+	systemVersion := dependencies.SystemVersion
+	if systemVersion == "" {
+		systemVersion = "dev"
+	}
 	return &Server{
 		app: dependencies.Application, auth: dependencies.Auth, daemonControl: dependencies.DaemonControl,
 		assets: dependencies.Assets, files: http.FileServer(http.FS(dependencies.Assets)), indexHTML: index,
-		inspectRelay: dependencies.InspectRelay, selectDirectory: dependencies.SelectDirectory,
+		inspectRelay: dependencies.InspectRelay, selectDirectory: dependencies.SelectDirectory, systemVersion: systemVersion,
 	}, nil
 }
 
@@ -150,7 +158,7 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	}
 	segments := splitPath(strings.TrimPrefix(strings.Trim(request.URL.Path, "/"), "api/v1/"))
 	if len(segments) == 0 {
-		writeJSON(writer, http.StatusOK, contract.SystemStatus{Name: "portless", APIVersion: contract.APIVersion})
+		writeJSON(writer, http.StatusOK, contract.SystemStatus{Name: "portless", Version: s.systemVersion, APIVersion: contract.APIVersion})
 		return
 	}
 	switch segments[0] {

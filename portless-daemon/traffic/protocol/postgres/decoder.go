@@ -36,15 +36,17 @@ type pendingOperation struct {
 
 // Decoder incrementally decodes one PostgreSQL protocol v3 connection.
 type Decoder struct {
-	mu             sync.Mutex
-	config         protocol.Config
-	requestBuffer  []byte
-	responseBuffer []byte
-	startup        bool
-	sslPending     bool
-	pending        []*pendingOperation
-	current        *pendingOperation
-	state          protocol.State
+	mu                        sync.Mutex
+	config                    protocol.Config
+	requestBuffer             []byte
+	responseBuffer            []byte
+	startup                   bool
+	sslPending                bool
+	pending                   []*pendingOperation
+	current                   *pendingOperation
+	nextTransactionSequence   uint64
+	activeTransactionSequence uint64
+	state                     protocol.State
 }
 
 // New creates a PostgreSQL protocol decoder.
@@ -96,6 +98,9 @@ func (d *Decoder) Close(completed time.Time, connectionErr error) []protocol.Ope
 	for _, pending := range d.pending {
 		pending.operation.CompletedAt = completed
 		pending.operation.Outcome = model.TrafficTCPOutcomeIncomplete
+		if d.activeTransactionSequence != 0 {
+			pending.operation.TransactionSequence = d.activeTransactionSequence
+		}
 		if d.state.Inspection != model.TrafficInspectionDecoded {
 			pending.operation.Inspection = d.state.Inspection
 			pending.operation.InspectionReason = d.state.Reason
@@ -202,6 +207,7 @@ func (d *Decoder) observeResponse(content []byte, observed time.Time) []protocol
 		if decoded.kind == 'Z' {
 			d.pending = d.pending[1:]
 			pending.operation.CompletedAt = observed
+			d.assignTransaction(&pending.operation, decoded.payload)
 			if pending.operation.Outcome == "" {
 				pending.operation.Outcome = model.TrafficTCPOutcomeSuccess
 			}
@@ -209,6 +215,25 @@ func (d *Decoder) observeResponse(content []byte, observed time.Time) []protocol
 		}
 	}
 	return completed
+}
+
+func (d *Decoder) assignTransaction(operation *protocol.Operation, readyPayload []byte) {
+	if len(readyPayload) == 0 {
+		return
+	}
+	switch readyPayload[0] {
+	case 'T', 'E':
+		if d.activeTransactionSequence == 0 {
+			d.nextTransactionSequence++
+			d.activeTransactionSequence = d.nextTransactionSequence
+		}
+		operation.TransactionSequence = d.activeTransactionSequence
+	case 'I':
+		if d.activeTransactionSequence != 0 {
+			operation.TransactionSequence = d.activeTransactionSequence
+			d.activeTransactionSequence = 0
+		}
+	}
 }
 
 func (d *Decoder) clientPacket(decoded packet, observed time.Time) []protocol.Operation {

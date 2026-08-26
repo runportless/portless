@@ -1,12 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import type { DaemonHandoffStatus, DaemonStatus, Environment, Project } from '../types'
-import { AppChrome, type EnvironmentView, type SettingsView } from './Chrome'
+import { describe, expect, it, vi } from 'vitest'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus, Environment, Project } from '../types'
+import { AppChrome, scrollCommandIntoView, type EnvironmentView, type SettingsView } from './Chrome'
 
 const project = { name: 'billing' } as Project
 const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
 const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
 const handoff = { state: 'ready', verifiedAt: '2026-08-25T12:00:00Z', activeEnvironments: [], problems: [] } as DaemonHandoffStatus
+const diagnostics = { inventory: { processes: 0, containers: 0, proxyListeners: 0, activeEnvironments: 0, problems: [] } } as unknown as DaemonDiagnostics
+const controlPlaneHealth: ControlPlaneHealth = { api: { state: 'ready', latencyMs: 2 }, events: { state: 'idle', connections: 0, connected: 0 } }
 
 function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview', settingsActive = false, settingsView: SettingsView = 'appearance', live = true) {
   return renderToStaticMarkup(
@@ -20,9 +22,12 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       settingsView={settingsView}
       commands={[]}
       daemon={daemon}
+      diagnostics={diagnostics}
+      controlPlaneHealth={controlPlaneHealth}
       live={live}
       onNavigate={() => undefined}
       onDaemonRefresh={async () => daemon}
+      onDaemonDiagnosticsRefresh={async () => diagnostics}
       onDaemonHandoffVerify={async () => handoff}
       onDaemonRestart={async (instanceId) => ({ restarting: true, previousInstanceId: instanceId, handoff: true, activeEnvironments: [] })}
       onDaemonReconnected={async () => undefined}
@@ -87,5 +92,15 @@ describe('application navigation', () => {
     expect(reconnecting).toContain('<span class="daemon-state--reconnecting">reconnecting</span>')
     expect(ready).toContain('<span>ready</span>')
     expect(ready).not.toContain('daemon-state--reconnecting')
+  })
+})
+
+describe('command palette', () => {
+  it('scrolls the selected command to the nearest visible position', () => {
+    const scrollIntoView = vi.fn()
+
+    scrollCommandIntoView({ scrollIntoView })
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
   })
 })

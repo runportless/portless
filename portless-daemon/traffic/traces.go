@@ -13,6 +13,11 @@ type traceNode struct {
 	correlation model.TrafficCorrelation
 }
 
+type tcpTransactionKey struct {
+	session     uint64
+	transaction uint64
+}
+
 type disjointSet struct {
 	parent map[int64]int64
 }
@@ -158,17 +163,30 @@ func projectTrace(members []*traceNode, all map[int64]*traceNode) model.TrafficT
 		correlation = weakerCorrelation(correlation, member.correlation)
 	}
 	spans := make([]model.TrafficTraceSpan, 0, len(members))
+	transactionGroups := make(map[tcpTransactionKey]int)
+	nextTransactionGroup := 0
 	for _, member := range members {
 		spanCorrelation := member.correlation
 		if member != root && member.parent == 0 && spanCorrelation != model.TrafficCorrelationAmbiguous {
 			spanCorrelation = model.TrafficCorrelationPartial
 			correlation = weakerCorrelation(correlation, spanCorrelation)
 		}
-		spans = append(spans, model.TrafficTraceSpan{
+		span := model.TrafficTraceSpan{
 			Exchange: member.exchange, ParentSequence: member.parent,
 			Depth: traceDepth(member, all), StartOffsetMS: member.exchange.StartedAt.Sub(started).Milliseconds(),
 			Correlation: spanCorrelation,
-		})
+		}
+		if tcp := member.exchange.TCP; tcp != nil && tcp.SessionSequence != 0 && tcp.TransactionSequence != 0 {
+			key := tcpTransactionKey{session: tcp.SessionSequence, transaction: tcp.TransactionSequence}
+			group := transactionGroups[key]
+			if group == 0 {
+				nextTransactionGroup++
+				group = nextTransactionGroup
+				transactionGroups[key] = group
+			}
+			span.TransactionGroup = group
+		}
+		spans = append(spans, span)
 	}
 	rootExchange := root.exchange
 	requestTarget := rootExchange.RequestTarget

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/model"
@@ -21,6 +22,26 @@ const (
 	maxLogFileBytes = 16 << 20
 	retainedRuns    = 10
 )
+
+var lastPrunedUnixNano atomic.Int64
+
+// RetentionStats describes the fixed service-log bounds and the most recent
+// generation removal performed by this daemon process.
+type RetentionStats struct {
+	RetainedRuns   int
+	MaxStreamBytes int64
+	LastPrunedAt   *time.Time
+}
+
+// Retention returns the configured service-log limits and last observed prune.
+func Retention() RetentionStats {
+	result := RetentionStats{RetainedRuns: retainedRuns, MaxStreamBytes: maxLogFileBytes}
+	if value := lastPrunedUnixNano.Load(); value > 0 {
+		prunedAt := time.Unix(0, value).UTC()
+		result.LastPrunedAt = &prunedAt
+	}
+	return result
+}
 
 // Sink converts one process stream into bounded structured JSON Lines log entries.
 type Sink struct {
@@ -227,6 +248,7 @@ func pruneGenerations(serviceRoot string, retain int) error {
 		if err := os.RemoveAll(filepath.Join(serviceRoot, generations[0].name)); err != nil {
 			return err
 		}
+		lastPrunedUnixNano.Store(time.Now().UTC().UnixNano())
 		generations = generations[1:]
 	}
 	return nil

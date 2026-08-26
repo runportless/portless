@@ -296,7 +296,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         <TrafficTableHeader mode="traces" />
         {tracePagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
           <TraceSummaryRow trace={trace} expanded={expandedTrace === trace.number} onToggle={() => void toggleTrace(trace)} />
-          {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onExchange={(exchange) => void inspectExchange(exchange, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
+          {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} includeBackground={includeBackground} onExchange={(exchange) => void inspectExchange(exchange, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
         </div>)}
         {visibleTraces.length === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
         <PanelPagination label="traces" pagination={tracePagination} onPage={setTracePage} />

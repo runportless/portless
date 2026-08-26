@@ -288,7 +288,13 @@ func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
 	if !first.HasEdge("billing/local", "checkout", "orders", port) {
 		t.Fatal("first manager did not report its edge")
 	}
+	if first.ListenerCount() != 1 {
+		t.Fatalf("listener count = %d, want 1", first.ListenerCount())
+	}
 	first.CloseEnvironment(context.Background(), "billing/local")
+	if first.ListenerCount() != 0 {
+		t.Fatalf("listener count after close = %d, want 0", first.ListenerCount())
+	}
 	second := newManagerForTest(controlStore)
 	defer second.Close(context.Background())
 	restored, err := second.EnsureEdgeAtPort(context.Background(), "billing/local", connection, port)

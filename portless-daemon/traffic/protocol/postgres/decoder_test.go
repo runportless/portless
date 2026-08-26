@@ -67,6 +67,38 @@ func TestDecoderClassifiesExtendedDriverQueryAsBackground(t *testing.T) {
 	}
 }
 
+func TestDecoderAssignsConnectionLocalTransactionSequences(t *testing.T) {
+	decoder := New(protocol.Config{})
+	now := time.Now().UTC()
+	decoder.Observe(protocol.DirectionRequest, startupPacket(196608), now)
+
+	query := func(statement string, status byte, offset time.Duration) protocol.Operation {
+		decoder.Observe(protocol.DirectionRequest, typedPacket('Q', append([]byte(statement), 0)), now.Add(offset))
+		operations := decoder.Observe(protocol.DirectionResponse, typedPacket('Z', []byte{status}), now.Add(offset+time.Millisecond))
+		if len(operations) != 1 {
+			t.Fatalf("%s operations = %#v, want one", statement, operations)
+		}
+		return operations[0]
+	}
+
+	first := []protocol.Operation{
+		query("BEGIN", 'T', time.Millisecond),
+		query("UPDATE inventory SET on_hand = on_hand - 1", 'T', 3*time.Millisecond),
+		query("COMMIT", 'I', 5*time.Millisecond),
+	}
+	for _, operation := range first {
+		if operation.TransactionSequence != 1 {
+			t.Fatalf("first transaction operation = %#v, want transaction 1", operation)
+		}
+	}
+	if autocommit := query("SELECT 1", 'I', 7*time.Millisecond); autocommit.TransactionSequence != 0 {
+		t.Fatalf("autocommit operation = %#v, want no transaction", autocommit)
+	}
+	if second := query("BEGIN", 'T', 9*time.Millisecond); second.TransactionSequence != 2 {
+		t.Fatalf("second transaction operation = %#v, want transaction 2", second)
+	}
+}
+
 func TestDecoderRecognizesPostgreSQLTLSUpgrade(t *testing.T) {
 	decoder := New(protocol.Config{})
 	decoder.Observe(protocol.DirectionRequest, startupPacket(sslRequestCode), time.Now().UTC())

@@ -45,12 +45,14 @@ var (
 type Config struct {
 	Layout        installation.Layout
 	PreferredPort int
+	Build         BuildInfo
 }
 
 // Run composes, reconciles, publishes, and serves one per-user Portless daemon
 // until shutdown, replacement, cancellation, or a listener failure.
 func Run(ctx context.Context, config Config) error {
 	paths := config.Layout
+	build := normalizedBuildInfo(config.Build)
 	for _, directory := range []string{paths.Root, paths.Logs, paths.Temporary} {
 		if err := installation.EnsurePrivateDirectory(directory); err != nil {
 			return err
@@ -183,7 +185,11 @@ func Run(ctx context.Context, config Config) error {
 	})
 	apiHandler, err := apiserver.New(apiserver.Dependencies{
 		Application: app, Auth: authManager, Assets: portlessweb.Assets(),
-		DaemonControl: lifecycleAPIControl{handler: handler, logs: daemonlog.NewReader(paths.DaemonLog, authToken, ownershipKey)},
+		DaemonControl: lifecycleAPIControl{
+			handler: handler, logs: daemonlog.NewReader(paths.DaemonLog, authToken, ownershipKey), app: app,
+			build: build, runningBuildID: buildID, executable: executable,
+		},
+		SystemVersion: build.Version,
 		InspectRelay: func(ctx context.Context) (contract.RelayStatus, error) {
 			status, err := relay.Inspect(ctx)
 			return contract.RelayStatus(status), err
@@ -265,8 +271,12 @@ func Run(ctx context.Context, config Config) error {
 }
 
 type lifecycleAPIControl struct {
-	handler *lifecycle.Handler
-	logs    *daemonlog.Reader
+	handler        *lifecycle.Handler
+	logs           *daemonlog.Reader
+	app            *controlplane.Service
+	build          BuildInfo
+	runningBuildID string
+	executable     string
 }
 
 // Status adapts lifecycle identity into the public daemon status contract.
@@ -282,6 +292,58 @@ func (c lifecycleAPIControl) Status(ctx context.Context) (contract.DaemonStatus,
 		RecoveryProblems:   append([]string(nil), identity.RecoveryProblems...),
 		ActiveEnvironments: append([]string(nil), identity.ActiveEnvironments...),
 	}, nil
+}
+
+// Diagnostics returns one bounded operational snapshot for the daemon drawer.
+func (c lifecycleAPIControl) Diagnostics(ctx context.Context, includeStorage bool) (contract.DaemonDiagnostics, error) {
+	if err := ctx.Err(); err != nil {
+		return contract.DaemonDiagnostics{}, err
+	}
+	operational := c.app.Diagnostics(ctx, includeStorage)
+	result := contract.DaemonDiagnostics{
+		CollectedAt: time.Now().UTC(),
+		Inventory: contract.DaemonManagedInventory{
+			Processes: operational.Inventory.Processes, Containers: operational.Inventory.Containers,
+			ProxyListeners: operational.Inventory.ProxyListeners, ActiveEnvironments: operational.Inventory.ActiveEnvironments,
+			Problems: append([]string(nil), operational.Inventory.Problems...),
+		},
+		Recovery: contract.DaemonRecoveryStatus{
+			Result: operational.Recovery.Result, CompletedAt: operational.Recovery.CompletedAt,
+			DurationMS: operational.Recovery.Duration.Milliseconds(), Recovered: operational.Recovery.Recovered,
+			Problems: append([]string(nil), operational.Recovery.Problems...),
+		},
+		Build: contract.DaemonBuildProvenance{
+			Version: c.build.Version, Distribution: c.build.Distribution, Commit: c.build.Commit,
+			RunningBuildID: c.runningBuildID,
+		},
+	}
+	onDiskBuildID, err := installation.BuildIDForPath(c.executable)
+	if err != nil {
+		result.Build.Problem = err.Error()
+	} else {
+		result.Build.OnDiskBuildID = onDiskBuildID
+		result.Build.Current = onDiskBuildID == c.runningBuildID
+	}
+	if operational.Storage != nil {
+		storage := operational.Storage
+		result.Storage = &contract.DaemonStorageStatus{
+			DatabaseBytes: storage.DatabaseBytes, RecordingCount: storage.RecordingCount,
+			RecordedEventCount: storage.RecordedEventCount, RecordedBytes: storage.RecordedBytes,
+			LiveTrafficExchanges: storage.LiveTrafficExchanges, LiveTrafficBytes: storage.LiveTrafficBytes,
+			ServiceLogBytes: storage.ServiceLogBytes, DaemonLogBytes: storage.DaemonLogBytes,
+			TrafficExchangeLimitPerEnvironment: storage.TrafficExchangeLimitPerEnvironment,
+			TrafficPayloadLimitPerEnvironment:  storage.TrafficPayloadLimitPerEnvironment,
+			RecordingDefaultEventLimit:         storage.RecordingDefaultEventLimit,
+			RecordingMaximumEventLimit:         storage.RecordingMaximumEventLimit,
+			RecordingDefaultPayloadLimit:       storage.RecordingDefaultPayloadLimit,
+			RecordingMaximumPayloadLimit:       storage.RecordingMaximumPayloadLimit,
+			ServiceLogGenerationLimit:          storage.ServiceLogGenerationLimit,
+			ServiceLogStreamLimitBytes:         storage.ServiceLogStreamLimitBytes,
+			TrafficPrunedAt:                    storage.TrafficPrunedAt, ServiceLogsPrunedAt: storage.ServiceLogsPrunedAt,
+			Problems: append([]string(nil), storage.Problems...),
+		}
+	}
+	return result, nil
 }
 
 // Logs returns one bounded, safely redacted daemon-log tail.
@@ -351,4 +413,17 @@ func loadOrCreateKey(path string) (string, error) {
 		return "", err
 	}
 	return encoded, nil
+}
+
+func normalizedBuildInfo(value BuildInfo) BuildInfo {
+	if value.Version == "" {
+		value.Version = "dev"
+	}
+	if value.Distribution == "" {
+		value.Distribution = "source"
+	}
+	if value.Commit == "" {
+		value.Commit = "unknown"
+	}
+	return value
 }

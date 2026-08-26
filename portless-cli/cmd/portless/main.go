@@ -14,7 +14,7 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "__daemon":
-			os.Exit(daemon.Command(os.Args[2:], os.Stderr))
+			os.Exit(daemon.Command(os.Args[2:], os.Stderr, daemon.BuildInfo{Version: cli.Version, Distribution: cli.Distribution, Commit: cli.Commit}))
 		case "__relay":
 			os.Exit(relay.Command(os.Args[2:], os.Stderr, relay.PrepareRuntime))
 		case "__runner":

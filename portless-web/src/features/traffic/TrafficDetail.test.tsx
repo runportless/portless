@@ -258,10 +258,38 @@ describe('TrafficDetail', () => {
     expect(markup).toContain('>RESPONSE</button>')
     expect(markup).toContain('aria-label="request protocol messages"')
     expect(markup).toContain('<code>1 MESSAGE</code>')
+    expect(markup).toContain('aria-label="Message 1: pub"')
+    expect(markup).toContain('class="traffic-protocol-message__index" aria-hidden="true">01</span>')
     expect(markup).toContain('<dt>subject</dt><dd>orders.created</dd>')
     expect(markup).toContain('class="traffic-json"')
     expect(markup).toContain('class="traffic-json__key"')
     expect(markup).toContain('&quot;orderId&quot;')
     expect(markup).toContain('>SENT</b>')
+  })
+
+  it('avoids repeating protocol payloads and omits empty message fields', () => {
+    const sql = 'UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2'
+    const tcp = {
+      ...exchange,
+      protocol: 'tcp', method: undefined, host: undefined, path: undefined, requestTarget: undefined, status: undefined,
+      requestHeaders: undefined, responseHeaders: undefined, requestBody: undefined, responseBody: undefined,
+      source: 'inventory', target: 'inventory-postgres', targetProvider: 'container', requestBytes: 96, responseBytes: 0,
+      tcp: {
+        kind: 'operation', applicationProtocol: 'postgresql', operation: 'UPDATE', inspection: 'decoded', outcome: 'success',
+        requestMessageCount: 1, responseMessageCount: 0,
+        requestMessages: [{
+          type: 'parse', offsetMs: 0, summary: `Parse ${sql}`, wireBytes: 96,
+          contentType: 'text/x-sql', encoding: 'utf8', fields: [{ name: 'statement', value: '' }], content: sql,
+        }],
+      },
+    } as TrafficExchange
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
+
+    expect(markup.match(/UPDATE store_inventory/g)).toHaveLength(1)
+    expect(markup).not.toContain(`Parse ${sql}`)
+    expect(markup).not.toContain('<dt>statement</dt>')
+    expect(markup).not.toContain('aria-label="Message fields"')
+    expect(markup).toContain('<code>text/x-sql</code>')
+    expect(markup).toContain('<span>+0ms</span>')
   })
 })

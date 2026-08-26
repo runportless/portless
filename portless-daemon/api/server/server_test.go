@@ -52,6 +52,12 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		State: "ready", PID: 33083, StartedAt: time.Now().UTC().Add(-time.Minute),
 		InstanceID: "instance-current", BuildID: "build-current", ProtocolVersion: "2.0.0", APIVersion: contract.APIVersion,
 		RecoveryProblems: []string{}, ActiveEnvironments: []string{"billing/local"},
+	}, diagnostics: contract.DaemonDiagnostics{
+		CollectedAt: time.Now().UTC(),
+		Inventory:   contract.DaemonManagedInventory{Processes: 1, Containers: 2, ProxyListeners: 3, ActiveEnvironments: 1, Problems: []string{}},
+		Recovery:    contract.DaemonRecoveryStatus{Result: "healthy", DurationMS: 24, Recovered: 1, Problems: []string{}},
+		Build:       contract.DaemonBuildProvenance{Version: "0.8.0", Distribution: "source", Commit: "commit-current", RunningBuildID: "build-current", OnDiskBuildID: "build-current", Current: true},
+		Storage:     &contract.DaemonStorageStatus{DatabaseBytes: 4096, Problems: []string{}},
 	}, logs: contract.DaemonLogSnapshot{Content: "time=2026-08-25T12:00:00Z level=INFO msg=\"Portless daemon ready\"\n", Truncated: true}, handoff: contract.DaemonHandoffStatus{State: "ready", VerifiedAt: time.Now().UTC(), Problems: []string{}, ActiveEnvironments: []string{"billing/local"}}}
 	server, err := New(Dependencies{Application: app, Auth: authManager, Assets: assets, DaemonControl: daemonControl})
 	if err != nil {
@@ -210,6 +216,14 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	}
 	if daemonControl.handoffCalls != 0 {
 		t.Fatalf("shallow daemon status performed %d handoff audits", daemonControl.handoffCalls)
+	}
+	daemonDiagnostics := request(server, authManager, http.MethodGet, "/api/v1/daemon/diagnostics", "", true)
+	if daemonDiagnostics.Code != http.StatusOK || !strings.Contains(daemonDiagnostics.Body.String(), `"processes":1`) || strings.Contains(daemonDiagnostics.Body.String(), `"storage"`) || daemonControl.diagnosticsStorage {
+		t.Fatalf("daemon diagnostics response code=%d body=%s storage=%v", daemonDiagnostics.Code, daemonDiagnostics.Body.String(), daemonControl.diagnosticsStorage)
+	}
+	daemonStorage := request(server, authManager, http.MethodGet, "/api/v1/daemon/diagnostics?include=storage", "", true)
+	if daemonStorage.Code != http.StatusOK || !strings.Contains(daemonStorage.Body.String(), `"databaseBytes":4096`) || !daemonControl.diagnosticsStorage {
+		t.Fatalf("daemon storage response code=%d body=%s storage=%v", daemonStorage.Code, daemonStorage.Body.String(), daemonControl.diagnosticsStorage)
 	}
 	daemonLogs := request(server, authManager, http.MethodGet, "/api/v1/daemon/logs", "", true)
 	var logSnapshot contract.DaemonLogSnapshot
@@ -375,17 +389,28 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 }
 
 type fakeDaemonControl struct {
-	identity          contract.DaemonStatus
-	logs              contract.DaemonLogSnapshot
-	logsErr           error
-	logCalls          int
-	handoff           contract.DaemonHandoffStatus
-	handoffCalls      int
-	restartedInstance string
+	identity           contract.DaemonStatus
+	diagnostics        contract.DaemonDiagnostics
+	diagnosticsStorage bool
+	logs               contract.DaemonLogSnapshot
+	logsErr            error
+	logCalls           int
+	handoff            contract.DaemonHandoffStatus
+	handoffCalls       int
+	restartedInstance  string
 }
 
 func (f *fakeDaemonControl) Status(context.Context) (contract.DaemonStatus, error) {
 	return f.identity, nil
+}
+
+func (f *fakeDaemonControl) Diagnostics(_ context.Context, includeStorage bool) (contract.DaemonDiagnostics, error) {
+	f.diagnosticsStorage = includeStorage
+	result := f.diagnostics
+	if !includeStorage {
+		result.Storage = nil
+	}
+	return result, nil
 }
 
 func (f *fakeDaemonControl) Logs(context.Context) (contract.DaemonLogSnapshot, error) {

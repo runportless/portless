@@ -119,6 +119,16 @@ implementation details. Inspection responses must never expose secrets;
 providers keep secret-bearing runtime values separate from redacted safe
 values.
 
+The authenticated `GET /api/v1/daemon/diagnostics` endpoint supplies the web
+drawer with a bounded snapshot of ownership-proven runtime counts, the last
+startup reconciliation, linked build provenance, and the running executable's
+currency against its on-disk binary. `include=storage` additionally inspects
+fixed daemon-owned state and log locations, logical recording and live-traffic
+usage, configured retention bounds, and actual automatic-pruning timestamps.
+That storage work remains opt-in so routine status polling does not walk log
+directories. The response exposes sizes and results, never private paths or
+retained application payloads.
+
 ## Safety invariants
 
 - Discovery is static, bounded, read-only, and confined to its supplied
