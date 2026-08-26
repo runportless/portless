@@ -92,6 +92,14 @@ refuses to launch a duplicate or signal an unverified process. A normal
 restart can therefore keep an environment running; a forced replacement is an
 explicit recovery action and is not routine development workflow.
 
+Normal CLI, browser, MCP, and executable-change triggers use one in-process
+replacement coordinator. Concurrent triggers coalesce into one receipt, the
+old daemon cancels long-lived request contexts before a bounded drain, and the
+replacement carries the receipt through `exec` so diagnostics can report its
+ready time. Callers enforce a five-second end-to-end readiness deadline; the
+operational target is under two seconds. Forced and legacy recovery remains on
+the slower stop/start path and is outside this SLA.
+
 The privileged relay remains deliberately narrow. It binds the documented
 machine-wide loopback listeners, verifies its ownership receipt, drops to the
 installing user, and forwards bytes to the daemon. All application-aware
@@ -122,7 +130,8 @@ values.
 The authenticated `GET /api/v1/daemon/diagnostics` endpoint supplies the web
 drawer with a bounded snapshot of ownership-proven runtime counts, the last
 startup reconciliation, linked build provenance, and the running executable's
-currency against its on-disk binary. `include=storage` additionally inspects
+currency against its on-disk binary. It also reports the last completed restart
+receipt, duration, and SLA result. `include=storage` additionally inspects
 fixed daemon-owned state and log locations, logical recording and live-traffic
 usage, configured retention bounds, and actual automatic-pruning timestamps.
 That storage work remains opt-in so routine status polling does not walk log

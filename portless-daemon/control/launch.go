@@ -21,9 +21,12 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 	if err := installation.EnsurePrivateDirectory(paths.Root); err != nil {
 		return identity.Record{}, err
 	}
-	if inspection, err := m.inspectDaemon(ctx); err == nil && inspection.Compatible {
-		if m.keepCompatibleDaemon(ctx, inspection) {
+	if inspection, err := m.inspectDaemon(ctx); err == nil {
+		if inspection.Compatible && m.keepCompatibleDaemon(ctx, inspection) {
 			return inspection.Record, nil
+		}
+		if !inspection.CurrentBuild && inspection.Identity.ProtocolVersion == lifecycle.ProtocolVersion {
+			return m.restartOutdatedDaemon(ctx, inspection)
 		}
 	}
 	lock, err := os.OpenFile(paths.StartupLock, os.O_CREATE|os.O_RDWR, 0o600)
@@ -58,6 +61,9 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 		}
 		if inspection.Compatible && m.keepCompatibleDaemon(ctx, inspection) {
 			return inspection.Record, nil
+		}
+		if !inspection.CurrentBuild && inspection.Identity.ProtocolVersion == lifecycle.ProtocolVersion {
+			return m.restartOutdatedDaemon(ctx, inspection)
 		}
 		if _, err := m.stopVerifiedDaemon(ctx, inspection, StopOptions{Timeout: 15 * time.Second, Handoff: true}, false, "replace an outdated daemon"); err != nil {
 			return identity.Record{}, err

@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// DaemonRestartSLA is the end-to-end deadline for an authenticated normal
+// daemon replacement to publish a ready current-build instance.
+const DaemonRestartSLA = 5 * time.Second
+
 // Health is the unauthenticated compatibility response used by relay checks.
 type Health struct {
 	Ready      bool   `json:"ready"`
@@ -52,6 +56,7 @@ type DaemonDiagnostics struct {
 	Inventory   DaemonManagedInventory `json:"inventory"`
 	Recovery    DaemonRecoveryStatus   `json:"recovery"`
 	Build       DaemonBuildProvenance  `json:"build"`
+	LastRestart *DaemonRestartStatus   `json:"lastRestart,omitempty"`
 	Storage     *DaemonStorageStatus   `json:"storage,omitempty"`
 }
 
@@ -124,12 +129,33 @@ type DaemonHandoffStatus struct {
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 }
 
-// DaemonRestart reports an accepted daemon restart and handoff strategy.
+// DaemonRestart reports an accepted daemon restart, shared deadline, and
+// handoff strategy.
 type DaemonRestart struct {
-	Restarting         bool     `json:"restarting"`
-	PreviousInstanceID string   `json:"previousInstanceId"`
-	Handoff            bool     `json:"handoff"`
-	ActiveEnvironments []string `json:"activeEnvironments"`
+	Restarting         bool      `json:"restarting"`
+	RestartID          string    `json:"restartId"`
+	Reason             string    `json:"reason"`
+	PreviousInstanceID string    `json:"previousInstanceId"`
+	TargetBuildID      string    `json:"targetBuildId"`
+	AcceptedAt         time.Time `json:"acceptedAt"`
+	DeadlineAt         time.Time `json:"deadlineAt"`
+	Handoff            bool      `json:"handoff"`
+	ActiveEnvironments []string  `json:"activeEnvironments"`
+}
+
+// DaemonRestartStatus describes the most recent completed replacement without
+// exposing private authentication or runtime-ownership material.
+type DaemonRestartStatus struct {
+	RestartID          string    `json:"restartId"`
+	Reason             string    `json:"reason"`
+	PreviousInstanceID string    `json:"previousInstanceId"`
+	InstanceID         string    `json:"instanceId"`
+	TargetBuildID      string    `json:"targetBuildId"`
+	AcceptedAt         time.Time `json:"acceptedAt"`
+	DeadlineAt         time.Time `json:"deadlineAt"`
+	ReadyAt            time.Time `json:"readyAt"`
+	DurationMS         int64     `json:"durationMs"`
+	WithinSLA          bool      `json:"withinSla"`
 }
 
 // DaemonRestartRequest identifies the daemon instance the caller intends to restart.

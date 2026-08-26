@@ -355,11 +355,12 @@ func (r *recoveryContainerRuntime) Start(_ context.Context, _, _ string, service
 		Environment: map[string]string{"POSTGRES_USER": "portless", "POSTGRES_DB": "portless", "POSTGRES_PASSWORD": "private"},
 	}, nil
 }
-func (r *recoveryContainerRuntime) Adopt(context.Context, string, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (container.StartResult, error) {
-	return container.StartResult{ContainerName: r.inspection.ContainerName, Port: r.inspection.Port}, nil
-}
-func (r *recoveryContainerRuntime) InspectRecovery(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (container.RecoveryInspection, error) {
-	return r.inspection, nil
+func (r *recoveryContainerRuntime) Recover(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string, string) (container.RecoveryResult, error) {
+	result := container.RecoveryResult{Inspection: r.inspection}
+	if r.inspection.State == container.RecoveryRunning {
+		result.Start = &container.StartResult{ContainerName: r.inspection.ContainerName, Port: r.inspection.Port}
+	}
+	return result, nil
 }
 func (r *recoveryContainerRuntime) StopEnvironment(context.Context, string, bool) error { return nil }
 func (r *recoveryContainerRuntime) StopService(context.Context, string, string) error   { return nil }

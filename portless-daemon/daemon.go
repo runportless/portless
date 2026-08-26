@@ -43,9 +43,10 @@ var (
 // Config defines the installation layout and preferred private control port
 // for a daemon process.
 type Config struct {
-	Layout        installation.Layout
-	PreferredPort int
-	Build         BuildInfo
+	Layout         installation.Layout
+	PreferredPort  int
+	Build          BuildInfo
+	RestartReceipt *contract.DaemonRestart
 }
 
 // Run composes, reconciles, publishes, and serves one per-user Portless daemon
@@ -119,7 +120,11 @@ func Run(ctx context.Context, config Config) error {
 		DataDirectory: paths.Root, InstallationKey: ownershipKey, DaemonInstanceID: instanceID, Executable: executable,
 		PrivateTCPIngress: e2ePrivateTCPIngress,
 	})
-	defer app.Close(context.Background())
+	var closeApplicationOnce sync.Once
+	closeApplication := func(closeContext context.Context) {
+		closeApplicationOnce.Do(func() { app.Close(closeContext) })
+	}
+	defer closeApplication(context.Background())
 	// Recovered processes can health-check through source-aware TCP endpoints.
 	// Serve their durable DNS allocations before reconciliation begins.
 	dnsListener, err := listenPrivateSocket(paths.DNSSocket, "DNS")
@@ -168,26 +173,21 @@ func Run(ctx context.Context, config Config) error {
 	defer removeIngressSocket(paths.IngressSocket)
 	port := listener.Addr().(*net.TCPAddr).Port
 	shutdownRequested := make(chan struct{})
-	restartRequested := make(chan struct{}, 1)
-	replacementRequested := make(chan struct{}, 1)
+	replacements := newReplacementCoordinator()
 	var shutdownOnce sync.Once
 	handler := lifecycle.NewHandler(lifecycle.HandlerConfig{
 		Auth: authManager, Identity: identity,
 		HandoffStatus:      app.CanHandoff,
 		ActiveEnvironments: app.ActiveEnvironments,
 		Shutdown:           func() { shutdownOnce.Do(func() { close(shutdownRequested) }) },
-		Replace: func() {
-			select {
-			case restartRequested <- struct{}{}:
-			default:
-			}
-		},
 	})
+	lastRestart := pendingRestartStatus(config.RestartReceipt, instanceID)
 	apiHandler, err := apiserver.New(apiserver.Dependencies{
 		Application: app, Auth: authManager, Assets: portlessweb.Assets(),
 		DaemonControl: lifecycleAPIControl{
 			handler: handler, logs: daemonlog.NewReader(paths.DaemonLog, authToken, ownershipKey), app: app,
 			build: build, runningBuildID: buildID, executable: executable,
+			replacements: replacements, lastRestart: lastRestart,
 		},
 		SystemVersion: build.Version,
 		InspectRelay: func(ctx context.Context) (contract.RelayStatus, error) {
@@ -200,14 +200,18 @@ func Run(ctx context.Context, config Config) error {
 		return err
 	}
 	handler.SetNext(apiHandler)
+	serverContext, stopServing := context.WithCancel(ctx)
+	defer stopServing()
 	controlServer := &http.Server{
 		Handler:           handler,
+		BaseContext:       func(net.Listener) context.Context { return serverContext },
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 	}
 	ingressServer := &http.Server{
 		Handler:           handler,
+		BaseContext:       func(net.Listener) context.Context { return serverContext },
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    64 << 10,
@@ -222,47 +226,56 @@ func Run(ctx context.Context, config Config) error {
 		return fmt.Errorf("publish daemon discovery record: %w", err)
 	}
 	defer daemonidentity.RemoveOwn(paths, identity.InstanceID)
-	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.IngressSocket, "dnsSocket", paths.DNSSocket, "pid", os.Getpid(), "instance", identity.InstanceID, "build", identity.BuildID[:12])
+	completeRestartStatus(lastRestart, time.Now().UTC())
 	go func() {
 		errChannel <- controlServer.Serve(listener)
 	}()
 	go func() {
 		errChannel <- ingressServer.Serve(ingressListener)
 	}()
+	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.IngressSocket, "dnsSocket", paths.DNSSocket, "pid", os.Getpid(), "instance", identity.InstanceID, "build", identity.BuildID[:12])
+	if lastRestart != nil {
+		arguments := []any{"event", "daemon.restart.complete", "restart", lastRestart.RestartID, "reason", lastRestart.Reason, "previousInstance", lastRestart.PreviousInstanceID, "instance", lastRestart.InstanceID, "targetBuild", lastRestart.TargetBuildID, "durationMs", lastRestart.DurationMS, "withinSLA", lastRestart.WithinSLA}
+		if lastRestart.WithinSLA {
+			slog.Info("Portless daemon restart complete", arguments...)
+		} else {
+			slog.Warn("Portless daemon restart missed readiness SLA", arguments...)
+		}
+	}
 	watchContext, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
-	go watchExecutable(watchContext, executable, buildID, app.CanHandoff, replacementRequested)
+	go watchExecutable(watchContext, executable, buildID, app.CanHandoff, func(targetBuildID string) {
+		activeEnvironments, _ := app.ActiveEnvironments(watchContext)
+		receipt, prepareErr := replacements.prepare("executable-change", instanceID, targetBuildID, time.Now().UTC(), activeEnvironments, ErrExecutableChanged)
+		if prepareErr != nil {
+			slog.Error("Prepare automatic daemon replacement", "error", prepareErr)
+			return
+		}
+		replacements.commit(receipt.RestartID)
+	})
 	select {
 	case <-ctx.Done():
 		stopDNS()
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
+		return shutdownHTTPServers(stopServing, ordinaryShutdownTimeout, controlServer, ingressServer)
 	case <-shutdownRequested:
 		stopDNS()
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		return errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
-	case <-replacementRequested:
+		return shutdownHTTPServers(stopServing, ordinaryShutdownTimeout, controlServer, ingressServer)
+	case replacement := <-replacements.requests:
 		stopDNS()
 		_ = controlStore.SetDaemonInstanceState(context.Background(), instanceID, "draining", false)
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		shutdownErr := errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
-		return errors.Join(ErrExecutableChanged, shutdownErr)
-	case <-restartRequested:
-		stopDNS()
-		_ = controlStore.SetDaemonInstanceState(context.Background(), instanceID, "draining", false)
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		shutdownErr := errors.Join(controlServer.Shutdown(shutdownContext), ingressServer.Shutdown(shutdownContext))
-		return errors.Join(ErrRestartRequested, shutdownErr)
+		slog.Info("Portless daemon restart draining", "event", "daemon.restart.draining", "restart", replacement.receipt.RestartID, "reason", replacement.receipt.Reason)
+		drainStartedAt := time.Now()
+		shutdownErr := shutdownHTTPServers(stopServing, replacementDrainTimeout, controlServer, ingressServer)
+		drainDuration := time.Since(drainStartedAt)
+		cleanupStartedAt := time.Now()
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), replacementCleanupTimeout)
+		closeApplication(cleanupContext)
+		cleanupCancel()
+		slog.Info("Portless daemon restart exec", "event", "daemon.restart.exec", "restart", replacement.receipt.RestartID, "drainMs", drainDuration.Milliseconds(), "cleanupMs", time.Since(cleanupStartedAt).Milliseconds(), "elapsedMs", time.Since(replacement.receipt.AcceptedAt).Milliseconds())
+		return errors.Join(&replacementExit{receipt: replacement.receipt, cause: replacement.cause}, shutdownErr)
 	case err := <-errChannel:
 		stopDNS()
-		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		_ = controlServer.Shutdown(shutdownContext)
-		_ = ingressServer.Shutdown(shutdownContext)
+		_ = shutdownHTTPServers(stopServing, ordinaryShutdownTimeout, controlServer, ingressServer)
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -277,6 +290,8 @@ type lifecycleAPIControl struct {
 	build          BuildInfo
 	runningBuildID string
 	executable     string
+	replacements   *replacementCoordinator
+	lastRestart    *contract.DaemonRestartStatus
 }
 
 // Status adapts lifecycle identity into the public daemon status contract.
@@ -316,6 +331,7 @@ func (c lifecycleAPIControl) Diagnostics(ctx context.Context, includeStorage boo
 			Version: c.build.Version, Distribution: c.build.Distribution, Commit: c.build.Commit,
 			RunningBuildID: c.runningBuildID,
 		},
+		LastRestart: cloneRestartStatus(c.lastRestart),
 	}
 	onDiskBuildID, err := installation.BuildIDForPath(c.executable)
 	if err != nil {
@@ -369,7 +385,8 @@ func (c lifecycleAPIControl) HandoffStatus(ctx context.Context) (contract.Daemon
 }
 
 // Restart requests lifecycle replacement and adapts its structured result or error.
-func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID string) (contract.DaemonRestart, error) {
+func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID, reason string) (contract.DaemonRestart, error) {
+	auditStartedAt := time.Now()
 	result, err := c.handler.Restart(ctx, instanceID)
 	if err != nil {
 		var lifecycleError *lifecycle.LifecycleError
@@ -382,10 +399,53 @@ func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID string) (co
 		}
 		return contract.DaemonRestart{}, err
 	}
-	return contract.DaemonRestart{
-		Restarting: true, PreviousInstanceID: result.InstanceID, Handoff: result.Handoff,
-		ActiveEnvironments: append([]string(nil), result.ActiveEnvironments...),
-	}, nil
+	targetBuildID, err := installation.BuildIDForPath(c.executable)
+	if err != nil {
+		return contract.DaemonRestart{}, fmt.Errorf("inspect replacement daemon build: %w", err)
+	}
+	acceptedAt := time.Now().UTC()
+	receipt, err := c.replacements.prepare(reason, result.InstanceID, targetBuildID, acceptedAt, result.ActiveEnvironments, ErrRestartRequested)
+	if err != nil {
+		return contract.DaemonRestart{}, err
+	}
+	slog.Info("Portless daemon restart accepted", "event", "daemon.restart.accepted", "restart", receipt.RestartID, "reason", receipt.Reason, "deadline", receipt.DeadlineAt, "auditMs", time.Since(auditStartedAt).Milliseconds())
+	return receipt, nil
+}
+
+// CommitRestart begins a prepared replacement after the API response is flushed.
+func (c lifecycleAPIControl) CommitRestart(restartID string) {
+	if !c.replacements.commit(restartID) {
+		slog.Warn("Portless daemon restart commit ignored", "restart", restartID)
+	}
+}
+
+func pendingRestartStatus(receipt *contract.DaemonRestart, instanceID string) *contract.DaemonRestartStatus {
+	if receipt == nil {
+		return nil
+	}
+	return &contract.DaemonRestartStatus{
+		RestartID: receipt.RestartID, Reason: receipt.Reason,
+		PreviousInstanceID: receipt.PreviousInstanceID, InstanceID: instanceID,
+		TargetBuildID: receipt.TargetBuildID, AcceptedAt: receipt.AcceptedAt,
+		DeadlineAt: receipt.DeadlineAt,
+	}
+}
+
+func completeRestartStatus(status *contract.DaemonRestartStatus, readyAt time.Time) {
+	if status == nil {
+		return
+	}
+	status.ReadyAt = readyAt
+	status.DurationMS = max(0, readyAt.Sub(status.AcceptedAt).Milliseconds())
+	status.WithinSLA = !readyAt.After(status.DeadlineAt)
+}
+
+func cloneRestartStatus(status *contract.DaemonRestartStatus) *contract.DaemonRestartStatus {
+	if status == nil {
+		return nil
+	}
+	clone := *status
+	return &clone
 }
 
 func newInstanceID() (string, error) {

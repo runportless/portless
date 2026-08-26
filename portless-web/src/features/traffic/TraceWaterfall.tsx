@@ -4,12 +4,31 @@ import type { TrafficCorrelation, TrafficExchange, TrafficTrace, TrafficTraceSpa
 
 function spanOperation(exchange: TrafficExchange) {
   if (exchange.protocol === 'http') return `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}`
-  return `${exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'} ${exchange.tcp?.operation || 'SESSION'}`
+  const application = exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'
+  if (exchange.tcp?.kind === 'operation') return `${application} · ${exchange.tcp.operation || 'UNKNOWN'}`
+  return `${application} SESSION`
 }
 
-type TraceWaterfallItem =
+export type TraceWaterfallItem =
   | { kind: 'span'; span: TrafficTraceSpan }
   | { kind: 'transaction'; group: number; spans: TrafficTraceSpan[] }
+
+export type TraceNavigationItem =
+  | { kind: 'exchange'; key: string; exchange: TrafficExchange }
+  | { kind: 'transaction'; key: string; group: number; exchange: TrafficExchange; spans: TrafficTraceSpan[]; expanded: boolean }
+
+const transactionBoundaryOperations = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'])
+
+export function traceTransactionCommandSpans(spans: TrafficTraceSpan[]) {
+  const commands = spans.filter((span) => !transactionBoundaryOperations.has((span.exchange.tcp?.operation || '').toUpperCase()))
+  return commands.length > 0 ? commands : spans
+}
+
+function transactionCommandLabel(spans: TrafficTraceSpan[]) {
+  const operations = traceTransactionCommandSpans(spans).map((span) => span.exchange.tcp?.operation || 'COMMAND')
+  if (operations.length <= 3) return operations.join(' + ')
+  return `${operations.slice(0, 2).join(' + ')} + ${operations.length - 2} MORE`
+}
 
 function visibleSpan(span: TrafficTraceSpan, includeBackground: boolean) {
   const exchange = span.exchange
@@ -18,7 +37,9 @@ function visibleSpan(span: TrafficTraceSpan, includeBackground: boolean) {
 }
 
 export function traceWaterfallItems(trace: TrafficTrace, includeBackground = false): TraceWaterfallItem[] {
-  const spans = (trace.spans || []).filter((span) => visibleSpan(span, includeBackground))
+  const spans = (trace.spans || [])
+    .filter((span) => visibleSpan(span, includeBackground))
+    .sort((left, right) => left.startOffsetMs - right.startOffsetMs || left.exchange.sequence - right.exchange.sequence)
   const transactions = new Map<number, TrafficTraceSpan[]>()
   for (const span of spans) {
     if (!span.transactionGroup) continue
@@ -42,6 +63,63 @@ export function traceWaterfallItems(trace: TrafficTrace, includeBackground = fal
   return items
 }
 
+function transactionRepresentative(spans: TrafficTraceSpan[]) {
+  return spans.find((span) => span.exchange.error || span.exchange.tcp?.outcome === 'error' || span.exchange.tcp?.outcome === 'incomplete')
+    || spans.find((span) => !transactionBoundaryOperations.has((span.exchange.tcp?.operation || '').toUpperCase()))
+    || spans[0]
+}
+
+function transactionExchange(spans: TrafficTraceSpan[]) {
+  const ordered = [...spans].sort((left, right) => left.startOffsetMs - right.startOffsetMs || left.exchange.sequence - right.exchange.sequence)
+  const representative = transactionRepresentative(ordered).exchange
+  const first = ordered[0].exchange
+  const start = Math.min(...ordered.map((span) => span.startOffsetMs))
+  const end = Math.max(...ordered.map((span) => span.startOffsetMs + span.exchange.durationMs))
+  const error = ordered.find((span) => span.exchange.error)?.exchange.error
+  const fault = ordered.find((span) => span.exchange.fault)?.exchange.fault
+  const recording = ordered.find((span) => span.exchange.recording)?.exchange.recording
+  const outcome: NonNullable<TrafficExchange['tcp']>['outcome'] = ordered.some((span) => span.exchange.tcp?.outcome === 'error')
+    ? 'error'
+    : ordered.some((span) => span.exchange.tcp?.outcome === 'incomplete') ? 'incomplete' : 'success'
+  return {
+    ...representative,
+    sequence: first.sequence,
+    startedAt: first.startedAt,
+    completedAt: ordered[ordered.length - 1].exchange.completedAt,
+    durationMs: Math.max(0, end - start),
+    requestBytes: ordered.reduce((total, span) => total + Math.max(0, span.exchange.requestBytes), 0),
+    responseBytes: ordered.reduce((total, span) => total + Math.max(0, span.exchange.responseBytes), 0),
+    fault,
+    recording,
+    error,
+    tcp: representative.tcp ? { ...representative.tcp, operation: 'TRANSACTION', outcome } : representative.tcp,
+  } as TrafficExchange
+}
+
+function transactionNavigationItem(item: Extract<TraceWaterfallItem, { kind: 'transaction' }>, expanded: boolean): TraceNavigationItem {
+  return {
+    kind: 'transaction',
+    key: `transaction:${item.group}`,
+    group: item.group,
+    exchange: transactionExchange(item.spans),
+    spans: item.spans,
+    expanded,
+  }
+}
+
+export function exchangeNavigationItem(exchange: TrafficExchange): TraceNavigationItem {
+  return { kind: 'exchange', key: `exchange:${exchange.sequence}`, exchange }
+}
+
+export function traceNavigationItems(trace: TrafficTrace, includeBackground = false, expandedTransactions: ReadonlySet<number> = new Set()): TraceNavigationItem[] {
+  return traceWaterfallItems(trace, includeBackground).flatMap((item) => {
+    if (item.kind === 'span') return [exchangeNavigationItem(item.span.exchange)]
+    const expanded = expandedTransactions.has(item.group)
+    const transaction = transactionNavigationItem(item, expanded)
+    return expanded ? [transaction, ...item.spans.map((span) => exchangeNavigationItem(span.exchange))] : [transaction]
+  })
+}
+
 function spanStyle(startOffsetMs: number, durationMs: number, depth: number, total: number) {
   const left = Math.max(0, Math.min(100, startOffsetMs / total * 100))
   const width = Math.max(1.25, Math.min(100 - left, durationMs / total * 100))
@@ -60,63 +138,65 @@ function weakestCorrelation(spans: TrafficTraceSpan[]): TrafficCorrelation {
   return spans.reduce<TrafficCorrelation>((current, span) => strength[span.correlation] > strength[current] ? span.correlation : current, 'exact')
 }
 
-function TraceSpanRow({ span, total, depth = span.depth, className = '', onInspect }: {
+function TraceSpanRow({ span, total, depth = span.depth, className = '', dependencySummary = span.exchange.protocol === 'tcp', onInspect }: {
   span: TrafficTraceSpan
   total: number
   depth?: number
   className?: string
+  dependencySummary?: boolean
   onInspect: (exchange: TrafficExchange) => void
 }) {
   const exchange = span.exchange
-  return <button className={`trace-span${spanTone(exchange)}${className}`} style={spanStyle(span.startOffsetMs, exchange.durationMs, depth, total)} type="button" onClick={() => onInspect(exchange)} aria-label={`Inspect ${exchange.source} to ${exchange.target} ${spanOperation(exchange)}`}>
-    <span className="trace-span__label"><strong>{exchange.source} <i>→</i> {exchange.target}</strong><small>{spanOperation(exchange)}</small></span>
+  return <button className={`trace-span${dependencySummary ? ' trace-span--dependency-summary' : ''}${spanTone(exchange)}${className}`} style={spanStyle(span.startOffsetMs, exchange.durationMs, depth, total)} type="button" onClick={() => onInspect(exchange)} aria-label={`Inspect ${exchange.source} to ${exchange.target} ${spanOperation(exchange)}`}>
+    <span className="trace-span__label"><strong>{dependencySummary && <span className="trace-span__disclosure-placeholder" aria-hidden="true" />}{exchange.source} <i>→</i> {exchange.target}</strong><small>{spanOperation(exchange)}</small></span>
     <span className="trace-span__track"><i /><small>{duration(exchange.durationMs)}</small></span>
     <span className={`correlation-badge correlation-badge--${span.correlation}`}>{span.correlation}</span>
   </button>
 }
 
-export function TraceWaterfall({ trace, includeBackground = false, onExchange }: { trace: TrafficTrace; includeBackground?: boolean; onExchange: (exchange: TrafficExchange) => void }) {
+export function TraceWaterfall({ trace, includeBackground = false, expandedTransactions, onTransactionToggle, onItem }: {
+  trace: TrafficTrace
+  includeBackground?: boolean
+  expandedTransactions: ReadonlySet<number>
+  onTransactionToggle: (group: number) => void
+  onItem: (item: TraceNavigationItem) => void
+}) {
   const [maximized, setMaximized] = useState(false)
-  const [expandedTransactions, setExpandedTransactions] = useState<Set<number>>(() => new Set())
   useEffect(() => {
     if (!maximized) return
     const restore = (event: KeyboardEvent) => { if (event.key === 'Escape') setMaximized(false) }
     window.addEventListener('keydown', restore)
     return () => window.removeEventListener('keydown', restore)
   }, [maximized])
-  useEffect(() => setExpandedTransactions(new Set()), [trace.number])
   const total = Math.max(1, trace.durationMs)
-  const inspect = (exchange: TrafficExchange) => { setMaximized(false); onExchange(exchange) }
-  const toggleTransaction = (group: number) => setExpandedTransactions((current) => {
-    const next = new Set(current)
-    if (next.has(group)) next.delete(group)
-    else next.add(group)
-    return next
-  })
+  const inspect = (item: TraceNavigationItem) => { setMaximized(false); onItem(item) }
   return <div className={`trace-waterfall${maximized ? ' panel trace-waterfall--maximized' : ''}`} role="region" aria-label="Trace waterfall">
     {maximized && <div className="panel-title trace-waterfall__toolbar"><span>TRACE WATERFALL</span><div><button className="icon-button" type="button" title="Restore trace" aria-label="Restore trace" aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div></div>}
     <div className="trace-waterfall__content">
     <div className="trace-waterfall__axis"><span>SERVICE / OPERATION</span><div><i>0</i><i>{duration(Math.round(total / 2))}</i><i>{duration(total)}</i></div>{!maximized && <button className="trace-waterfall__size" type="button" title="Maximize trace" aria-label="Maximize trace" aria-pressed="false" onClick={() => setMaximized(true)}><TraceSizeIcon /></button>}</div>
     {traceWaterfallItems(trace, includeBackground).map((item) => {
-      if (item.kind === 'span') return <TraceSpanRow key={item.span.exchange.sequence} span={item.span} total={total} onInspect={inspect} />
+      if (item.kind === 'span') return <TraceSpanRow key={item.span.exchange.sequence} span={item.span} total={total} onInspect={(exchange) => inspect(exchangeNavigationItem(exchange))} />
 
       const first = item.spans[0]
       const exchange = first.exchange
       const expanded = expandedTransactions.has(item.group)
+      const navigationItem = transactionNavigationItem(item, expanded)
       const start = Math.min(...item.spans.map((span) => span.startOffsetMs))
       const end = Math.max(...item.spans.map((span) => span.startOffsetMs + span.exchange.durationMs))
       const depth = Math.min(...item.spans.map((span) => span.depth))
       const application = exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'
-      const operationLabel = `${item.spans.length} ${item.spans.length === 1 ? 'OPERATION' : 'OPERATIONS'}`
+      const commandSpans = traceTransactionCommandSpans(item.spans)
+      const commandLabel = `${commandSpans.length} ${commandSpans.length === 1 ? 'command' : 'commands'}`
       const tone = item.spans.some((span) => spanTone(span.exchange) === ' is-error') ? ' is-error' : item.spans.some((span) => span.exchange.fault) ? ' is-faulted' : ' is-tcp'
       const correlation = weakestCorrelation(item.spans)
       return <Fragment key={`transaction-${item.group}`}>
-        <button className={`trace-span trace-span--transaction${tone}`} style={spanStyle(start, Math.max(0, end - start), depth, total)} type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${exchange.source} to ${exchange.target} ${application} transaction with ${operationLabel.toLowerCase()}`} onClick={() => toggleTransaction(item.group)}>
-          <span className="trace-span__label"><strong><b className="trace-span__disclosure">{expanded ? '−' : '+'}</b>{exchange.source} <i>→</i> {exchange.target}</strong><small>{application} TRANSACTION · {operationLabel}</small></span>
+        <div className={`trace-span trace-span--dependency-summary trace-span--transaction${tone}`} style={spanStyle(start, Math.max(0, end - start), depth, total)} aria-expanded={expanded}>
+          <button className="trace-span__transaction-inspect" type="button" aria-label={`Inspect ${exchange.source} to ${exchange.target} ${application} command summary with ${commandLabel}`} onClick={() => inspect(navigationItem)} />
+          <span className="trace-span__label"><strong><button className="trace-span__disclosure" type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${exchange.source} to ${exchange.target} ${application} TCP details`} onClick={() => onTransactionToggle(item.group)}>{expanded ? '−' : '+'}</button>{exchange.source} <i>→</i> {exchange.target}</strong><small>{application} · {transactionCommandLabel(item.spans)}</small></span>
           <span className="trace-span__track"><i /><small>{duration(Math.max(0, end - start))}</small></span>
           <span className={`correlation-badge correlation-badge--${correlation}`}>{correlation}</span>
-        </button>
-        {expanded && item.spans.map((span) => <TraceSpanRow key={span.exchange.sequence} span={span} total={total} depth={span.depth + 1} className=" trace-span--transaction-child" onInspect={inspect} />)}
+        </div>
+        {expanded && item.spans.map((span) => <TraceSpanRow key={span.exchange.sequence} span={span} total={total} depth={span.depth + 1} className=" trace-span--transaction-child" dependencySummary={false} onInspect={(exchange) => inspect(exchangeNavigationItem(exchange))} />)}
       </Fragment>
     })}
     </div>

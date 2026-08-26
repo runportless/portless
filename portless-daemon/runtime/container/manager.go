@@ -130,44 +130,24 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	return runtime.Start(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
 }
 
-// Adopt resumes management of a verified resource container after daemon replacement.
-func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, generation int64, logsRoot string) (StartResult, error) {
+// Recover verifies and resumes management of a resource container after daemon replacement.
+func (m *Manager) Recover(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName, logsRoot string) (RecoveryResult, error) {
 	plan, err := m.resourcePlan(service)
 	if err != nil {
-		return StartResult{}, err
+		return RecoveryResult{}, err
 	}
 	runtime, err := m.readyRuntime(ctx)
 	if err != nil {
-		return StartResult{}, err
+		return RecoveryResult{}, err
 	}
-	adopter, ok := runtime.(Adopter)
+	recoverer, ok := runtime.(Recoverer)
 	if !ok {
-		return StartResult{}, errors.New("selected container runtime does not support adoption")
+		return RecoveryResult{}, errors.New("selected container runtime does not support recovery")
 	}
 	if err := m.markUsed(runtime.Name()); err != nil {
-		return StartResult{}, fmt.Errorf("record used container runtime: %w", err)
+		return RecoveryResult{}, fmt.Errorf("record used container runtime: %w", err)
 	}
-	return adopter.Adopt(ctx, environmentName, environmentKey, service, plan, generation, logsRoot)
-}
-
-// InspectRecovery verifies whether a persisted managed container is running, stopped, or conclusively missing.
-func (m *Manager) InspectRecovery(ctx context.Context, environmentKey string, service model.ServiceDefinition, generation int64, containerName string) (RecoveryInspection, error) {
-	plan, err := m.resourcePlan(service)
-	if err != nil {
-		return RecoveryInspection{}, err
-	}
-	runtime, err := m.readyRuntime(ctx)
-	if err != nil {
-		return RecoveryInspection{}, err
-	}
-	inspector, ok := runtime.(RecoveryInspector)
-	if !ok {
-		return RecoveryInspection{}, errors.New("selected container runtime does not support recovery inspection")
-	}
-	if err := m.markUsed(runtime.Name()); err != nil {
-		return RecoveryInspection{}, fmt.Errorf("record used container runtime: %w", err)
-	}
-	return inspector.InspectRecovery(ctx, environmentKey, service, plan, generation, containerName)
+	return recoverer.Recover(ctx, environmentKey, service, plan, generation, containerName, logsRoot)
 }
 
 // Verify checks persisted container identity and ownership through the selected runtime.

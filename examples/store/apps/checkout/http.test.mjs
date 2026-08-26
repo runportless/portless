@@ -28,6 +28,7 @@ test('checkout serves a browser page that exercises the JSON POST endpoint', asy
     assert.match(page, /value="coffee-mug"/)
     assert.match(page, /value="usb-c-cable"/)
     assert.match(page, /id="theme-toggle"/)
+    assert.match(page, /id="reset-inventory-button"/)
     assert.match(page, /class="brand__signal"/)
     assert.match(page, /id="request-preview"/)
     assert.match(page, /src="\/checkout\.js"/)
@@ -43,6 +44,7 @@ test('checkout serves a browser page that exercises the JSON POST endpoint', asy
     assert.match(scriptResponse.headers.get('content-type') || '', /^text\/javascript;/)
     const script = await scriptResponse.text()
     assert.match(script, /fetch\('\/checkout'/)
+    assert.match(script, /fetch\('\/inventory\/reset'/)
     assert.match(script, /method: 'POST'/)
     assert.match(script, /'content-type': 'application\/json'/)
     assert.match(script, /body: JSON\.stringify\(payload\)/)
@@ -50,7 +52,42 @@ test('checkout serves a browser page that exercises the JSON POST endpoint', asy
     assert.match(script, /window\.localStorage\.setItem\(themeStorageKey, next\)/)
     assert.match(script, /root\.dataset\.theme = theme/)
     assert.match(script, /themeToggle\.addEventListener\('click'/)
+    assert.match(script, /resetButton\.addEventListener\('click'/)
   })
+})
+
+test('checkout resets inventory through the inventory service with propagated trace context', async () => {
+  const calls = []
+  const reset = {
+    status: 'reset',
+    items: [
+      { sku: 'coffee-mug', name: 'Ceramic Coffee Mug', onHand: 24, warehouse: 'ord-01' },
+      { sku: 'mechanical-keyboard', name: 'Mechanical Keyboard', onHand: 8, warehouse: 'ord-01' },
+      { sku: 'usb-c-cable', name: 'USB-C Cable', onHand: 0, warehouse: 'dfw-02' },
+    ],
+  }
+  await withServer({
+    inventoryURL: 'http://inventory',
+    ordersURL: 'http://orders',
+    async requestJSON(url, options) {
+      calls.push({ url, options })
+      return { status: 200, value: reset }
+    },
+  }, async (origin) => {
+    const response = await fetch(`${origin}/inventory/reset`, {
+      method: 'POST',
+      headers: { traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' },
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), reset)
+  })
+  assert.deepEqual(calls, [{
+    url: 'http://inventory/inventory/reset',
+    options: {
+      method: 'POST',
+      headers: { traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' },
+    },
+  }])
 })
 
 test('checkout validates inventory and creates an order with propagated trace context', async () => {

@@ -15,6 +15,11 @@ import jakarta.annotation.PostConstruct;
 
 @Service
 public class InventoryCatalog {
+    private static final List<InventoryItem> DEFAULT_ITEMS = List.of(
+            new InventoryItem("coffee-mug", "Ceramic Coffee Mug", 24, "ord-01"),
+            new InventoryItem("mechanical-keyboard", "Mechanical Keyboard", 8, "ord-01"),
+            new InventoryItem("usb-c-cable", "USB-C Cable", 0, "dfw-02"));
+
     static final String CREATE_INVENTORY_SQL = """
             CREATE TABLE IF NOT EXISTS store_inventory (
               sku TEXT PRIMARY KEY,
@@ -66,6 +71,14 @@ public class InventoryCatalog {
             VALUES (?, ?, ?, ?)
             ON CONFLICT (sku) DO NOTHING
             """;
+    private static final String RESET_ITEM_SQL = """
+            INSERT INTO store_inventory (sku, name, on_hand, warehouse)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (sku) DO UPDATE
+            SET name = EXCLUDED.name,
+                on_hand = EXCLUDED.on_hand,
+                warehouse = EXCLUDED.warehouse
+            """;
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
@@ -79,9 +92,7 @@ public class InventoryCatalog {
     void migrate() {
         jdbc.execute(CREATE_INVENTORY_SQL);
         jdbc.execute(CREATE_RESERVATIONS_SQL);
-        seed(new InventoryItem("coffee-mug", "Ceramic Coffee Mug", 24, "ord-01"));
-        seed(new InventoryItem("mechanical-keyboard", "Mechanical Keyboard", 8, "ord-01"));
-        seed(new InventoryItem("usb-c-cable", "USB-C Cable", 0, "dfw-02"));
+        DEFAULT_ITEMS.forEach(this::seed);
     }
 
     public List<InventoryItem> items() {
@@ -141,6 +152,17 @@ public class InventoryCatalog {
             return count != null && count > 0;
         });
         return Boolean.TRUE.equals(released);
+    }
+
+    public List<InventoryItem> reset() {
+        return transactions.execute(status -> {
+            jdbc.execute("LOCK TABLE store_inventory, store_inventory_reservations IN SHARE ROW EXCLUSIVE MODE");
+            for (InventoryItem item : DEFAULT_ITEMS) {
+                jdbc.update(RESET_ITEM_SQL, item.sku(), item.name(), item.onHand(), item.warehouse());
+            }
+            jdbc.update("DELETE FROM store_inventory_reservations");
+            return items();
+        });
     }
 
     private void seed(InventoryItem item) {

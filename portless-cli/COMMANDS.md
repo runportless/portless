@@ -445,20 +445,24 @@ help.
 | --- | --- |
 | `portless daemon status` | Inspect and authenticate the local daemon without starting a replacement, including a fresh runtime-handoff safety audit. |
 | `portless daemon stop` | Gracefully stop the authenticated daemon. `--timeout <duration>` defaults to `15s`; `--force` permits a guarded stop with active environments or a legacy fallback. |
-| `portless daemon restart` | Stop the authenticated daemon and start the current executable build. `--timeout <duration>` defaults to `15s`; `--force` permits a guarded replacement with active environments or a legacy daemon. |
+| `portless daemon restart` | Replace the authenticated daemon with the current executable build and wait for ready state. Normal restart has one fixed five-second end-to-end deadline; `--force` uses the guarded legacy stop/start path outside that SLA. |
 | `portless runtime status` | Show configured and detected Docker or Podman runtime status. |
 | `portless runtime start` | Start the configured container runtime when supported. |
 | `portless runtime use <auto|docker|podman>` | Save the container-runtime preference. `auto` chooses an available supported runtime. |
 
-A normal daemon restart is designed to adopt owned runtimes. Forced
+A normal daemon restart is designed to adopt owned runtimes, target completion
+under two seconds, and fail with the daemon-log path if a different ready
+instance is not observed within five seconds. Concurrent CLI, browser, MCP,
+and executable-change requests coalesce into one replacement. Forced
 replacement can interrupt active environments and is not a routine refresh
-mechanism.
+mechanism or part of the normal restart SLA.
 
 The browser's routine connection and status polling use shallow daemon identity
 and active-environment state. Opening the daemon drawer or requesting a restart
 performs the deeper supervisor, container, proxy-listener, and ownership audit;
 restart always repeats that audit immediately before replacement and fails
-closed if current ownership cannot be proven.
+closed if current ownership cannot be proven. The restart receipt includes its
+identifier, trigger, target build, acceptance time, and shared ready deadline.
 
 ### Diagnostics
 

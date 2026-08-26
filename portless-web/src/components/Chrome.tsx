@@ -8,6 +8,7 @@ export type EnvironmentView = 'overview' | 'topology' | 'traffic' | 'mocks' | 'r
 export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const expandedProjectsKey = 'portless.expanded-projects'
+const sidebarCollapsedKey = 'portless.sidebar-collapsed'
 
 export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
@@ -34,6 +35,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
 }) {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [daemonOpen, setDaemonOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed)
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(readExpandedProjects)
   const scopedProject = activeEnvironment?.project ?? activeProject?.name
 
@@ -49,6 +51,11 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     try { window.sessionStorage.setItem(expandedProjectsKey, JSON.stringify([...expandedProjects])) }
     catch { /* Disclosure state can remain in memory when storage is unavailable. */ }
   }, [expandedProjects])
+
+  useEffect(() => {
+    try { window.localStorage.setItem(sidebarCollapsedKey, sidebarCollapsed ? 'true' : 'false') }
+    catch { /* The navigation can still collapse for this page when storage is unavailable. */ }
+  }, [sidebarCollapsed])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -91,9 +98,12 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   const daemonStateLabel = live ? daemon?.state ?? 'connected' : 'reconnecting'
   const daemonLabel = `daemon ${daemonStateLabel}`
 
-  return <div className="shell">
+  return <div className={sidebarCollapsed ? 'shell shell--sidebar-collapsed' : 'shell'}>
     <aside className="sidebar">
-      <button className="brand" onClick={() => onNavigate('/projects')} aria-label="Portless projects"><span className="brand__signal"><i /><i /><i /></span><span>portless</span></button>
+      <div className="sidebar__header">
+        <button className="brand" type="button" onClick={() => onNavigate('/projects')} aria-label="Portless projects" title={sidebarCollapsed ? 'Projects' : undefined}><span className="brand__signal"><i /><i /><i /></span><span className="brand__wordmark">portless</span></button>
+        <button className="sidebar__collapse" type="button" aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} aria-expanded={!sidebarCollapsed} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} onClick={() => setSidebarCollapsed((value) => !value)}><SidebarCollapseIcon collapsed={sidebarCollapsed} /></button>
+      </div>
       <div className="sidebar__body">
         <div className="sidebar__section-label">Projects</div>
         <nav className="project-nav" aria-label="Projects">
@@ -104,12 +114,12 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
             return <div className="project-nav__branch" key={project.name}>
               <div className={selected ? 'project-nav__row is-active' : 'project-nav__row'}>
                 <button className="project-nav__disclosure" type="button" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${project.name}`} aria-expanded={expanded} onClick={() => toggleProject(project.name)}><ChevronIcon expanded={expanded} /></button>
-                <button className="project-nav__project-link" type="button" aria-current={selected ? 'page' : undefined} onClick={() => { expandProject(project.name); onNavigate(`/projects/${encodeURIComponent(project.name)}`) }}><span>{project.name}</span><small>{projectEnvironments.length} env</small></button>
+                <button className="project-nav__project-link" type="button" aria-label={`${project.name} project, ${projectEnvironments.length} ${projectEnvironments.length === 1 ? 'environment' : 'environments'}`} aria-current={selected ? 'page' : undefined} title={sidebarCollapsed ? project.name : undefined} onClick={() => { expandProject(project.name); onNavigate(`/projects/${encodeURIComponent(project.name)}`) }}><ProjectIcon /><span>{project.name}</span><small>{projectEnvironments.length} env</small></button>
               </div>
               {expanded && <div className="project-nav__children">{projectEnvironments.map((environment) => {
                 const environmentSelected = activeEnvironment?.project === environment.project && activeEnvironment.name === environment.name
-                return <button key={environment.name} className={environmentSelected ? 'project-nav__item project-nav__item--child is-active' : 'project-nav__item project-nav__item--child'} aria-current={environmentSelected ? 'page' : undefined} onClick={() => onNavigate(environmentRoute(environment))}>
-                  <StatusMark status={environment.status} label={false} /><span>{environment.name}</span><small>{environment.status}</small>
+                return <button key={environment.name} className={environmentSelected ? 'project-nav__item project-nav__item--child is-active' : 'project-nav__item project-nav__item--child'} aria-label={`${environment.project}/${environment.name}, ${environment.status}`} aria-current={environmentSelected ? 'page' : undefined} title={sidebarCollapsed ? `${environment.project}/${environment.name}` : undefined} onClick={() => onNavigate(environmentRoute(environment))}>
+                  <span className="project-nav__environment-icon"><EnvironmentIcon /><StatusMark status={environment.status} label={false} /></span><span>{environment.name}</span><small>{environment.status}</small>
                 </button>
               })}</div>}
             </div>
@@ -119,21 +129,21 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
         {activeEnvironment && <>
           <div className="sidebar__section-label sidebar__section-label--context"><span>Environment</span><small title={`${activeEnvironment.project}/${activeEnvironment.name}`}>{activeEnvironment.project}/{activeEnvironment.name}</small></div>
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>
-            <ViewButton label="Overview" view="overview" activeView={activeView} environment={activeEnvironment} icon={<GridIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Mocks" view="mocks" activeView={activeView} environment={activeEnvironment} icon={<MockIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} onNavigate={onNavigate} />
-            <ViewButton label="Timeline" view="timeline" activeView={activeView} environment={activeEnvironment} icon={<TimelineIcon />} onNavigate={onNavigate} />
+            <ViewButton label="Overview" view="overview" activeView={activeView} environment={activeEnvironment} icon={<GridIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Mocks" view="mocks" activeView={activeView} environment={activeEnvironment} icon={<MockIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Timeline" view="timeline" activeView={activeView} environment={activeEnvironment} icon={<TimelineIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
           </nav>
         </>}
       </div>
       <nav className="sidebar__utility" aria-label="Application">
-        <button type="button" className={settingsActive ? 'is-active' : ''} aria-current={settingsActive ? 'page' : undefined} onClick={() => onNavigate('/settings')}><SettingsIcon /><span>Settings</span></button>
+        <button type="button" className={settingsActive ? 'is-active' : ''} aria-label="Settings" aria-current={settingsActive ? 'page' : undefined} title={sidebarCollapsed ? 'Settings' : undefined} onClick={() => onNavigate('/settings')}><SettingsIcon /><span>Settings</span></button>
       </nav>
-      <button className="sidebar__footer" type="button" aria-expanded={daemonOpen} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span className={live ? undefined : 'daemon-state--reconnecting'}>{daemonStateLabel}</span><small>DETAILS ›</small></button>
+      <button className="sidebar__footer" type="button" aria-label={`Daemon ${daemonStateLabel}`} aria-expanded={daemonOpen} title={sidebarCollapsed ? `Daemon ${daemonStateLabel}` : undefined} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span className={live ? undefined : 'daemon-state--reconnecting'}>{daemonStateLabel}</span><small>DETAILS ›</small></button>
     </aside>
     <div className="stage">
       <header className="topbar"><TopbarBreadcrumbs settingsActive={settingsActive} settingsView={settingsView} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} /><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
@@ -167,16 +177,17 @@ function BreadcrumbLink({ path, onNavigate, children }: { path: string; onNaviga
   }}>{children}</a>
 }
 
-function ViewButton({ label, view, activeView, environment, icon, onNavigate }: {
+function ViewButton({ label, view, activeView, environment, icon, compact, onNavigate }: {
   label: string
   view: EnvironmentView
   activeView: EnvironmentView
   environment: Environment
   icon: ReactNode
+  compact: boolean
   onNavigate: (path: string) => void
 }) {
   const active = activeView === view
-  return <button className={active ? 'is-active' : ''} aria-current={active ? 'page' : undefined} onClick={() => onNavigate(environmentViewRoute(environment, view))}>{icon}<span>{label}</span></button>
+  return <button className={active ? 'is-active' : ''} aria-label={label} aria-current={active ? 'page' : undefined} title={compact ? label : undefined} onClick={() => onNavigate(environmentViewRoute(environment, view))}>{icon}<span>{label}</span></button>
 }
 
 function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: () => void }) {
@@ -215,7 +226,14 @@ function readExpandedProjects() {
     return new Set<string>(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === 'string') : [])
   } catch { return new Set<string>() }
 }
+function readSidebarCollapsed() {
+  try { return window.localStorage.getItem(sidebarCollapsedKey) === 'true' }
+  catch { return false }
+}
 function ChevronIcon({ expanded }: { expanded: boolean }) { return <svg className={expanded ? 'is-expanded' : ''} viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2.5 3.5 3.5L4 9.5" /></svg> }
+function SidebarCollapseIcon({ collapsed }: { collapsed: boolean }) { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d={collapsed ? 'm6 3 5 5-5 5' : 'm10 3-5 5 5 5'} /></svg> }
+function ProjectIcon() { return <svg className="project-nav__project-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.3 1.7H14v6.3H2z" /><path d="M2 4.5V3h4.6l1.2 1.5H14v1.7" /></svg> }
+function EnvironmentIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m8 1.8 5.3 3.1v6.2L8 14.2l-5.3-3.1V4.9z" /><path d="m2.9 5 5.1 3 5.1-3M8 8v6" /></svg> }
 function GridIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" /><rect x="9" y="2" width="5" height="5" /><rect x="2" y="9" width="5" height="5" /><rect x="9" y="9" width="5" height="5" /></svg> }
 function TopologyIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.5" /><circle cx="10.5" cy="3.5" r="1.5" /><circle cx="13" cy="11.5" r="1.5" /><path d="m4.5 7.1 4.6-2.7M4.5 8.7l7 2.3M11.2 5l1.2 5" /></svg> }
 function LinkIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 5.5 5 4a3 3 0 0 0-4 4l2 2a3 3 0 0 0 4 0l1-1"/><path d="m9.5 10.5 1.5 1.5a3 3 0 0 0 4-4l-2-2a3 3 0 0 0-4 0L8 7"/></svg> }

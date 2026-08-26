@@ -20,6 +20,67 @@ func startOrder(definition model.ProjectModel) ([]string, error) {
 }
 
 func executionOrder(definition model.ProjectModel, bindings []model.ComponentBinding) ([]string, error) {
+	services, indegree, dependents := executionGraph(definition, bindings)
+	var ready []string
+	for service, degree := range indegree {
+		if degree == 0 {
+			ready = append(ready, service)
+		}
+	}
+	sort.Strings(ready)
+	var result []string
+	for len(ready) > 0 {
+		current := ready[0]
+		ready = ready[1:]
+		result = append(result, current)
+		for _, dependent := range dependents[current] {
+			indegree[dependent]--
+			if indegree[dependent] == 0 {
+				ready = append(ready, dependent)
+				sort.Strings(ready)
+			}
+		}
+	}
+	if len(result) != len(services) {
+		return nil, fmt.Errorf("service dependency graph contains a cycle")
+	}
+	return result, nil
+}
+
+func executionLayers(definition model.ProjectModel, bindings []model.ComponentBinding) ([][]string, error) {
+	services, indegree, dependents := executionGraph(definition, bindings)
+	var ready []string
+	for service, degree := range indegree {
+		if degree == 0 {
+			ready = append(ready, service)
+		}
+	}
+	sort.Strings(ready)
+	layers := make([][]string, 0)
+	completed := 0
+	for len(ready) > 0 {
+		layer := append([]string(nil), ready...)
+		layers = append(layers, layer)
+		completed += len(layer)
+		next := make([]string, 0)
+		for _, current := range layer {
+			for _, dependent := range dependents[current] {
+				indegree[dependent]--
+				if indegree[dependent] == 0 {
+					next = append(next, dependent)
+				}
+			}
+		}
+		sort.Strings(next)
+		ready = next
+	}
+	if completed != len(services) {
+		return nil, fmt.Errorf("service dependency graph contains a cycle")
+	}
+	return layers, nil
+}
+
+func executionGraph(definition model.ProjectModel, bindings []model.ComponentBinding) (map[string]struct{}, map[string]int, map[string][]string) {
 	providers := make(map[string]model.ProviderKind, len(bindings))
 	for _, binding := range bindings {
 		providers[binding.Service] = binding.Provider
@@ -74,30 +135,7 @@ func executionOrder(definition model.ProjectModel, bindings []model.ComponentBin
 		indegree[connection.Source]++
 		dependents[connection.Target] = append(dependents[connection.Target], connection.Source)
 	}
-	var ready []string
-	for service, degree := range indegree {
-		if degree == 0 {
-			ready = append(ready, service)
-		}
-	}
-	sort.Strings(ready)
-	var result []string
-	for len(ready) > 0 {
-		current := ready[0]
-		ready = ready[1:]
-		result = append(result, current)
-		for _, dependent := range dependents[current] {
-			indegree[dependent]--
-			if indegree[dependent] == 0 {
-				ready = append(ready, dependent)
-				sort.Strings(ready)
-			}
-		}
-	}
-	if len(result) != len(services) {
-		return nil, fmt.Errorf("service dependency graph contains a cycle")
-	}
-	return result, nil
+	return services, indegree, dependents
 }
 
 func serviceDefinition(definition model.ProjectModel, name string) (model.ServiceDefinition, bool) {

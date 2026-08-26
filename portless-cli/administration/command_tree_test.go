@@ -6,10 +6,14 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/runportless/portless/portless-cli/command"
 	"github.com/runportless/portless/portless-cli/doctor"
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"github.com/runportless/portless/portless-daemon/control"
 	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/lifecycle"
 )
 
 func TestConfigHelpShowsColorAndReset(t *testing.T) {
@@ -53,6 +57,13 @@ func TestDaemonHelpAndStoppedStatus(t *testing.T) {
 			t.Errorf("daemon help does not contain %q:\n%s", expected, output.String())
 		}
 	}
+	restart, _, err := root.Find([]string{"restart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restart.Flags().Lookup("force") == nil || restart.Flags().Lookup("timeout") != nil || !strings.Contains(restart.Short, "readiness SLA") {
+		t.Fatalf("daemon restart flags/description = %q, %s", restart.Short, restart.Flags().FlagUsages())
+	}
 
 	output.Reset()
 	root = application.daemonCommand()
@@ -72,6 +83,32 @@ func TestDaemonHelpAndStoppedStatus(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "already stopped") {
 		t.Fatalf("unexpected stopped result: %s", output.String())
+	}
+}
+
+func TestDaemonRestartJSONKeepsPrivateDiscoveryFieldsInternal(t *testing.T) {
+	startedAt := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	record := identity.Record{
+		PID: 42, Port: 7331, ProtocolVersion: lifecycle.ProtocolVersion, APIVersion: contract.APIVersion,
+		InstallationID: "installation", InstanceID: "replacement", BuildID: "build", State: "ready",
+		TokenPath: "/private/auth-token", StartedAt: startedAt, ProcessHint: "portless",
+	}
+	result := daemonRestartJSONOutput(control.RestartResult{
+		Restart: contract.DaemonRestart{Restarting: true, RestartID: "restart", Reason: "cli", PreviousInstanceID: "previous", TargetBuildID: "build", AcceptedAt: startedAt, DeadlineAt: startedAt.Add(contract.DaemonRestartSLA), Handoff: true, ActiveEnvironments: []string{"store/local"}},
+		Daemon:  record,
+		Inspection: control.Inspection{
+			Record: record, Identity: lifecycle.Identity{State: "ready", RecoveryProblems: []string{}, ActiveEnvironments: []string{"store/local"}},
+			Compatible: true, CurrentBuild: true, ExpectedBuildID: "build", Problems: []string{},
+		},
+		DurationMS: 731,
+	})
+	content, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(content)
+	if strings.Contains(encoded, "auth-token") || strings.Contains(encoded, `"port":7331`) || !strings.Contains(encoded, `"durationMs":731`) || !strings.Contains(encoded, `"compatible":true`) {
+		t.Fatalf("unsafe or incomplete daemon restart JSON: %s", encoded)
 	}
 }
 

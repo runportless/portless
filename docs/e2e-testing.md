@@ -98,8 +98,9 @@ The CLI E2E suite protects these product contracts:
   session fallbacks for encrypted or incomplete protocol traffic;
 - bounded recordings and persistent fault creation, matching, disable,
   re-enable, export, and deletion;
-- authenticated daemon restart with adoption of the original service
-  processes and proxy routes;
+- authenticated daemon restart within the fixed five-second readiness deadline,
+  with adoption of the original service processes and proxy routes while live
+  browser event streams reconnect;
 - hard daemon crashes and executable replacement with exact process adoption,
   plus service crashes, degraded state, retained logs, and recovery;
 - reboot-shaped loss where durable supervisor files still say `ready` but the
@@ -122,7 +123,7 @@ The CLI E2E suite protects these product contracts:
 The Playwright suite protects these browser journeys:
 
 - browser authentication and one-use claim consumption;
-- project, environment, sidebar, and breadcrumb navigation;
+- project, environment, persistent collapsible icon-rail sidebar, and breadcrumb navigation;
 - environment creation through the modal without duplicating project sources;
 - browser theme persistence;
 - services, copyable endpoints, topology edges, service details, and default-on
@@ -146,8 +147,8 @@ The Playwright suite protects these browser journeys:
   and HTTP/TCP switching;
 - keyboard topology inspection, command-palette navigation, runtime status,
   not-found routes, and automatic recovery from a failed control-plane poll;
-- daemon details and logs, full-screen drawer behavior, restart, reconnect, and
-  runtime adoption.
+- daemon details, restart timing, and logs; full-screen drawer behavior;
+  five-second restart failure messaging, reconnect, and runtime adoption.
 
 ## Test-only ingress
 
@@ -217,7 +218,9 @@ temporary Portless home and private E2E ingress. It verifies:
   `SELECT` exchanges with captured SQL;
 - decoded Redis `GET` and `SET` exchanges with the expected cache key;
 - stock and order persistence across their owning process restarts; and
-- both PostgreSQL volumes persisting across ordinary environment down/up.
+- both PostgreSQL volumes persisting across ordinary environment down/up; and
+- the checkout page's inventory reset restoring the seed stock through the
+  checkout-to-inventory dependency edge.
 
 The normal Go suite separately asserts the statically discovered Store
 topology and application-protocol classifications. `make test-example-store`

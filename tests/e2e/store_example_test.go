@@ -145,6 +145,19 @@ func TestStoreExampleEndToEnd(t *testing.T) {
 	if afterEnvironmentInventory.OnHand != 22 {
 		t.Fatalf("Store inventory did not survive ordinary down/up: %#v", afterEnvironmentInventory)
 	}
+
+	resetBody := assertStoreJSON(t, home, host, http.MethodPost, "/inventory/reset", "", traceHeaders, http.StatusOK)
+	var reset struct {
+		Status string               `json:"status"`
+		Items  []storeInventoryItem `json:"items"`
+	}
+	if err := json.Unmarshal(resetBody, &reset); err != nil || reset.Status != "reset" || len(reset.Items) != 3 {
+		t.Fatalf("decode Store inventory reset: err=%v response=%#v body=%s", err, reset, resetBody)
+	}
+	afterReset := storeInventoryLookup(t, home, inventoryHost, "coffee-mug", 2)
+	if afterReset.OnHand != 24 || !afterReset.Available {
+		t.Fatalf("reset Store inventory = %#v", afterReset)
+	}
 }
 
 func assertStoreProtocolTraffic(t *testing.T, binary, home, checkout, selector string, orderID int) {
@@ -293,7 +306,7 @@ func assertStoreCheckoutPage(t *testing.T, home, host string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("content-type"), "text/html;") || !strings.Contains(string(encoded), `<form id="checkout-form">`) || !strings.Contains(string(encoded), `src="/checkout.js"`) {
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("content-type"), "text/html;") || !strings.Contains(string(encoded), `<form id="checkout-form">`) || !strings.Contains(string(encoded), `id="reset-inventory-button"`) || !strings.Contains(string(encoded), `src="/checkout.js"`) {
 		t.Fatalf("Store checkout page = %s content-type=%q\n%s", response.Status, response.Header.Get("content-type"), encoded)
 	}
 }

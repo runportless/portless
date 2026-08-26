@@ -122,6 +122,12 @@ func (m *Manager) Stop(ctx context.Context, options StopOptions) (StopResult, er
 	return m.stopDaemon(ctx, options)
 }
 
+// Restart performs a guarded daemon replacement and waits for the new current
+// build to become ready within the normal restart SLA.
+func (m *Manager) Restart(ctx context.Context, options RestartOptions) (RestartResult, error) {
+	return m.restartDaemon(ctx, options)
+}
+
 // ResetApplicationState stops owned runtimes as permitted by force, removes
 // persistent application state, and returns the replacement daemon record.
 func (m *Manager) ResetApplicationState(ctx context.Context, force bool) (installation.ResetStateResult, identity.Record, error) {

@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -84,5 +85,22 @@ class InventoryControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(17))
                 .andExpect(jsonPath("$.state").value("released"));
+    }
+
+    @Test
+    void resetsTheDemoInventoryToItsSeedQuantities() throws Exception {
+        when(catalog.reset()).thenReturn(List.of(
+                new InventoryItem("coffee-mug", "Ceramic Coffee Mug", 24, "ord-01"),
+                new InventoryItem("mechanical-keyboard", "Mechanical Keyboard", 8, "ord-01"),
+                new InventoryItem("usb-c-cable", "USB-C Cable", 0, "dfw-02")));
+
+        mvc.perform(post("/inventory/reset"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("reset"))
+                .andExpect(jsonPath("$.items.length()").value(3))
+                .andExpect(jsonPath("$.items[0].sku").value("coffee-mug"))
+                .andExpect(jsonPath("$.items[0].onHand").value(24))
+                .andExpect(jsonPath("$.items[2].sku").value("usb-c-cable"))
+                .andExpect(jsonPath("$.items[2].onHand").value(0));
     }
 }

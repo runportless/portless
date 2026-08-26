@@ -52,12 +52,11 @@ func (c *Commands) daemonCommand() *cobra.Command {
 	stop.Flags().DurationVar(&stopOptions.Timeout, "timeout", stopOptions.Timeout, "time to wait for graceful shutdown")
 	root.AddCommand(stop)
 
-	restartOptions := control.StopOptions{Timeout: 15 * time.Second}
-	restart := &cobra.Command{Use: "restart", Short: "Stop the authenticated daemon and start the current build", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
-		return c.restartDaemon(cmd.Context(), restartOptions, c.JSONOutput)
+	restartForce := false
+	restart := &cobra.Command{Use: "restart", Short: "Replace the authenticated daemon within the readiness SLA", Args: shared.UsageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+		return c.restartDaemon(cmd.Context(), restartForce, c.JSONOutput)
 	}}
-	restart.Flags().BoolVar(&restartOptions.Force, "force", false, "restart despite active environments or replace a guarded legacy daemon")
-	restart.Flags().DurationVar(&restartOptions.Timeout, "timeout", restartOptions.Timeout, "time to wait for graceful shutdown")
+	restart.Flags().BoolVar(&restartForce, "force", false, "bypass handoff safety or replace a guarded legacy daemon outside the normal restart SLA")
 	root.AddCommand(restart)
 	return root
 }

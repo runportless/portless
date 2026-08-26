@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
@@ -204,7 +205,7 @@ func TestCLIDebugModesArePortlessOwnedAndAdditive(t *testing.T) {
 	checkoutDebugPort := checkoutService.Debugger.Port
 	ordersPID, ordersDebugPort := ordersService.PID, ordersService.Debugger.Port
 
-	if output, err := runCLIAt(binary, home, checkoutDirectory, "daemon", "restart", "--timeout", "30s"); err != nil {
+	if output, err := runCLIAt(binary, home, checkoutDirectory, "daemon", "restart"); err != nil {
 		t.Fatalf("restart daemon with active debuggers: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
 	}
 	checkoutService = waitForCLIServiceMode(t, binary, home, checkoutDirectory, "checkout", model.ServiceReady, model.LaunchDebug)
@@ -347,21 +348,30 @@ func TestCLIDaemonRestartAdoptsRunningServices(t *testing.T) {
 		t.Fatalf("daemon was not ready for handoff before restart: %#v", beforeDaemon)
 	}
 
-	restartOutput, err := runCLIAt(binary, home, checkout, "--json", "daemon", "restart", "--timeout", "30s")
+	restartStartedAt := time.Now()
+	restartOutput, err := runCLIAt(binary, home, checkout, "--json", "daemon", "restart")
 	if err != nil {
 		t.Fatalf("restart daemon: %v\n%s\ndaemon log:\n%s", err, restartOutput, readDaemonLog(home))
 	}
 	var restart struct {
-		Daemon e2eDaemonStatus `json:"daemon"`
+		Restart    contract.DaemonRestart `json:"restart"`
+		Daemon     e2eDaemonStatus        `json:"daemon"`
+		DurationMS int64                  `json:"durationMs"`
 	}
 	if err := json.Unmarshal([]byte(restartOutput), &restart); err != nil {
 		t.Fatalf("decode daemon restart: %v\n%s", err, restartOutput)
 	}
-	if restart.Daemon.InstanceID == beforeDaemon.InstanceID || restart.Daemon.PID == beforeDaemon.PID {
-		t.Fatalf("daemon identity did not change: before=%#v after=%#v", beforeDaemon, restart.Daemon)
+	if restart.Daemon.InstanceID == beforeDaemon.InstanceID || restart.Daemon.PID != beforeDaemon.PID {
+		t.Fatalf("daemon replacement did not preserve its PID while changing instance identity: before=%#v after=%#v", beforeDaemon, restart.Daemon)
 	}
 	if !restart.Daemon.Compatible || !restart.Daemon.CurrentBuild || restart.Daemon.RuntimeState != "ready" || len(restart.Daemon.RecoveryProblems) != 0 {
 		t.Fatalf("replacement daemon was not healthy: %#v", restart.Daemon)
+	}
+	if restart.Restart.RestartID == "" || restart.Restart.PreviousInstanceID != beforeDaemon.InstanceID || restart.DurationMS > contract.DaemonRestartSLA.Milliseconds() {
+		t.Fatalf("restart did not honor its receipt and SLA: %#v", restart)
+	}
+	if elapsed := time.Since(restartStartedAt); elapsed > contract.DaemonRestartSLA+time.Second {
+		t.Fatalf("restart command exceeded its bounded wall-clock allowance: %s", elapsed)
 	}
 
 	after := environmentStatus(t, binary, home, checkout)

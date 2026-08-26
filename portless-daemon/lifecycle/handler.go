@@ -22,7 +22,6 @@ type HandlerConfig struct {
 	ActiveEnvironments func(context.Context) ([]string, error)
 	HandoffStatus      func(context.Context) (bool, []string)
 	Shutdown           func()
-	Replace            func()
 }
 
 // Handler serves authenticated identity and shutdown routes before delegating
@@ -34,7 +33,6 @@ type Handler struct {
 	activeEnvironments func(context.Context) ([]string, error)
 	handoffStatus      func(context.Context) (bool, []string)
 	shutdown           func()
-	replace            func()
 }
 
 // NewHandler constructs a lifecycle handler from config.
@@ -42,7 +40,7 @@ func NewHandler(config HandlerConfig) *Handler {
 	return &Handler{
 		next: config.Next, auth: config.Auth, identity: config.Identity,
 		activeEnvironments: config.ActiveEnvironments, handoffStatus: config.HandoffStatus,
-		shutdown: config.Shutdown, replace: config.Replace,
+		shutdown: config.Shutdown,
 	}
 }
 
@@ -180,6 +178,10 @@ func (h *Handler) VerifyHandoff(ctx context.Context) (HandoffStatus, error) {
 	if err != nil {
 		return HandoffStatus{}, err
 	}
+	return h.verifyHandoff(ctx, active), nil
+}
+
+func (h *Handler) verifyHandoff(ctx context.Context, active []string) HandoffStatus {
 	ready := false
 	problems := []string{"runtime handoff is not configured"}
 	if h.handoffStatus != nil {
@@ -194,45 +196,34 @@ func (h *Handler) VerifyHandoff(ctx context.Context) (HandoffStatus, error) {
 	}
 	return HandoffStatus{
 		State: state, VerifiedAt: time.Now().UTC(), Problems: append([]string(nil), problems...),
-		ActiveEnvironments: active,
-	}, nil
+		ActiveEnvironments: append([]string(nil), active...),
+	}
 }
 
-// Restart requests replacement of instanceID after proving that active runtime
-// state can be handed off safely.
+// Restart validates replacement of instanceID after proving that active
+// runtime state can be handed off safely.
 func (h *Handler) Restart(ctx context.Context, instanceID string) (ShutdownResponse, error) {
-	identity, err := h.Status(ctx)
+	active, err := h.currentActiveEnvironments(ctx)
 	if err != nil {
 		return ShutdownResponse{}, err
 	}
-	if instanceID == "" || instanceID != identity.InstanceID {
+	if instanceID == "" || instanceID != h.identity.InstanceID {
 		return ShutdownResponse{}, &LifecycleError{
 			Code: "DAEMON_INSTANCE_CHANGED", Message: "daemon instance changed; refresh its status before restarting",
-			ActiveEnvironments: identity.ActiveEnvironments,
+			ActiveEnvironments: active,
 		}
 	}
-	verification, err := h.VerifyHandoff(ctx)
-	if err != nil {
-		return ShutdownResponse{}, err
-	}
+	verification := h.verifyHandoff(ctx, active)
 	if len(verification.ActiveEnvironments) > 0 && verification.State != HandoffReady {
 		return ShutdownResponse{}, &LifecycleError{
 			Code: "HANDOFF_UNAVAILABLE", Message: "active environments cannot be safely handed off",
 			ActiveEnvironments: verification.ActiveEnvironments, Problems: verification.Problems,
 		}
 	}
-	if h.replace == nil {
-		return ShutdownResponse{}, &LifecycleError{
-			Code: "DAEMON_RESTART_UNAVAILABLE", Message: "daemon replacement is not configured",
-			ActiveEnvironments: identity.ActiveEnvironments,
-		}
-	}
-	result := ShutdownResponse{
-		Stopping: true, Handoff: true, InstanceID: identity.InstanceID,
+	return ShutdownResponse{
+		Stopping: true, Handoff: true, InstanceID: h.identity.InstanceID,
 		ActiveEnvironments: append([]string(nil), verification.ActiveEnvironments...),
-	}
-	h.replace()
-	return result, nil
+	}, nil
 }
 
 func (h *Handler) currentActiveEnvironments(ctx context.Context) ([]string, error) {

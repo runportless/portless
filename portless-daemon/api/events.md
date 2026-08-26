@@ -64,6 +64,13 @@ must reload snapshots after reconnecting. A completed reconciliation emits the
 normal `environment.state`/`service.state` updates for subsequent changes, and
 the durable timeline includes an `environment.reconciled` entry.
 
+An accepted normal daemon restart has one five-second readiness deadline. The
+old daemon cancels every live request context, including SSE subscriptions,
+before its bounded HTTP drain. Browsers should treat those stream closures as
+the expected handoff boundary, reconnect to the replacement instance, and then
+reload authoritative snapshots. They must not wait for an old stream to end
+gracefully or infer missed state from daemon-local SSE identifiers.
+
 The broker is bounded and nonblocking. A slow UI cannot stall proxied
 application traffic. Subscriptions are isolated by project and environment.
 Snapshot endpoints are authoritative after a reconnect. Traffic clients merge

@@ -175,38 +175,40 @@ func (m *Manager) Start(ctx context.Context, environmentName, environmentKey str
 	return container.StartResult{ContainerName: containerName, Port: port, Environment: environment, StartedAt: time.Now().UTC(), LogDirectory: logDirectory}, nil
 }
 
-// Adopt verifies an existing container and resumes health and log observation.
-func (m *Manager) Adopt(ctx context.Context, environmentName, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, logsRoot string) (container.StartResult, error) {
+// Recover verifies an existing container once, classifies inactive state, and
+// resumes health and log observation when it is running.
+func (m *Manager) Recover(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, expectedName, logsRoot string) (container.RecoveryResult, error) {
 	if service.Kind != model.ServiceResource || service.Resource == nil {
-		return container.StartResult{}, errors.New("only resource services can be adopted")
+		return container.RecoveryResult{}, errors.New("only resource services can be recovered")
 	}
-	name, port, err := m.verifyAdoptableContainer(ctx, environmentKey, service, plan, generation, "")
+	inspection, err := m.inspectRecoverableContainer(ctx, environmentKey, service, plan, generation, expectedName)
 	if err != nil {
-		return container.StartResult{}, err
+		return container.RecoveryResult{}, err
+	}
+	result := container.RecoveryResult{Inspection: inspection}
+	if inspection.State != container.RecoveryRunning {
+		return result, nil
 	}
 	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
-	err = m.waitForHealth(healthCtx, name, port, plan.Readiness)
+	err = m.waitForHealth(healthCtx, inspection.ContainerName, inspection.Port, plan.Readiness)
 	healthCancel()
 	if err != nil {
-		return container.StartResult{}, err
+		return container.RecoveryResult{}, err
 	}
-	environment, err := m.inspectEnvironment(ctx, name)
+	environment, err := m.inspectEnvironment(ctx, inspection.ContainerName)
 	if err != nil {
-		return container.StartResult{}, fmt.Errorf("inspect managed %s environment: %w", service.Name, err)
+		return container.RecoveryResult{}, fmt.Errorf("inspect managed %s environment: %w", service.Name, err)
 	}
 	logDirectory := filepath.Join(logsRoot, service.Name, strconv.FormatInt(generation, 10))
-	if err := m.startLogCollector(name, service.Name, generation, logDirectory); err != nil {
-		return container.StartResult{}, err
+	if err := m.startLogCollector(inspection.ContainerName, service.Name, generation, logDirectory); err != nil {
+		return container.RecoveryResult{}, err
 	}
-	return container.StartResult{
-		ContainerName: name, Port: port, Environment: environment,
+	start := container.StartResult{
+		ContainerName: inspection.ContainerName, Port: inspection.Port, Environment: environment,
 		StartedAt: time.Now().UTC(), LogDirectory: logDirectory,
-	}, nil
-}
-
-// InspectRecovery verifies ownership and classifies a persisted container without changing it.
-func (m *Manager) InspectRecovery(ctx context.Context, environmentKey string, service model.ServiceDefinition, plan providers.ContainerPlan, generation int64, expectedName string) (container.RecoveryInspection, error) {
-	return m.inspectRecoverableContainer(ctx, environmentKey, service, plan, generation, expectedName)
+	}
+	result.Start = &start
+	return result, nil
 }
 
 // Verify checks an existing container's ownership, resource identity, generation, and port.

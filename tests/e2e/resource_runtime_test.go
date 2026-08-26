@@ -81,7 +81,7 @@ func TestCLIManagedResourcePluginLifecycle(t *testing.T) {
 			}
 
 			beforeRestart := resource
-			if output, err := runCLIAt(binary, home, checkout, "daemon", "restart", "--timeout", "30s"); err != nil {
+			if output, err := runCLIAt(binary, home, checkout, "daemon", "restart"); err != nil {
 				t.Fatalf("restart daemon with %s active: %v\n%s", testCase.name, err, output)
 			}
 			afterRestart := requireService(t, environmentStatus(t, binary, home, checkout), testCase.resource)
@@ -234,7 +234,7 @@ func TestCLIManagedResourcesAreIsolatedAcrossEnvironments(t *testing.T) {
 
 	localGeneration, isolatedGeneration := localRedis.Generation, isolatedRedis.Generation
 	localPort, isolatedPort := localRedis.UpstreamPort, isolatedRedis.UpstreamPort
-	if output, err := runCLIAt(binary, home, checkout, "daemon", "restart", "--timeout", "30s"); err != nil {
+	if output, err := runCLIAt(binary, home, checkout, "daemon", "restart"); err != nil {
 		t.Fatalf("restart daemon with isolated resources: %v\n%s", err, output)
 	}
 	localRedis = requireService(t, explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/local"), "checkout-redis")

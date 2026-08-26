@@ -201,20 +201,43 @@ exposes a live, bounded tail of the fixed private daemon log; older output is
 explicitly marked when omitted, and known installation authentication and
 ownership secrets are redacted again at the inspection boundary.
 
+Normal CLI and browser daemon restarts share a five-second end-to-end readiness
+deadline and ordinarily complete in under two seconds. The accepted restart
+receipt identifies the coalesced handoff, target build, and deadline; the
+daemon drawer reports the last measured duration and whether it met the SLA.
+Forced or legacy recovery is deliberately outside that SLA because it may have
+to signal an unresponsive process and can interrupt active environments.
+
 HTTP exchanges retain bounded inspectable headers and bodies. Declared
 PostgreSQL, Redis/Valkey, MySQL, and NATS connections are decoded into bounded
 logical operations while their TCP connections remain open, so queries,
 commands, results, subjects, and message payloads can be inspected from the
-same Request and Response views. Unknown, encrypted, oversized, or malformed
-TCP traffic remains byte-count-only and never interrupts forwarding.
+same traffic drawer. Decoded TCP spans use Command and Result views parallel to
+HTTP's Request and Response views, with a side-by-side Compare view when the
+drawer is maximized. TCP drawers open directly on those useful views without
+repeating the HTTP overview metadata strip. Their bounded wire messages remain
+available through the explicit TCP Details view. Unknown, encrypted, oversized, or
+malformed TCP traffic remains byte-count-only and never interrupts forwarding.
 
 Successful driver and connection-pool housekeeping is marked as background:
 for example, PostgreSQL session setup and validation queries or Redis handshakes
 and client metadata. Raw Exchanges and recordings still retain those operations,
 while standalone housekeeping traces, housekeeping spans inside foreground
 traces, and topology animation are hidden by default. Failed or faulted
-housekeeping always remains visible. Explicit database transactions remain
-individually inspectable in Exchanges and are grouped in the trace waterfall.
+housekeeping always remains visible. Decoded TCP dependencies use one consistent
+summary-row treatment in the trace waterfall. Explicit database transactions
+remain individually inspectable in Exchanges and are grouped into expandable
+command/result summaries, while standalone commands use the same presentation
+and open directly. Transaction boundaries such as `BEGIN` and `COMMIT` stay in
+the opt-in TCP details instead of competing with application commands.
+
+The trace drawer's previous and next controls follow the waterfall's visible
+span model: a collapsed transaction is one command/result summary, and showing
+its TCP details opts the individual protocol operations into navigation. Hidden
+background spans do not appear in that sequence until they are shown.
+
+The trace list is HTTP-rooted by default while retaining decoded TCP dependency
+spans inside those requests; standalone TCP roots are an explicit opt-in.
 
 The [command reference](portless-cli/COMMANDS.md) contains complete CLI usage.
 Traffic payloads can contain application data; see

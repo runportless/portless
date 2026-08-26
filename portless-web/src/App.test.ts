@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { environmentSessionKey, LoadingScreen, parseRoute } from './App'
+import { environmentSessionKey, LoadingScreen, pageTitle, parseRoute } from './App'
 
 describe('application routes', () => {
   it('recognizes the top-level settings page without inventing project scope', () => {
@@ -40,6 +40,11 @@ describe('application routes', () => {
     expect(environmentSessionKey(environment, null)).toBe('billing/local@daemon-pending')
     expect(environmentSessionKey(environment, { instanceId: 'daemon-a' })).toBe('billing/local@daemon-a')
     expect(environmentSessionKey(environment, { instanceId: 'daemon-b' })).toBe('billing/local@daemon-b')
+  })
+
+  it('includes the current project in the browser title', () => {
+    expect(pageTitle('Store Checkout')).toBe('Portless | Store Checkout')
+    expect(pageTitle()).toBe('Portless')
   })
 
   it('renders a clear, accessible connecting state', () => {

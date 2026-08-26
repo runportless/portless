@@ -111,6 +111,15 @@ async function handleRequest(request, response, dependencies) {
     sendJSON(response, 200, { service: 'checkout', ready: true })
     return
   }
+  if (request.method === 'POST' && url.pathname === '/inventory/reset') {
+    const result = await dependencies.requestJSON(`${dependencies.inventoryURL}/inventory/reset`, {
+      method: 'POST',
+      headers: forwardedTraceHeaders(request.headers),
+    })
+    if (result.status !== 200) throw new Error(`inventory reset returned ${result.status}`)
+    sendJSON(response, 200, result.value)
+    return
+  }
   if (request.method === 'POST' && url.pathname === '/checkout') {
     const input = checkoutInput(await readJSON(request))
     const traceHeaders = forwardedTraceHeaders(request.headers)
@@ -161,11 +170,11 @@ async function handleRequest(request, response, dependencies) {
     sendJSON(response, 200, result.value)
     return
   }
-  if (url.pathname === '/checkout' || orderMatch) {
+  if (url.pathname === '/checkout' || url.pathname === '/inventory/reset' || orderMatch) {
     sendJSON(response, 405, { error: 'method not allowed' })
     return
   }
-  sendJSON(response, 200, { service: 'checkout', routes: ['GET /', 'POST /checkout', 'GET /orders/:id', 'GET /health'] })
+  sendJSON(response, 200, { service: 'checkout', routes: ['GET /', 'POST /checkout', 'POST /inventory/reset', 'GET /orders/:id', 'GET /health'] })
 }
 
 async function releaseInventoryReservation(dependencies, reservationID, traceHeaders) {

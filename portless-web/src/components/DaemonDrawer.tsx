@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { APIError } from '../api'
+import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from '../daemonRestart'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
 import { DaemonLogs } from './DaemonLogs'
 import { DrawerSizeButton } from './DrawerSizeButton'
@@ -147,14 +148,18 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
     const previousInstance = status.instanceId
     setError('')
     setPhase('restarting')
+    const initiatedAt = Date.now()
     try {
-      await onRestart(previousInstance)
-      const deadline = Date.now() + 30_000
+      const receipt = await onRestart(previousInstance)
+      const deadline = daemonRestartDeadline(receipt, initiatedAt)
+      let attempt = 0
       while (Date.now() < deadline && mounted.current) {
-        await wait(400)
+        await wait(Math.min(daemonRestartPollDelay(attempt++), Math.max(0, deadline - Date.now())))
+        if (Date.now() >= deadline) break
         try {
-          const replacement = await onRefresh()
-          if (replacement.instanceId !== previousInstance && replacement.state === 'ready') {
+          const replacement = await settleBeforeDeadline(onRefresh(), deadline)
+          if (!replacement) break
+          if (Date.now() <= deadline && replacement.instanceId !== previousInstance && replacement.state === 'ready') {
             if (!mounted.current) return
             setPhase('reconnected')
             await onReconnected()
@@ -164,7 +169,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
           // A refused connection is expected between shutdown and replacement readiness.
         }
       }
-      throw new Error('The replacement daemon did not become ready within 30 seconds.')
+      throw new Error(`The replacement daemon did not become ready within the ${DAEMON_RESTART_SLA_MS / 1_000} second SLA.`)
     } catch (value) {
       if (!mounted.current) return
       setError(errorMessage(value))
@@ -229,6 +234,7 @@ function StatusPanel({ status, diagnostics, health, live }: { status: DaemonStat
   if (!status) return <Unavailable title="DAEMON STATUS UNAVAILABLE" message="Portless could not load daemon identity information." />
   const build = diagnostics?.build
   const recovery = diagnostics?.recovery
+  const lastRestart = diagnostics?.lastRestart
   return <>
     <div className="detail-grid daemon-detail-grid">
       <Detail label="PID" value={String(status.pid)} />
@@ -254,6 +260,15 @@ function StatusPanel({ status, diagnostics, health, live }: { status: DaemonStat
         <HealthDetail label="EVENT STREAMS" value={eventHealthLabel(health.events)} detail={eventHealthDetail(health.events)} healthy={health.events.state !== 'reconnecting'} idle={health.events.state === 'idle'} />
       </div>
     </section>
+    {lastRestart && <section className={`drawer-section daemon-restart-status ${lastRestart.withinSla ? '' : 'daemon-section--warning'}`}>
+      <div className="daemon-section-heading"><span className="eyebrow">LAST RESTART</span><StatusMark status={lastRestart.withinSla ? 'ready' : 'degraded'} /></div>
+      <div className="daemon-recovery-grid">
+        <Detail label="TRIGGER" value={displayState(lastRestart.reason)} />
+        <Detail label="DURATION" value={formatDuration(lastRestart.durationMs)} />
+        <Detail label="READY" value={`${relativeTime(lastRestart.readyAt)} ago`} />
+        <Detail label="5 SECOND SLA" value={lastRestart.withinSla ? 'Met' : 'Missed'} detail={shortFingerprint(lastRestart.restartId)} title={lastRestart.restartId} />
+      </div>
+    </section>}
     <section className={`drawer-section daemon-recovery ${recovery && recovery.result !== 'healthy' ? 'daemon-section--warning' : ''}`}>
       <div className="daemon-section-heading"><span className="eyebrow">RECOVERY STATUS</span><StatusMark status={recoveryState(recovery?.result)} /></div>
       {recovery ? <>
@@ -470,6 +485,7 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
   const runtimeCandidates = runtime?.candidates.length ? `\n${runtime.candidates.map((candidate) => `  ${candidate.name}: ${candidate.state}${candidate.version ? ` v${candidate.version}` : ''}${candidate.reason ? ` — ${candidate.reason}` : ''}`).join('\n')}` : ' none'
   const helper = relayCurrency(relay)
   const inventory = diagnostics?.inventory
+  const lastRestart = diagnostics?.lastRestart
   const storage = diagnostics?.storage
   return [
     'Portless daemon',
@@ -486,6 +502,10 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
     `API Version: ${status.apiVersion}`,
     `API latency: ${health?.api.latencyMs === undefined ? 'unavailable' : `${health.api.latencyMs} ms`}`,
     `Event streams: ${health ? eventHealthLabel(health.events) : 'unknown'}`,
+    `Last restart: ${lastRestart?.restartId ?? 'none'}`,
+    `Last restart trigger: ${lastRestart?.reason ?? 'unknown'}`,
+    `Last restart duration: ${lastRestart ? formatDuration(lastRestart.durationMs) : 'unknown'}`,
+    `Last restart SLA: ${lastRestart ? lastRestart.withinSla ? 'met' : 'missed' : 'unknown'}`,
     `Managed processes: ${inventory?.processes ?? 'unknown'}`,
     `Managed containers: ${inventory?.containers ?? 'unknown'}`,
     `Managed proxy listeners: ${inventory?.proxyListeners ?? 'unknown'}`,
@@ -587,4 +607,18 @@ function errorMessage(value: unknown) {
 
 function wait(milliseconds: number) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+async function settleBeforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T | null> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) return null
+  let timer = 0
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<null>((resolve) => { timer = window.setTimeout(() => resolve(null), remaining) }),
+    ])
+  } finally {
+    window.clearTimeout(timer)
+  }
 }

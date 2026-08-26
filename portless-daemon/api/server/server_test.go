@@ -57,6 +57,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		Inventory:   contract.DaemonManagedInventory{Processes: 1, Containers: 2, ProxyListeners: 3, ActiveEnvironments: 1, Problems: []string{}},
 		Recovery:    contract.DaemonRecoveryStatus{Result: "healthy", DurationMS: 24, Recovered: 1, Problems: []string{}},
 		Build:       contract.DaemonBuildProvenance{Version: "0.8.0", Distribution: "source", Commit: "commit-current", RunningBuildID: "build-current", OnDiskBuildID: "build-current", Current: true},
+		LastRestart: &contract.DaemonRestartStatus{RestartID: "restart-last", Reason: "cli", PreviousInstanceID: "instance-before", InstanceID: "instance-current", TargetBuildID: "build-current", AcceptedAt: time.Now().UTC().Add(-time.Second), DeadlineAt: time.Now().UTC().Add(4 * time.Second), ReadyAt: time.Now().UTC(), DurationMS: 731, WithinSLA: true},
 		Storage:     &contract.DaemonStorageStatus{DatabaseBytes: 4096, Problems: []string{}},
 	}, logs: contract.DaemonLogSnapshot{Content: "time=2026-08-25T12:00:00Z level=INFO msg=\"Portless daemon ready\"\n", Truncated: true}, handoff: contract.DaemonHandoffStatus{State: "ready", VerifiedAt: time.Now().UTC(), Problems: []string{}, ActiveEnvironments: []string{"billing/local"}}}
 	server, err := New(Dependencies{Application: app, Auth: authManager, Assets: assets, DaemonControl: daemonControl})
@@ -218,7 +219,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("shallow daemon status performed %d handoff audits", daemonControl.handoffCalls)
 	}
 	daemonDiagnostics := request(server, authManager, http.MethodGet, "/api/v1/daemon/diagnostics", "", true)
-	if daemonDiagnostics.Code != http.StatusOK || !strings.Contains(daemonDiagnostics.Body.String(), `"processes":1`) || strings.Contains(daemonDiagnostics.Body.String(), `"storage"`) || daemonControl.diagnosticsStorage {
+	if daemonDiagnostics.Code != http.StatusOK || !strings.Contains(daemonDiagnostics.Body.String(), `"processes":1`) || !strings.Contains(daemonDiagnostics.Body.String(), `"lastRestart":{"restartId":"restart-last"`) || strings.Contains(daemonDiagnostics.Body.String(), `"storage"`) || daemonControl.diagnosticsStorage {
 		t.Fatalf("daemon diagnostics response code=%d body=%s storage=%v", daemonDiagnostics.Code, daemonDiagnostics.Body.String(), daemonControl.diagnosticsStorage)
 	}
 	daemonStorage := request(server, authManager, http.MethodGet, "/api/v1/daemon/diagnostics?include=storage", "", true)
@@ -248,7 +249,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("relay status response code=%d body=%s", relayStatus.Code, relayStatus.Body.String())
 	}
 	daemonRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, true)
-	if daemonRestart.Code != http.StatusAccepted || !strings.Contains(daemonRestart.Body.String(), `"restarting":true`) || daemonControl.restartedInstance != "instance-current" {
+	if daemonRestart.Code != http.StatusAccepted || !strings.Contains(daemonRestart.Body.String(), `"restarting":true`) || !strings.Contains(daemonRestart.Body.String(), `"deadlineAt":`) || daemonControl.restartedInstance != "instance-current" || daemonControl.restartedReason != "cli" || daemonControl.committedRestart == "" {
 		t.Fatalf("daemon restart response code=%d body=%s restarted=%q", daemonRestart.Code, daemonRestart.Body.String(), daemonControl.restartedInstance)
 	}
 	staleRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"stale"}`, true)
@@ -268,8 +269,12 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("browser restart without CSRF returned %d body=%s", missingCSRF.Code, missingCSRF.Body.String())
 	}
 	browserRestart := requestBrowser(server, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, sessionToken, csrf)
-	if browserRestart.Code != http.StatusAccepted {
+	if browserRestart.Code != http.StatusAccepted || daemonControl.restartedReason != "browser" {
 		t.Fatalf("browser restart with CSRF returned %d body=%s", browserRestart.Code, browserRestart.Body.String())
+	}
+	mcpRestart := requestClientKind(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, string(contract.ClientKindMCP))
+	if mcpRestart.Code != http.StatusAccepted || daemonControl.restartedReason != "mcp" {
+		t.Fatalf("MCP restart returned %d body=%s", mcpRestart.Code, mcpRestart.Body.String())
 	}
 	browserReset := requestBrowser(server, http.MethodPost, "/api/v1/runtime/reset", "", sessionToken, csrf)
 	if browserReset.Code != http.StatusForbidden || !strings.Contains(browserReset.Body.String(), `"code":"CLI_AUTH_REQUIRED"`) {
@@ -398,6 +403,8 @@ type fakeDaemonControl struct {
 	handoff            contract.DaemonHandoffStatus
 	handoffCalls       int
 	restartedInstance  string
+	restartedReason    string
+	committedRestart   string
 }
 
 func (f *fakeDaemonControl) Status(context.Context) (contract.DaemonStatus, error) {
@@ -423,12 +430,23 @@ func (f *fakeDaemonControl) HandoffStatus(context.Context) (contract.DaemonHando
 	return f.handoff, nil
 }
 
-func (f *fakeDaemonControl) Restart(_ context.Context, instanceID string) (contract.DaemonRestart, error) {
+func (f *fakeDaemonControl) Restart(_ context.Context, instanceID, reason string) (contract.DaemonRestart, error) {
 	if instanceID != f.identity.InstanceID {
 		return contract.DaemonRestart{}, &contract.DaemonControlError{Code: "DAEMON_INSTANCE_CHANGED", Message: "daemon instance changed"}
 	}
 	f.restartedInstance = instanceID
-	return contract.DaemonRestart{Restarting: true, PreviousInstanceID: instanceID, Handoff: true, ActiveEnvironments: append([]string(nil), f.identity.ActiveEnvironments...)}, nil
+	f.restartedReason = reason
+	acceptedAt := time.Now().UTC()
+	return contract.DaemonRestart{
+		Restarting: true, RestartID: "restart-" + reason, Reason: reason,
+		PreviousInstanceID: instanceID, TargetBuildID: f.identity.BuildID,
+		AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
+		Handoff: true, ActiveEnvironments: append([]string(nil), f.identity.ActiveEnvironments...),
+	}, nil
+}
+
+func (f *fakeDaemonControl) CommitRestart(restartID string) {
+	f.committedRestart = restartID
 }
 
 func TestDirectorySelectionRequiresABrowserSessionAndHandlesCancellation(t *testing.T) {

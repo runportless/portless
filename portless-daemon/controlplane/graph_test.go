@@ -56,3 +56,39 @@ func TestExecutionOrderSkipsRemoteServicesAndTheirUnusedContainers(t *testing.T)
 		t.Fatalf("order = %#v, want %#v", order, expected)
 	}
 }
+
+func TestExecutionLayersGroupIndependentTargetsBeforeTheirSources(t *testing.T) {
+	definition := model.ProjectModel{
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "inventory", Kind: model.ServiceProcess},
+			{Name: "orders", Kind: model.ServiceProcess},
+			{Name: "inventory-db", Kind: model.ServiceResource},
+			{Name: "orders-db", Kind: model.ServiceResource},
+			{Name: "orders-cache", Kind: model.ServiceResource},
+		},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "inventory"},
+			{Source: "checkout", Target: "orders"},
+			{Source: "inventory", Target: "inventory-db"},
+			{Source: "orders", Target: "orders-db"},
+			{Source: "orders", Target: "orders-cache"},
+		},
+	}
+	bindings := []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal},
+		{Service: "inventory", Provider: model.ProviderLocal},
+		{Service: "orders", Provider: model.ProviderLocal},
+		{Service: "inventory-db", Provider: model.ProviderContainer},
+		{Service: "orders-db", Provider: model.ProviderContainer},
+		{Service: "orders-cache", Provider: model.ProviderContainer},
+	}
+	layers, err := executionLayers(definition, bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := [][]string{{"inventory-db", "orders-cache", "orders-db"}, {"inventory", "orders"}, {"checkout"}}
+	if !reflect.DeepEqual(layers, expected) {
+		t.Fatalf("layers = %#v, want %#v", layers, expected)
+	}
+}

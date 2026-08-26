@@ -192,6 +192,31 @@ export const checkoutPageHTML = `<!doctype html>
         line-height: 1.6;
       }
 
+      .page-heading__actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .reset-button {
+        min-height: 35px;
+        padding: 0 13px;
+        border: 1px solid var(--line-bright);
+        background: var(--surface);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+      }
+
+      .reset-button:hover:not(:disabled) { border-color: var(--teal-dim); color: var(--text); }
+      .reset-button:focus-visible { outline: 1px solid var(--teal); outline-offset: 3px; }
+      .reset-button:disabled { cursor: wait; opacity: 0.45; }
+
       .workspace {
         display: grid;
         grid-template-columns: minmax(330px, 0.88fr) minmax(420px, 1.12fr);
@@ -342,6 +367,7 @@ export const checkoutPageHTML = `<!doctype html>
         .brand__context { display: none; }
         .page { padding: 28px 16px 48px; }
         .page-heading { display: block; }
+        .page-heading__actions { margin-top: 18px; }
         .field-grid { grid-template-columns: 1fr; }
         .theme-toggle__label { display: none; }
       }
@@ -367,6 +393,9 @@ export const checkoutPageHTML = `<!doctype html>
         <div>
           <h1>Checkout</h1>
           <p class="page-heading__copy">Create an order and view the response.</p>
+        </div>
+        <div class="page-heading__actions">
+          <button class="reset-button" id="reset-inventory-button" type="button">RESET INVENTORY</button>
         </div>
       </header>
 
@@ -426,7 +455,8 @@ const themeColor = document.querySelector('meta[name="theme-color"]')
 const themeToggle = document.querySelector('#theme-toggle')
 const themeToggleLabel = document.querySelector('#theme-toggle-label')
 const form = document.querySelector('#checkout-form')
-const button = form.querySelector('button[type="submit"]')
+const submitButton = form.querySelector('button[type="submit"]')
+const resetButton = document.querySelector('#reset-inventory-button')
 const requestPreview = document.querySelector('#request-preview')
 const status = document.querySelector('#response-status')
 const output = document.querySelector('#response-output')
@@ -477,8 +507,9 @@ themeToggle.addEventListener('click', () => {
 form.addEventListener('input', updateRequestPreview)
 form.addEventListener('submit', async (event) => {
   event.preventDefault()
-  button.disabled = true
-  button.textContent = 'CREATING ORDER...'
+  submitButton.disabled = true
+  resetButton.disabled = true
+  submitButton.textContent = 'CREATING ORDER...'
   renderResponse('SENDING', 'Waiting for checkout...', 'idle')
 
   const payload = checkoutPayload()
@@ -497,8 +528,32 @@ form.addEventListener('submit', async (event) => {
   } catch (error) {
     renderResponse('REQUEST FAILED', error instanceof Error ? error.message : String(error), 'error')
   } finally {
-    button.disabled = false
-    button.textContent = 'CREATE ORDER'
+    submitButton.disabled = false
+    resetButton.disabled = false
+    submitButton.textContent = 'CREATE ORDER'
+  }
+})
+
+resetButton.addEventListener('click', async () => {
+  submitButton.disabled = true
+  resetButton.disabled = true
+  resetButton.textContent = 'RESETTING...'
+  renderResponse('RESETTING', 'Restoring the demo inventory...', 'idle')
+
+  try {
+    const response = await fetch('/inventory/reset', { method: 'POST' })
+    const encoded = await response.text()
+    let value = encoded
+    try {
+      value = encoded ? JSON.parse(encoded) : {}
+    } catch {}
+    renderResponse('HTTP ' + response.status, value, response.ok ? 'success' : 'error')
+  } catch (error) {
+    renderResponse('REQUEST FAILED', error instanceof Error ? error.message : String(error), 'error')
+  } finally {
+    submitButton.disabled = false
+    resetButton.disabled = false
+    resetButton.textContent = 'RESET INVENTORY'
   }
 })
 `

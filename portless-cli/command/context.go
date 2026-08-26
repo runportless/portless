@@ -38,6 +38,8 @@ type DaemonController interface {
 	ConnectExisting(context.Context) (*apiclient.Client, identity.Record, error)
 	// Stop terminates the owned daemon according to the supplied safety options.
 	Stop(context.Context, control.StopOptions) (control.StopResult, error)
+	// Restart performs a guarded replacement and waits for the current build.
+	Restart(context.Context, control.RestartOptions) (control.RestartResult, error)
 	// ResetApplicationState clears Portless application state while applying the
 	// requested active-runtime policy.
 	ResetApplicationState(context.Context, bool) (installation.ResetStateResult, identity.Record, error)

@@ -29,7 +29,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       onDaemonRefresh={async () => daemon}
       onDaemonDiagnosticsRefresh={async () => diagnostics}
       onDaemonHandoffVerify={async () => handoff}
-      onDaemonRestart={async (instanceId) => ({ restarting: true, previousInstanceId: instanceId, handoff: true, activeEnvironments: [] })}
+      onDaemonRestart={async (instanceId) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', handoff: true, activeEnvironments: [] })}
       onDaemonReconnected={async () => undefined}
     >
       <div>content</div>
@@ -56,6 +56,7 @@ describe('application navigation', () => {
     expect(markup).toContain('<span>ready</span><small>DETAILS ›</small>')
     expect(markup).not.toContain('<span>daemon ready</span>')
     expect(markup).toContain('aria-label="daemon ready"')
+    expect(markup).toContain('aria-label="Collapse navigation" aria-expanded="true"')
     expect(markup).toContain('aria-expanded="false"')
   })
 
@@ -70,7 +71,7 @@ describe('application navigation', () => {
     expect(markup).toContain('<a href="/projects/billing">billing</a>')
     expect(markup).toContain('<strong aria-current="page">local</strong>')
     expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><a href="/projects/billing">billing</a><b>/</b><strong aria-current="page">local</strong></nav>')
-    expect(markup).toContain('<button class="is-active" aria-current="page"')
+    expect(markup).toContain('<button class="is-active" aria-label="Topology" aria-current="page"')
     expect(markup.indexOf('<span>Faults</span>')).toBeLessThan(markup.indexOf('<span>Bindings</span>'))
     expect(markup.indexOf('<span>Bindings</span>')).toBeLessThan(markup.indexOf('<span>Timeline</span>'))
   })
@@ -79,7 +80,7 @@ describe('application navigation', () => {
     const markup = renderChrome(undefined, 'overview', true, 'mcp')
 
     expect(markup).toContain('aria-label="Application"')
-    expect(markup).toContain('class="is-active" aria-current="page"><svg')
+    expect(markup).toContain('class="is-active" aria-label="Settings" aria-current="page"><svg')
     expect(markup).toContain('<svg class="settings-gear"')
     expect(markup).toContain('<span>Settings</span>')
     expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><a href="/settings">settings</a><b>/</b><strong aria-current="page">mcp</strong></nav>')
@@ -92,6 +93,27 @@ describe('application navigation', () => {
     expect(reconnecting).toContain('<span class="daemon-state--reconnecting">reconnecting</span>')
     expect(ready).toContain('<span>ready</span>')
     expect(ready).not.toContain('daemon-state--reconnecting')
+  })
+
+  it('restores a compact icon rail with accessible navigation labels', () => {
+    vi.stubGlobal('window', {
+      localStorage: { getItem: (key: string) => key === 'portless.sidebar-collapsed' ? 'true' : null },
+      sessionStorage: { getItem: (key: string) => key === 'portless.expanded-projects' ? JSON.stringify(['billing']) : null },
+    })
+
+    try {
+      const markup = renderChrome(environment, 'traffic')
+
+      expect(markup).toContain('<div class="shell shell--sidebar-collapsed">')
+      expect(markup).toContain('aria-label="Expand navigation" aria-expanded="false"')
+      expect(markup).toContain('aria-label="billing project, 1 environment" title="billing"')
+      expect(markup).toContain('aria-label="billing/local, healthy" aria-current="page" title="billing/local"')
+      expect(markup).toContain('aria-label="Traffic" aria-current="page" title="Traffic"')
+      expect(markup).toContain('aria-label="Settings" title="Settings"')
+      expect(markup).toContain('aria-label="Daemon ready" aria-expanded="false" title="Daemon ready"')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

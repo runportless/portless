@@ -27,6 +27,11 @@ const diagnostics: DaemonDiagnostics = {
     version: '0.9.0', distribution: 'source', commit: '1234567890abcdef1234567890abcdef12345678',
     runningBuildId: 'build-current', onDiskBuildId: 'build-current', current: true,
   },
+  lastRestart: {
+    restartId: 'restart-browser', reason: 'browser', previousInstanceId: 'previous-instance', instanceId: 'current-instance',
+    targetBuildId: 'build-current', acceptedAt: '2026-08-25T11:59:59Z', deadlineAt: '2026-08-25T12:00:04Z',
+    readyAt: '2026-08-25T12:00:00Z', durationMs: 731, withinSla: true,
+  },
 }
 
 const controlPlaneHealth: ControlPlaneHealth = {
@@ -44,7 +49,7 @@ describe('daemon diagnostics', () => {
     const handoff: DaemonHandoffStatus = {
       state: 'ready', verifiedAt: '2026-08-25T12:00:00Z', problems: [], activeEnvironments: ['store/local'],
     }
-    const output = daemonDiagnostics(status, runtime, relay, handoff)
+    const output = daemonDiagnostics(status, runtime, relay, handoff, diagnostics)
 
     expect(output).toContain('Protocol Version: 3.0.0')
     expect(output).toContain('API Version: 8.0.0')
@@ -57,6 +62,9 @@ describe('daemon diagnostics', () => {
     expect(output).toContain('DNS resolver: ready (localhost, portless.test)')
     expect(output).toContain('Relay service: dev.portless.relay (launchd, running)')
     expect(output).toContain('Relay helper: Matches daemon build (Build build-curren)')
+    expect(output).toContain('Last restart: restart-browser')
+    expect(output).toContain('Last restart duration: 731 ms')
+    expect(output).toContain('Last restart SLA: met')
   })
 
   it('opens on a status summary with ordered operational sections and accessible tabs', () => {
@@ -71,7 +79,7 @@ describe('daemon diagnostics', () => {
       onRefresh: async () => status,
       onRefreshDiagnostics: async () => diagnostics,
       onVerifyHandoff: async () => handoff,
-      onRestart: async (instanceId: string) => ({ restarting: true, previousInstanceId: instanceId, handoff: true, activeEnvironments: [] }),
+      onRestart: async (instanceId: string) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', handoff: true, activeEnvironments: [] }),
       onReconnected: async () => undefined,
     }))
 
@@ -83,13 +91,16 @@ describe('daemon diagnostics', () => {
     expect(markup).toContain('role="tabpanel" aria-labelledby="daemon-tab-status" tabindex="0"')
     expect(markup).toContain('<span>INSTANCE</span><strong title="1234567890abcdef">1234567890ab</strong><small>1 active environment</small>')
     expect(markup.indexOf('BUILD PROVENANCE')).toBeLessThan(markup.indexOf('CONTROL-PLANE HEALTH'))
-    expect(markup.indexOf('CONTROL-PLANE HEALTH')).toBeLessThan(markup.indexOf('RECOVERY STATUS'))
+    expect(markup.indexOf('CONTROL-PLANE HEALTH')).toBeLessThan(markup.indexOf('LAST RESTART'))
+    expect(markup.indexOf('LAST RESTART')).toBeLessThan(markup.indexOf('RECOVERY STATUS'))
     expect(markup).toContain('<span>VERSION</span><strong>0.9.0</strong>')
     expect(markup).toContain('<span>API ROUND TRIP</span>')
     expect(markup).toContain('<strong>3 ms</strong>')
     expect(markup).toContain('<span>EVENT STREAMS</span>')
     expect(markup).toContain('<strong>2 connected</strong>')
     expect(markup).toContain('<span>RESULT</span><strong>Healthy</strong>')
+    expect(markup).toContain('<span>DURATION</span><strong>731 ms</strong>')
+    expect(markup).toContain('<span>5 SECOND SLA</span><strong title="restart-browser">Met</strong>')
     expect(markup).not.toContain('RUNTIME ENGINE')
   })
 

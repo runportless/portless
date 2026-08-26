@@ -187,8 +187,7 @@ func TestLifecycleIdentityRemainsAvailableWhenApplicationInventoryFails(t *testi
 	}
 }
 
-func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
-	var replacements atomic.Int32
+func TestLifecycleHandlerGuardsBrowserRestart(t *testing.T) {
 	handoffReady := false
 	handler := lifecycle.NewHandler(lifecycle.HandlerConfig{
 		Identity: lifecycle.Identity{Product: lifecycle.Product, InstanceID: "instance", State: "ready", RecoveryProblems: []string{"reconciliation warning"}},
@@ -201,7 +200,6 @@ func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
 			}
 			return false, []string{"checkout has no recoverable supervisor"}
 		},
-		Replace: func() { replacements.Add(1) },
 	})
 
 	if _, err := handler.Restart(context.Background(), "other-instance"); err == nil {
@@ -220,10 +218,6 @@ func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
 			t.Fatalf("unsafe restart error = %#v", err)
 		}
 	}
-	if replacements.Load() != 0 {
-		t.Fatalf("unsafe restart scheduled %d replacements", replacements.Load())
-	}
-
 	handoffReady = true
 	result, err := handler.Restart(context.Background(), "instance")
 	if err != nil {
@@ -231,9 +225,6 @@ func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
 	}
 	if !result.Stopping || !result.Handoff || result.InstanceID != "instance" || strings.Join(result.ActiveEnvironments, ",") != "billing/local" {
 		t.Fatalf("unexpected restart result: %#v", result)
-	}
-	if replacements.Load() != 1 {
-		t.Fatalf("safe restart scheduled %d replacements, want 1", replacements.Load())
 	}
 }
 

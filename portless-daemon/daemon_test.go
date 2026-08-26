@@ -2,16 +2,139 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/controlplane"
 	"github.com/runportless/portless/portless-daemon/database"
 	"github.com/runportless/portless/portless-daemon/events"
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
+
+func TestShutdownHTTPServersCancelsLongLivedRequestsWithinDrainBudget(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestStopped := make(chan struct{})
+	serverContext, stopServing := context.WithCancel(context.Background())
+	server := &http.Server{
+		BaseContext: func(net.Listener) context.Context { return serverContext },
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			writer.WriteHeader(http.StatusOK)
+			writer.(http.Flusher).Flush()
+			close(requestStarted)
+			<-request.Context().Done()
+			close(requestStopped)
+		}),
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+
+	response, err := http.Get("http://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("long-lived request did not start")
+	}
+
+	startedAt := time.Now()
+	if err := shutdownHTTPServers(stopServing, 250*time.Millisecond, server); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 250*time.Millisecond {
+		t.Fatalf("long-lived request consumed the full drain budget: %s", elapsed)
+	}
+	select {
+	case <-requestStopped:
+	case <-time.After(time.Second):
+		t.Fatal("server shutdown did not cancel the request context")
+	}
+	if err := <-serveDone; !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("Serve returned %v, want http.ErrServerClosed", err)
+	}
+}
+
+func TestReplacementCoordinatorCoalescesAndCommitsOnce(t *testing.T) {
+	coordinator := newReplacementCoordinator()
+	acceptedAt := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	first, err := coordinator.prepare("cli", "old-instance", "new-build", acceptedAt, []string{"store/local"}, ErrRestartRequested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := coordinator.prepare("browser", "different-instance", "different-build", acceptedAt.Add(time.Second), nil, ErrExecutableChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.RestartID != first.RestartID || second.Reason != first.Reason || second.PreviousInstanceID != first.PreviousInstanceID {
+		t.Fatalf("concurrent prepare did not reuse receipt: first=%#v second=%#v", first, second)
+	}
+	if !first.DeadlineAt.Equal(first.AcceptedAt.Add(contract.DaemonRestartSLA)) {
+		t.Fatalf("restart deadline = %s, want accepted + %s", first.DeadlineAt, contract.DaemonRestartSLA)
+	}
+	if coordinator.commit("wrong-restart") {
+		t.Fatal("coordinator committed a different restart")
+	}
+	if !coordinator.commit(first.RestartID) || coordinator.commit(first.RestartID) {
+		t.Fatal("coordinator did not commit exactly once")
+	}
+	select {
+	case request := <-coordinator.requests:
+		if request.receipt.RestartID != first.RestartID || !errors.Is(request.cause, ErrRestartRequested) {
+			t.Fatalf("replacement request = %#v, %v", request.receipt, request.cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("committed replacement was not delivered")
+	}
+}
+
+func TestRestartReceiptEnvironmentRoundTrip(t *testing.T) {
+	acceptedAt := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	receipt := contract.DaemonRestart{
+		Restarting: true, RestartID: "restart-id", Reason: "cli",
+		PreviousInstanceID: "old-instance", TargetBuildID: "new-build",
+		AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
+		Handoff: true, ActiveEnvironments: []string{"store/local"},
+	}
+	environment, err := environmentWithRestartReceipt([]string{"PATH=/bin", daemonRestartReceiptEnvironment + "=stale"}, receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := ""
+	for _, value := range environment {
+		if strings.HasPrefix(value, daemonRestartReceiptEnvironment+"=") {
+			if encoded != "" {
+				t.Fatal("restart receipt environment was duplicated")
+			}
+			encoded = strings.TrimPrefix(value, daemonRestartReceiptEnvironment+"=")
+		}
+	}
+	if encoded == "" {
+		t.Fatal("restart receipt environment is missing")
+	}
+	t.Setenv(daemonRestartReceiptEnvironment, encoded)
+	decoded, err := restartReceiptFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.RestartID != receipt.RestartID || decoded.Reason != receipt.Reason || len(decoded.ActiveEnvironments) != 1 {
+		t.Fatalf("decoded restart receipt = %#v", decoded)
+	}
+}
 
 func TestListenIngressCreatesPrivateUnixSocket(t *testing.T) {
 	directory, err := os.MkdirTemp("/tmp", "portless-daemon-test-")
@@ -59,10 +182,10 @@ func TestExecutableWatcherRequestsSafeReplacement(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	replacement := make(chan struct{}, 1)
+	replacement := make(chan string, 1)
 	go watchExecutable(ctx, executable, buildID, func(context.Context) (bool, []string) {
 		return true, nil
-	}, replacement)
+	}, func(targetBuildID string) { replacement <- targetBuildID })
 
 	// Let the watcher capture the original file identity before replacing it.
 	time.Sleep(50 * time.Millisecond)
@@ -70,7 +193,10 @@ func TestExecutableWatcherRequestsSafeReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-replacement:
+	case targetBuildID := <-replacement:
+		if targetBuildID == "" || targetBuildID == buildID {
+			t.Fatalf("replacement build ID = %q, want updated build", targetBuildID)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("updated executable did not request a safe daemon replacement")
 	}
@@ -97,14 +223,26 @@ func TestDaemonDiagnosticsReportsLinkedBuildAndExecutableCurrency(t *testing.T) 
 	control := lifecycleAPIControl{
 		app: app, executable: executable, runningBuildID: buildID,
 		build: BuildInfo{Version: "1.2.3", Distribution: "release", Commit: "1234567890abcdef"},
+		lastRestart: &contract.DaemonRestartStatus{
+			RestartID: "restart-id", Reason: "cli", PreviousInstanceID: "previous-instance",
+			InstanceID: "current-instance", TargetBuildID: buildID, DurationMS: 731, WithinSLA: true,
+		},
 	}
 
 	result, err := control.Diagnostics(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Build.Version != "1.2.3" || result.Build.Distribution != "release" || result.Build.Commit != "1234567890abcdef" || result.Build.OnDiskBuildID != buildID || !result.Build.Current || result.Storage != nil {
+	if result.Build.Version != "1.2.3" || result.Build.Distribution != "release" || result.Build.Commit != "1234567890abcdef" || result.Build.OnDiskBuildID != buildID || !result.Build.Current || result.Storage != nil || result.LastRestart == nil || result.LastRestart.DurationMS != 731 {
 		t.Fatalf("current build diagnostics = %#v", result)
+	}
+	result.LastRestart.DurationMS = 999
+	unchanged, err := control.Diagnostics(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.LastRestart == nil || unchanged.LastRestart.DurationMS != 731 {
+		t.Fatalf("diagnostics exposed mutable restart status: %#v", unchanged.LastRestart)
 	}
 	if err := os.WriteFile(executable, []byte("replacement-build"), 0o700); err != nil {
 		t.Fatal(err)

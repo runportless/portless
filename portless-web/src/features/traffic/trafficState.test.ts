@@ -66,7 +66,8 @@ describe('traffic state', () => {
     const correlated = trace(5, { method: 'GET', requestTarget: '/checkout', source: 'external', target: 'checkout', spanCount: 2 })
     const settledTCP = trace(6, { protocol: 'tcp', method: undefined, requestTarget: undefined, source: 'worker', target: 'redis', spanCount: 1 })
 
-    expect(filterTraces([provisionalTCP, correlated, settledTCP], '', 'all', true).map((item) => item.number)).toEqual([5, 6])
+    expect(filterTraces([provisionalTCP, correlated, settledTCP], '', 'all', true).map((item) => item.number)).toEqual([5])
+    expect(filterTraces([provisionalTCP, correlated, settledTCP], '', 'all', true, true).map((item) => item.number)).toEqual([5, 6])
   })
 
   it('summarizes only the rolling 60 second window', () => {

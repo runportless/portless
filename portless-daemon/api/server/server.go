@@ -41,7 +41,9 @@ type DaemonControl interface {
 	// HandoffStatus performs a fresh runtime-adoption safety audit.
 	HandoffStatus(context.Context) (contract.DaemonHandoffStatus, error)
 	// Restart requests replacement of the identified daemon instance.
-	Restart(context.Context, string) (contract.DaemonRestart, error)
+	Restart(context.Context, string, string) (contract.DaemonRestart, error)
+	// CommitRestart begins an accepted replacement after its response has been written.
+	CommitRestart(string)
 }
 
 // Dependencies contains the control-plane services required by Server.
@@ -165,7 +167,7 @@ func (s *Server) handleAPI(writer http.ResponseWriter, request *http.Request) {
 	case "system":
 		s.handleSystem(writer, request, segments, principal)
 	case "daemon":
-		s.handleDaemon(writer, request, segments)
+		s.handleDaemon(writer, request, segments, principal)
 	case "relay":
 		s.handleRelay(writer, request, segments)
 	case "runtime":

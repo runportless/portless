@@ -87,6 +87,7 @@ export interface DaemonDiagnostics {
   inventory: DaemonManagedInventory
   recovery: DaemonRecoveryStatus
   build: DaemonBuildProvenance
+  lastRestart?: DaemonRestartStatus
   storage?: DaemonStorageStatus
 }
 
@@ -118,9 +119,27 @@ export interface DaemonHandoffStatus {
 
 export interface DaemonRestart {
   restarting: boolean
+  restartId: string
+  reason: string
   previousInstanceId: string
+  targetBuildId: string
+  acceptedAt: string
+  deadlineAt: string
   handoff: boolean
   activeEnvironments: string[]
+}
+
+export interface DaemonRestartStatus {
+  restartId: string
+  reason: string
+  previousInstanceId: string
+  instanceId: string
+  targetBuildId: string
+  acceptedAt: string
+  deadlineAt: string
+  readyAt: string
+  durationMs: number
+  withinSla: boolean
 }
 
 export interface RelayStatus {

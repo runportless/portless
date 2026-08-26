@@ -179,65 +179,74 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		effectiveBindings = append(effectiveBindings, binding)
 		bindingsByService[serviceDefinition.Name] = binding
 	}
-	order, err := executionOrder(definition, effectiveBindings)
+	layers, err := executionLayers(definition, effectiveBindings)
 	if err != nil {
 		return err
 	}
+	runtimesByService := make(map[string]database.ServiceRuntimeRecord, len(definition.Services))
+	for _, serviceDefinition := range definition.Services {
+		runtime, runtimeErr := s.database.ServiceRuntime(ctx, scope, serviceDefinition.Name)
+		if runtimeErr != nil {
+			return runtimeErr
+		}
+		runtimesByService[serviceDefinition.Name] = runtime
+	}
 	// Recover remote and mock targets first, then local/container services in
-	// dependency-target-first order. A live process health check may require its
-	// saved dependency listener, so that listener is restored after its targets
-	// are adopted and immediately before the health probe.
-	orderedDefinitions := make([]model.ServiceDefinition, 0, len(definition.Services))
+	// dependency-target-first layers. Independent services within one layer are
+	// adopted concurrently with a fixed bound. A live process health check may
+	// require its saved dependency listener, so that listener is restored after
+	// all targets in earlier layers are adopted and immediately before the probe.
 	seen := make(map[string]struct{}, len(definition.Services))
+	reconcileService := func(serviceDefinition model.ServiceDefinition) {
+		binding := bindingsByService[serviceDefinition.Name]
+		runtime := runtimesByService[serviceDefinition.Name]
+		if binding.Provider != model.ProviderRemote && binding.Provider != model.ProviderMock && runtime.Generation == 0 && (runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned) {
+			return
+		}
+		var reconcileErr error
+		switch binding.Provider {
+		case model.ProviderRemote:
+			reconcileErr = s.reconcileRemote(ctx, scope, binding, runtime)
+		case model.ProviderMock:
+			reconcileErr = s.activateMock(ctx, scope, binding, model.Service{Generation: runtime.Generation, RestartCount: runtime.RestartCount})
+		case model.ProviderContainer:
+			reconcileErr = s.reconcileContainer(ctx, scope, serviceDefinition, runtime, privateEnvironmentKey, logsRoot)
+		default:
+			reconcileErr = s.reconcileProcess(ctx, scope, serviceDefinition, runtime, func() error {
+				return s.restoreDependencyProxiesForSource(ctx, scope, definition, serviceDefinition.Name, runtime.Generation)
+			})
+		}
+		if reconcileErr != nil {
+			reason := "runtime could not be recovered: " + reconcileErr.Error()
+			_ = s.database.SetServiceStatus(ctx, scope, serviceDefinition.Name, model.ServiceUnknown, reason)
+			s.proxy.RemoveTarget(scope, serviceDefinition.Name)
+		}
+	}
 	for _, serviceDefinition := range definition.Services {
 		provider := bindingsByService[serviceDefinition.Name].Provider
 		if provider != model.ProviderRemote && provider != model.ProviderMock {
 			continue
 		}
-		orderedDefinitions = append(orderedDefinitions, serviceDefinition)
+		reconcileService(serviceDefinition)
 		seen[serviceDefinition.Name] = struct{}{}
 	}
-	for _, serviceName := range order {
-		orderedService, exists := serviceDefinition(definition, serviceName)
-		if !exists {
-			continue
+	for _, layer := range layers {
+		layerDefinitions := make([]model.ServiceDefinition, 0, len(layer))
+		for _, serviceName := range layer {
+			orderedService, exists := serviceDefinition(definition, serviceName)
+			if !exists {
+				continue
+			}
+			layerDefinitions = append(layerDefinitions, orderedService)
+			seen[serviceName] = struct{}{}
 		}
-		orderedDefinitions = append(orderedDefinitions, orderedService)
-		seen[serviceName] = struct{}{}
+		runBoundedServiceRecoveries(layerDefinitions, 4, reconcileService)
 	}
 	for _, serviceDefinition := range definition.Services {
 		if _, exists := seen[serviceDefinition.Name]; exists {
 			continue
 		}
-		orderedDefinitions = append(orderedDefinitions, serviceDefinition)
-	}
-
-	for _, serviceDefinition := range orderedDefinitions {
-		binding := bindingsByService[serviceDefinition.Name]
-		runtime, runtimeErr := s.database.ServiceRuntime(ctx, scope, serviceDefinition.Name)
-		if runtimeErr != nil {
-			return runtimeErr
-		}
-		if binding.Provider != model.ProviderRemote && binding.Provider != model.ProviderMock && runtime.Generation == 0 && (runtime.Status == model.ServiceStopped || runtime.Status == model.ServicePlanned) {
-			continue
-		}
-		switch binding.Provider {
-		case model.ProviderRemote:
-			err = s.reconcileRemote(ctx, scope, binding, runtime)
-		case model.ProviderMock:
-			err = s.activateMock(ctx, scope, binding, model.Service{Generation: runtime.Generation, RestartCount: runtime.RestartCount})
-		case model.ProviderContainer:
-			err = s.reconcileContainer(ctx, scope, environment, serviceDefinition, runtime, privateEnvironmentKey, logsRoot)
-		default:
-			err = s.reconcileProcess(ctx, scope, serviceDefinition, runtime, func() error {
-				return s.restoreDependencyProxiesForSource(ctx, scope, definition, serviceDefinition.Name, runtime.Generation)
-			})
-		}
-		if err != nil {
-			reason := "runtime could not be recovered: " + err.Error()
-			_ = s.database.SetServiceStatus(ctx, scope, serviceDefinition.Name, model.ServiceUnknown, reason)
-			s.proxy.RemoveTarget(scope, serviceDefinition.Name)
-		}
+		reconcileService(serviceDefinition)
 	}
 	current, err := s.database.Environment(ctx, environment.Project, environment.Name)
 	if err != nil {
@@ -277,6 +286,25 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		_, _ = s.timeline(ctx, scope, "daemon", "environment.reconciled", scope, "warning", "Runtime recovery completed with unavailable services", map[string]any{"daemonInstance": s.daemonInstanceID})
 	}
 	return nil
+}
+
+func runBoundedServiceRecoveries(definitions []model.ServiceDefinition, limit int, recoverService func(model.ServiceDefinition)) {
+	if limit < 1 {
+		limit = 1
+	}
+	semaphore := make(chan struct{}, limit)
+	var wait sync.WaitGroup
+	for _, definition := range definitions {
+		definition := definition
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			recoverService(definition)
+		}()
+	}
+	wait.Wait()
 }
 
 func (s *Service) restoreDependencyProxiesForSource(ctx context.Context, scope string, definition model.ProjectModel, source string, generation int64) error {
@@ -505,14 +533,15 @@ func recoveredTerminalStatus(state string) (model.ServiceStatus, bool) {
 	}
 }
 
-func (s *Service) reconcileContainer(ctx context.Context, scope string, environment model.Environment, definition model.ServiceDefinition, runtime database.ServiceRuntimeRecord, privateEnvironmentKey, logsRoot string) error {
+func (s *Service) reconcileContainer(ctx context.Context, scope string, definition model.ServiceDefinition, runtime database.ServiceRuntimeRecord, privateEnvironmentKey, logsRoot string) error {
 	if runtime.Generation <= 0 {
 		return errors.New("container generation is missing")
 	}
-	inspection, err := s.containers.InspectRecovery(ctx, privateEnvironmentKey, definition, runtime.Generation, runtime.ContainerName)
+	recovery, err := s.containers.Recover(ctx, privateEnvironmentKey, definition, runtime.Generation, runtime.ContainerName, logsRoot)
 	if err != nil {
 		return err
 	}
+	inspection := recovery.Inspection
 	switch inspection.State {
 	case container.RecoveryStopped:
 		return s.markRecoveredRuntimeStopped(ctx, scope, definition.Name, runtime, "previous managed container is stopped", inspection.ContainerName)
@@ -523,10 +552,10 @@ func (s *Service) reconcileContainer(ctx context.Context, scope string, environm
 	default:
 		return errors.New("managed container recovery returned an invalid state")
 	}
-	result, err := s.containers.Adopt(ctx, environment.Project+"-"+environment.Name, privateEnvironmentKey, definition, runtime.Generation, logsRoot)
-	if err != nil {
-		return err
+	if recovery.Start == nil {
+		return errors.New("managed running container recovery returned no adopted runtime")
 	}
+	result := *recovery.Start
 	if runtime.ContainerName != "" && result.ContainerName != runtime.ContainerName {
 		return fmt.Errorf("managed container %s does not match persisted container %s", result.ContainerName, runtime.ContainerName)
 	}

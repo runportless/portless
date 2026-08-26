@@ -2,7 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TrafficExchange, TrafficTrace } from '../../types'
-import { defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, orderedTraceExchanges, rawTrafficMessage, trafficStartedTime, trafficTargetBinding, TrafficDetail } from './TrafficDetail'
+import { defaultTrafficDetailView, defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, orderedTraceExchanges, rawTrafficMessage, semanticTrafficMessage, trafficStartedTime, trafficTargetBinding, TrafficDetail } from './TrafficDetail'
+import { traceNavigationItems } from './TraceWaterfall'
 
 const exchange = {
   project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
@@ -66,7 +67,7 @@ describe('TrafficDetail', () => {
     expect(markup).not.toContain('traffic-trace-context')
     expect(markup).not.toContain('TRACE ID')
     expect(markup).not.toContain('4bf92f3577b34da6a3ce929d0e0e4736')
-    expect(markup).not.toContain('Trace exchange navigation')
+    expect(markup).not.toContain('Trace span navigation')
     expect(markup).toContain('sold-out / reject-order')
     expect(markup).not.toContain('aria-label="Transfer summary"')
     expect(markup).not.toContain('traffic-message-workbench--response')
@@ -95,14 +96,81 @@ describe('TrafficDetail', () => {
     }))
 
     expect(orderedTraceExchanges(trace).map((candidate) => candidate.sequence)).toEqual([6, 7, 9])
-    expect(markup).toContain('aria-label="Trace exchange navigation"')
-    expect(markup).toContain('aria-label="First exchange in trace"')
-    expect(markup).toContain('aria-label="Previous exchange in trace"')
-    expect(markup).toContain('aria-label="Exchange 2 of 3"')
-    expect(markup).toContain('aria-label="Next exchange in trace"')
-    expect(markup).toContain('aria-label="Last exchange in trace"')
+    expect(markup).toContain('aria-label="Trace span navigation"')
+    expect(markup).toContain('aria-label="First visible span in trace"')
+    expect(markup).toContain('aria-label="Previous visible span in trace"')
+    expect(markup).toContain('aria-label="Span 2 of 3"')
+    expect(markup).toContain('aria-label="Next visible span in trace"')
+    expect(markup).toContain('aria-label="Last visible span in trace"')
     expect(markup).toContain('<strong>2</strong><span>OF</span><strong>3</strong>')
     expect(markup).not.toContain('>TRACE<')
+  })
+
+  it('presents a collapsed database transaction as one navigable summary', () => {
+    const root = { ...exchange, sequence: 6, source: 'external', target: 'checkout' } as TrafficExchange
+    const operation = (sequence: number, name: string, content = name, result = name) => ({
+      ...exchange,
+      sequence,
+      protocol: 'tcp',
+      source: 'inventory',
+      target: 'inventory-postgres',
+      status: undefined,
+      method: undefined,
+      requestTarget: undefined,
+      path: undefined,
+      requestBody: undefined,
+      responseBody: undefined,
+      tcp: {
+        kind: 'operation', applicationProtocol: 'postgresql', operation: name, inspection: 'decoded', outcome: 'success',
+        requestMessages: [{ type: 'query', offsetMs: 0, summary: name, wireBytes: 6, content, contentType: 'text/x-sql', encoding: 'utf8' }],
+        responseMessages: [{ type: 'command-complete', offsetMs: 1, summary: result, wireBytes: 6, fields: [{ name: 'command', value: result }] }],
+      },
+    }) as TrafficExchange
+    const trace = {
+      project: 'billing', environment: 'local', number: 6, lastSequence: 9, rootSequence: 6,
+      protocol: 'http', startedAt: root.startedAt, completedAt: root.completedAt, durationMs: 24,
+      source: 'external', target: 'checkout', status: 201, error: false, faulted: false, background: false, provisional: false,
+      spanCount: 4, correlation: 'exact',
+      spans: [
+        { exchange: root, depth: 0, startOffsetMs: 0, correlation: 'exact' },
+        { exchange: operation(7, 'BEGIN'), parentSequence: 6, depth: 1, startOffsetMs: 2, correlation: 'inferred', transactionGroup: 1 },
+        { exchange: operation(8, 'UPDATE', 'UPDATE inventory SET on_hand = on_hand - 1', 'UPDATE 1'), parentSequence: 6, depth: 1, startOffsetMs: 4, correlation: 'inferred', transactionGroup: 1 },
+        { exchange: operation(9, 'COMMIT'), parentSequence: 6, depth: 1, startOffsetMs: 6, correlation: 'inferred', transactionGroup: 1 },
+      ],
+    } as TrafficTrace
+    const navigationItems = traceNavigationItems(trace)
+    const transaction = navigationItems[1]
+    expect(transaction).toMatchObject({ kind: 'transaction', expanded: false })
+
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+      exchange: transaction.exchange,
+      trace,
+      traceNavigationItems: navigationItems,
+      traceNavigationItem: transaction,
+      onTraceNavigate: () => undefined,
+      onTraceTransactionToggle: () => undefined,
+      onClose: () => undefined,
+    }))
+
+    expect(markup).toContain('POSTGRESQL COMMAND / RESULT')
+    expect(markup).toContain('<code>1 COMMAND</code>')
+    expect(markup).toContain('aria-label="Command"')
+    expect(markup).toContain('aria-selected="true" class="is-active">COMMAND</button>')
+    expect(markup).toContain('aria-selected="false" class="">RESULT</button>')
+    expect(markup).toContain('aria-selected="false" class="">TCP DETAILS</button>')
+    expect(markup).not.toContain('aria-label="Exchange overview"')
+    expect(markup).not.toContain('traffic-overview__context')
+    expect(markup).not.toContain('<span>ENVIRONMENT</span>')
+    expect(markup).not.toContain('<span>TARGET BINDING</span>')
+    expect(markup).not.toContain('<span>STARTED</span>')
+    expect(markup).not.toContain('<span>COMPLETED</span>')
+    expect(markup).not.toContain('<strong>BEGIN</strong>')
+    expect(markup).not.toContain('<strong>COMMIT</strong>')
+    expect(markup).toContain('UPDATE inventory SET on_hand = on_hand - 1')
+    expect(markup).not.toContain('UPDATE 1')
+    expect(semanticTrafficMessage(trace.spans![2].exchange, 'response')).toMatchObject({ label: 'RESULT', title: 'UPDATE 1' })
+    expect(markup).toContain('aria-label="Span 2 of 2"')
+    expect(markup).not.toContain('PROTOCOL MESSAGES')
   })
 
   it('formats body, header, and raw payload representations without exposing secrets', () => {
@@ -223,7 +291,12 @@ describe('TrafficDetail', () => {
 
     expect(markup).toContain('POSTGRESQL EXCHANGE #7')
     expect(markup).toContain('<code>SESSION</code>')
-    expect(markup).toContain('aria-label="Exchange overview"')
+    expect(markup).toContain('aria-label="TCP inspection summary"')
+    expect(markup).not.toContain('traffic-overview__context')
+    expect(markup).not.toContain('<span>ENVIRONMENT</span>')
+    expect(markup).not.toContain('<span>TARGET BINDING</span>')
+    expect(markup).not.toContain('<span>STARTED</span>')
+    expect(markup).not.toContain('<span>COMPLETED</span>')
     expect(markup).not.toContain('aria-label="Exchange payload"')
     expect(markup).toContain('TLS-encrypted PostgreSQL traffic')
     expect(markup).toContain('8 B sent · 1 B received')
@@ -232,7 +305,7 @@ describe('TrafficDetail', () => {
     expect(markup).not.toContain('>RESPONSE</button>')
   })
 
-  it('renders decoded TCP operations with protocol request and response tabs', () => {
+  it('opens decoded TCP operations on command with result and TCP details as peers', () => {
     const tcp = {
       ...exchange,
       protocol: 'tcp', method: undefined, host: undefined, path: undefined, requestTarget: undefined, status: undefined,
@@ -252,22 +325,33 @@ describe('TrafficDetail', () => {
     } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
 
-    expect(markup).toContain('NATS EXCHANGE #7')
+    expect(markup).toContain('NATS COMMAND / RESULT')
     expect(markup).toContain('<code>PUB</code>')
-    expect(markup).toContain('>REQUEST</button>')
-    expect(markup).toContain('>RESPONSE</button>')
-    expect(markup).toContain('aria-label="request protocol messages"')
-    expect(markup).toContain('<code>1 MESSAGE</code>')
-    expect(markup).toContain('aria-label="Message 1: pub"')
-    expect(markup).toContain('class="traffic-protocol-message__index" aria-hidden="true">01</span>')
-    expect(markup).toContain('<dt>subject</dt><dd>orders.created</dd>')
+    expect(defaultTrafficDetailView(tcp)).toBe('request')
+    expect(markup).toContain('aria-label="Command"')
+    expect(markup).toContain('aria-selected="true" class="is-active">COMMAND</button>')
+    expect(markup).toContain('aria-selected="false" class="">RESULT</button>')
+    expect(markup).toContain('aria-selected="false" class="">TCP DETAILS</button>')
+    expect(markup).not.toContain('aria-label="Exchange overview"')
+    expect(markup).not.toContain('traffic-overview__context')
+    expect(markup).not.toContain('<span>ENVIRONMENT</span>')
+    expect(markup).not.toContain('<span>TARGET BINDING</span>')
+    expect(markup).not.toContain('<span>STARTED</span>')
+    expect(markup).not.toContain('<span>COMPLETED</span>')
+    expect(markup).not.toContain('>REQUEST</button>')
+    expect(markup).not.toContain('>RESPONSE</button>')
+    expect(markup).not.toContain('aria-label="command protocol messages"')
+    expect(markup).toContain('aria-label="command summary"')
+    expect(markup).toContain('PUB orders.created')
     expect(markup).toContain('class="traffic-json"')
     expect(markup).toContain('class="traffic-json__key"')
     expect(markup).toContain('&quot;orderId&quot;')
+    expect(markup).not.toContain('This command does not have a result.')
+    expect(semanticTrafficMessage(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'No response' })
     expect(markup).toContain('>SENT</b>')
   })
 
-  it('avoids repeating protocol payloads and omits empty message fields', () => {
+  it('summarizes PostgreSQL queries and results without protocol plumbing', () => {
     const sql = 'UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2'
     const tcp = {
       ...exchange,
@@ -276,11 +360,12 @@ describe('TrafficDetail', () => {
       source: 'inventory', target: 'inventory-postgres', targetProvider: 'container', requestBytes: 96, responseBytes: 0,
       tcp: {
         kind: 'operation', applicationProtocol: 'postgresql', operation: 'UPDATE', inspection: 'decoded', outcome: 'success',
-        requestMessageCount: 1, responseMessageCount: 0,
+        requestMessageCount: 5, responseMessageCount: 3,
         requestMessages: [{
           type: 'parse', offsetMs: 0, summary: `Parse ${sql}`, wireBytes: 96,
           contentType: 'text/x-sql', encoding: 'utf8', fields: [{ name: 'statement', value: '' }], content: sql,
-        }],
+        }, { type: 'bind', offsetMs: 0, summary: 'Bind parameters', wireBytes: 20 }, { type: 'describe', offsetMs: 0, summary: 'Describe', wireBytes: 5 }, { type: 'execute', offsetMs: 0, summary: 'Execute', wireBytes: 5 }, { type: 'sync', offsetMs: 0, summary: 'Sync', wireBytes: 5 }],
+        responseMessages: [{ type: 'parse-complete', offsetMs: 0, summary: 'Parse complete', wireBytes: 5 }, { type: 'command-complete', offsetMs: 1, summary: 'UPDATE 1', wireBytes: 14, fields: [{ name: 'command', value: 'UPDATE 1' }] }, { type: 'ready', offsetMs: 1, summary: 'Ready for query', wireBytes: 6 }],
       },
     } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
@@ -288,8 +373,27 @@ describe('TrafficDetail', () => {
     expect(markup.match(/UPDATE store_inventory/g)).toHaveLength(1)
     expect(markup).not.toContain(`Parse ${sql}`)
     expect(markup).not.toContain('<dt>statement</dt>')
-    expect(markup).not.toContain('aria-label="Message fields"')
-    expect(markup).toContain('<code>text/x-sql</code>')
-    expect(markup).toContain('<span>+0ms</span>')
+    expect(markup).toContain('<small>text/x-sql</small>')
+    expect(markup).toContain('<strong>UPDATE</strong>')
+    expect(markup).not.toContain('<strong>UPDATE 1</strong>')
+    expect(semanticTrafficMessage(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'UPDATE 1' })
+    expect(markup).not.toContain('Parse complete')
+    expect(markup).not.toContain('Ready for query')
+    expect(markup).not.toContain('<span>+0ms</span>')
+  })
+
+  it('selects Redis commands and decoded results for the semantic summary', () => {
+    const tcp = {
+      ...exchange,
+      protocol: 'tcp', status: undefined, source: 'orders', target: 'orders-redis', requestBytes: 34, responseBytes: 8,
+      tcp: {
+        kind: 'operation', applicationProtocol: 'redis', operation: 'GET', inspection: 'decoded', outcome: 'success',
+        requestMessages: [{ type: 'command', offsetMs: 0, summary: 'GET store:order:24', wireBytes: 34, contentType: 'application/json', encoding: 'utf8', content: '[\n  "GET",\n  "store:order:24"\n]' }],
+        responseMessages: [{ type: 'response', offsetMs: 1, summary: 'bulk string', wireBytes: 8, contentType: 'application/json', encoding: 'utf8', content: '"cached"' }],
+      },
+    } as TrafficExchange
+
+    expect(semanticTrafficMessage(tcp, 'request')).toMatchObject({ label: 'COMMAND', title: 'GET store:order:24' })
+    expect(semanticTrafficMessage(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'bulk string', content: '"cached"' })
   })
 })

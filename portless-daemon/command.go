@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/runtime/supervisor"
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
@@ -34,9 +35,16 @@ func Command(args []string, stderr io.Writer, build BuildInfo) int {
 	}
 	layout, err := installation.ResolveLayout(*dataDirectory)
 	if err == nil {
+		var restartReceipt *contract.DaemonRestart
+		restartReceipt, err = restartReceiptFromEnvironment()
+		_ = os.Unsetenv(daemonRestartReceiptEnvironment)
+		if err != nil {
+			fmt.Fprintln(stderr, "portless daemon:", err)
+			return 1
+		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		err = Run(ctx, Config{Layout: layout, PreferredPort: *port, Build: build})
+		err = Run(ctx, Config{Layout: layout, PreferredPort: *port, Build: build, RestartReceipt: restartReceipt})
 	}
 	if errors.Is(err, ErrExecutableChanged) || errors.Is(err, ErrRestartRequested) {
 		executable, executableErr := os.Executable()
@@ -48,7 +56,14 @@ func Command(args []string, stderr io.Writer, build BuildInfo) int {
 			if *port > 0 {
 				arguments = append(arguments, "--port", strconv.Itoa(*port))
 			}
-			executableErr = syscall.Exec(executable, arguments, os.Environ())
+			environment := os.Environ()
+			var replacement *replacementExit
+			if errors.As(err, &replacement) {
+				environment, executableErr = environmentWithRestartReceipt(environment, replacement.receipt)
+			}
+			if executableErr == nil {
+				executableErr = syscall.Exec(executable, arguments, environment)
+			}
 		}
 		if executableErr != nil {
 			err = fmt.Errorf("replace daemon with updated executable: %w", executableErr)

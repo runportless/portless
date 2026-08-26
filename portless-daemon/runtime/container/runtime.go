@@ -80,6 +80,14 @@ type RecoveryInspection struct {
 	Port          int
 }
 
+// RecoveryResult contains one verified recovery classification and, when the
+// container is running, the adopted runtime state produced from that same
+// inspection.
+type RecoveryResult struct {
+	Inspection RecoveryInspection
+	Start      *StartResult
+}
+
 // ResetResult counts installation-owned artifacts removed from a runtime.
 type ResetResult struct {
 	Runtime    RuntimeName `json:"runtime"`
@@ -106,16 +114,11 @@ type Runtime interface {
 	ResetInstallation(context.Context) (ResetResult, error)
 }
 
-// Adopter recovers a previously started managed container after daemon replacement.
-type Adopter interface {
-	// Adopt verifies ownership and resumes observation of an existing container.
-	Adopt(context.Context, string, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (StartResult, error)
-}
-
-// RecoveryInspector verifies container ownership and distinguishes safe inactivity from ambiguity.
-type RecoveryInspector interface {
-	// InspectRecovery checks one persisted resource container without adopting or changing it.
-	InspectRecovery(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string) (RecoveryInspection, error)
+// Recoverer verifies and recovers a previously started managed container after
+// daemon replacement without repeating its ownership inspection.
+type Recoverer interface {
+	// Recover classifies the persisted container and resumes observation when it is running.
+	Recover(context.Context, string, model.ServiceDefinition, providers.ContainerPlan, int64, string, string) (RecoveryResult, error)
 }
 
 // Verifier checks that a persisted container still matches expected ownership and identity.

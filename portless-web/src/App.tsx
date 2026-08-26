@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, APIError, environmentPath, eventStreamHealth, jsonBody, setCSRF, subscribeEventStreamHealth } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
+import { DAEMON_RESTART_SLA_MS } from './daemonRestart'
 import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
@@ -145,6 +146,9 @@ export function App() {
   const activeEnvironment = parsed.project && parsed.environment
     ? environments.find((environment) => environment.project === parsed.project && environment.name === parsed.environment)
     : undefined
+  useEffect(() => {
+    document.title = pageTitle(activeProject?.name)
+  }, [activeProject?.name])
   const mutateEnvironment = useCallback(async (action: 'up' | 'down') => {
     if (!activeEnvironment) return
     await api<Operation>(environmentPath(activeEnvironment, `/${action}`), { method: 'POST', ...(action === 'down' ? jsonBody({ removeVolumes: false }) : {}) })
@@ -159,7 +163,16 @@ export function App() {
     setRuntimeStatus(status)
   }, [])
   const restartDaemon = useCallback(async (instanceId: string) => {
-    return api<DaemonRestart>('/daemon/restart', { method: 'POST', ...jsonBody({ instanceId }) })
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), DAEMON_RESTART_SLA_MS)
+    try {
+      return await api<DaemonRestart>('/daemon/restart', { method: 'POST', signal: controller.signal, ...jsonBody({ instanceId }) })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw new Error(`The daemon did not accept restart within the ${DAEMON_RESTART_SLA_MS / 1_000} second SLA.`)
+      throw error
+    } finally {
+      window.clearTimeout(timeout)
+    }
   }, [])
   const verifyDaemonHandoff = useCallback(async () => api<DaemonHandoffStatus>('/daemon/handoff'), [])
   const commands = useMemo<Command[]>(() => activeEnvironment ? [
@@ -192,6 +205,10 @@ export function App() {
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {
   return `${environment.project}/${environment.name}@${daemon?.instanceId || 'daemon-pending'}`
+}
+
+export function pageTitle(projectName?: string) {
+  return projectName ? `Portless | ${projectName}` : 'Portless'
 }
 
 export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockProfile?: string; tab: Tab } {

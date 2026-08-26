@@ -9,8 +9,8 @@ import (
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
-func watchExecutable(ctx context.Context, executable, currentBuildID string, canHandoff func(context.Context) (bool, []string), replacement chan<- struct{}) {
-	ticker := time.NewTicker(2 * time.Second)
+func watchExecutable(ctx context.Context, executable, currentBuildID string, canHandoff func(context.Context) (bool, []string), replacement func(string)) {
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	reportedBuild := ""
 	lastInfo, _ := os.Stat(executable)
@@ -51,10 +51,10 @@ func watchExecutable(ctx context.Context, executable, currentBuildID string, can
 			}
 			continue
 		}
-		select {
-		case replacement <- struct{}{}:
-		case <-ctx.Done():
+		if ctx.Err() != nil {
+			return
 		}
+		replacement(pendingBuild)
 		return
 	}
 }

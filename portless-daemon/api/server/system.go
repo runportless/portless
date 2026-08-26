@@ -31,7 +31,7 @@ func (s *Server) handleRelay(writer http.ResponseWriter, request *http.Request, 
 	writeJSON(writer, http.StatusOK, status)
 }
 
-func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request, segments []string) {
+func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {
 	if s.daemonControl == nil {
 		writeAPIError(writer, http.StatusServiceUnavailable, contract.APIError{Code: "DAEMON_CONTROL_UNAVAILABLE", Message: "daemon lifecycle information is unavailable", Remediation: []contract.Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
 		return
@@ -115,7 +115,13 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "DAEMON_INSTANCE_REQUIRED", Message: "instanceId is required"})
 		return
 	}
-	result, err := s.daemonControl.Restart(request.Context(), input.InstanceID)
+	reason := "cli"
+	if principal.Session {
+		reason = "browser"
+	} else if principal.Actor == "MCP" {
+		reason = "mcp"
+	}
+	result, err := s.daemonControl.Restart(request.Context(), input.InstanceID, reason)
 	if err != nil {
 		var lifecycleError *contract.DaemonControlError
 		if errors.As(err, &lifecycleError) {
@@ -131,6 +137,10 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 	}
 	result.ActiveEnvironments = nonNil(append([]string(nil), result.ActiveEnvironments...))
 	writeJSON(writer, http.StatusAccepted, result)
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	s.daemonControl.CommitRestart(result.RestartID)
 }
 
 func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.4.0
+  version: 12.5.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.4.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.5.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -135,8 +135,11 @@ paths:
       description: >-
         Requests an authenticated daemon replacement without force. Active
         environments must pass runtime handoff checks. Browser sessions remain
-        valid across the replacement and clients reconnect by observing a new
-        instanceId.
+        valid across the replacement. A successful response is a restart
+        receipt with one shared five-second readiness deadline; clients
+        reconnect by observing a different ready instanceId. Concurrent CLI,
+        browser, MCP, and executable-change triggers coalesce into one
+        replacement.
       requestBody:
         required: true
         content:
@@ -1307,7 +1310,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.4.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.5.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1318,6 +1321,7 @@ components:
         inventory: { $ref: '#/components/schemas/DaemonManagedInventory' }
         recovery: { $ref: '#/components/schemas/DaemonRecoveryStatus' }
         build: { $ref: '#/components/schemas/DaemonBuildProvenance' }
+        lastRestart: { $ref: '#/components/schemas/DaemonRestartStatus' }
         storage: { $ref: '#/components/schemas/DaemonStorageStatus' }
     DaemonManagedInventory:
       type: object
@@ -1408,12 +1412,31 @@ components:
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonRestart:
       type: object
-      required: [restarting, previousInstanceId, handoff, activeEnvironments]
+      required: [restarting, restartId, reason, previousInstanceId, targetBuildId, acceptedAt, deadlineAt, handoff, activeEnvironments]
       properties:
         restarting: { type: boolean, const: true }
+        restartId: { type: string, description: Stable identifier shared by every caller whose concurrent trigger coalesced into this replacement. }
+        reason: { type: string, enum: [cli, browser, mcp, executable-change] }
         previousInstanceId: { type: string }
+        targetBuildId: { type: string, description: SHA-256 identity of the executable the replacement will run. }
+        acceptedAt: { type: string, format: date-time }
+        deadlineAt: { type: string, format: date-time, description: Ready-state deadline five seconds after restart acceptance. }
         handoff: { type: boolean, const: true }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    DaemonRestartStatus:
+      type: object
+      required: [restartId, reason, previousInstanceId, instanceId, targetBuildId, acceptedAt, deadlineAt, readyAt, durationMs, withinSla]
+      properties:
+        restartId: { type: string }
+        reason: { type: string, enum: [cli, browser, mcp, executable-change] }
+        previousInstanceId: { type: string }
+        instanceId: { type: string }
+        targetBuildId: { type: string }
+        acceptedAt: { type: string, format: date-time }
+        deadlineAt: { type: string, format: date-time }
+        readyAt: { type: string, format: date-time }
+        durationMs: { type: integer, format: int64, minimum: 0 }
+        withinSla: { type: boolean }
     DirectorySelection:
       type: object
       required: [path]

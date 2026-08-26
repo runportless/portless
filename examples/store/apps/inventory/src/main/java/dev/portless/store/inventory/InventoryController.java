@@ -27,6 +27,11 @@ public class InventoryController {
         return catalog.items();
     }
 
+    @PostMapping("/reset")
+    public InventoryResetResult reset() {
+        return new InventoryResetResult("reset", catalog.reset());
+    }
+
     @GetMapping("/{sku}")
     public ResponseEntity<InventoryAvailability> availability(
             @PathVariable String sku,

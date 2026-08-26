@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/runportless/portless/portless-cli/command"
+	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/control"
 )
 
@@ -30,6 +31,13 @@ type daemonStatusOutput struct {
 	RecoveryProblems   []string  `json:"recoveryProblems"`
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 	Problems           []string  `json:"problems"`
+}
+
+type daemonRestartOutput struct {
+	Restart    contract.DaemonRestart `json:"restart"`
+	Daemon     daemonStatusOutput     `json:"daemon"`
+	DurationMS int64                  `json:"durationMs"`
+	Forced     bool                   `json:"forced"`
 }
 
 func (c *Commands) daemonStatus(ctx context.Context, jsonOutput bool) error {
@@ -147,43 +155,65 @@ func (c *Commands) stopDaemon(ctx context.Context, options control.StopOptions, 
 	return nil
 }
 
-func (c *Commands) restartDaemon(ctx context.Context, options control.StopOptions, jsonOutput bool) error {
-	options.Handoff = true
-	stopped, err := c.Daemon.Stop(ctx, options)
-	if err != nil {
-		return err
+func daemonRestartJSONOutput(result control.RestartResult) daemonRestartOutput {
+	record := result.Daemon
+	inspection := result.Inspection
+	activeEnvironments := append([]string(nil), result.Restart.ActiveEnvironments...)
+	if len(activeEnvironments) == 0 {
+		activeEnvironments = append(activeEnvironments, inspection.Identity.ActiveEnvironments...)
 	}
-	record, err := c.Daemon.Ensure(ctx)
-	if err != nil {
-		return err
+	if activeEnvironments == nil {
+		activeEnvironments = []string{}
 	}
-	inspection, err := c.Daemon.Inspect(ctx)
-	if err != nil {
-		return err
+	recoveryProblems := append([]string(nil), inspection.Identity.RecoveryProblems...)
+	if recoveryProblems == nil {
+		recoveryProblems = append([]string{}, record.RecoveryProblems...)
 	}
-	handoff, err := c.Daemon.VerifyHandoff(ctx)
-	if err != nil {
-		return err
+	runtimeState := inspection.Identity.State
+	if runtimeState == "" {
+		runtimeState = record.State
+	}
+	handoffState := "ready"
+	if result.Forced {
+		handoffState = "bypassed"
+	} else if result.Restart.RestartID == "" {
+		handoffState = "not-required"
+	}
+	expectedBuildID := inspection.ExpectedBuildID
+	if expectedBuildID == "" {
+		expectedBuildID = record.BuildID
 	}
 	problems := append([]string(nil), inspection.Problems...)
 	if problems == nil {
 		problems = []string{}
 	}
-	if jsonOutput {
-		return command.WriteJSON(c.Out, map[string]any{"stopped": stopped, "daemon": daemonStatusOutput{
-			State: "running", Compatible: inspection.Compatible, CurrentBuild: inspection.CurrentBuild, PID: record.PID,
-			ProtocolVersion: record.ProtocolVersion, APIVersion: record.APIVersion,
-			InstallationID: record.InstallationID, InstanceID: record.InstanceID,
-			BuildID: record.BuildID, ExpectedBuildID: inspection.ExpectedBuildID,
-			StartedAt: record.StartedAt, ActiveEnvironments: append([]string{}, handoff.ActiveEnvironments...),
-			RuntimeState: inspection.Identity.State, HandoffState: string(handoff.State), HandoffVerifiedAt: handoff.VerifiedAt,
-			HandoffProblems:  append([]string{}, handoff.Problems...),
-			RecoveryProblems: append([]string{}, inspection.Identity.RecoveryProblems...),
-			Problems:         problems,
-		}})
+	return daemonRestartOutput{
+		Restart: result.Restart,
+		Daemon: daemonStatusOutput{
+			State: "running", Compatible: inspection.Compatible, CurrentBuild: inspection.CurrentBuild,
+			PID: record.PID, ProtocolVersion: record.ProtocolVersion, APIVersion: record.APIVersion,
+			InstallationID: record.InstallationID, InstanceID: record.InstanceID, BuildID: record.BuildID,
+			ExpectedBuildID: expectedBuildID, StartedAt: record.StartedAt, RuntimeState: runtimeState,
+			HandoffState: handoffState, HandoffProblems: []string{}, RecoveryProblems: recoveryProblems,
+			ActiveEnvironments: activeEnvironments, Problems: problems,
+		},
+		DurationMS: result.DurationMS,
+		Forced:     result.Forced,
 	}
-	fmt.Fprintf(c.Out, "Portless daemon is %s (PID %d, build %s).\n", c.Success(c.Out, "running"), record.PID, shortFingerprint(record.BuildID))
-	printForcedDaemonWarning(c, stopped)
+}
+
+func (c *Commands) restartDaemon(ctx context.Context, force, jsonOutput bool) error {
+	result, err := c.Daemon.Restart(ctx, control.RestartOptions{Force: force})
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return command.WriteJSON(c.Out, daemonRestartJSONOutput(result))
+	}
+	fmt.Fprintf(c.Out, "Portless daemon is %s (PID %d, build %s) after %d ms.\n", c.Success(c.Out, "running"), result.Daemon.PID, shortFingerprint(result.Daemon.BuildID), result.DurationMS)
+	if result.Forced {
+		printForcedDaemonWarning(c, control.StopResult{Forced: true, ActiveEnvironments: result.Restart.ActiveEnvironments})
+	}
 	return nil
 }
 

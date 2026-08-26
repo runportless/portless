@@ -149,11 +149,11 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 			if request.URL.Query().Get("include") == "storage" {
 				storage = `,"storage":{"databaseBytes":4096,"recordingCount":0,"recordedEventCount":0,"recordedBytes":0,"liveTrafficExchanges":0,"liveTrafficBytes":0,"serviceLogBytes":0,"daemonLogBytes":0,"trafficExchangeLimitPerEnvironment":5000,"trafficPayloadLimitPerEnvironment":67108864,"recordingDefaultEventLimit":10000,"recordingMaximumEventLimit":100000,"recordingDefaultPayloadLimit":65536,"recordingMaximumPayloadLimit":1048576,"serviceLogGenerationLimit":10,"serviceLogStreamLimitBytes":16777216,"problems":[]}`
 			}
-			_, _ = io.WriteString(writer, `{"collectedAt":"2026-08-25T12:00:01Z","inventory":{"processes":1,"containers":2,"proxyListeners":3,"activeEnvironments":1,"problems":[]},"recovery":{"result":"healthy","durationMs":12,"recovered":1,"problems":[]},"build":{"version":"dev","distribution":"source","commit":"abc","runningBuildId":"build","current":true}`+storage+`}`)
+			_, _ = io.WriteString(writer, `{"collectedAt":"2026-08-25T12:00:01Z","inventory":{"processes":1,"containers":2,"proxyListeners":3,"activeEnvironments":1,"problems":[]},"recovery":{"result":"healthy","durationMs":12,"recovered":1,"problems":[]},"build":{"version":"dev","distribution":"source","commit":"abc","runningBuildId":"build","current":true},"lastRestart":{"restartId":"restart-id","reason":"cli","previousInstanceId":"previous","instanceId":"instance","targetBuildId":"build","acceptedAt":"2026-08-25T11:59:59Z","deadlineAt":"2026-08-25T12:00:04Z","readyAt":"2026-08-25T12:00:00Z","durationMs":1000,"withinSla":true}`+storage+`}`)
 		case "/api/v1/daemon/handoff":
 			_, _ = io.WriteString(writer, `{"state":"ready","verifiedAt":"2026-08-25T12:00:01Z","problems":[],"activeEnvironments":["store/local"]}`)
 		case "/api/v1/daemon/restart":
-			_, _ = io.WriteString(writer, `{"restarting":true,"previousInstanceId":"instance","handoff":true,"activeEnvironments":["store/local"]}`)
+			_, _ = io.WriteString(writer, `{"restarting":true,"restartId":"restart-id","reason":"cli","previousInstanceId":"instance","targetBuildId":"build","acceptedAt":"2026-08-25T12:00:01Z","deadlineAt":"2026-08-25T12:00:06Z","handoff":true,"activeEnvironments":["store/local"]}`)
 		default:
 			http.NotFound(writer, request)
 		}
@@ -170,7 +170,7 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 		t.Fatalf("daemon logs = %#v, %v", logs, err)
 	}
 	diagnostics, err := client.DaemonDiagnostics(context.Background(), false)
-	if err != nil || diagnostics.Inventory.Processes != 1 || diagnostics.Storage != nil {
+	if err != nil || diagnostics.Inventory.Processes != 1 || diagnostics.Storage != nil || diagnostics.LastRestart == nil || diagnostics.LastRestart.DurationMS != 1000 {
 		t.Fatalf("daemon diagnostics = %#v, %v", diagnostics, err)
 	}
 	diagnostics, err = client.DaemonDiagnostics(context.Background(), true)
@@ -182,7 +182,7 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 		t.Fatalf("daemon handoff = %#v, %v", handoff, err)
 	}
 	restart, err := client.RestartDaemon(context.Background(), "instance")
-	if err != nil || !restart.Restarting || !restart.Handoff {
+	if err != nil || !restart.Restarting || !restart.Handoff || restart.RestartID != "restart-id" || restart.DeadlineAt.IsZero() {
 		t.Fatalf("daemon restart = %#v, %v", restart, err)
 	}
 	for _, expected := range []string{"GET /api/v1/daemon", "GET /api/v1/daemon/logs", "GET /api/v1/daemon/diagnostics", "GET /api/v1/daemon/diagnostics?include=storage", "GET /api/v1/daemon/handoff", "POST /api/v1/daemon/restart"} {

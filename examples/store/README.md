@@ -73,6 +73,15 @@ curl http://checkout.local.store.localhost/orders/1
 curl http://checkout.local.store.localhost/orders/1
 ```
 
+Use **RESET INVENTORY** on the checkout page when you want to run the scenario
+again with the original stock levels. The action restores all three seed items
+and clears their demo reservations without deleting order history. The same
+action is available from the command line:
+
+```bash
+curl --request POST http://checkout.local.store.localhost/inventory/reset
+```
+
 The first lookup reports `"cache":"miss"`: orders reads PostgreSQL and fills
 Valkey for 60 seconds. The second reports `"cache":"hit"` and returns directly
 from Valkey. Redis stores complete order JSON under `store:order:<id>`; it never

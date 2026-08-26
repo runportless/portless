@@ -147,7 +147,7 @@ func TestStartRefusesToRemoveUnownedContainerNameCollision(t *testing.T) {
 	}
 }
 
-func TestInspectRecoveryClassifiesFullyOwnedStoppedContainer(t *testing.T) {
+func TestRecoverClassifiesFullyOwnedStoppedContainer(t *testing.T) {
 	root := t.TempDir()
 	const containerName = "portless-local-postgres-abcdef12"
 	script := filepath.Join(root, "container-engine")
@@ -172,16 +172,16 @@ esac
 	manager := New(binaryEngine{binary: script}, "installation", filepath.Join(root, "tmp"))
 	service := model.ServiceDefinition{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432}
 	plan := providers.ContainerPlan{Image: "docker.io/library/postgres:17", ClientPort: 5432}
-	inspection, err := manager.InspectRecovery(context.Background(), "abcdef123456", service, plan, 2, containerName)
+	recovery, err := manager.Recover(context.Background(), "abcdef123456", service, plan, 2, containerName, filepath.Join(root, "logs"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inspection.State != container.RecoveryStopped || inspection.ContainerName != containerName {
-		t.Fatalf("stopped container inspection = %#v", inspection)
+	if recovery.Inspection.State != container.RecoveryStopped || recovery.Inspection.ContainerName != containerName || recovery.Start != nil {
+		t.Fatalf("stopped container recovery = %#v", recovery)
 	}
 }
 
-func TestInspectRecoveryClassifiesExpectedContainerMissing(t *testing.T) {
+func TestRecoverClassifiesExpectedContainerMissing(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "container-engine")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
@@ -190,16 +190,16 @@ func TestInspectRecoveryClassifiesExpectedContainerMissing(t *testing.T) {
 	manager := New(binaryEngine{binary: script}, "installation", filepath.Join(root, "tmp"))
 	service := model.ServiceDefinition{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432}
 	plan := providers.ContainerPlan{Image: "docker.io/library/postgres:17", ClientPort: 5432}
-	inspection, err := manager.InspectRecovery(context.Background(), "abcdef123456", service, plan, 2, "expected-postgres")
+	recovery, err := manager.Recover(context.Background(), "abcdef123456", service, plan, 2, "expected-postgres", filepath.Join(root, "logs"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inspection.State != container.RecoveryMissing || inspection.ContainerName != "expected-postgres" {
-		t.Fatalf("missing container inspection = %#v", inspection)
+	if recovery.Inspection.State != container.RecoveryMissing || recovery.Inspection.ContainerName != "expected-postgres" || recovery.Start != nil {
+		t.Fatalf("missing container recovery = %#v", recovery)
 	}
 }
 
-func TestInspectRecoveryRefusesUnownedExpectedNameCollision(t *testing.T) {
+func TestRecoverRefusesUnownedExpectedNameCollision(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "container-engine")
 	content := `#!/bin/sh
@@ -214,12 +214,12 @@ esac
 	manager := New(binaryEngine{binary: script}, "installation", filepath.Join(root, "tmp"))
 	service := model.ServiceDefinition{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432}
 	plan := providers.ContainerPlan{Image: "docker.io/library/postgres:17", ClientPort: 5432}
-	if _, err := manager.InspectRecovery(context.Background(), "abcdef123456", service, plan, 2, "expected-postgres"); err == nil || !strings.Contains(err.Error(), "without the expected Portless ownership labels") {
+	if _, err := manager.Recover(context.Background(), "abcdef123456", service, plan, 2, "expected-postgres", filepath.Join(root, "logs")); err == nil || !strings.Contains(err.Error(), "without the expected Portless ownership labels") {
 		t.Fatalf("unowned collision inspection error = %v", err)
 	}
 }
 
-func TestInspectRecoveryRefusesToInferMissingContainerWhenInventoryFails(t *testing.T) {
+func TestRecoverRefusesToInferMissingContainerWhenInventoryFails(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "container-engine")
 	content := `#!/bin/sh
@@ -234,7 +234,7 @@ esac
 	manager := New(binaryEngine{binary: script}, "installation", filepath.Join(root, "tmp"))
 	service := model.ServiceDefinition{Name: "postgres", Kind: model.ServiceResource, Resource: &model.ResourceDefinition{Type: "postgres", Version: "17"}, Port: 5432}
 	plan := providers.ContainerPlan{Image: "docker.io/library/postgres:17", ClientPort: 5432}
-	if _, err := manager.InspectRecovery(context.Background(), "abcdef123456", service, plan, 2, "expected-postgres"); err == nil || !strings.Contains(err.Error(), "verify expected managed postgres container is absent") {
+	if _, err := manager.Recover(context.Background(), "abcdef123456", service, plan, 2, "expected-postgres", filepath.Join(root, "logs")); err == nil || !strings.Contains(err.Error(), "verify expected managed postgres container is absent") {
 		t.Fatalf("container inventory failure = %v", err)
 	}
 }
