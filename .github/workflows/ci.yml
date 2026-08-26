@@ -89,7 +89,7 @@ jobs:
 
       - name: Render and lint formula
         run: |
-          scripts/render-homebrew-formula.sh 0.0.0 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef /tmp/portless.rb
+          scripts/render-homebrew-formula.sh 0.0.0 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef "$GITHUB_SHA" /tmp/portless.rb
           ruby -c /tmp/portless.rb
           brew style /tmp/portless.rb
           brew tap-new --no-git runportless/formula-audit
