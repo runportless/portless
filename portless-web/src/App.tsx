@@ -91,6 +91,15 @@ export function App() {
     setRelayStatus(await api<RelayStatus>('/relay').catch(() => null))
   }, [])
 
+  const refreshAfterDaemonRestart = useCallback(async () => {
+    await refresh()
+    await Promise.all([
+      refreshDaemonDiagnostics(false).catch(() => undefined),
+      refreshRuntime(),
+      refreshRelay(),
+    ])
+  }, [refresh, refreshDaemonDiagnostics, refreshRelay, refreshRuntime])
+
   useEffect(() => {
     const initialize = async () => {
       try {
@@ -178,7 +187,7 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

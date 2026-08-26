@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/runportless/portless/portless-daemon/controlplane"
+	"github.com/runportless/portless/portless-daemon/database"
+	"github.com/runportless/portless/portless-daemon/events"
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
@@ -70,5 +73,47 @@ func TestExecutableWatcherRequestsSafeReplacement(t *testing.T) {
 	case <-replacement:
 	case <-time.After(5 * time.Second):
 		t.Fatal("updated executable did not request a safe daemon replacement")
+	}
+}
+
+func TestDaemonDiagnosticsReportsLinkedBuildAndExecutableCurrency(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := controlplane.New(controlStore, events.NewBroker(), controlplane.Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+	executable := filepath.Join(data, "portless")
+	if err := os.WriteFile(executable, []byte("first-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	buildID, err := installation.BuildIDForPath(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := lifecycleAPIControl{
+		app: app, executable: executable, runningBuildID: buildID,
+		build: BuildInfo{Version: "1.2.3", Distribution: "release", Commit: "1234567890abcdef"},
+	}
+
+	result, err := control.Diagnostics(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Build.Version != "1.2.3" || result.Build.Distribution != "release" || result.Build.Commit != "1234567890abcdef" || result.Build.OnDiskBuildID != buildID || !result.Build.Current || result.Storage != nil {
+		t.Fatalf("current build diagnostics = %#v", result)
+	}
+	if err := os.WriteFile(executable, []byte("replacement-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := control.Diagnostics(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.Build.Current || replaced.Build.OnDiskBuildID == buildID || replaced.Storage == nil {
+		t.Fatalf("replacement build diagnostics = %#v", replaced)
 	}
 }

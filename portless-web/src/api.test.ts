@@ -95,6 +95,8 @@ describe('event-stream health', () => {
     disconnect()
     expect(source.close).toHaveBeenCalledOnce()
     expect(observed.at(-1)).toMatchObject({ state: 'idle', connections: 0, connected: 0 })
+    source.onopen?.()
+    expect(eventStreamHealth()).toMatchObject({ state: 'idle', connections: 0, connected: 0 })
     unsubscribe()
   })
 })

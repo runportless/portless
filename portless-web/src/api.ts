@@ -129,6 +129,7 @@ export function connectEvents(environment: Pick<Environment, 'project' | 'name'>
   eventStreams.set(identifier, 'reconnecting')
   publishEventStreamHealth()
   source.onopen = () => {
+    if (!eventStreams.has(identifier)) return
     eventStreams.set(identifier, 'connected')
     lastEventStreamConnection = new Date().toISOString()
     publishEventStreamHealth()

@@ -244,7 +244,7 @@ function StatusPanel({ status, diagnostics, health, live }: { status: DaemonStat
         <Detail label="VERSION" value={build.version} />
         <Detail label="DISTRIBUTION" value={displayDistribution(build.distribution)} />
         <Detail label="COMMIT" value={shortFingerprint(build.commit)} title={build.commit} />
-        <Detail label="INSTALLED BINARY" value={build.current ? 'Current' : 'Replacement pending'} detail={build.onDiskBuildId ? `${shortFingerprint(build.runningBuildId)} running · ${shortFingerprint(build.onDiskBuildId)} installed` : build.problem || 'On-disk identity unavailable'} />
+        <Detail label="INSTALLED BINARY" value={build.problem ? 'Comparison unavailable' : build.current ? 'Current' : 'Replacement pending'} detail={build.onDiskBuildId ? `${shortFingerprint(build.runningBuildId)} running · ${shortFingerprint(build.onDiskBuildId)} installed` : build.problem || 'On-disk identity unavailable'} />
       </div> : <p>Build provenance is loading.</p>}
     </section>
     <section className={`drawer-section daemon-control-health ${!live || health.api.state !== 'ready' ? 'daemon-section--warning' : ''}`}>

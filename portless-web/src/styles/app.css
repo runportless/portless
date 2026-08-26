@@ -361,7 +361,10 @@ button.table-row { cursor: pointer; }.table-row:last-child { border-bottom: 0; }
 .drawer-size-button:hover { color:var(--text); border-color:var(--line-bright); }
 .drawer-size-button[aria-pressed="true"] { color:var(--teal); border-color:var(--teal-dim); }
 .drawer-size-button svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.35; stroke-linecap:square; stroke-linejoin:miter; }
-.daemon-drawer > header { min-height:72px; align-items:center; }
+.daemon-drawer { display:flex; flex-direction:column; overflow:hidden; }
+.daemon-drawer > header { min-height:72px; flex:0 0 auto; align-items:center; }
+.daemon-drawer > .drawer-actions,.daemon-drawer > .daemon-drawer-tabs { flex:0 0 auto; }
+.daemon-drawer > .drawer-content { min-height:0; flex:1; overflow:auto; scrollbar-color:var(--line-bright) transparent; scrollbar-width:thin; }
 .daemon-drawer-heading > div { display:flex; gap:13px; align-items:center; }
 .daemon-drawer-heading h2 { margin:0; }
 .daemon-drawer-tabs { gap:0; }
