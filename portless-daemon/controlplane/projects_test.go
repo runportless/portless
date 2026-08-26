@@ -706,7 +706,7 @@ func TestRescanRemovesConnectionNoLongerDiscoveredFromSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(environment.Connections) != 1 || environment.Connections[0].Source != "checkout" || environment.Connections[0].Target != "redis" {
+	if len(environment.Connections) != 1 || environment.Connections[0].Source != "checkout" || environment.Connections[0].Target != "checkout-redis" {
 		t.Fatalf("initial connections = %#v", environment.Connections)
 	}
 	if err := os.WriteFile(environmentFile, []byte("LOG_LEVEL=debug\n"), 0o600); err != nil {
@@ -719,12 +719,97 @@ func TestRescanRemovesConnectionNoLongerDiscoveredFromSource(t *testing.T) {
 	if len(rescanned.Connections) != 0 {
 		t.Fatalf("rescanned connections = %#v, want none", rescanned.Connections)
 	}
+	if len(rescanned.Services) != 1 || rescanned.Services[0].Name != "checkout" {
+		t.Fatalf("rescanned services = %#v, want retired resource removed", rescanned.Services)
+	}
+	if len(rescanned.Bindings) != 1 || rescanned.Bindings[0].Service != "checkout" {
+		t.Fatalf("rescanned bindings = %#v, want retired resource binding removed", rescanned.Bindings)
+	}
 	projectDefinition, err := app.ProjectModel(ctx, "billing")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(projectDefinition.Connections) != 0 {
 		t.Fatalf("stored project connections = %#v, want none", projectDefinition.Connections)
+	}
+}
+
+func TestRescanAddsConsumerScopedResourceAndContainerBinding(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
+	_, _, _, err = app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".env.example"), []byte("DATABASE_URL=postgresql://postgres\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rescanned, _, err := app.Rescan(ctx, "billing", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rescanned.Services) != 2 || rescanned.Services[1].Name != "checkout-postgres" || rescanned.Services[1].Resource == nil || rescanned.Services[1].Resource.Type != "postgres" {
+		t.Fatalf("rescanned services = %#v", rescanned.Services)
+	}
+	if len(rescanned.Connections) != 1 || rescanned.Connections[0].Source != "checkout" || rescanned.Connections[0].Target != "checkout-postgres" {
+		t.Fatalf("rescanned connections = %#v", rescanned.Connections)
+	}
+	if len(rescanned.Bindings) != 2 || rescanned.Bindings[1].Service != "checkout-postgres" || rescanned.Bindings[1].Provider != model.ProviderContainer {
+		t.Fatalf("rescanned bindings = %#v", rescanned.Bindings)
+	}
+}
+
+func TestCreateProjectScopesGenericResourcesAcrossSources(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
+	defer app.Close(ctx)
+
+	root := t.TempDir()
+	orders := nestNamedFixture(t, filepath.Join(root, "orders"), "orders")
+	inventory := nestNamedFixture(t, filepath.Join(root, "inventory"), "inventory")
+	for _, source := range []string{orders, inventory} {
+		if err := os.WriteFile(filepath.Join(source, ".env.example"), []byte("DATABASE_URL=postgresql://postgres\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, environment, _, err := app.CreateProject(ctx, "store", []SourceInput{
+		{Name: "orders", Path: orders},
+		{Name: "inventory", Path: inventory},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := make(map[string]bool)
+	connections := make(map[string]string)
+	for _, service := range environment.Services {
+		services[service.Name] = true
+	}
+	for _, connection := range environment.Connections {
+		connections[connection.Source] = connection.Target
+	}
+	for _, service := range []string{"inventory", "inventory-postgres", "orders", "orders-postgres"} {
+		if !services[service] {
+			t.Errorf("service %s was not compiled: %#v", service, environment.Services)
+		}
+	}
+	if connections["inventory"] != "inventory-postgres" || connections["orders"] != "orders-postgres" {
+		t.Fatalf("resource connections = %#v", connections)
 	}
 }
 

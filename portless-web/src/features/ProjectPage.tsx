@@ -250,11 +250,12 @@ export function topologyEdgeKey(source: string, target: string) { return `${sour
 export function summarizeTopologyTraffic(events: TrafficExchange[], now = Date.now()) {
   const metrics = new Map<string, TopologyEdgeMetric>()
   for (const event of events) {
+    if (event.background) continue
     const observedAt = new Date(event.completedAt || event.startedAt).getTime()
     if (!Number.isFinite(observedAt) || now-observedAt > topologyWindowMilliseconds) continue
     const key = topologyEdgeKey(event.source, event.target)
     const current = metrics.get(key) || emptyTopologyMetric()
-    if (event.protocol === 'http') current.samples.push({ observedAt, duration: event.durationMs || 0, error: !!event.error || (event.status || 0) >= 500 })
+    current.samples.push({ observedAt, duration: event.durationMs || 0, error: topologyExchangeError(event) })
     current.bytes += Math.max(0, event.requestBytes || 0) + Math.max(0, event.responseBytes || 0)
     current.lastSeen = Math.max(current.lastSeen, observedAt)
     current.latestSequence = Math.max(current.latestSequence, event.sequence || 0)
@@ -268,26 +269,35 @@ function emptyTopologyMetric(): TopologyEdgeMetric {
   return { samples: [], bytes: 0, activeConnections: 0, lastSeen: 0, latestSequence: 0 }
 }
 
-function mergeTopologySignal(metrics: Map<string, TopologyEdgeMetric>, signal: TopologySignal) {
+export function mergeTopologySignal(metrics: Map<string, TopologyEdgeMetric>, signal: TopologySignal, now = Date.now()) {
+  if (!('phase' in signal) && signal.background) return metrics
   const key = topologyEdgeKey(signal.source, signal.target)
   const next = new Map(metrics)
   const current = { ...(next.get(key) || emptyTopologyMetric()) }
-  current.samples = current.samples.filter((sample) => Date.now()-sample.observedAt <= topologyWindowMilliseconds)
+  current.samples = current.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds)
   if ('phase' in signal) {
     current.activeConnections = Math.max(0, signal.activeConnections || 0)
-    current.bytes += Math.max(0, signal.requestBytes || 0) + Math.max(0, signal.responseBytes || 0)
-    current.lastSeen = new Date(signal.observedAt).getTime() || Date.now()
-    if (signal.fault) { current.fault = signal.fault; current.faultSeen = current.lastSeen }
+    const observedAt = new Date(signal.observedAt).getTime() || now
+    const bytes = Math.max(0, signal.requestBytes || 0) + Math.max(0, signal.responseBytes || 0)
+    if (!signal.applicationProtocol && bytes > 0) {
+      current.bytes += bytes
+      current.lastSeen = observedAt
+    }
+    if (signal.fault) { current.fault = signal.fault; current.faultSeen = observedAt; current.lastSeen = observedAt }
   } else {
-    const observedAt = new Date(signal.completedAt || signal.startedAt).getTime() || Date.now()
-    current.samples.push({ observedAt, duration: signal.durationMs || 0, error: !!signal.error || (signal.status || 0) >= 500 })
+    const observedAt = new Date(signal.completedAt || signal.startedAt).getTime() || now
+    current.samples.push({ observedAt, duration: signal.durationMs || 0, error: topologyExchangeError(signal) })
     current.bytes += Math.max(0, signal.requestBytes || 0) + Math.max(0, signal.responseBytes || 0)
-    current.lastSeen = new Date(signal.completedAt || signal.startedAt).getTime() || Date.now()
+    current.lastSeen = observedAt
     current.latestSequence = Math.max(current.latestSequence, signal.sequence || 0)
     if (signal.fault) { current.fault = signal.fault; current.faultSeen = observedAt }
   }
   next.set(key, current)
   return next
+}
+
+function topologyExchangeError(exchange: TrafficExchange) {
+  return !!exchange.error || (exchange.status || 0) >= 500 || exchange.tcp?.outcome === 'error' || exchange.tcp?.outcome === 'incomplete'
 }
 
 export function topologyEdgeTone(metric: TopologyEdgeMetric | undefined, hasFault: boolean, now = Date.now()) {
@@ -302,7 +312,8 @@ export function topologyEdgeTone(metric: TopologyEdgeMetric | undefined, hasFaul
 
 function topologyEdgeLabel(edge: TopologyEdge, metric: TopologyEdgeMetric | undefined, now: number, activeFault?: string) {
   if (activeFault) return `▲ ${activeFault}`
-  if (!metric || now-metric.lastSeen > topologyWindowMilliseconds) return edge.protocol.toUpperCase()
+  if (!metric) return edge.protocol.toUpperCase()
+  if (now-metric.lastSeen > topologyWindowMilliseconds) return edge.protocol !== 'http' && metric.activeConnections > 0 ? `${metric.activeConnections} OPEN` : edge.protocol.toUpperCase()
   if (edge.protocol !== 'http') return metric.activeConnections > 0 ? `${metric.activeConnections} OPEN · ${formatBytes(metric.bytes)}` : formatBytes(metric.bytes)
   const samples = metric.samples.filter((sample) => now-sample.observedAt <= topologyWindowMilliseconds)
   const requestsPerSecond = samples.length/(topologyWindowMilliseconds/1000)
@@ -705,8 +716,8 @@ function Detail({ label, value }: { label: string; value: string }) { return <di
 function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
   const [name, setName] = useState('checkout-debug')
   const [scopeID, setScopeID] = useState('')
-  const [captureBodies, setCaptureBodies] = useState(false)
-  const [maxBodyBytes, setMaxBodyBytes] = useState(65536)
+  const [capturePayloads, setCapturePayloads] = useState(false)
+  const [maxPayloadBytes, setMaxPayloadBytes] = useState(65536)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const scopes = useMemo(() => experimentScopes(environment), [environment])
   const selectedScope = scopes.find((scope) => scope.id === scopeID)
@@ -715,7 +726,7 @@ function RecordingsPanel({ environment, recordings, refresh }: { environment: En
     setError(null)
     const recordingName = name.trim()
     if (!recordingName) { setError(actionError("Recording wasn't started", 'Enter a recording name.')); return }
-    try { await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody({ name: recordingName, source: selectedScope?.source || '', target: selectedScope?.target || '', captureBodies, maxEvents: 10000, maxBodyBytes }) }); await refresh() }
+    try { await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody({ name: recordingName, source: selectedScope?.source || '', target: selectedScope?.target || '', capturePayloads, maxEvents: 10000, maxPayloadBytes }) }); await refresh() }
     catch (value) { setError(actionError("Recording wasn't started", value)) }
   }
   const stop = async (recording: Recording) => {
@@ -730,8 +741,8 @@ function RecordingsPanel({ environment, recordings, refresh }: { environment: En
   }
   return <div className="experiment-layout">
     {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
-    <section className="panel experiment-form"><div className="panel-title"><span>START RECORDING</span></div><label><span>NAME</span><input value={name} onChange={(event) => { setName(event.target.value); setError(null) }} /></label><label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} onChange={(event) => { setScopeID(event.target.value); setError(null) }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label><label className="recording-body-toggle"><input type="checkbox" checked={captureBodies} onChange={(event) => setCaptureBodies(event.target.checked)} /><span><strong>CAPTURE BODIES</strong><small>Needed when a recording will become a useful mock response.</small></span></label>{captureBodies && <><label><span>MAXIMUM BODY SIZE</span><select value={maxBodyBytes} onChange={(event) => setMaxBodyBytes(Number(event.target.value))}><option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label><div className="recording-body-warning"><strong>SENSITIVE DATA</strong><span>Request and response bodies are retained locally. Header redaction does not remove secrets inside a body.</span></div></>}<button className="button button--primary" onClick={start}>● START RECORDING</button></section>
-    <section className="panel experiment-list"><div className="panel-title"><span>RECORDINGS</span></div>{recordings.map((recording) => <div className="experiment-row" key={recording.name}><StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} /><div><strong>{recording.name}</strong><small>{recordingScopeLabel(recording)} · {recording.eventCount} events{recording.captureBodies ? ' · bodies captured' : ''}</small></div><span>{relativeTime(recording.startedAt)} ago</span><div>{recording.status === 'active' ? <button onClick={() => stop(recording)}>STOP</button> : <><a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}>EXPORT</a><button onClick={() => remove(recording)}>DELETE</button></>}</div></div>)}{recordings.length === 0 && <div className="empty-row">No recordings. Start one before reproducing a local issue.</div>}</section>
+    <section className="panel experiment-form"><div className="panel-title"><span>START RECORDING</span></div><label><span>NAME</span><input value={name} onChange={(event) => { setName(event.target.value); setError(null) }} /></label><label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} onChange={(event) => { setScopeID(event.target.value); setError(null) }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label><label className="recording-body-toggle"><input type="checkbox" checked={capturePayloads} onChange={(event) => setCapturePayloads(event.target.checked)} /><span><strong>CAPTURE PAYLOADS</strong><small>Retains HTTP bodies and decoded database or messaging content.</small></span></label>{capturePayloads && <><label><span>MAXIMUM PAYLOAD SIZE</span><select value={maxPayloadBytes} onChange={(event) => setMaxPayloadBytes(Number(event.target.value))}><option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label><div className="recording-body-warning"><strong>APPLICATION DATA</strong><span>Captured payloads are retained locally and can contain application data.</span></div></>}<button className="button button--primary" onClick={start}>● START RECORDING</button></section>
+    <section className="panel experiment-list"><div className="panel-title"><span>RECORDINGS</span></div>{recordings.map((recording) => <div className="experiment-row" key={recording.name}><StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} /><div><strong>{recording.name}</strong><small>{recordingScopeLabel(recording)} · {recording.eventCount} events{recording.capturePayloads ? ' · payloads captured' : ''}</small></div><span>{relativeTime(recording.startedAt)} ago</span><div>{recording.status === 'active' ? <button onClick={() => stop(recording)}>STOP</button> : <><a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}>EXPORT</a><button onClick={() => remove(recording)}>DELETE</button></>}</div></div>)}{recordings.length === 0 && <div className="empty-row">No recordings. Start one before reproducing a local issue.</div>}</section>
   </div>
 }
 

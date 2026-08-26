@@ -1,72 +1,58 @@
-import http from 'node:http'
-import net from 'node:net'
+import pg from 'pg'
+import { createClient } from 'redis'
+import { OrderCache } from './cache.mjs'
+import { createOrdersServer } from './http.mjs'
+import { Orders } from './orders.mjs'
+import { OrderRepository } from './repository.mjs'
 
 const port = Number(process.env.PORT || 3001)
-const database = process.env.DATABASE_URL
-const cache = process.env.REDIS_URL
+const databaseURL = process.env.DATABASE_URL
+const redisURL = process.env.REDIS_URL
 
-function exchange(name, rawURL, defaultPort, payload) {
-  if (!rawURL) return Promise.resolve(Buffer.from('not configured'))
-  const target = new URL(rawURL)
-  const targetPort = Number(target.port || defaultPort)
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const socket = net.createConnection({ host: target.hostname, port: targetPort })
-    const fail = (error) => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      reject(new Error(`${name}: ${error.message}`))
-    }
-    socket.setTimeout(2_000)
-    socket.once('connect', () => socket.write(payload))
-    socket.once('data', (reply) => {
-      if (settled) return
-      settled = true
-      socket.end()
-      resolve(reply)
-    })
-    socket.once('timeout', () => fail(new Error('timed out')))
-    socket.once('error', fail)
-    socket.once('close', () => {
-      if (!settled) fail(new Error('closed without a response'))
-    })
+if (!databaseURL) throw new Error('DATABASE_URL is required')
+if (!redisURL) throw new Error('REDIS_URL is required')
+
+const pool = new pg.Pool({
+  connectionString: databaseURL,
+  application_name: 'portless-store-orders',
+  max: 4,
+  connectionTimeoutMillis: 2_000,
+  idleTimeoutMillis: 30_000,
+})
+const redis = createClient({
+  url: redisURL,
+  disableOfflineQueue: true,
+  maintNotifications: 'disabled',
+  socket: { connectTimeout: 2_000 },
+})
+redis.on('error', (error) => console.error(`orders cache connection: ${error.message}`))
+
+const repository = new OrderRepository(pool)
+const cache = new OrderCache(redis)
+const server = createOrdersServer({ orders: new Orders(repository, cache) })
+
+let stopping = false
+async function stop() {
+  if (stopping) return
+  stopping = true
+  await new Promise((resolve) => server.close(resolve))
+  await Promise.allSettled([
+    pool.end(),
+    redis.isOpen ? redis.close() : Promise.resolve(),
+  ])
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    void stop().finally(() => process.exit(0))
   })
 }
 
-async function checkPostgres() {
-  if (!database) return 'not configured'
-  const sslRequest = Buffer.alloc(8)
-  sslRequest.writeInt32BE(8, 0)
-  sslRequest.writeInt32BE(80877103, 4)
-  const reply = await exchange('postgres', database, 5432, sslRequest)
-  const mode = reply.toString('ascii', 0, 1)
-  if (mode !== 'S' && mode !== 'N') throw new Error('postgres: unexpected handshake response')
-  return 'reachable'
+try {
+  await Promise.all([repository.migrate(), redis.connect()])
+  server.listen(port, '127.0.0.1', () => console.log(`orders ready on ${port}`))
+} catch (error) {
+  console.error(`orders failed to start: ${error?.message || error}`)
+  await Promise.allSettled([pool.end(), redis.isOpen ? redis.close() : Promise.resolve()])
+  process.exitCode = 1
 }
-
-async function checkRedis() {
-  if (!cache) return 'not configured'
-  const reply = await exchange('redis', cache, 6379, Buffer.from('*1\r\n$4\r\nPING\r\n'))
-  if (!reply.toString().startsWith('+PONG')) throw new Error('redis: unexpected PING response')
-  return 'PONG'
-}
-
-const server = http.createServer(async (request, response) => {
-  response.setHeader('content-type', 'application/json')
-  const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
-  if (url.pathname === '/orders') {
-    const sku = url.searchParams.get('sku') || 'coffee-mug'
-    const quantity = Number(url.searchParams.get('quantity') || 1)
-    try {
-      const [postgres, redis] = await Promise.all([checkPostgres(), checkRedis()])
-      return response.end(JSON.stringify({ number: 42, state: 'created', lines: [{ sku, quantity }], dependencies: { postgres, redis } }))
-    } catch (error) {
-      response.statusCode = 503
-      return response.end(JSON.stringify({ error: String(error) }))
-    }
-  }
-  response.end(JSON.stringify({ service: 'orders', databaseBound: Boolean(process.env.DATABASE_URL), cacheBound: Boolean(process.env.REDIS_URL) }))
-})
-
-server.listen(port, '127.0.0.1', () => console.log(`orders ready on ${port}`))

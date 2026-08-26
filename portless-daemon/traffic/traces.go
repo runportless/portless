@@ -230,6 +230,12 @@ func weakerCorrelation(current, candidate model.TrafficCorrelation) model.Traffi
 }
 
 func backgroundExchange(exchange model.TrafficExchange) bool {
+	if exchange.Error != "" || exchange.Fault != "" || exchange.Status >= 500 || exchange.TCP != nil && exchange.TCP.Outcome == model.TrafficTCPOutcomeError {
+		return false
+	}
+	if exchange.Background {
+		return true
+	}
 	if exchange.RequestKind == model.TrafficRequestSubresource {
 		return true
 	}

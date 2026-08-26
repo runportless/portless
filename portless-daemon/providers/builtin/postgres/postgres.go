@@ -22,7 +22,7 @@ func New() providers.Plugin { return Plugin{} }
 
 // Descriptor returns PostgreSQL plugin registration metadata and aliases.
 func (Plugin) Descriptor() providers.Descriptor {
-	return providers.Descriptor{ID: "postgres", Aliases: []string{"postgresql"}, DefaultVersion: "17"}
+	return providers.Descriptor{ID: "postgres", Aliases: []string{"postgresql"}, DefaultVersion: "17", ApplicationProtocol: model.ApplicationProtocolPostgreSQL}
 }
 
 // Detect finds PostgreSQL dependencies and their consumer environment variables.
@@ -35,6 +35,10 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 		},
 		ExplicitEnvironment: func(content string, consumer providers.Consumer) string {
 			return common.FirstEnvironment(content, "SPRING_DATASOURCE_URL", "DATABASE_URL", "POSTGRESQL_URL", "POSTGRES_URL")
+		},
+		GenericNames: []string{"postgresql"},
+		ResourceName: func(content string) string {
+			return common.LogicalServiceHost(content, "postgresql", "postgres")
 		},
 	})
 }

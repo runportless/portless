@@ -6,7 +6,7 @@ import { defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, 
 
 const exchange = {
   project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
-  source: 'checkout', target: 'orders', targetProvider: 'mock', mockProfile: 'sold-out', mockRoute: 'reject-order',
+  source: 'checkout', target: 'orders', background: false, targetProvider: 'mock', mockProfile: 'sold-out', mockRoute: 'reject-order',
   startedAt: '2026-08-13T12:00:00.123Z', completedAt: '2026-08-13T12:00:00.147Z',
   method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
   durationMs: 24, requestBytes: 42, responseBytes: 118,
@@ -210,23 +210,58 @@ describe('TrafficDetail', () => {
     expect(markup).not.toContain('CAPTURE COMPLETE')
   })
 
-  it('renders TCP exchanges as a session overview without HTTP payload tabs', () => {
+  it('renders opaque TCP sessions as a bounded fallback without payload tabs', () => {
     const tcp = {
       ...exchange,
       protocol: 'tcp', method: undefined, host: undefined, path: undefined, requestTarget: undefined, status: undefined,
       requestHeaders: undefined, responseHeaders: undefined, requestBody: undefined, responseBody: undefined,
       traceId: undefined, spanId: undefined, parentSpanId: undefined,
       source: 'orders', target: 'postgres', targetProvider: 'container', requestBytes: 8, responseBytes: 1,
+      tcp: { kind: 'session', applicationProtocol: 'postgresql', inspection: 'encrypted', inspectionReason: 'TLS-encrypted PostgreSQL traffic' },
     } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
 
-    expect(markup).toContain('TCP session')
+    expect(markup).toContain('POSTGRESQL EXCHANGE #7')
+    expect(markup).toContain('<code>SESSION</code>')
     expect(markup).toContain('aria-label="Exchange overview"')
     expect(markup).not.toContain('aria-label="Exchange payload"')
-    expect(markup).toContain('Payload content is not captured.')
+    expect(markup).toContain('TLS-encrypted PostgreSQL traffic')
     expect(markup).toContain('8 B sent · 1 B received')
     expect(markup).not.toContain('traffic-trace-context')
     expect(markup).not.toContain('>REQUEST</button>')
     expect(markup).not.toContain('>RESPONSE</button>')
+  })
+
+  it('renders decoded TCP operations with protocol request and response tabs', () => {
+    const tcp = {
+      ...exchange,
+      protocol: 'tcp', method: undefined, host: undefined, path: undefined, requestTarget: undefined, status: undefined,
+      requestHeaders: undefined, responseHeaders: undefined, requestBody: undefined, responseBody: undefined,
+      traceId: undefined, spanId: undefined, parentSpanId: undefined,
+      source: 'api', target: 'nats', targetProvider: 'container', requestBytes: 58, responseBytes: 0,
+      tcp: {
+        kind: 'operation', applicationProtocol: 'nats', operation: 'PUB', inspection: 'decoded', outcome: 'one-way',
+        requestMessageCount: 1, responseMessageCount: 0,
+        requestMessages: [{
+          type: 'pub', offsetMs: 0, summary: 'PUB orders.created', wireBytes: 58,
+          contentBytes: 34, capturedBytes: 34, contentType: 'application/json', encoding: 'utf8',
+          fields: [{ name: 'subject', value: 'orders.created' }],
+          content: '{"orderId":42,"state":"created"}',
+        }],
+      },
+    } as TrafficExchange
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
+
+    expect(markup).toContain('NATS EXCHANGE #7')
+    expect(markup).toContain('<code>PUB</code>')
+    expect(markup).toContain('>REQUEST</button>')
+    expect(markup).toContain('>RESPONSE</button>')
+    expect(markup).toContain('aria-label="request protocol messages"')
+    expect(markup).toContain('<code>1 MESSAGE</code>')
+    expect(markup).toContain('<dt>subject</dt><dd>orders.created</dd>')
+    expect(markup).toContain('class="traffic-json"')
+    expect(markup).toContain('class="traffic-json__key"')
+    expect(markup).toContain('&quot;orderId&quot;')
+    expect(markup).toContain('>SENT</b>')
   })
 })

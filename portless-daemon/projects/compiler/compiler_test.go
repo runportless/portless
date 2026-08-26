@@ -229,6 +229,7 @@ func TestRefreshDiscoveredTopologyReplacesStoredConnectionsFromCurrentSources(t 
 		Services: []model.ServiceDefinition{
 			{Name: "checkout", Kind: model.ServiceProcess},
 			{Name: "orders", Kind: model.ServiceProcess},
+			resourceService("retired-db", "postgres", "17", 5432),
 			resourceService("redis", "valkey", "8", 6379),
 		},
 		Connections: []model.Connection{
@@ -238,18 +239,45 @@ func TestRefreshDiscoveredTopologyReplacesStoredConnectionsFromCurrentSources(t 
 			{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP, Binding: "valkey", Environment: "REDIS_URL", Required: true},
 		},
 	}
-	current := []model.SourceBinding{{Name: "apps", Definition: model.ProjectModel{Connections: []model.Connection{
-		{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Environment: "ORDERS_URL", Required: true},
-		{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP, Binding: "valkey", Environment: "REDIS_URL", Required: true},
-	}}}}
+	current := []model.SourceBinding{{Name: "apps", Definition: model.ProjectModel{
+		Services: []model.ServiceDefinition{
+			{Name: "checkout", Kind: model.ServiceProcess},
+			{Name: "orders", Kind: model.ServiceProcess},
+			resourceService("inventory-postgres", "postgres", "17", 5432),
+			resourceService("redis", "valkey", "8", 6379),
+		},
+		Connections: []model.Connection{
+			{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP, Environment: "ORDERS_URL", Required: true},
+			{Source: "orders", Target: "redis", Protocol: model.ProtocolTCP, Binding: "valkey", Environment: "REDIS_URL", Required: true},
+		},
+	}}}
+	bindings := []model.ComponentBinding{
+		{Service: "checkout", Provider: model.ProviderLocal, Source: "apps"},
+		{Service: "orders", Provider: model.ProviderLocal, Source: "apps"},
+		{Service: "redis", Provider: model.ProviderContainer},
+		{Service: "retired-db", Provider: model.ProviderContainer},
+	}
 
-	refreshed := RefreshDiscoveredTopology(project, current)
+	refreshed, refreshedBindings, err := RefreshDiscoveredTopology(project, current, bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(serviceNames(refreshed.Services), ","); got != "checkout,inventory-postgres,orders,redis" {
+		t.Fatalf("refreshed services = %s", got)
+	}
 	var edges []string
 	for _, connection := range refreshed.Connections {
 		edges = append(edges, connection.Source+":"+connection.Target)
 	}
 	if strings.Join(edges, ",") != "checkout:orders,orders:redis" {
 		t.Fatalf("refreshed edges = %v", edges)
+	}
+	var gotBindings []string
+	for _, binding := range refreshedBindings {
+		gotBindings = append(gotBindings, binding.Service+":"+string(binding.Provider))
+	}
+	if strings.Join(gotBindings, ",") != "checkout:local,inventory-postgres:container,orders:local,redis:container" {
+		t.Fatalf("refreshed bindings = %v", gotBindings)
 	}
 }
 

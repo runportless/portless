@@ -37,7 +37,7 @@ func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
 	}
 	record := identity.Record{
 		PID: os.Getpid(), Port: 7331, ProtocolVersion: lifecycle.ProtocolVersion, APIVersion: contract.APIVersion,
-		InstallationID: "installation", InstanceID: "instance", BuildID: "build", State: "ready", HandoffReady: true,
+		InstallationID: "installation", InstanceID: "instance", BuildID: "build", State: "ready",
 		TokenPath: paths.AuthToken, StartedAt: time.Now().UTC(), ProcessHint: "portless-test",
 	}
 	content, err := json.Marshal(record)

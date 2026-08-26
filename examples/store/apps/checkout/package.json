@@ -1,6 +1,7 @@
 {
   "name": "checkout",
   "private": true,
-  "scripts": { "start:dev": "node server.mjs", "test": "node --test trace.test.mjs" },
-  "dependencies": { "@nestjs/core": "fixture-only" }
+  "engines": { "node": ">=22.12" },
+  "scripts": { "start:dev": "node server.mjs", "test": "node --test *.test.mjs" },
+  "devDependencies": { "@nestjs/core": "11.2.3" }
 }

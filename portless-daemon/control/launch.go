@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/lifecycle"
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
@@ -21,7 +22,7 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 		return identity.Record{}, err
 	}
 	if inspection, err := m.inspectDaemon(ctx); err == nil && inspection.Compatible {
-		if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 && !inspection.Identity.HandoffReady {
+		if m.keepCompatibleDaemon(ctx, inspection) {
 			return inspection.Record, nil
 		}
 	}
@@ -37,7 +38,7 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 			break
 		}
 		if inspection, inspectErr := m.inspectDaemon(ctx); inspectErr == nil && inspection.Compatible {
-			if inspection.CurrentBuild || len(inspection.Identity.ActiveEnvironments) > 0 && !inspection.Identity.HandoffReady {
+			if m.keepCompatibleDaemon(ctx, inspection) {
 				return inspection.Record, nil
 			}
 		}
@@ -55,7 +56,7 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 		if inspection.Compatible && inspection.CurrentBuild {
 			return inspection.Record, nil
 		}
-		if inspection.Compatible && len(inspection.Identity.ActiveEnvironments) > 0 && !inspection.Identity.HandoffReady {
+		if inspection.Compatible && m.keepCompatibleDaemon(ctx, inspection) {
 			return inspection.Record, nil
 		}
 		if _, err := m.stopVerifiedDaemon(ctx, inspection, StopOptions{Timeout: 15 * time.Second, Handoff: true}, false, "replace an outdated daemon"); err != nil {
@@ -110,6 +111,17 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 		message += ": " + tail
 	}
 	return identity.Record{}, errors.New(message)
+}
+
+func (m *Manager) keepCompatibleDaemon(ctx context.Context, inspection Inspection) bool {
+	if inspection.CurrentBuild {
+		return true
+	}
+	if len(inspection.Identity.ActiveEnvironments) == 0 {
+		return false
+	}
+	handoff, err := m.verifyDaemonHandoff(ctx, inspection)
+	return err != nil || handoff.State != lifecycle.HandoffReady
 }
 
 func startDaemonProcess(paths installation.Layout) error {

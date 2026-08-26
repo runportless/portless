@@ -20,6 +20,7 @@ import (
 	apiserver "github.com/runportless/portless/portless-daemon/api/server"
 	"github.com/runportless/portless/portless-daemon/auth"
 	"github.com/runportless/portless/portless-daemon/controlplane"
+	"github.com/runportless/portless/portless-daemon/daemonlog"
 	"github.com/runportless/portless/portless-daemon/database"
 	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 	"github.com/runportless/portless/portless-daemon/events"
@@ -71,6 +72,10 @@ func Run(ctx context.Context, config Config) error {
 	if err != nil {
 		return fmt.Errorf("initialize local authentication: %w", err)
 	}
+	authToken, err := installation.ReadPrivateTextFile(paths.AuthToken)
+	if err != nil {
+		return fmt.Errorf("read local authentication token: %w", err)
+	}
 	ownershipKey, err := loadOrCreateKey(paths.OwnershipKey)
 	if err != nil {
 		return fmt.Errorf("initialize runtime ownership key: %w", err)
@@ -113,14 +118,38 @@ func Run(ctx context.Context, config Config) error {
 		PrivateTCPIngress: e2ePrivateTCPIngress,
 	})
 	defer app.Close(context.Background())
+	// Recovered processes can health-check through source-aware TCP endpoints.
+	// Serve their durable DNS allocations before reconciliation begins.
+	dnsListener, err := listenPrivateSocket(paths.DNSSocket, "DNS")
+	if err != nil {
+		return err
+	}
+	defer dnsListener.Close()
+	defer removeIngressSocket(paths.DNSSocket)
+	dnsContext, stopDNS := context.WithCancel(ctx)
+	defer stopDNS()
+	errChannel := make(chan error, 3)
+	go func() {
+		errChannel <- portlessdns.Serve(dnsContext, dnsListener, controlStore)
+	}()
 	reconciliation, err := app.Reconcile(ctx)
 	if err != nil {
 		identity.RecoveryProblems = append(identity.RecoveryProblems, err.Error())
 	} else {
 		identity.RecoveryProblems = append(identity.RecoveryProblems, reconciliation.Unverifiable...)
 	}
+	select {
+	case dnsErr := <-errChannel:
+		if dnsErr != nil {
+			return dnsErr
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("private DNS server stopped during runtime reconciliation")
+	default:
+	}
 	identity.State = "ready"
-	identity.HandoffReady, _ = app.CanHandoff(ctx)
 	if err := controlStore.SetDaemonInstanceState(ctx, instanceID, "ready", false); err != nil {
 		return err
 	}
@@ -135,12 +164,6 @@ func Run(ctx context.Context, config Config) error {
 	}
 	defer ingressListener.Close()
 	defer removeIngressSocket(paths.IngressSocket)
-	dnsListener, err := listenPrivateSocket(paths.DNSSocket, "DNS")
-	if err != nil {
-		return err
-	}
-	defer dnsListener.Close()
-	defer removeIngressSocket(paths.DNSSocket)
 	port := listener.Addr().(*net.TCPAddr).Port
 	shutdownRequested := make(chan struct{})
 	restartRequested := make(chan struct{}, 1)
@@ -160,7 +183,7 @@ func Run(ctx context.Context, config Config) error {
 	})
 	apiHandler, err := apiserver.New(apiserver.Dependencies{
 		Application: app, Auth: authManager, Assets: portlessweb.Assets(),
-		DaemonControl: lifecycleAPIControl{handler: handler},
+		DaemonControl: lifecycleAPIControl{handler: handler, logs: daemonlog.NewReader(paths.DaemonLog, authToken, ownershipKey)},
 		InspectRelay: func(ctx context.Context) (contract.RelayStatus, error) {
 			status, err := relay.Inspect(ctx)
 			return contract.RelayStatus(status), err
@@ -186,7 +209,7 @@ func Run(ctx context.Context, config Config) error {
 	record := daemonidentity.Record{
 		PID: identity.PID, Port: port, ProtocolVersion: identity.ProtocolVersion, APIVersion: identity.APIVersion,
 		InstallationID: identity.InstallationID, InstanceID: identity.InstanceID, BuildID: identity.BuildID,
-		State: identity.State, HandoffReady: identity.HandoffReady, RecoveryProblems: identity.RecoveryProblems,
+		State: identity.State, RecoveryProblems: identity.RecoveryProblems,
 		TokenPath: paths.AuthToken, StartedAt: identity.StartedAt, ProcessHint: filepath.Base(os.Args[0]),
 	}
 	if err := daemonidentity.Write(paths, record); err != nil {
@@ -194,17 +217,11 @@ func Run(ctx context.Context, config Config) error {
 	}
 	defer daemonidentity.RemoveOwn(paths, identity.InstanceID)
 	slog.Info("Portless daemon ready", "port", port, "ingressSocket", paths.IngressSocket, "dnsSocket", paths.DNSSocket, "pid", os.Getpid(), "instance", identity.InstanceID, "build", identity.BuildID[:12])
-	errChannel := make(chan error, 3)
 	go func() {
 		errChannel <- controlServer.Serve(listener)
 	}()
 	go func() {
 		errChannel <- ingressServer.Serve(ingressListener)
-	}()
-	dnsContext, stopDNS := context.WithCancel(ctx)
-	defer stopDNS()
-	go func() {
-		errChannel <- portlessdns.Serve(dnsContext, dnsListener, controlStore)
 	}()
 	watchContext, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
@@ -249,6 +266,7 @@ func Run(ctx context.Context, config Config) error {
 
 type lifecycleAPIControl struct {
 	handler *lifecycle.Handler
+	logs    *daemonlog.Reader
 }
 
 // Status adapts lifecycle identity into the public daemon status contract.
@@ -261,8 +279,30 @@ func (c lifecycleAPIControl) Status(ctx context.Context) (contract.DaemonStatus,
 		State: identity.State, PID: identity.PID, StartedAt: identity.StartedAt,
 		InstanceID: identity.InstanceID, BuildID: identity.BuildID,
 		ProtocolVersion: identity.ProtocolVersion, APIVersion: identity.APIVersion,
-		HandoffReady: identity.HandoffReady, RecoveryProblems: append([]string(nil), identity.RecoveryProblems...),
+		RecoveryProblems:   append([]string(nil), identity.RecoveryProblems...),
 		ActiveEnvironments: append([]string(nil), identity.ActiveEnvironments...),
+	}, nil
+}
+
+// Logs returns one bounded, safely redacted daemon-log tail.
+func (c lifecycleAPIControl) Logs(ctx context.Context) (contract.DaemonLogSnapshot, error) {
+	snapshot, err := c.logs.Snapshot(ctx)
+	if err != nil {
+		return contract.DaemonLogSnapshot{}, err
+	}
+	return contract.DaemonLogSnapshot{Content: snapshot.Content, Truncated: snapshot.Truncated}, nil
+}
+
+// HandoffStatus performs and adapts a fresh lifecycle handoff verification.
+func (c lifecycleAPIControl) HandoffStatus(ctx context.Context) (contract.DaemonHandoffStatus, error) {
+	status, err := c.handler.VerifyHandoff(ctx)
+	if err != nil {
+		return contract.DaemonHandoffStatus{}, err
+	}
+	return contract.DaemonHandoffStatus{
+		State: string(status.State), VerifiedAt: status.VerifiedAt,
+		Problems:           append([]string(nil), status.Problems...),
+		ActiveEnvironments: append([]string(nil), status.ActiveEnvironments...),
 	}, nil
 }
 

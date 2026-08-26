@@ -19,7 +19,7 @@ func New() providers.Plugin { return Plugin{} }
 
 // Descriptor returns NATS plugin registration metadata.
 func (Plugin) Descriptor() providers.Descriptor {
-	return providers.Descriptor{ID: "nats", DefaultVersion: "2"}
+	return providers.Descriptor{ID: "nats", DefaultVersion: "2", ApplicationProtocol: model.ApplicationProtocolNATS}
 }
 
 // Detect finds NATS dependencies and their consumer environment variables.
@@ -30,6 +30,9 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 		DefaultEnvironment: func(providers.Consumer) string { return "NATS_URL" },
 		ExplicitEnvironment: func(content string, consumer providers.Consumer) string {
 			return common.FirstEnvironment(content, "NATS_URL", "NATS_ADDRESS")
+		},
+		ResourceName: func(content string) string {
+			return common.LogicalServiceHost(content, "nats")
 		},
 	})
 }

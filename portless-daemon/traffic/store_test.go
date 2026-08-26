@@ -129,6 +129,52 @@ func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T)
 	}
 }
 
+func TestBackgroundExchangeIsRetainedButOnlyHidesStandaloneSuccessfulTrace(t *testing.T) {
+	base := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	scope := model.EnvironmentSelector("store", "local")
+	standalone := NewStore(nil)
+	background := standalone.AddExchange(model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
+		Source: "orders", Target: "redis", Background: true,
+		StartedAt: base, CompletedAt: base.Add(time.Millisecond),
+		TCP: &model.TrafficTCPExchange{Kind: model.TrafficTCPKindOperation, Outcome: model.TrafficTCPOutcomeSuccess},
+	})
+	if !background.Background || len(standalone.RecentExchanges(scope, 10)) != 1 {
+		t.Fatalf("background raw exchange was not retained: %#v", background)
+	}
+	traces := standalone.Traces(scope, 10)
+	if len(traces) != 1 || !traces[0].Background {
+		t.Fatalf("standalone housekeeping trace = %#v, want background", traces)
+	}
+
+	correlated := NewStore(nil)
+	activeRequest := correlated.BeginHTTPRequest(scope, "orders", base)
+	correlated.AddExchange(model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
+		Source: "orders", Target: "redis", Background: true,
+		StartedAt: base.Add(time.Millisecond), CompletedAt: base.Add(2 * time.Millisecond),
+		TCP: &model.TrafficTCPExchange{Kind: model.TrafficTCPKindOperation, Outcome: model.TrafficTCPOutcomeSuccess},
+	})
+	correlated.CompleteHTTPRequest(activeRequest, model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolHTTP,
+		Source: "external", Target: "orders", StartedAt: base, CompletedAt: base.Add(3 * time.Millisecond), Status: 200,
+	})
+	traces = correlated.Traces(scope, 10)
+	if len(traces) != 1 || traces[0].Background || traces[0].SpanCount != 2 {
+		t.Fatalf("HTTP trace with housekeeping child = %#v, want visible two-span trace", traces)
+	}
+
+	failed := standalone.AddExchange(model.TrafficExchange{
+		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
+		Source: "orders", Target: "redis", Background: true, Error: "validation failed",
+		StartedAt: base.Add(time.Second), CompletedAt: base.Add(time.Second + time.Millisecond),
+		TCP: &model.TrafficTCPExchange{Kind: model.TrafficTCPKindOperation, Outcome: model.TrafficTCPOutcomeError},
+	})
+	if failed.Background {
+		t.Fatalf("failed housekeeping exchange remained background: %#v", failed)
+	}
+}
+
 func TestTraceProjectionUsesExactContextAndRefusesAmbiguousInference(t *testing.T) {
 	base := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	exact := buildTraces([]model.TrafficExchange{
@@ -167,6 +213,25 @@ func TestStoreClonesRepeatedHeaders(t *testing.T) {
 	stored, ok := store.Exchange(model.EnvironmentSelector("billing", "local"), exchange.Sequence)
 	if !ok || len(stored.RequestHeaders["X-Value"]) != 2 || stored.RequestHeaders["X-Value"][0] != "one" {
 		t.Fatalf("stored headers were not isolated: %#v", stored.RequestHeaders)
+	}
+}
+
+func TestStoreClonesDecodedTCPMessagesAndEvictsByPayloadBytes(t *testing.T) {
+	store := NewStore(nil)
+	store.payloadLimit = 20
+	first := store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local", TCP: &model.TrafficTCPExchange{
+		Kind: model.TrafficTCPKindOperation, Inspection: model.TrafficInspectionDecoded,
+		RequestMessages: []model.TrafficMessage{{Type: "q", Content: "123456", CapturedBytes: 6, Fields: []model.TrafficMessageField{{Name: "key", Value: "one"}}}},
+	}})
+	first.TCP.RequestMessages[0].Content = "changed"
+	first.TCP.RequestMessages[0].Fields[0].Value = "changed"
+	stored, ok := store.Exchange(model.EnvironmentSelector("billing", "local"), first.Sequence)
+	if !ok || stored.TCP.RequestMessages[0].Content != "123456" || stored.TCP.RequestMessages[0].Fields[0].Value != "one" {
+		t.Fatalf("stored TCP messages were not isolated: %#v", stored)
+	}
+	store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local", RequestBody: "abcdefgh"})
+	if _, exists := store.Exchange(model.EnvironmentSelector("billing", "local"), first.Sequence); exists {
+		t.Fatal("oldest exchange was not evicted by the retained payload limit")
 	}
 }
 

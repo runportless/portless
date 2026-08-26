@@ -87,6 +87,19 @@ func (m *Manager) Inspect(ctx context.Context) (Inspection, error) {
 	return m.inspectDaemon(ctx)
 }
 
+// VerifyHandoff performs a fresh adoption-safety audit against the currently
+// authenticated daemon.
+func (m *Manager) VerifyHandoff(ctx context.Context) (HandoffInspection, error) {
+	inspection, err := m.inspectDaemon(ctx)
+	if err != nil {
+		return HandoffInspection{}, err
+	}
+	if !inspection.Compatible {
+		return HandoffInspection{}, incompatibleDaemonError(inspection)
+	}
+	return m.verifyDaemonHandoff(ctx, inspection)
+}
+
 // Check returns the live record for a compatible daemon running the current build.
 func (m *Manager) Check(ctx context.Context) (identity.Record, error) {
 	return m.checkDaemon(ctx)

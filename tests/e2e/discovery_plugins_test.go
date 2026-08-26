@@ -192,10 +192,10 @@ func TestCLIResourceDiscoveryPluginMatrix(t *testing.T) {
 		port         int
 		environment  string
 	}{
-		{name: "postgres", dependency: `"pg":"latest"`, resource: "postgres", resourceType: "postgres", version: "17", port: 5432, environment: "DATABASE_URL"},
-		{name: "valkey", dependency: `"redis":"latest"`, resource: "redis", resourceType: "valkey", version: "8", port: 6379, environment: "REDIS_URL"},
-		{name: "mysql", dependency: `"mysql2":"latest"`, resource: "mysql", resourceType: "mysql", version: "8.4", port: 3306, environment: "DATABASE_URL"},
-		{name: "nats", dependency: `"nats":"latest"`, resource: "nats", resourceType: "nats", version: "2", port: 4222, environment: "NATS_URL"},
+		{name: "postgres", dependency: `"pg":"latest"`, resource: "resource-api-postgres", resourceType: "postgres", version: "17", port: 5432, environment: "DATABASE_URL"},
+		{name: "valkey", dependency: `"redis":"latest"`, resource: "resource-api-redis", resourceType: "valkey", version: "8", port: 6379, environment: "REDIS_URL"},
+		{name: "mysql", dependency: `"mysql2":"latest"`, resource: "resource-api-mysql", resourceType: "mysql", version: "8.4", port: 3306, environment: "DATABASE_URL"},
+		{name: "nats", dependency: `"nats":"latest"`, resource: "resource-api-nats", resourceType: "nats", version: "2", port: 4222, environment: "NATS_URL"},
 	}
 
 	binary := e2eBinary(t)

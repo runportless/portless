@@ -47,8 +47,8 @@ func (c *Commands) startRecording(ctx context.Context, name string, options reco
 	if options.maxEvents < 1 || options.maxEvents > 100_000 {
 		return command.UsageError("--max-events must be between 1 and 100000")
 	}
-	if options.maxBodyBytes < 1 || options.maxBodyBytes > 1<<20 {
-		return command.UsageError("--max-body-bytes must be between 1 and 1048576")
+	if options.maxPayloadBytes < 1 || options.maxPayloadBytes > 1<<20 {
+		return command.UsageError("--max-payload-bytes must be between 1 and 1048576")
 	}
 	source, target, err := command.ParseEdge(options.edge)
 	if err != nil {
@@ -59,9 +59,9 @@ func (c *Commands) startRecording(ctx context.Context, name string, options reco
 		return err
 	}
 	expires := time.Now().UTC().Add(options.duration)
-	input := model.Recording{Name: name, Source: source, Target: target, CaptureBodies: options.captureBodies, MaxEvents: options.maxEvents, MaxBodyBytes: options.maxBodyBytes, ExpiresAt: &expires}
-	if options.captureBodies && !c.JSONOutput {
-		fmt.Fprintln(c.Err, c.Warning(c.Err, "Body capture retains application payloads on this machine; inspect and delete recordings when finished."))
+	input := model.Recording{Name: name, Source: source, Target: target, CapturePayloads: options.capturePayloads, MaxEvents: options.maxEvents, MaxPayloadBytes: options.maxPayloadBytes, ExpiresAt: &expires}
+	if options.capturePayloads && !c.JSONOutput {
+		fmt.Fprintln(c.Err, c.Warning(c.Err, "Payload capture retains application data on this machine; inspect and delete recordings when finished."))
 	}
 	created, err := client.StartRecording(ctx, environment.Project, environment.Name, input)
 	if err != nil {

@@ -759,7 +759,7 @@ func assertCleanValkeyEndpoint(t *testing.T, harness *machineHarness) {
 	decodeJSON(t, result.Stdout, &environment)
 	var endpoint *model.Endpoint
 	for _, service := range environment.Services {
-		if service.Name != "redis" || service.Status != model.ServiceReady {
+		if service.Name != "checkout-redis" || service.Status != model.ServiceReady {
 			continue
 		}
 		for index := range service.Endpoints {

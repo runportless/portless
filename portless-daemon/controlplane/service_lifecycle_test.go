@@ -599,7 +599,7 @@ func TestStableTCPServiceAndConnectionEndpointsAreExposedBeforeStartup(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(connections) != 1 || connections[0].Endpoint == nil || connections[0].Endpoint.Host != "postgres.via-orders.local.store.portless.test" || connections[0].Endpoint.Port != 5432 {
+	if len(connections) != 1 || connections[0].ApplicationProtocol != model.ApplicationProtocolPostgreSQL || connections[0].Endpoint == nil || connections[0].Endpoint.Host != "postgres.via-orders.local.store.portless.test" || connections[0].Endpoint.Port != 5432 {
 		t.Fatalf("directed Postgres endpoint = %#v", connections)
 	}
 	if connections[0].InjectedEnvironment["DATABASE_URL"] != "not active" {
@@ -674,5 +674,39 @@ func TestPrivateTCPIngressUsesEphemeralLoopbackWithoutPublishingStableEndpoints(
 	}
 	if len(connections) != 1 || connections[0].Endpoint == nil || connections[0].Endpoint.Address != net.JoinHostPort(host, encodedPort) || connections[0].InjectedEnvironment["DATABASE_ADDRESS"] != values["DATABASE_ADDRESS"] {
 		t.Fatalf("private effective connection = %#v", connections)
+	}
+}
+
+func TestRunBoundedHandoffChecksRunsInParallelWithoutExceedingLimit(t *testing.T) {
+	const checkCount = 9
+	const limit = 4
+	started := make(chan int, checkCount)
+	release := make(chan struct{})
+	checks := make([]func() []string, checkCount)
+	for index := range checks {
+		index := index
+		checks[index] = func() []string {
+			started <- index
+			<-release
+			return []string{strconv.Itoa(index)}
+		}
+	}
+
+	completed := make(chan [][]string, 1)
+	go func() { completed <- runBoundedHandoffChecks(checks, limit) }()
+	for range limit {
+		<-started
+	}
+	select {
+	case index := <-started:
+		t.Fatalf("check %d started before one of the first %d completed", index, limit)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	results := <-completed
+	for index, result := range results {
+		if len(result) != 1 || result[0] != strconv.Itoa(index) {
+			t.Fatalf("result %d = %#v", index, result)
+		}
 	}
 }

@@ -32,7 +32,7 @@ func (c *Commands) trafficCommand() *cobra.Command {
 	traces.Flags().IntVar(&traceOptions.limit, "limit", traceOptions.limit, "maximum traces")
 	traces.Flags().StringVar(&traceOptions.service, "service", "", "match traces containing a service")
 	traces.Flags().StringVar(&traceOptions.edge, "edge", "", "match traces containing a source:target edge")
-	traces.Flags().BoolVar(&traceOptions.includeBackground, "include-background", false, "include browser background activity")
+	traces.Flags().BoolVar(&traceOptions.includeBackground, "include-background", false, "include background subresource and connection-housekeeping activity")
 	traces.MarkFlagsMutuallyExclusive("service", "edge")
 	_ = traces.RegisterFlagCompletionFunc("service", c.Complete(shared.CompletionServices))
 	_ = traces.RegisterFlagCompletionFunc("edge", c.Complete(shared.CompletionConnections))
@@ -53,15 +53,15 @@ func (c *Commands) recordCommand() *cobra.Command {
 	list.Flags().IntVar(&listOptions.limit, "limit", listOptions.limit, "maximum recordings")
 	root.AddCommand(list)
 
-	options := recordingOptions{duration: 15 * time.Minute, maxEvents: 10000, maxBodyBytes: 64 * 1024}
+	options := recordingOptions{duration: 15 * time.Minute, maxEvents: 10000, maxPayloadBytes: 64 * 1024}
 	start := &cobra.Command{Use: "start <name>", Short: "Start a bounded recording", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		return c.startRecording(cmd.Context(), args[0], options)
 	}}
 	start.Flags().StringVar(&options.edge, "edge", "", "source:target scope")
 	start.Flags().DurationVar(&options.duration, "duration", options.duration, "automatic stop time")
 	start.Flags().Int64Var(&options.maxEvents, "max-events", options.maxEvents, "maximum retained events")
-	start.Flags().BoolVar(&options.captureBodies, "capture-bodies", false, "retain bounded inspectable request and response bodies")
-	start.Flags().Int64Var(&options.maxBodyBytes, "max-body-bytes", options.maxBodyBytes, "maximum retained bytes for each request or response body")
+	start.Flags().BoolVar(&options.capturePayloads, "capture-payloads", false, "retain bounded HTTP bodies and decoded TCP payloads")
+	start.Flags().Int64Var(&options.maxPayloadBytes, "max-payload-bytes", options.maxPayloadBytes, "maximum retained bytes for each request, response, or decoded message payload")
 	_ = start.RegisterFlagCompletionFunc("edge", c.Complete(shared.CompletionConnections))
 	root.AddCommand(start)
 

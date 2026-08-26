@@ -333,7 +333,7 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.json"`, name))
-		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 2, Project: project, Environment: environment, Recording: name, Exchanges: exchanges})
+		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 3, Project: project, Environment: environment, Recording: name, Exchanges: exchanges})
 		return
 	}
 	writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "recording route not found"})

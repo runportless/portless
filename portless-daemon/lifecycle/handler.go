@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/runportless/portless/portless-daemon/auth"
 )
@@ -50,7 +51,7 @@ func (h *Handler) SetNext(next http.Handler) { h.next = next }
 
 // ServeHTTP authenticates lifecycle requests and delegates every other route.
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != IdentityPath && request.URL.Path != ShutdownPath {
+	if request.URL.Path != IdentityPath && request.URL.Path != HandoffPath && request.URL.Path != ShutdownPath {
 		if h.next == nil {
 			http.NotFound(writer, request)
 			return
@@ -82,6 +83,18 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		writeDaemonJSON(writer, http.StatusOK, h.Identity(request.Context()))
+	case HandoffPath:
+		if request.Method != http.MethodGet {
+			writer.Header().Set("Allow", http.MethodGet)
+			writeDaemonError(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method is not allowed", nil)
+			return
+		}
+		status, err := h.VerifyHandoff(request.Context())
+		if err != nil {
+			writeDaemonError(writer, http.StatusInternalServerError, "DAEMON_STATE_UNAVAILABLE", err.Error(), nil)
+			return
+		}
+		writeDaemonJSON(writer, http.StatusOK, status)
 	case ShutdownPath:
 		if request.Method != http.MethodPost {
 			writer.Header().Set("Allow", http.MethodPost)
@@ -107,19 +120,21 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			}
 			active = []string{}
 		}
-		if len(active) > 0 && !input.Force {
-			if !input.Handoff {
-				writeDaemonError(writer, http.StatusConflict, "ACTIVE_ENVIRONMENTS", "daemon is managing active environments", active, nil)
+		if !input.Force && input.Handoff {
+			verification, verifyErr := h.VerifyHandoff(request.Context())
+			if verifyErr != nil {
+				writeDaemonError(writer, http.StatusInternalServerError, "DAEMON_STATE_UNAVAILABLE", verifyErr.Error(), nil)
 				return
 			}
-			ready, problems := false, []string{"runtime handoff is not configured"}
-			if h.handoffStatus != nil {
-				ready, problems = h.handoffStatus(request.Context())
-			}
-			if !ready {
-				writeDaemonError(writer, http.StatusConflict, "HANDOFF_UNAVAILABLE", "active environments cannot be safely handed off", active, problems)
+			active = verification.ActiveEnvironments
+			if len(active) > 0 && verification.State != HandoffReady {
+				writeDaemonError(writer, http.StatusConflict, "HANDOFF_UNAVAILABLE", "active environments cannot be safely handed off", active, verification.Problems)
 				return
 			}
+		}
+		if len(active) > 0 && !input.Force && !input.Handoff {
+			writeDaemonError(writer, http.StatusConflict, "ACTIVE_ENVIRONMENTS", "daemon is managing active environments", active, nil)
+			return
 		}
 		writeDaemonJSON(writer, http.StatusAccepted, ShutdownResponse{Stopping: true, Handoff: input.Handoff, InstanceID: h.identity.InstanceID, ActiveEnvironments: active})
 		h.shutdown()
@@ -137,13 +152,13 @@ func (h *Handler) Identity(ctx context.Context) Identity {
 	}
 	identity = h.identity
 	identity.ActiveEnvironments = []string{}
-	identity.HandoffReady = false
 	identity.RecoveryProblems = append([]string(nil), h.identity.RecoveryProblems...)
 	identity.RecoveryProblems = append(identity.RecoveryProblems, "active environment inventory is unavailable: "+err.Error())
 	return identity
 }
 
-// Status returns live identity, active environments, and handoff readiness.
+// Status returns live identity and active environments without probing runtime
+// handoff safety.
 func (h *Handler) Status(ctx context.Context) (Identity, error) {
 	active, err := h.currentActiveEnvironments(ctx)
 	if err != nil {
@@ -152,15 +167,35 @@ func (h *Handler) Status(ctx context.Context) (Identity, error) {
 	identity := h.identity
 	identity.ActiveEnvironments = active
 	identity.RecoveryProblems = append([]string(nil), h.identity.RecoveryProblems...)
-	if h.handoffStatus != nil {
-		ready, problems := h.handoffStatus(ctx)
-		identity.HandoffReady = ready
-		identity.RecoveryProblems = append(identity.RecoveryProblems, problems...)
-	}
 	if identity.RecoveryProblems == nil {
 		identity.RecoveryProblems = []string{}
 	}
 	return identity, nil
+}
+
+// VerifyHandoff performs a fresh fail-closed audit of active runtime ownership
+// and adoption safety.
+func (h *Handler) VerifyHandoff(ctx context.Context) (HandoffStatus, error) {
+	active, err := h.currentActiveEnvironments(ctx)
+	if err != nil {
+		return HandoffStatus{}, err
+	}
+	ready := false
+	problems := []string{"runtime handoff is not configured"}
+	if h.handoffStatus != nil {
+		ready, problems = h.handoffStatus(ctx)
+	}
+	if problems == nil {
+		problems = []string{}
+	}
+	state := HandoffBlocked
+	if ready {
+		state = HandoffReady
+	}
+	return HandoffStatus{
+		State: state, VerifiedAt: time.Now().UTC(), Problems: append([]string(nil), problems...),
+		ActiveEnvironments: active,
+	}, nil
 }
 
 // Restart requests replacement of instanceID after proving that active runtime
@@ -176,10 +211,14 @@ func (h *Handler) Restart(ctx context.Context, instanceID string) (ShutdownRespo
 			ActiveEnvironments: identity.ActiveEnvironments,
 		}
 	}
-	if len(identity.ActiveEnvironments) > 0 && !identity.HandoffReady {
+	verification, err := h.VerifyHandoff(ctx)
+	if err != nil {
+		return ShutdownResponse{}, err
+	}
+	if len(verification.ActiveEnvironments) > 0 && verification.State != HandoffReady {
 		return ShutdownResponse{}, &LifecycleError{
 			Code: "HANDOFF_UNAVAILABLE", Message: "active environments cannot be safely handed off",
-			ActiveEnvironments: identity.ActiveEnvironments, Problems: identity.RecoveryProblems,
+			ActiveEnvironments: verification.ActiveEnvironments, Problems: verification.Problems,
 		}
 	}
 	if h.replace == nil {
@@ -190,7 +229,7 @@ func (h *Handler) Restart(ctx context.Context, instanceID string) (ShutdownRespo
 	}
 	result := ShutdownResponse{
 		Stopping: true, Handoff: true, InstanceID: identity.InstanceID,
-		ActiveEnvironments: append([]string(nil), identity.ActiveEnvironments...),
+		ActiveEnvironments: append([]string(nil), verification.ActiveEnvironments...),
 	}
 	h.replace()
 	return result, nil

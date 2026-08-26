@@ -19,6 +19,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/networking"
 	trafficstore "github.com/runportless/portless/portless-daemon/traffic"
+	"github.com/runportless/portless/portless-daemon/traffic/protocol"
 )
 
 func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T) {
@@ -244,7 +245,7 @@ func TestRecordingBodyLimitCanExceedLiveTrafficLimit(t *testing.T) {
 	trafficStore := trafficstore.NewStore(broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
-	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "mock-source", CaptureBodies: true, MaxBodyBytes: int64(len(content))}); err != nil {
+	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "mock-source", CapturePayloads: true, MaxPayloadBytes: int64(len(content))}); err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
@@ -542,6 +543,236 @@ func TestTCPEdgePublishesActivityBeforeTheConnectionCloses(t *testing.T) {
 			t.Fatal("TCP byte activity was not published while the connection remained open")
 		}
 	}
+}
+
+func TestRedisOperationIsCapturedBeforeThePooledConnectionCloses(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	release := make(chan struct{})
+	go func() {
+		connection, acceptErr := upstream.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		request := make([]byte, len("*1\r\n$4\r\nPING\r\n"))
+		if _, readErr := io.ReadFull(connection, request); readErr != nil {
+			return
+		}
+		_, _ = connection.Write([]byte("+PONG\r\n"))
+		<-release
+	}()
+
+	broker := events.NewBroker()
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
+	defer manager.Close(context.Background())
+	scope := model.EnvironmentSelector("billing", "local")
+	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
+	port, err := manager.EnsureEdge(context.Background(), scope, model.Connection{
+		Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP, ApplicationProtocol: model.ApplicationProtocolRedis,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := connection.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, len("+PONG\r\n"))
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		exchanges := trafficStore.RecentExchanges(scope, 10)
+		if len(exchanges) > 0 {
+			exchange := exchanges[0]
+			if exchange.TCP == nil || exchange.TCP.Kind != model.TrafficTCPKindOperation || exchange.TCP.ApplicationProtocol != model.ApplicationProtocolRedis || exchange.TCP.Operation != "PING" || !exchange.Background || len(exchange.TCP.RequestMessages) != 1 || len(exchange.TCP.ResponseMessages) != 1 || !strings.Contains(exchange.TCP.RequestMessages[0].Content, "PING") || !strings.Contains(exchange.TCP.ResponseMessages[0].Content, "PONG") {
+				t.Fatalf("decoded Redis exchange = %#v", exchange)
+			}
+			close(release)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	t.Fatal("Redis operation was not retained while its TCP connection remained open")
+}
+
+func TestBackgroundTCPOperationRequiresSuccessfulUnfaultedHousekeeping(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation protocol.Operation
+		fault     string
+		want      bool
+	}{
+		{name: "successful housekeeping", operation: protocol.Operation{Background: true, Outcome: model.TrafficTCPOutcomeSuccess}, want: true},
+		{name: "application operation", operation: protocol.Operation{Outcome: model.TrafficTCPOutcomeSuccess}},
+		{name: "protocol error outcome", operation: protocol.Operation{Background: true, Outcome: model.TrafficTCPOutcomeError}},
+		{name: "connection error", operation: protocol.Operation{Background: true, Outcome: model.TrafficTCPOutcomeSuccess, Error: "connection reset"}},
+		{name: "fault intervention", operation: protocol.Operation{Background: true, Outcome: model.TrafficTCPOutcomeSuccess}, fault: "redis-delay"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := backgroundTCPOperation(test.operation, test.fault); got != test.want {
+				t.Fatalf("backgroundTCPOperation() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRedisRecordingPayloadPolicyPreservesOperationMetadata(t *testing.T) {
+	ctx := context.Background()
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		for {
+			connection, acceptErr := upstream.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() {
+				defer connection.Close()
+				request := make([]byte, len("*1\r\n$4\r\nPING\r\n"))
+				if _, readErr := io.ReadFull(connection, request); readErr == nil {
+					_, _ = connection.Write([]byte("+PONG\r\n"))
+				}
+			}()
+		}
+	}()
+
+	broker := events.NewBroker()
+	trafficStore := trafficstore.NewStore(broker)
+	manager := NewManager(controlStore, trafficStore, broker)
+	defer manager.Close(ctx)
+	scope := model.EnvironmentSelector("billing", "local")
+	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
+	port, err := manager.EnsureEdge(ctx, scope, model.Connection{
+		Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP, ApplicationProtocol: model.ApplicationProtocolRedis,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "metadata-only"}); err != nil {
+		t.Fatal(err)
+	}
+	exerciseRedisPing(t, port)
+	metadataOnly := waitForRecordedTraffic(t, controlStore, scope, "metadata-only")
+	if metadataOnly.TCP == nil || metadataOnly.TCP.Operation != "PING" || !metadataOnly.Background || metadataOnly.TCP.RequestMessageCount != 1 || metadataOnly.TCP.ResponseMessageCount != 1 {
+		t.Fatalf("metadata-only recording lost operation details: %#v", metadataOnly)
+	}
+	if metadataOnly.TCP.RequestMessages != nil || metadataOnly.TCP.ResponseMessages != nil || metadataOnly.RequestCapturedBytes != 0 || metadataOnly.ResponseCapturedBytes != 0 {
+		t.Fatalf("metadata-only recording retained payloads: %#v", metadataOnly)
+	}
+	if err := controlStore.StopRecording(ctx, scope, "metadata-only", "stopped"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "with-payloads", CapturePayloads: true, MaxPayloadBytes: 4}); err != nil {
+		t.Fatal(err)
+	}
+	exerciseRedisPing(t, port)
+	withPayloads := waitForRecordedTraffic(t, controlStore, scope, "with-payloads")
+	if withPayloads.TCP == nil || len(withPayloads.TCP.RequestMessages) != 1 || len(withPayloads.TCP.ResponseMessages) != 1 || withPayloads.TCP.RequestMessages[0].CapturedBytes != 4 || withPayloads.TCP.ResponseMessages[0].CapturedBytes != 4 || !withPayloads.TCP.RequestMessages[0].Truncated || !withPayloads.TCP.ResponseMessages[0].Truncated {
+		t.Fatalf("payload recording did not retain decoded messages: %#v", withPayloads)
+	}
+	live := trafficStore.RecentExchanges(scope, 1)
+	if len(live) != 1 || live[0].TCP == nil || !strings.Contains(live[0].TCP.RequestMessages[0].Content, "PING") || !strings.Contains(live[0].TCP.ResponseMessages[0].Content, "PONG") {
+		t.Fatalf("small recording limit changed the independent live payload: %#v", live)
+	}
+}
+
+func TestProtocolObservationPreservesForwardingOrderWithinABound(t *testing.T) {
+	session := &orderedProtocolSession{state: protocol.State{Inspection: model.TrafficInspectionDecoded}}
+	observation := &tcpProtocolObservation{session: session, emit: func([]protocol.Operation) {}}
+	requestTicket := observation.reserve()
+	responseTicket := observation.reserve()
+	observed := time.Now().UTC()
+	observation.submit(responseTicket, protocol.DirectionResponse, []byte("response"), observed.Add(time.Millisecond))
+	if len(session.directions) != 0 {
+		t.Fatalf("response was observed before the earlier request: %#v", session.directions)
+	}
+	observation.submit(requestTicket, protocol.DirectionRequest, []byte("request"), observed)
+	if len(session.directions) != 2 || session.directions[0] != protocol.DirectionRequest || session.directions[1] != protocol.DirectionResponse {
+		t.Fatalf("protocol observation order = %#v", session.directions)
+	}
+
+	limited := &tcpProtocolObservation{session: &orderedProtocolSession{state: protocol.State{Inspection: model.TrafficInspectionDecoded}}, emit: func([]protocol.Operation) {}}
+	tickets := make([]uint64, maximumReorderedProtocolChunks+2)
+	for index := range tickets {
+		tickets[index] = limited.reserve()
+	}
+	for _, ticket := range tickets[1:] {
+		limited.submit(ticket, protocol.DirectionResponse, []byte("deferred"), observed)
+	}
+	if state := limited.state(); state.Inspection != model.TrafficInspectionLimited {
+		t.Fatalf("unbounded reorder state = %#v", state)
+	}
+}
+
+type orderedProtocolSession struct {
+	directions []protocol.Direction
+	state      protocol.State
+}
+
+func (s *orderedProtocolSession) Observe(direction protocol.Direction, _ []byte, _ time.Time) []protocol.Operation {
+	s.directions = append(s.directions, direction)
+	return nil
+}
+
+func (s *orderedProtocolSession) Close(time.Time, error) []protocol.Operation { return nil }
+
+func (s *orderedProtocolSession) State() protocol.State { return s.state }
+
+func exerciseRedisPing(t *testing.T, port int) {
+	t.Helper()
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	if _, err := connection.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, len("+PONG\r\n"))
+	if _, err := io.ReadFull(connection, response); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForRecordedTraffic(t *testing.T, controlStore *database.Store, scope, recording string) model.TrafficExchange {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		exchanges, err := controlStore.RecordedTraffic(context.Background(), scope, recording, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(exchanges) == 1 {
+			return exchanges[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("recording %q did not receive Redis traffic", recording)
+	return model.TrafficExchange{}
 }
 
 func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {

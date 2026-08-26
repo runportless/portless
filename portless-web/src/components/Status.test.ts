@@ -5,6 +5,7 @@ describe('status presentation', () => {
   it('maps domain states to consistent safety tones', () => {
     expect(statusTone('healthy')).toBe('success')
     expect(statusTone('starting')).toBe('warning')
+    expect(statusTone('checking')).toBe('warning')
     expect(statusTone('failed')).toBe('danger')
   })
 

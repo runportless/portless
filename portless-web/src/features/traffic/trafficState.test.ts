@@ -7,7 +7,7 @@ function exchange(sequence: number, overrides: Partial<TrafficExchange> = {}): T
     project: 'store', environment: 'local', sequence, protocol: 'http',
     source: 'checkout', target: 'orders', startedAt: '2026-08-17T12:00:00Z',
     completedAt: '2026-08-17T12:00:00.100Z', method: 'GET', requestTarget: '/orders',
-    durationMs: 100, requestBytes: 0, responseBytes: 10, status: 200,
+    background: false, durationMs: 100, requestBytes: 0, responseBytes: 10, status: 200,
     ...overrides,
   }
 }
@@ -47,10 +47,11 @@ describe('traffic state', () => {
   it('filters exchanges and traces by operator-visible fields', () => {
     const exchanges = [
       exchange(1),
-      exchange(2, { protocol: 'tcp', source: 'orders', target: 'redis', method: undefined, requestTarget: undefined, status: undefined }),
+      exchange(2, { protocol: 'tcp', source: 'orders', target: 'redis', method: undefined, requestTarget: undefined, status: undefined, tcp: { kind: 'operation', applicationProtocol: 'redis', operation: 'GET', inspection: 'decoded', outcome: 'success' } }),
       exchange(3, { status: 503, fault: 'orders-down' }),
     ]
     expect(filterExchanges(exchanges, 'orders:redis', 'all', 'tcp').map((item) => item.sequence)).toEqual([2])
+    expect(filterExchanges(exchanges, 'redis get', 'all', 'tcp').map((item) => item.sequence)).toEqual([2])
     expect(filterExchanges(exchanges, '', 'errors', 'all').map((item) => item.sequence)).toEqual([3])
     expect(filterExchanges(exchanges, 'orders-down', 'faulted', 'all').map((item) => item.sequence)).toEqual([3])
 

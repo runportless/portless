@@ -290,8 +290,11 @@ func (s *Service) Rescan(ctx context.Context, projectName, environmentName strin
 	if err != nil {
 		return model.Environment{}, warnings, err
 	}
-	projectDefinition = compiler.RefreshDiscoveredTopology(projectDefinition, environment.Sources)
-	compiled := compiler.Compile(projectDefinition, environment.Sources, environment.Bindings)
+	projectDefinition, refreshedBindings, err := compiler.RefreshDiscoveredTopology(projectDefinition, environment.Sources, environment.Bindings)
+	if err != nil {
+		return model.Environment{}, warnings, fmt.Errorf("refresh discovered topology: %w", err)
+	}
+	compiled := compiler.Compile(projectDefinition, environment.Sources, refreshedBindings)
 	if len(compiled.Issues) > 0 {
 		environment.Issues = compiled.Issues
 		return environment, warnings, compiler.ConfigurationError{Issues: compiled.Issues}

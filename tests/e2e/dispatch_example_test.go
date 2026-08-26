@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -121,6 +122,77 @@ func TestDispatchExampleEndToEnd(t *testing.T) {
 			t.Fatalf("Dispatch traffic does not contain %s: %#v", edge, traffic.Exchanges)
 		}
 	}
+	assertDispatchProtocolTraffic(t, binary, home, checkout, delivery.ID)
+}
+
+func assertDispatchProtocolTraffic(t *testing.T, binary, home, checkout, deliveryID string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	var lastOutput string
+	for time.Now().Before(deadline) {
+		output, err := runCLIAt(binary, home, checkout,
+			"--env", "dispatch-example/local", "--json", "traffic", "list", "--protocol", "tcp", "--limit", "200",
+		)
+		lastOutput = output
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		var traffic struct {
+			Exchanges []model.TrafficExchange `json:"exchanges"`
+		}
+		if json.Unmarshal([]byte(output), &traffic) != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		mysql := findDispatchProtocolExchange(traffic.Exchanges, "api", "api-mysql", model.ApplicationProtocolMySQL, "INSERT")
+		published := findDispatchProtocolExchange(traffic.Exchanges, "api", "dispatch-nats", model.ApplicationProtocolNATS, "PUB")
+		delivered := findDispatchProtocolExchange(traffic.Exchanges, "notifier", "dispatch-nats", model.ApplicationProtocolNATS, "MSG")
+		if mysql == nil || published == nil || delivered == nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		mysqlDetail := dispatchTrafficDetail(t, binary, home, checkout, mysql.Sequence)
+		if mysqlDetail.TCP == nil || len(mysqlDetail.TCP.RequestMessages) == 0 || !strings.Contains(mysqlDetail.TCP.RequestMessages[0].Content, "INSERT INTO deliveries") {
+			t.Fatalf("Dispatch MySQL operation detail = %#v", mysqlDetail)
+		}
+		publishDetail := dispatchTrafficDetail(t, binary, home, checkout, published.Sequence)
+		if publishDetail.TCP == nil || len(publishDetail.TCP.RequestMessages) == 0 || !strings.Contains(publishDetail.TCP.RequestMessages[0].Content, `"deliveryId"`) || !strings.Contains(publishDetail.TCP.RequestMessages[0].Content, deliveryID) {
+			t.Fatalf("Dispatch NATS publish detail = %#v", publishDetail)
+		}
+		deliveryDetail := dispatchTrafficDetail(t, binary, home, checkout, delivered.Sequence)
+		if deliveryDetail.TCP == nil || len(deliveryDetail.TCP.ResponseMessages) == 0 || !strings.Contains(deliveryDetail.TCP.ResponseMessages[0].Content, `"deliveryId"`) || !strings.Contains(deliveryDetail.TCP.ResponseMessages[0].Content, deliveryID) {
+			t.Fatalf("Dispatch NATS delivery detail = %#v", deliveryDetail)
+		}
+		return
+	}
+	t.Fatalf("Dispatch protocol operations were not captured; last response:\n%s", lastOutput)
+}
+
+func findDispatchProtocolExchange(exchanges []model.TrafficExchange, source, target string, applicationProtocol model.ApplicationProtocol, operation string) *model.TrafficExchange {
+	for index := range exchanges {
+		exchange := &exchanges[index]
+		if exchange.Source == source && exchange.Target == target && exchange.TCP != nil && exchange.TCP.Kind == model.TrafficTCPKindOperation && exchange.TCP.ApplicationProtocol == applicationProtocol && exchange.TCP.Operation == operation {
+			return exchange
+		}
+	}
+	return nil
+}
+
+func dispatchTrafficDetail(t *testing.T, binary, home, checkout string, sequence int64) model.TrafficExchange {
+	t.Helper()
+	output, err := runCLIAt(binary, home, checkout,
+		"--env", "dispatch-example/local", "--json", "traffic", "show", fmt.Sprint(sequence),
+	)
+	if err != nil {
+		t.Fatalf("show Dispatch protocol exchange %d: %v\n%s", sequence, err, output)
+	}
+	var exchange model.TrafficExchange
+	if err := json.Unmarshal([]byte(output), &exchange); err != nil {
+		t.Fatalf("decode Dispatch protocol exchange %d: %v\n%s", sequence, err, output)
+	}
+	return exchange
 }
 
 func waitForDispatchReady(t *testing.T, home, host string) {

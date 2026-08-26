@@ -1,19 +1,27 @@
 # Traffic tracing plan
 
-Status: implemented in the API 8 traffic contract. Passive trace projection,
+Status: implemented in the API 11 traffic contract. Passive trace projection,
 trace-first UI, raw exchanges, bounded pause buffering, and CLI trace inspection
 are now part of the product. Framework-specific propagation remains follow-on work.
 
 ## Goal
 
-Replace the current protocol-separated list of completed exchanges with a trace-first view that explains one user action across application services and managed resources. For the store example, opening `/checkout` should read as one trace containing:
+Replace the current protocol-separated list of completed exchanges with a trace-first view that explains one user action across application services and managed resources. For the Store example, creating and then retrieving an order should produce traces such as:
 
 ```text
-GET /checkout                         external -> checkout
-|- GET /inventory/coffee-mug          checkout -> inventory
-`- GET /orders                        checkout -> orders
-   |- TCP session                     orders -> redis
-   `- TCP session                     orders -> postgres
+POST /checkout                        external -> checkout
+|- POST /inventory/.../reservations   checkout -> inventory
+|  |- POSTGRESQL UPDATE               inventory -> inventory-postgres
+|  `- POSTGRESQL INSERT               inventory -> inventory-postgres
+`- POST /orders                       checkout -> orders
+   |- POSTGRESQL INSERT               orders -> orders-postgres
+   `- REDIS DEL                       orders -> redis
+
+GET /orders/1                         external -> checkout
+`- GET /orders/1                      checkout -> orders
+   |- REDIS GET                       orders -> redis
+   |- POSTGRESQL SELECT               orders -> orders-postgres
+   `- REDIS SET                       orders -> redis
 ```
 
 The raw exchange list remains available for debugging and as the source of truth.
@@ -24,6 +32,10 @@ The raw exchange list remains available for debugging and as the source of truth
 - Combine HTTP and TCP exchanges in one trace instead of requiring a protocol toggle.
 - Order spans by start time and show their overlap and duration in a compact waterfall.
 - Treat browser-generated traffic such as `/favicon.ico` as separate background activity. Collapse it by default; do not silently discard it.
+- Treat successful, recognized PostgreSQL and Redis driver/pool housekeeping as
+  background as well. Preserve it in raw exchanges and recordings, exclude its
+  standalone traces and topology animation by default, and never hide failures
+  or faulted operations.
 - Let selecting any span open the full existing request, response, fault, provider, and recording details.
 - Label correlation as `exact`, `inferred`, `partial`, or `ambiguous`. The UI must not present timing inference as certainty.
 - Pausing the live view buffers new exchanges and applies them on resume; it must not lose them merely because rendering is paused.
@@ -41,7 +53,7 @@ or a recording. Other request and response values remain developer-visible.
 - Preserve repeated request and response header values rather than joining them
   irreversibly. Replace authorization, cookies, and common API-key/token header
   values before retaining the exchange.
-- Preserve captured request and response bodies verbatim up to a documented memory limit.
+- Preserve captured HTTP bodies and decoded TCP application payloads verbatim up to documented memory limits.
 - Use explicit truncation flags and captured/observed byte counts when a body exceeds the limit.
 - Display `HEADERS`; sensitive header values already arrive as `[REDACTED]` and
   cannot be revealed by API clients.
@@ -59,6 +71,8 @@ Replace the overloaded event shape with an exchange model and trace projections.
 - Existing environment, sequence, protocol, source, target, provider, timing, status, byte, fault, recording, and error fields.
 - `requestTarget`: exact escaped path plus raw query.
 - `requestKind`: navigation, subresource, fetch/XHR, service, or unknown, derived from `Sec-Fetch-*` and other bounded request metadata.
+- `background`: explicit successful browser or connection-housekeeping
+  classification shared by trace projection and topology activity.
 - Complete multi-value request and response headers.
 - Body contents, observed byte counts, captured byte counts, and truncation flags.
 - Optional normalized lower-hex `traceId`, `spanId`, and `parentSpanId` derived
@@ -184,20 +198,24 @@ portless-web/src/features/traffic/
 
 ### End-to-end test
 
-Run the store fixture, open `/`, then `/checkout`, and assert:
+Run the real Store example, create an order through `POST /checkout`, then read
+that order twice through `GET /orders/:id`, and assert:
 
-- `/` and `/checkout` are distinct root traces;
-- `/checkout` contains checkout-to-inventory and checkout-to-orders HTTP spans;
-- Redis and PostgreSQL TCP sessions appear beneath the orders span when timing is unambiguous;
+- the checkout trace contains checkout-to-inventory and checkout-to-orders HTTP spans, a decoded PostgreSQL stock `UPDATE` beneath inventory, and a decoded PostgreSQL `INSERT` beneath orders when timing is unambiguous;
+- the first read contains a decoded Redis `GET`, PostgreSQL `SELECT`, and Redis `SET` cache-fill sequence;
+- the second read contains the Redis `GET` cache hit without another PostgreSQL `SELECT`;
 - favicon traffic is retained as collapsed background activity;
+- successful PostgreSQL/Redis connection housekeeping is retained as background
+  raw traffic without creating default standalone trace rows or idle topology
+  animation;
 - raw mode contains every underlying exchange;
-- an injected authorization header is redacted while the query value and a
-  non-sensitive repeated header remain available in exchange detail.
+- an injected authorization header is redacted while a non-sensitive repeated
+  header remains available in exchange detail.
 
 ## Non-goals for the first tracing slice
 
 - Claiming exact causality where no trace context exists.
-- Parsing database, Redis/Valkey, or other TCP application protocols.
-- Capturing arbitrary TCP payload contents.
+- Capturing arbitrary undeclared TCP streams as raw byte dumps.
+- Decrypting or intercepting TLS-wrapped TCP application protocols.
 - Replacing a full OpenTelemetry backend or collector.
 - Framework-specific auto-instrumentation in the initial passive correlation release.

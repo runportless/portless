@@ -8,15 +8,28 @@ const (
 	// Product is the authenticated lifecycle product identifier.
 	Product = "portless"
 	// ProtocolVersion is the semantic version of the daemon lifecycle protocol.
-	ProtocolVersion = "3.0.0"
+	ProtocolVersion = "4.0.0"
 	// IdentityPath is the private authenticated daemon identity route.
 	IdentityPath = "/_portless/daemon/v1/identity"
+	// HandoffPath is the private authenticated daemon handoff-verification route.
+	HandoffPath = "/_portless/daemon/v1/handoff"
 	// ShutdownPath is the private authenticated daemon shutdown route.
 	ShutdownPath = "/_portless/daemon/v1/shutdown"
 )
 
+// HandoffState classifies the result of a completed daemon handoff audit.
+type HandoffState string
+
+const (
+	// HandoffReady means every active runtime can be adopted safely.
+	HandoffReady HandoffState = "ready"
+	// HandoffBlocked means at least one active runtime cannot be adopted safely.
+	HandoffBlocked HandoffState = "blocked"
+)
+
 // Identity proves the running daemon's installation, process, build,
-// compatibility, recovery, and handoff state.
+// compatibility, recovery, and active-environment state. Handoff readiness is
+// verified separately because it requires live runtime ownership probes.
 type Identity struct {
 	Product            string    `json:"product"`
 	ProtocolVersion    string    `json:"protocolVersion"`
@@ -27,9 +40,16 @@ type Identity struct {
 	PID                int       `json:"pid"`
 	StartedAt          time.Time `json:"startedAt"`
 	State              string    `json:"state"`
-	HandoffReady       bool      `json:"handoffReady"`
 	RecoveryProblems   []string  `json:"recoveryProblems"`
 	ActiveEnvironments []string  `json:"activeEnvironments"`
+}
+
+// HandoffStatus reports one completed live runtime-adoption audit.
+type HandoffStatus struct {
+	State              HandoffState `json:"state"`
+	VerifiedAt         time.Time    `json:"verifiedAt"`
+	Problems           []string     `json:"problems"`
+	ActiveEnvironments []string     `json:"activeEnvironments"`
 }
 
 // ShutdownRequest identifies the intended daemon instance and shutdown policy.

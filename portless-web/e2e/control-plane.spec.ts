@@ -979,6 +979,13 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(drawer.getByText(before.apiVersion, { exact: true })).toBeVisible()
   await expect(drawer).not.toContainText('Version')
 
+  await drawer.getByRole('tab', { name: 'LOGS' }).click()
+  const daemonLogs = drawer.getByLabel('Daemon logs')
+  await expect(daemonLogs).toContainText('Portless daemon ready')
+  await expect(drawer.getByRole('button', { name: 'Open raw daemon logs in new tab' })).toBeEnabled()
+  await expect(drawer.getByRole('button', { name: 'Pause daemon log tail' })).toHaveAttribute('aria-pressed', 'true')
+  await drawer.getByRole('tab', { name: 'OVERVIEW' }).click()
+
   const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })
   await expect(fullScreenButton.locator('svg')).toBeVisible()
   await expect(fullScreenButton).toHaveText('')

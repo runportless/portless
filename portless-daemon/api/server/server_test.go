@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -50,8 +51,8 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	daemonControl := &fakeDaemonControl{identity: contract.DaemonStatus{
 		State: "ready", PID: 33083, StartedAt: time.Now().UTC().Add(-time.Minute),
 		InstanceID: "instance-current", BuildID: "build-current", ProtocolVersion: "2.0.0", APIVersion: contract.APIVersion,
-		HandoffReady: true, RecoveryProblems: []string{}, ActiveEnvironments: []string{"billing/local"},
-	}}
+		RecoveryProblems: []string{}, ActiveEnvironments: []string{"billing/local"},
+	}, logs: contract.DaemonLogSnapshot{Content: "time=2026-08-25T12:00:00Z level=INFO msg=\"Portless daemon ready\"\n", Truncated: true}, handoff: contract.DaemonHandoffStatus{State: "ready", VerifiedAt: time.Now().UTC(), Problems: []string{}, ActiveEnvironments: []string{"billing/local"}}}
 	server, err := New(Dependencies{Application: app, Auth: authManager, Assets: assets, DaemonControl: daemonControl})
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +64,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	unauthenticated := request(server, authManager, http.MethodGet, "/api/v1/projects", "", false)
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated control request returned %d", unauthenticated.Code)
+	}
+	unauthenticatedLogs := request(server, authManager, http.MethodGet, "/api/v1/daemon/logs", "", false)
+	if unauthenticatedLogs.Code != http.StatusUnauthorized || daemonControl.logCalls != 0 {
+		t.Fatalf("unauthenticated daemon logs response code=%d calls=%d", unauthenticatedLogs.Code, daemonControl.logCalls)
 	}
 	projects := request(server, authManager, http.MethodGet, "/api/v1/projects", "", true)
 	if projects.Code != http.StatusOK || !strings.Contains(projects.Body.String(), `"name":"billing"`) || !strings.Contains(projects.Body.String(), `"environments":[`) || !strings.Contains(projects.Body.String(), `"total":1`) {
@@ -123,18 +128,28 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 
 	started := time.Now().UTC().Add(-time.Second)
 	httpExchange := app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolHTTP, Source: "checkout", Target: "orders", StartedAt: started, CompletedAt: started.Add(12 * time.Millisecond), Method: "GET", Path: "/orders", RequestTarget: "/orders?state=open", Status: 200, TraceContextSource: model.TrafficTraceContextGenerated, RequestHeaders: map[string][]string{"Accept": {"application/json"}}, ResponseHeaders: map[string][]string{"Content-Type": {"application/json"}}})
-	app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Source: "checkout", Target: "postgres", StartedAt: started, CompletedAt: started.Add(2 * time.Millisecond)})
+	tcpExchange := app.AddTrafficExchange(model.TrafficExchange{Project: "billing", Environment: "local", Protocol: model.ProtocolTCP, Source: "checkout", Target: "postgres", Background: true, StartedAt: started, CompletedAt: started.Add(2 * time.Millisecond), RequestBytes: 18, ResponseBytes: 24,
+		TCP: &model.TrafficTCPExchange{Kind: model.TrafficTCPKindOperation, ApplicationProtocol: model.ApplicationProtocolPostgreSQL, Operation: "SELECT", Inspection: model.TrafficInspectionDecoded, Outcome: model.TrafficTCPOutcomeSuccess, RequestMessageCount: 1, ResponseMessageCount: 1,
+			RequestMessages: []model.TrafficMessage{{Type: "query", Content: "SELECT 1", ContentType: "text/x-sql", WireBytes: 18}}, ResponseMessages: []model.TrafficMessage{{Type: "row", Content: `[1]`, ContentType: "application/json", WireBytes: 24}}}})
 	httpTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=http&service=checkout&limit=10", "", true)
 	if httpTraffic.Code != http.StatusOK || !strings.Contains(httpTraffic.Body.String(), `"target":"orders"`) || !strings.Contains(httpTraffic.Body.String(), `"traceContextSource":"generated"`) || strings.Contains(httpTraffic.Body.String(), `"target":"postgres"`) || strings.Contains(httpTraffic.Body.String(), `"requestHeaders"`) {
 		t.Fatalf("filtered HTTP traffic response code=%d body=%s", httpTraffic.Code, httpTraffic.Body.String())
 	}
 	tcpTraffic := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=tcp&edge=checkout:postgres", "", true)
-	if tcpTraffic.Code != http.StatusOK || !strings.Contains(tcpTraffic.Body.String(), `"protocol":"tcp"`) {
+	if tcpTraffic.Code != http.StatusOK || !strings.Contains(tcpTraffic.Body.String(), `"protocol":"tcp"`) || !strings.Contains(tcpTraffic.Body.String(), `"background":true`) || !strings.Contains(tcpTraffic.Body.String(), `"applicationProtocol":"postgresql"`) || !strings.Contains(tcpTraffic.Body.String(), `"operation":"SELECT"`) || strings.Contains(tcpTraffic.Body.String(), `"requestMessages"`) {
 		t.Fatalf("filtered TCP traffic response code=%d body=%s", tcpTraffic.Code, tcpTraffic.Body.String())
+	}
+	tcpDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges/"+strconv.FormatInt(tcpExchange.Sequence, 10), "", true)
+	if tcpDetail.Code != http.StatusOK || !strings.Contains(tcpDetail.Body.String(), `"requestMessages":[{"type":"query"`) || !strings.Contains(tcpDetail.Body.String(), `"content":"SELECT 1"`) || !strings.Contains(tcpDetail.Body.String(), `"responseMessages":[{"type":"row"`) {
+		t.Fatalf("TCP traffic detail response code=%d body=%s", tcpDetail.Code, tcpDetail.Body.String())
 	}
 	trafficDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges/"+strconv.FormatInt(httpExchange.Sequence, 10), "", true)
 	if trafficDetail.Code != http.StatusOK || !strings.Contains(trafficDetail.Body.String(), `"requestTarget":"/orders?state=open"`) || !strings.Contains(trafficDetail.Body.String(), `"traceContextSource":"generated"`) || !strings.Contains(trafficDetail.Body.String(), `"requestHeaders":{"Accept":["application/json"]}`) || !strings.Contains(trafficDetail.Body.String(), `"responseHeaders":{"Content-Type":["application/json"]}`) {
 		t.Fatalf("traffic detail response code=%d body=%s", trafficDetail.Code, trafficDetail.Body.String())
+	}
+	defaultTraces := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces", "", true)
+	if defaultTraces.Code != http.StatusOK || strings.Contains(defaultTraces.Body.String(), `"protocol":"tcp"`) || strings.Contains(defaultTraces.Body.String(), `"background":true`) {
+		t.Fatalf("default traces retained background TCP housekeeping code=%d body=%s", defaultTraces.Code, defaultTraces.Body.String())
 	}
 	traces := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces?background=include", "", true)
 	if traces.Code != http.StatusOK || !strings.Contains(traces.Body.String(), `"traces":[`) || !strings.Contains(traces.Body.String(), `"protocol":"http"`) || !strings.Contains(traces.Body.String(), `"provisional":false`) || strings.Contains(traces.Body.String(), `"spans"`) {
@@ -192,6 +207,27 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	daemonStatus := request(server, authManager, http.MethodGet, "/api/v1/daemon", "", true)
 	if daemonStatus.Code != http.StatusOK || !strings.Contains(daemonStatus.Body.String(), `"instanceId":"instance-current"`) || !strings.Contains(daemonStatus.Body.String(), `"protocolVersion":"2.0.0"`) || strings.Contains(daemonStatus.Body.String(), "installationId") {
 		t.Fatalf("daemon status response code=%d body=%s", daemonStatus.Code, daemonStatus.Body.String())
+	}
+	if daemonControl.handoffCalls != 0 {
+		t.Fatalf("shallow daemon status performed %d handoff audits", daemonControl.handoffCalls)
+	}
+	daemonLogs := request(server, authManager, http.MethodGet, "/api/v1/daemon/logs", "", true)
+	var logSnapshot contract.DaemonLogSnapshot
+	if err := json.Unmarshal(daemonLogs.Body.Bytes(), &logSnapshot); err != nil {
+		t.Fatalf("decode daemon logs: %v; body=%s", err, daemonLogs.Body.String())
+	}
+	if daemonLogs.Code != http.StatusOK || !strings.Contains(logSnapshot.Content, "Portless daemon ready") || !logSnapshot.Truncated || daemonControl.logCalls != 1 {
+		t.Fatalf("daemon logs response code=%d snapshot=%#v calls=%d", daemonLogs.Code, logSnapshot, daemonControl.logCalls)
+	}
+	daemonControl.logsErr = errors.New("private daemon log is unavailable")
+	failedDaemonLogs := request(server, authManager, http.MethodGet, "/api/v1/daemon/logs", "", true)
+	if failedDaemonLogs.Code != http.StatusServiceUnavailable || !strings.Contains(failedDaemonLogs.Body.String(), `"code":"DAEMON_LOG_UNAVAILABLE"`) {
+		t.Fatalf("failed daemon logs response code=%d body=%s", failedDaemonLogs.Code, failedDaemonLogs.Body.String())
+	}
+	daemonControl.logsErr = nil
+	daemonHandoff := request(server, authManager, http.MethodGet, "/api/v1/daemon/handoff", "", true)
+	if daemonHandoff.Code != http.StatusOK || !strings.Contains(daemonHandoff.Body.String(), `"state":"ready"`) || daemonControl.handoffCalls != 1 {
+		t.Fatalf("daemon handoff response code=%d body=%s calls=%d", daemonHandoff.Code, daemonHandoff.Body.String(), daemonControl.handoffCalls)
 	}
 	relayStatus := request(server, authManager, http.MethodGet, "/api/v1/relay", "", true)
 	if relayStatus.Code != http.StatusOK || !strings.Contains(relayStatus.Body.String(), `"httpHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"helperCurrent":true`) || !strings.Contains(relayStatus.Body.String(), `"helperBuildId":"build-current"`) || !strings.Contains(relayStatus.Body.String(), `"dnsHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"resolverHealthy":true`) || !strings.Contains(relayStatus.Body.String(), `"dnsListenAddress":"127.77.0.1:1053"`) || !strings.Contains(relayStatus.Body.String(), `"localhostResolverPath":"/etc/resolver/portless.localhost"`) {
@@ -340,11 +376,26 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 
 type fakeDaemonControl struct {
 	identity          contract.DaemonStatus
+	logs              contract.DaemonLogSnapshot
+	logsErr           error
+	logCalls          int
+	handoff           contract.DaemonHandoffStatus
+	handoffCalls      int
 	restartedInstance string
 }
 
 func (f *fakeDaemonControl) Status(context.Context) (contract.DaemonStatus, error) {
 	return f.identity, nil
+}
+
+func (f *fakeDaemonControl) Logs(context.Context) (contract.DaemonLogSnapshot, error) {
+	f.logCalls++
+	return f.logs, f.logsErr
+}
+
+func (f *fakeDaemonControl) HandoffStatus(context.Context) (contract.DaemonHandoffStatus, error) {
+	f.handoffCalls++
+	return f.handoff, nil
 }
 
 func (f *fakeDaemonControl) Restart(_ context.Context, instanceID string) (contract.DaemonRestart, error) {
@@ -426,12 +477,13 @@ func TestApplicationHostRequiresServiceEnvironmentProject(t *testing.T) {
 }
 
 func TestTrafficSummaryOmitsDetailContentWithoutMutatingDetail(t *testing.T) {
-	detail := model.TrafficExchange{TraceContextSource: model.TrafficTraceContextGenerated, RequestHeaders: map[string][]string{"Authorization": {"Bearer local"}}, ResponseHeaders: map[string][]string{"Set-Cookie": {"session=local"}}, RequestBody: `{"request":true}`, ResponseBody: `{"response":true}`, RequestBodyTruncated: true, ResponseBodyTruncated: true}
+	detail := model.TrafficExchange{TraceContextSource: model.TrafficTraceContextGenerated, RequestHeaders: map[string][]string{"Authorization": {"Bearer local"}}, ResponseHeaders: map[string][]string{"Set-Cookie": {"session=local"}}, RequestBody: `{"request":true}`, ResponseBody: `{"response":true}`, RequestBodyTruncated: true, ResponseBodyTruncated: true,
+		TCP: &model.TrafficTCPExchange{Kind: model.TrafficTCPKindOperation, Operation: "GET", Inspection: model.TrafficInspectionDecoded, RequestMessages: []model.TrafficMessage{{Type: "command", Content: `["GET","key"]`}}}}
 	summary := trafficSummary(detail)
-	if summary.TraceContextSource != model.TrafficTraceContextGenerated || summary.RequestHeaders != nil || summary.ResponseHeaders != nil || summary.RequestBody != "" || summary.ResponseBody != "" || summary.RequestBodyTruncated || summary.ResponseBodyTruncated {
+	if summary.TraceContextSource != model.TrafficTraceContextGenerated || summary.RequestHeaders != nil || summary.ResponseHeaders != nil || summary.RequestBody != "" || summary.ResponseBody != "" || summary.RequestBodyTruncated || summary.ResponseBodyTruncated || summary.TCP == nil || summary.TCP.Operation != "GET" || summary.TCP.RequestMessages != nil {
 		t.Fatalf("summary retained detail content: %#v", summary)
 	}
-	if len(detail.RequestHeaders) != 1 || len(detail.ResponseHeaders) != 1 || detail.RequestBody == "" || detail.ResponseBody == "" || !detail.RequestBodyTruncated || !detail.ResponseBodyTruncated {
+	if len(detail.RequestHeaders) != 1 || len(detail.ResponseHeaders) != 1 || detail.RequestBody == "" || detail.ResponseBody == "" || !detail.RequestBodyTruncated || !detail.ResponseBodyTruncated || len(detail.TCP.RequestMessages) != 1 {
 		t.Fatalf("summary mutated detail: %#v", detail)
 	}
 }

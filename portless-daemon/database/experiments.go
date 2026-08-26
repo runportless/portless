@@ -25,8 +25,8 @@ func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) 
 	if recording.MaxEvents <= 0 {
 		recording.MaxEvents = 10_000
 	}
-	if recording.MaxBodyBytes <= 0 {
-		recording.MaxBodyBytes = 64 * 1024
+	if recording.MaxPayloadBytes <= 0 {
+		recording.MaxPayloadBytes = 64 * 1024
 	}
 	var activeName string
 	err = s.db.QueryRowContext(ctx, `SELECT name FROM recordings WHERE environment_key = ? AND status = 'active' LIMIT 1`, environmentKey).Scan(&activeName)
@@ -44,7 +44,7 @@ func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) 
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO recordings(environment_key, name, source, target, capture_bodies, max_events, max_body_bytes, status, started_at, expires_at)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, environmentKey, recording.Name, recording.Source, recording.Target,
-		boolInt(recording.CaptureBodies), recording.MaxEvents, recording.MaxBodyBytes, recording.Status,
+		boolInt(recording.CapturePayloads), recording.MaxEvents, recording.MaxPayloadBytes, recording.Status,
 		recording.StartedAt.Format(time.RFC3339Nano), expires)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -417,9 +417,9 @@ func scanRecording(scanner rowScanner, selector string) (model.Recording, error)
 	var started string
 	var completed, expires sql.NullString
 	err := scanner.Scan(&recording.Name, &recording.Source, &recording.Target, &capture, &recording.MaxEvents,
-		&recording.MaxBodyBytes, &recording.Status, &started, &completed, &expires, &recording.EventCount)
+		&recording.MaxPayloadBytes, &recording.Status, &started, &completed, &expires, &recording.EventCount)
 	recording.Project, recording.Environment = publicScope(selector)
-	recording.CaptureBodies = capture != 0
+	recording.CapturePayloads = capture != 0
 	recording.StartedAt = parseTime(started)
 	recording.CompletedAt = parseOptionalTime(completed)
 	recording.ExpiresAt = parseOptionalTime(expires)

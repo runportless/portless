@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 10.11.0
+  version: 12.2.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.11.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.2.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -70,13 +70,45 @@ paths:
   /daemon:
     get:
       operationId: daemonStatus
-      description: Browser-safe identity, lifecycle state, and handoff readiness for the local daemon.
+      description: >-
+        Browser-safe identity, lifecycle state, recovery state, and active
+        environments for the local daemon. This shallow status does not probe
+        supervisors, containers, or proxy ownership.
       responses:
         '200':
           description: Current daemon status
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DaemonStatus' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /daemon/logs:
+    get:
+      operationId: daemonLogs
+      description: >-
+        Returns at most the latest 256 KiB from the fixed, private daemon log.
+        The path is not client-selectable, unsafe files are rejected, and known
+        installation authentication and ownership secrets are redacted before
+        the snapshot crosses the API boundary.
+      responses:
+        '200':
+          description: Bounded daemon-log tail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DaemonLogSnapshot' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /daemon/handoff:
+    get:
+      operationId: daemonHandoffStatus
+      description: >-
+        Performs a fresh fail-closed audit of active supervisor, container,
+        ingress, dependency-proxy, and ownership state. Clients request this
+        only when presenting or attempting daemon replacement.
+      responses:
+        '200':
+          description: Completed runtime handoff audit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DaemonHandoffStatus' }
         '503': { $ref: '#/components/responses/Unavailable' }
   /daemon/restart:
     post:
@@ -735,7 +767,7 @@ paths:
         - in: query
           name: protocol
           schema: { type: string, enum: [all, http, tcp], default: all }
-          description: tcp includes raw TCP and protocol-aware Postgres and Redis connections.
+          description: tcp includes opaque sessions and protocol-aware PostgreSQL, Redis/Valkey, MySQL, and NATS operations.
         - { $ref: '#/components/parameters/Limit1000' }
         - in: query
           name: service
@@ -756,7 +788,7 @@ paths:
           schema: { type: integer, format: int64, minimum: 0, default: 0 }
       responses:
         '200':
-          description: Newest-first bounded exchange summaries from the live buffer; headers and bodies are available from the detail route.
+          description: Newest-first bounded exchange summaries from the live buffer; HTTP headers/bodies and decoded TCP messages are available from the detail route.
           content:
             application/json:
               schema:
@@ -798,7 +830,7 @@ paths:
         - in: query
           name: background
           schema: { type: string, enum: [exclude, include], default: exclude }
-          description: Include browser subresource and other background traces.
+          description: Include browser subresource and successful connection-housekeeping traces.
       responses:
         '200':
           description: Newest-first trace summaries rebuilt from the bounded exchange window
@@ -1248,17 +1280,34 @@ components:
           description: True when ordinary environment operations cannot decode the stored topology and active state requires an explicit forced reset.
     DaemonStatus:
       type: object
-      required: [state, pid, startedAt, instanceId, buildId, protocolVersion, apiVersion, handoffReady, recoveryProblems, activeEnvironments]
+      required: [state, pid, startedAt, instanceId, buildId, protocolVersion, apiVersion, recoveryProblems, activeEnvironments]
       properties:
         state: { type: string, enum: [reconciling, ready, draining] }
         pid: { type: integer }
         startedAt: { type: string, format: date-time }
         instanceId: { type: string }
         buildId: { type: string }
-        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '3.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '10.11.0', description: Stable semantic API version. }
-        handoffReady: { type: boolean }
+        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.2.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
+        activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+    DaemonLogSnapshot:
+      type: object
+      required: [content, truncated]
+      properties:
+        content:
+          type: string
+          description: Plain-text tail of the private daemon log after known installation-secret redaction.
+        truncated:
+          type: boolean
+          description: True when older log bytes were omitted by the fixed response bound.
+    DaemonHandoffStatus:
+      type: object
+      required: [state, verifiedAt, problems, activeEnvironments]
+      properties:
+        state: { type: string, enum: [ready, blocked] }
+        verifiedAt: { type: string, format: date-time }
+        problems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonRestart:
       type: object
@@ -1498,6 +1547,7 @@ components:
         source: { type: string, description: Service name or external. }
         target: { $ref: '#/components/schemas/ServiceName' }
         protocol: { type: string, enum: [http, tcp] }
+        applicationProtocol: { type: string, enum: [postgresql, redis, mysql, nats], description: Declared protocol used for bounded TCP operation inspection. }
         binding: { type: string, description: Resource plugin responsible for connection formatting. }
         environment: { type: string }
         required: { type: boolean }
@@ -1560,9 +1610,48 @@ components:
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         service: { type: string, description: Empty when entries from all services were requested. }
         entries: { type: array, items: { $ref: '#/components/schemas/LogEntry' } }
+    TrafficMessageField:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string }
+        value: { type: string }
+        encoding: { type: string, enum: [utf8, base64] }
+    TrafficMessage:
+      type: object
+      required: [type, offsetMs, wireBytes]
+      properties:
+        type: { type: string }
+        offsetMs: { type: integer, format: int64, minimum: 0 }
+        summary: { type: string }
+        wireBytes: { type: integer, format: int64, minimum: 0 }
+        contentBytes: { type: integer, format: int64, minimum: 0 }
+        capturedBytes: { type: integer, format: int64, minimum: 0 }
+        truncated: { type: boolean }
+        content: { type: string, description: Bounded decoded application content represented as UTF-8 or base64. }
+        contentType: { type: string }
+        encoding: { type: string, enum: [utf8, base64] }
+        fields: { type: array, maxItems: 256, items: { $ref: '#/components/schemas/TrafficMessageField' } }
+    TrafficTCPExchange:
+      type: object
+      required: [kind, inspection]
+      properties:
+        kind: { type: string, enum: [operation, session] }
+        applicationProtocol: { type: string, enum: [postgresql, redis, mysql, nats] }
+        operation: { type: string }
+        inspection: { type: string, enum: [decoded, opaque, encrypted, unsupported, malformed, limited] }
+        inspectionReason: { type: string }
+        outcome: { type: string, enum: [success, error, one-way, incomplete] }
+        requestMessageCount: { type: integer, minimum: 0 }
+        responseMessageCount: { type: integer, minimum: 0 }
+        requestMessages: { type: array, maxItems: 256, items: { $ref: '#/components/schemas/TrafficMessage' } }
+        responseMessages: { type: array, maxItems: 256, items: { $ref: '#/components/schemas/TrafficMessage' } }
+        requestTruncated: { type: boolean }
+        responseTruncated: { type: boolean }
+      description: Present for TCP exchanges. Decoded operations are emitted while pooled connections remain open; opaque sessions retain only inspection state and wire-byte totals.
     TrafficExchange:
       type: object
-      required: [project, environment, sequence, protocol, source, target, startedAt, completedAt, durationMs, requestBytes, responseBytes]
+      required: [project, environment, sequence, protocol, source, target, background, startedAt, completedAt, durationMs, requestBytes, responseBytes]
       properties:
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
@@ -1570,6 +1659,7 @@ components:
         protocol: { type: string, enum: [http, tcp] }
         source: { type: string }
         target: { type: string }
+        background: { type: boolean, description: Successful browser or client/connection-pool housekeeping. The raw exchange is retained, while a standalone trace is hidden by default. Errors and faulted operations are never background. }
         targetProvider: { type: string, enum: [local, container, remote, mock] }
         remoteClassification: { type: string, enum: [development, qa, staging, unknown] }
         startedAt: { type: string, format: date-time }
@@ -1606,6 +1696,7 @@ components:
         responseBody: { type: string, description: Bounded inspectable response-body prefix. }
         requestBodyTruncated: { type: boolean }
         responseBodyTruncated: { type: boolean }
+        tcp: { $ref: '#/components/schemas/TrafficTCPExchange' }
     TrafficClearResponse:
       type: object
       required: [cleared, throughSequence]
@@ -1754,9 +1845,9 @@ components:
         name: { $ref: '#/components/schemas/ArtifactName' }
         source: { type: string }
         target: { type: string }
-        captureBodies: { type: boolean, default: false, description: Persist bounded inspectable request and response bodies after secret-like headers are redacted. }
+        capturePayloads: { type: boolean, default: false, description: Persist bounded HTTP bodies and decoded TCP application payloads. }
         maxEvents: { type: integer, default: 10000, maximum: 100000 }
-        maxBodyBytes: { type: integer, default: 65536, maximum: 1048576 }
+        maxPayloadBytes: { type: integer, default: 65536, maximum: 1048576 }
         expiresAt: { type: string, format: date-time }
     Recording:
       allOf:
@@ -1774,7 +1865,7 @@ components:
       type: object
       required: [schemaVersion, project, environment, recording, exchanges]
       properties:
-        schemaVersion: { type: integer, const: 2 }
+        schemaVersion: { type: integer, const: 3 }
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         recording: { $ref: '#/components/schemas/ArtifactName' }

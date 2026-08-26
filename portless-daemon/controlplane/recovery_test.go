@@ -511,7 +511,7 @@ func TestDaemonRestartRecoversSupervisedProcessIngressAndDependencyProxy(t *test
 			{
 				Name: "checkout", Kind: model.ServiceProcess, Required: true,
 				Command:     []string{os.Args[0], "-test.run=TestApplicationProcessHelper", "--"},
-				Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1"}, PortEnvironment: "PORT",
+				Environment: map[string]string{"PORTLESS_APPLICATION_TEST_HELPER": "1", "PORTLESS_APPLICATION_HEALTH_DEPENDENCY": "PAYMENTS_URL"}, PortEnvironment: "PORT",
 				Health: model.HealthCheck{Kind: "http", Path: "/health", Timeout: 3 * time.Second, Interval: 20 * time.Millisecond},
 			},
 			{Name: "payments", Kind: model.ServiceProcess, Required: true},

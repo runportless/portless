@@ -4,7 +4,7 @@ import type { TrafficExchange, TrafficTrace } from '../../types'
 
 function spanOperation(exchange: TrafficExchange) {
   if (exchange.protocol === 'http') return `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}`
-  return `${exchange.protocol.toUpperCase()} session`
+  return `${exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'} ${exchange.tcp?.operation || 'SESSION'}`
 }
 
 export function TraceWaterfall({ trace, onExchange }: { trace: TrafficTrace; onExchange: (exchange: TrafficExchange) => void }) {

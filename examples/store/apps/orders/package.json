@@ -1,6 +1,11 @@
 {
   "name": "orders",
   "private": true,
-  "scripts": { "start:dev": "node server.mjs" },
-  "dependencies": { "@nestjs/core": "fixture-only" }
+  "engines": { "node": ">=22.12" },
+  "scripts": { "start:dev": "node server.mjs", "test": "node --test *.test.mjs" },
+  "dependencies": {
+    "pg": "8.23.0",
+    "redis": "6.2.1"
+  },
+  "devDependencies": { "@nestjs/core": "11.2.3" }
 }

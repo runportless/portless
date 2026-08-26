@@ -32,7 +32,7 @@ type DirectorySelection struct {
 }
 
 // DaemonStatus describes the authenticated daemon process, compatibility,
-// recovery, and active environments.
+// recovery, and active environments without performing runtime handoff probes.
 type DaemonStatus struct {
 	State              string    `json:"state"`
 	PID                int       `json:"pid"`
@@ -41,8 +41,21 @@ type DaemonStatus struct {
 	BuildID            string    `json:"buildId"`
 	ProtocolVersion    string    `json:"protocolVersion"`
 	APIVersion         string    `json:"apiVersion"`
-	HandoffReady       bool      `json:"handoffReady"`
 	RecoveryProblems   []string  `json:"recoveryProblems"`
+	ActiveEnvironments []string  `json:"activeEnvironments"`
+}
+
+// DaemonLogSnapshot is one bounded, safely redacted tail of the fixed daemon log.
+type DaemonLogSnapshot struct {
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"`
+}
+
+// DaemonHandoffStatus reports one completed live runtime-adoption audit.
+type DaemonHandoffStatus struct {
+	State              string    `json:"state"`
+	VerifiedAt         time.Time `json:"verifiedAt"`
+	Problems           []string  `json:"problems"`
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 }
 

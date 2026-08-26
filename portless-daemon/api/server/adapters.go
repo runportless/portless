@@ -13,6 +13,12 @@ func trafficSummary(exchange model.TrafficExchange) model.TrafficExchange {
 	exchange.ResponseBody = ""
 	exchange.RequestBodyTruncated = false
 	exchange.ResponseBodyTruncated = false
+	if exchange.TCP != nil {
+		tcp := *exchange.TCP
+		tcp.RequestMessages = nil
+		tcp.ResponseMessages = nil
+		exchange.TCP = &tcp
+	}
 	return exchange
 }
 

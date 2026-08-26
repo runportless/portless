@@ -28,6 +28,8 @@ type DaemonController interface {
 	ReadRecord() (identity.Record, error)
 	// Inspect returns the current daemon lifecycle state without changing it.
 	Inspect(context.Context) (control.Inspection, error)
+	// VerifyHandoff performs a fresh runtime-adoption safety audit.
+	VerifyHandoff(context.Context) (control.HandoffInspection, error)
 	// Connect returns an authenticated API client, starting a compatible daemon
 	// when necessary.
 	Connect(context.Context) (*apiclient.Client, identity.Record, error)

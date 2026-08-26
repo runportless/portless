@@ -76,7 +76,7 @@ func TestPrintDaemonStatusUsesExplicitVersionLabels(t *testing.T) {
 	application, output, _ := newTestCommands(t)
 	application.printDaemonStatus(daemonStatusOutput{
 		State: "running", PID: 33083, InstanceID: "f8ecffdf6d6f", BuildID: "9f15670e7324",
-		ProtocolVersion: "2.0.0", APIVersion: "3.0.0", RuntimeState: "ready", HandoffReady: true,
+		ProtocolVersion: "2.0.0", APIVersion: "3.0.0", RuntimeState: "ready", HandoffState: "ready",
 		ActiveEnvironments: []string{"store/local"},
 	})
 	for _, expected := range []string{"Protocol Version: 2.0.0\n", "API Version: 3.0.0\n"} {

@@ -9,10 +9,18 @@ import (
 
 func TestTCPApplicationTrafficUsesProtocolSpecificHumanOutput(t *testing.T) {
 	application, output, _ := newTestCommands(t)
-	application.printTrafficList(model.Environment{Project: "billing", Name: "local"}, "tcp", []model.TrafficExchange{{
+	exchange := model.TrafficExchange{
 		Sequence: 9, Protocol: model.ProtocolTCP, Source: "checkout", Target: "postgres", DurationMS: 4,
-	}})
-	for _, expected := range []string{"TCP traffic", "PROTOCOL", "TCP", "checkout:postgres", "ok"} {
+		TCP: &model.TrafficTCPExchange{
+			Kind: model.TrafficTCPKindOperation, ApplicationProtocol: model.ApplicationProtocolPostgreSQL,
+			Operation: "SELECT", Inspection: model.TrafficInspectionDecoded, Outcome: model.TrafficTCPOutcomeSuccess,
+			RequestMessages:  []model.TrafficMessage{{Type: "query", Summary: "SELECT state FROM orders", Content: "SELECT state FROM orders", WireBytes: 29}},
+			ResponseMessages: []model.TrafficMessage{{Type: "row", Summary: "Data row", Content: `{"state":"created"}`, ContentType: "application/json", WireBytes: 18}},
+		},
+	}
+	application.printTrafficList(model.Environment{Project: "billing", Name: "local"}, "tcp", []model.TrafficExchange{exchange})
+	application.printTrafficDetail(exchange)
+	for _, expected := range []string{"TCP traffic", "PROTOCOL", "POSTGRESQL", "SELECT", "checkout:postgres", "ok", "Operation:", "Request messages", "SELECT state FROM orders", "Response messages", `{"state":"created"}`} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("TCP traffic output does not contain %q:\n%s", expected, output.String())
 		}

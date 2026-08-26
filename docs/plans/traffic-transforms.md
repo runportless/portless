@@ -701,8 +701,8 @@ The existing live traffic capture cap remains independent of the larger body
 execution cap. A transform may process a 256 KiB body while live detail retains
 only the configured 64 KiB diagnostic prefix with explicit truncation.
 
-Recordings persist transform attribution even when body capture is disabled.
-When bounded body capture is enabled, they persist the changed before/after
+Recordings persist transform attribution even when payload capture is disabled.
+When bounded payload capture is enabled, they persist the changed before/after
 body evidence under the recording's own limit. Recording export increments its
 schema version and includes transform name, revision, source hash, and script
 API version, but not TypeScript source. A future reproduction bundle may add

@@ -11,7 +11,10 @@ import (
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
-const defaultExchangeLimit = 5000
+const (
+	defaultExchangeLimit = 5000
+	defaultPayloadLimit  = 64 << 20
+)
 
 // Store retains a bounded live traffic window for each environment and
 // publishes metadata notifications without blocking application proxying.
@@ -20,9 +23,11 @@ type Store struct {
 	broker             *events.Broker
 	sequences          map[string]int64
 	exchanges          map[string][]model.TrafficExchange
+	payloadBytes       map[string]int64
 	activeHTTPRequests map[uint64]activeHTTPRequest
 	nextHTTPRequest    uint64
 	limit              int
+	payloadLimit       int64
 }
 
 type activeHTTPRequest struct {
@@ -35,7 +40,8 @@ type activeHTTPRequest struct {
 func NewStore(broker *events.Broker) *Store {
 	return &Store{
 		broker: broker, sequences: make(map[string]int64),
-		exchanges: make(map[string][]model.TrafficExchange), activeHTTPRequests: make(map[uint64]activeHTTPRequest), limit: defaultExchangeLimit,
+		exchanges: make(map[string][]model.TrafficExchange), payloadBytes: make(map[string]int64),
+		activeHTTPRequests: make(map[uint64]activeHTTPRequest), limit: defaultExchangeLimit, payloadLimit: defaultPayloadLimit,
 	}
 }
 
@@ -76,6 +82,7 @@ func (s *Store) AddExchange(exchange model.TrafficExchange) model.TrafficExchang
 
 func (s *Store) addExchange(completedHTTPRequest uint64, exchange model.TrafficExchange) model.TrafficExchange {
 	scope := model.EnvironmentSelector(exchange.Project, exchange.Environment)
+	exchange.Background = backgroundExchange(exchange)
 	exchange = cloneExchange(exchange)
 	s.mu.Lock()
 	if completedHTTPRequest != 0 {
@@ -84,10 +91,13 @@ func (s *Store) addExchange(completedHTTPRequest uint64, exchange model.TrafficE
 	s.sequences[scope]++
 	exchange.Sequence = s.sequences[scope]
 	items := append(s.exchanges[scope], exchange)
-	if len(items) > s.limit {
-		items = append([]model.TrafficExchange(nil), items[len(items)-s.limit:]...)
+	payloadBytes := s.payloadBytes[scope] + exchangePayloadBytes(exchange)
+	for len(items) > 0 && (len(items) > s.limit || payloadBytes > s.payloadLimit) {
+		payloadBytes -= exchangePayloadBytes(items[0])
+		items = items[1:]
 	}
-	s.exchanges[scope] = items
+	s.exchanges[scope] = append([]model.TrafficExchange(nil), items...)
+	s.payloadBytes[scope] = payloadBytes
 	traces := buildTraces(items)
 	markProvisionalTraces(traces, activeRequestsForScope(s.activeHTTPRequests, scope))
 	trace := traceContaining(traces, exchange.Sequence)
@@ -121,6 +131,7 @@ func (s *Store) Clear(project, environment string) (int, int64) {
 	cleared := len(s.exchanges[scope])
 	throughSequence := s.sequences[scope]
 	delete(s.exchanges, scope)
+	delete(s.payloadBytes, scope)
 	s.mu.Unlock()
 
 	if s.broker != nil {
@@ -237,7 +248,49 @@ func traceContaining(traces []model.TrafficTrace, sequence int64) model.TrafficT
 func cloneExchange(exchange model.TrafficExchange) model.TrafficExchange {
 	exchange.RequestHeaders = cloneHeaders(exchange.RequestHeaders)
 	exchange.ResponseHeaders = cloneHeaders(exchange.ResponseHeaders)
+	if exchange.TCP != nil {
+		tcp := *exchange.TCP
+		tcp.RequestMessages = cloneMessages(tcp.RequestMessages)
+		tcp.ResponseMessages = cloneMessages(tcp.ResponseMessages)
+		exchange.TCP = &tcp
+	}
 	return exchange
+}
+
+func cloneMessages(messages []model.TrafficMessage) []model.TrafficMessage {
+	if messages == nil {
+		return nil
+	}
+	result := make([]model.TrafficMessage, len(messages))
+	for index, message := range messages {
+		result[index] = message
+		result[index].Fields = append([]model.TrafficMessageField(nil), message.Fields...)
+	}
+	return result
+}
+
+func exchangePayloadBytes(exchange model.TrafficExchange) int64 {
+	total := int64(len(exchange.RequestBody) + len(exchange.ResponseBody))
+	for _, headers := range []map[string][]string{exchange.RequestHeaders, exchange.ResponseHeaders} {
+		for name, values := range headers {
+			total += int64(len(name))
+			for _, value := range values {
+				total += int64(len(value))
+			}
+		}
+	}
+	if exchange.TCP == nil {
+		return total
+	}
+	for _, messages := range [][]model.TrafficMessage{exchange.TCP.RequestMessages, exchange.TCP.ResponseMessages} {
+		for _, message := range messages {
+			total += int64(len(message.Content) + len(message.Summary) + len(message.Type) + len(message.ContentType))
+			for _, field := range message.Fields {
+				total += int64(len(field.Name) + len(field.Value))
+			}
+		}
+	}
+	return total
 }
 
 func cloneHeaders(headers map[string][]string) map[string][]string {

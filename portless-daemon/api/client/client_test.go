@@ -133,3 +133,47 @@ func TestDoHonorsCancellationAndResponseLimit(t *testing.T) {
 		t.Fatalf("oversized response error = %v", err)
 	}
 }
+
+func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
+	requests := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.Method + " " + request.URL.Path
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v1/daemon":
+			_, _ = io.WriteString(writer, `{"state":"ready","pid":42,"startedAt":"2026-08-25T12:00:00Z","instanceId":"instance","buildId":"build","protocolVersion":"4.0.0","apiVersion":"12.2.0","recoveryProblems":[],"activeEnvironments":["store/local"]}`)
+		case "/api/v1/daemon/logs":
+			_, _ = io.WriteString(writer, `{"content":"daemon ready\n","truncated":true}`)
+		case "/api/v1/daemon/handoff":
+			_, _ = io.WriteString(writer, `{"state":"ready","verifiedAt":"2026-08-25T12:00:01Z","problems":[],"activeEnvironments":["store/local"]}`)
+		case "/api/v1/daemon/restart":
+			_, _ = io.WriteString(writer, `{"restarting":true,"previousInstanceId":"instance","handoff":true,"activeEnvironments":["store/local"]}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "secret", server.Client())
+	status, err := client.DaemonStatus(context.Background())
+	if err != nil || status.InstanceID != "instance" {
+		t.Fatalf("daemon status = %#v, %v", status, err)
+	}
+	logs, err := client.DaemonLogs(context.Background())
+	if err != nil || logs.Content != "daemon ready\n" || !logs.Truncated {
+		t.Fatalf("daemon logs = %#v, %v", logs, err)
+	}
+	handoff, err := client.DaemonHandoffStatus(context.Background())
+	if err != nil || handoff.State != "ready" || handoff.VerifiedAt.IsZero() {
+		t.Fatalf("daemon handoff = %#v, %v", handoff, err)
+	}
+	restart, err := client.RestartDaemon(context.Background(), "instance")
+	if err != nil || !restart.Restarting || !restart.Handoff {
+		t.Fatalf("daemon restart = %#v, %v", restart, err)
+	}
+	for _, expected := range []string{"GET /api/v1/daemon", "GET /api/v1/daemon/logs", "GET /api/v1/daemon/handoff", "POST /api/v1/daemon/restart"} {
+		if actual := <-requests; actual != expected {
+			t.Fatalf("request = %q, want %q", actual, expected)
+		}
+	}
+}

@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { DaemonStatus, Environment, Project } from '../types'
+import type { DaemonHandoffStatus, DaemonStatus, Environment, Project } from '../types'
 import { AppChrome, type EnvironmentView, type SettingsView } from './Chrome'
 
 const project = { name: 'billing' } as Project
 const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
 const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
+const handoff = { state: 'ready', verifiedAt: '2026-08-25T12:00:00Z', activeEnvironments: [], problems: [] } as DaemonHandoffStatus
 
 function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentView = 'overview', settingsActive = false, settingsView: SettingsView = 'appearance', live = true) {
   return renderToStaticMarkup(
@@ -22,6 +23,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       live={live}
       onNavigate={() => undefined}
       onDaemonRefresh={async () => daemon}
+      onDaemonHandoffVerify={async () => handoff}
       onDaemonRestart={async (instanceId) => ({ restarting: true, previousInstanceId: instanceId, handoff: true, activeEnvironments: [] })}
       onDaemonReconnected={async () => undefined}
     >

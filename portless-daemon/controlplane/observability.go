@@ -85,8 +85,8 @@ func (s *Service) StartRecording(ctx context.Context, recording model.Recording,
 	if recording.MaxEvents < 0 || recording.MaxEvents > 100_000 {
 		return model.Recording{}, errors.New("maxEvents must be between 1 and 100000")
 	}
-	if recording.MaxBodyBytes < 0 || recording.MaxBodyBytes > 1<<20 {
-		return model.Recording{}, errors.New("maxBodyBytes must not exceed 1048576")
+	if recording.MaxPayloadBytes < 0 || recording.MaxPayloadBytes > 1<<20 {
+		return model.Recording{}, errors.New("maxPayloadBytes must not exceed 1048576")
 	}
 	if recording.ExpiresAt == nil {
 		expires := time.Now().UTC().Add(15 * time.Minute)

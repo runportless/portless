@@ -14,4 +14,20 @@ The shared registry canonicalizes aliases, rejects duplicate identifiers, valida
 
 The initial registry contains PostgreSQL 17 (`postgres`, alias `postgresql`), Valkey 8 (`valkey`, alias `redis`), MySQL 8.4, and NATS 2. Adding another built-in resource consists of implementing the plugin and registering it; discovery, compilation, networking, and Docker/Podman lifecycle code remain unchanged.
 
+Managed-resource names are consumer-scoped by default. A missing logical host,
+or a generic host matching the resource name or alias, produces
+`<consumer>-<resource>`: `postgresql://postgres` in orders becomes
+`orders-postgres`, while `redis://redis` becomes `orders-redis`. This rule is
+applied on the first scan rather than only after a collision, so adding another
+consumer cannot rename an existing resource. PostgreSQL, MySQL, Redis/Valkey,
+and NATS plugins all extract valid static single-label hosts from their normal
+URL and JDBC forms.
+
+A valid non-generic single-label host is an explicit shared resource identity.
+Two consumers that both declare `postgresql://shared-postgres` receive one
+managed `shared-postgres` service with two source-aware edges. Localhost, IP
+addresses, external DNS names, and dynamic host expressions do not become
+public resource identities. Generated names remain bounded readable DNS
+labels; name collisions fail closed instead of receiving an opaque suffix.
+
 Version 1 intentionally has no compatibility layer for the earlier container-template model. Persisted project definitions are wrapped in an explicit format version; older definitions fail with reset-and-rediscover guidance rather than being interpreted ambiguously. Daemon authentication and guarded reset inventory do not decode that model: they use normalized environment status and runtime-ownership rows so `portless reset --force --yes` can still verify and stop owned runtimes before erasing incompatible state. Native Go plugins are not loaded dynamically. A future third-party mechanism must use a versioned subprocess boundary, explicit installation and permissions, bounded resources, and a scrubbed environment.

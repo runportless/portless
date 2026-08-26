@@ -27,11 +27,16 @@ func TestLifecycleHandlerRequiresCLIAuthenticationAndControlHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var handoffChecks atomic.Int32
 	handler := lifecycle.NewHandler(lifecycle.HandlerConfig{
 		Next: http.NotFoundHandler(), Auth: authManager,
 		Identity: lifecycle.Identity{Product: lifecycle.Product, InstanceID: "instance"},
 		ActiveEnvironments: func(context.Context) ([]string, error) {
 			return []string{"shop/local", "billing/qa"}, nil
+		},
+		HandoffStatus: func(context.Context) (bool, []string) {
+			handoffChecks.Add(1)
+			return true, nil
 		},
 		Shutdown: func() {},
 	})
@@ -63,6 +68,24 @@ func TestLifecycleHandlerRequiresCLIAuthenticationAndControlHost(t *testing.T) {
 	}
 	if strings.Join(identity.ActiveEnvironments, ",") != "billing/qa,shop/local" {
 		t.Fatalf("active environments = %#v", identity.ActiveEnvironments)
+	}
+	if handoffChecks.Load() != 0 {
+		t.Fatalf("identity performed %d handoff checks, want none", handoffChecks.Load())
+	}
+
+	handoffRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1"+lifecycle.HandoffPath, nil)
+	handoffRequest.Header.Set("Authorization", "Bearer "+authManager.Token())
+	handoffResponse := httptest.NewRecorder()
+	handler.ServeHTTP(handoffResponse, handoffRequest)
+	if handoffResponse.Code != http.StatusOK {
+		t.Fatalf("handoff verification returned %d: %s", handoffResponse.Code, handoffResponse.Body.String())
+	}
+	var handoff lifecycle.HandoffStatus
+	if err := json.Unmarshal(handoffResponse.Body.Bytes(), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	if handoff.State != lifecycle.HandoffReady || handoff.VerifiedAt.IsZero() || strings.Join(handoff.ActiveEnvironments, ",") != "billing/qa,shop/local" || handoffChecks.Load() != 1 {
+		t.Fatalf("unexpected handoff verification: status=%#v checks=%d", handoff, handoffChecks.Load())
 	}
 }
 
@@ -141,7 +164,7 @@ func TestLifecycleIdentityRemainsAvailableWhenApplicationInventoryFails(t *testi
 	if err := json.Unmarshal(identityResponse.Body.Bytes(), &identity); err != nil {
 		t.Fatal(err)
 	}
-	if identity.HandoffReady || len(identity.ActiveEnvironments) != 0 || !strings.Contains(strings.Join(identity.RecoveryProblems, "; "), "active environment inventory is unavailable") {
+	if len(identity.ActiveEnvironments) != 0 || !strings.Contains(strings.Join(identity.RecoveryProblems, "; "), "active environment inventory is unavailable") {
 		t.Fatalf("unexpected degraded identity: %#v", identity)
 	}
 
@@ -193,7 +216,7 @@ func TestLifecycleHandlerGuardsAndSchedulesBrowserRestart(t *testing.T) {
 		t.Fatal("restart accepted an unsafe active handoff")
 	} else {
 		var lifecycleError *lifecycle.LifecycleError
-		if !errors.As(err, &lifecycleError) || lifecycleError.Code != "HANDOFF_UNAVAILABLE" || len(lifecycleError.Problems) != 2 {
+		if !errors.As(err, &lifecycleError) || lifecycleError.Code != "HANDOFF_UNAVAILABLE" || len(lifecycleError.Problems) != 1 {
 			t.Fatalf("unsafe restart error = %#v", err)
 		}
 	}

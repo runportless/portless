@@ -27,6 +27,14 @@ type Inspection struct {
 	Problems        []string
 }
 
+// HandoffInspection is one completed live runtime-adoption safety audit.
+type HandoffInspection struct {
+	State              lifecycle.HandoffState
+	VerifiedAt         time.Time
+	Problems           []string
+	ActiveEnvironments []string
+}
+
 // ErrLegacyDaemon indicates that a daemon record predates authenticated
 // lifecycle identity metadata.
 var ErrLegacyDaemon = errors.New("daemon predates the authenticated lifecycle protocol")
@@ -106,7 +114,6 @@ func (m *Manager) checkDaemon(ctx context.Context) (identity.Record, error) {
 	// handoff safety are live properties, so diagnostics must use the freshly
 	// authenticated identity response rather than stale JSON on disk.
 	record.State = inspection.Identity.State
-	record.HandoffReady = inspection.Identity.HandoffReady
 	record.RecoveryProblems = append([]string(nil), inspection.Identity.RecoveryProblems...)
 	return record, nil
 }
@@ -118,10 +125,7 @@ func (m *Manager) fetchDaemonIdentity(ctx context.Context, port int, token strin
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/json")
-	// Identity includes a live handoff-safety check. Container ownership probes
-	// can require a few local engine round trips, so this timeout must cover more
-	// than a simple health endpoint while remaining tightly bounded.
-	client := m.hooks.HTTPClient(15 * time.Second)
+	client := m.hooks.HTTPClient(2 * time.Second)
 	response, err := client.Do(request)
 	if err != nil {
 		return lifecycle.Identity{}, fmt.Errorf("connect to recorded daemon identity endpoint: %w", err)
@@ -135,6 +139,45 @@ func (m *Manager) fetchDaemonIdentity(ctx context.Context, port int, token strin
 		return lifecycle.Identity{}, fmt.Errorf("decode recorded daemon identity: %w", err)
 	}
 	return identity, nil
+}
+
+func (m *Manager) verifyDaemonHandoff(ctx context.Context, inspection Inspection) (HandoffInspection, error) {
+	token, err := installation.ReadPrivateTextFile(inspection.Record.TokenPath)
+	if err != nil {
+		return HandoffInspection{}, fmt.Errorf("read CLI authentication token: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", inspection.Record.Port, lifecycle.HandoffPath), nil)
+	if err != nil {
+		return HandoffInspection{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/json")
+	response, err := m.hooks.HTTPClient(15 * time.Second).Do(request)
+	if err != nil {
+		return HandoffInspection{}, fmt.Errorf("verify daemon runtime handoff: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return HandoffInspection{}, fmt.Errorf("daemon handoff endpoint returned %s", response.Status)
+	}
+	var status lifecycle.HandoffStatus
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&status); err != nil {
+		return HandoffInspection{}, fmt.Errorf("decode daemon handoff status: %w", err)
+	}
+	if status.State != lifecycle.HandoffReady && status.State != lifecycle.HandoffBlocked {
+		return HandoffInspection{}, fmt.Errorf("daemon handoff endpoint returned invalid state %q", status.State)
+	}
+	if status.Problems == nil {
+		status.Problems = []string{}
+	}
+	if status.ActiveEnvironments == nil {
+		status.ActiveEnvironments = []string{}
+	}
+	return HandoffInspection{
+		State: status.State, VerifiedAt: status.VerifiedAt,
+		Problems:           append([]string(nil), status.Problems...),
+		ActiveEnvironments: append([]string(nil), status.ActiveEnvironments...),
+	}, nil
 }
 
 func incompatibleDaemonError(inspection Inspection) error {

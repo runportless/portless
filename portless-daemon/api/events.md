@@ -13,7 +13,7 @@ JSON domain payload:
 ```text
 id: 4813
 event: traffic.exchange
-data: {"project":"billing","environment":"local","sequence":307,"protocol":"http","source":"checkout","target":"orders","method":"GET","requestTarget":"/orders?limit=10","status":200,"durationMs":18}
+data: {"project":"billing","environment":"local","sequence":307,"protocol":"http","source":"checkout","target":"orders","background":false,"method":"GET","requestTarget":"/orders?limit=10","status":200,"durationMs":18}
 ```
 
 Current topics:
@@ -34,20 +34,28 @@ small `{name, deleted}` tombstone after deletion. Clients should reload the
 mock collection after receiving it because active profiles are recompiled and
 swapped atomically.
 
-`traffic.exchange` carries a completed HTTP or TCP summary. Request and response
-headers and bodies are omitted from this notification; clients load the full
-exchange on demand. `traffic.trace` carries an updated trace summary whenever a
-newly completed exchange changes that projection. Trace summaries identify the
-root `protocol`; a TCP-rooted summary is `provisional` while an active HTTP
-request can still absorb it during correlation. `traffic.cleared` reports the
-environment-local sequence through which live exchanges and derived traces
-were removed. Durable recordings remain available.
+`traffic.exchange` carries a completed HTTP request, decoded TCP operation, or
+opaque TCP session summary. HTTP headers and bodies and decoded TCP message
+fields/content are omitted from this notification; clients load the full
+exchange on demand. The TCP summary retains its declared application protocol,
+operation, inspection state, outcome, and message counts. `traffic.trace`
+carries an updated trace summary whenever a newly completed exchange changes
+that projection. Exchange summaries explicitly classify successful browser and
+connection housekeeping as `background`; the raw exchange remains available.
+Trace summaries identify the root `protocol`; a TCP-rooted
+summary is `provisional` while an active HTTP request can still absorb it during
+correlation. `traffic.cleared` reports the environment-local sequence through
+which live exchanges and derived traces were removed. Durable recordings remain
+available.
 
 `traffic.tcp.activity` is an ephemeral live signal for open TCP connections. It
 reports `open`, `data`, `heartbeat`, and `close` phases with the current active
-connection count and byte deltas. This lets topology animate long-lived
-Postgres and Redis connections before their completed exchange exists. It is
-not retained in traffic snapshots or recordings.
+connection count, byte deltas, and optional declared application protocol. This
+preserves live connection counts and byte activity without waiting for socket
+close. For declared application protocols, topology activity is driven by
+completed logical exchanges instead of socket heartbeats, so an idle pool does
+not appear to be application traffic. Undeclared TCP edges still use non-zero
+byte activity. The signal is not retained in traffic snapshots or recordings.
 
 After a daemon handoff, snapshot responses can temporarily report environment
 and service state as `recovering`. The replacement daemon does not emit a
@@ -74,9 +82,21 @@ DELETE /api/v1/environments/{projectName}/{environmentName}/traffic
 ```
 
 Exchange detail preserves the exact request target, repeated non-sensitive
-header values, and a bounded prefix of inspectable HTTP bodies. Known
-credential-bearing header values are replaced with `[REDACTED]` before
-retention. Bodies and other values can still contain local application data.
+header values, a bounded prefix of inspectable HTTP bodies, and bounded decoded
+messages for declared PostgreSQL, Redis/Valkey, MySQL, and NATS edges. Decoded
+TCP operations are completed at application-protocol boundaries rather than
+socket close, which keeps pooled connections useful in traces. Unknown,
+encrypted, unsupported, malformed, or capacity-limited traffic falls back to a
+session exchange with wire-byte totals and an inspection reason.
+Successful PostgreSQL driver/pool validation and session setup plus Redis
+handshake, client metadata, authentication, database selection, and validation
+commands are retained as background exchanges. Their standalone traces are
+excluded by default but available with `background=include`; failures and
+faulted operations remain foreground.
+
+Known credential-bearing HTTP headers and protocol-authentication fields are replaced
+with `[REDACTED]` before retention. Application payload values otherwise remain
+visible for local debugging.
 HTTP trace identifiers are normalized to lower-hex W3C widths after extraction
 from W3C/OpenTelemetry, B3 single or multi-header, or Datadog propagation.
 Exchange detail identifies whether that context was generated, recognized as a

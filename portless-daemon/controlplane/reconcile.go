@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/database"
@@ -161,6 +163,8 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	}
 	logsRoot := filepath.Join(s.dataDirectory, "environments", privateEnvironmentKey, "logs")
 
+	effectiveBindings := make([]model.ComponentBinding, 0, len(definition.Services))
+	bindingsByService := make(map[string]model.ComponentBinding, len(definition.Services))
 	for _, serviceDefinition := range definition.Services {
 		binding := bindingForEnvironment(environment, serviceDefinition.Name)
 		if binding.Provider == "" {
@@ -170,6 +174,44 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 				binding.Provider = model.ProviderLocal
 			}
 		}
+		effectiveBindings = append(effectiveBindings, binding)
+		bindingsByService[serviceDefinition.Name] = binding
+	}
+	order, err := executionOrder(definition, effectiveBindings)
+	if err != nil {
+		return err
+	}
+	// Recover remote and mock targets first, then local/container services in
+	// dependency-target-first order. A live process health check may require its
+	// saved dependency listener, so that listener is restored after its targets
+	// are adopted and immediately before the health probe.
+	orderedDefinitions := make([]model.ServiceDefinition, 0, len(definition.Services))
+	seen := make(map[string]struct{}, len(definition.Services))
+	for _, serviceDefinition := range definition.Services {
+		provider := bindingsByService[serviceDefinition.Name].Provider
+		if provider != model.ProviderRemote && provider != model.ProviderMock {
+			continue
+		}
+		orderedDefinitions = append(orderedDefinitions, serviceDefinition)
+		seen[serviceDefinition.Name] = struct{}{}
+	}
+	for _, serviceName := range order {
+		orderedService, exists := serviceDefinition(definition, serviceName)
+		if !exists {
+			continue
+		}
+		orderedDefinitions = append(orderedDefinitions, orderedService)
+		seen[serviceName] = struct{}{}
+	}
+	for _, serviceDefinition := range definition.Services {
+		if _, exists := seen[serviceDefinition.Name]; exists {
+			continue
+		}
+		orderedDefinitions = append(orderedDefinitions, serviceDefinition)
+	}
+
+	for _, serviceDefinition := range orderedDefinitions {
+		binding := bindingsByService[serviceDefinition.Name]
 		runtime, runtimeErr := s.database.ServiceRuntime(ctx, scope, serviceDefinition.Name)
 		if runtimeErr != nil {
 			return runtimeErr
@@ -185,7 +227,9 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		case model.ProviderContainer:
 			err = s.reconcileContainer(ctx, scope, environment, serviceDefinition, runtime, privateEnvironmentKey, logsRoot)
 		default:
-			err = s.reconcileProcess(ctx, scope, serviceDefinition, runtime)
+			err = s.reconcileProcess(ctx, scope, serviceDefinition, runtime, func() error {
+				return s.restoreDependencyProxiesForSource(ctx, scope, definition, serviceDefinition.Name, runtime.Generation)
+			})
 		}
 		if err != nil {
 			reason := "runtime could not be recovered: " + err.Error()
@@ -201,54 +245,13 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		return err
 	}
 	for _, connection := range current.Connections {
+		targetDefinition, _ := serviceDefinitionForEnvironment(current, connection.Target)
 		source := runtimeFor(current, connection.Source)
 		if source.Status != model.ServiceReady {
 			continue
 		}
-		if !s.proxy.HasTarget(scope, connection.Target) {
-			s.markConnectionRecoveryFailure(ctx, scope, connection, "target runtime is unavailable")
-			continue
-		}
-		persisted, persistedErr := s.database.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
-		if persistedErr != nil {
-			if errors.Is(persistedErr, database.ErrNotFound) {
-				s.markConnectionRecoveryFailure(ctx, scope, connection, "saved proxy port is missing")
-				continue
-			}
-			return persistedErr
-		}
-		if persisted.SourceGeneration != source.Generation {
-			s.markConnectionRecoveryFailure(ctx, scope, connection, "saved proxy generation does not match the running service")
-			continue
-		}
-		listenAddress := net.JoinHostPort(persisted.ListenIP, strconv.Itoa(persisted.ListenPort))
-		if persisted.ListenIP == "" {
-			listenAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(persisted.ListenPort))
-		}
-		if connection.Protocol != model.ProtocolHTTP && !s.privateTCPIngress {
-			allocation, allocationErr := s.database.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
-			if allocationErr != nil {
-				s.markConnectionRecoveryFailure(ctx, scope, connection, allocationErr.Error())
-				continue
-			}
-			if persisted.ListenIP != allocation.ListenIP || persisted.ListenPort != allocation.ListenPort || persisted.DNSName != allocation.DNSName {
-				s.markConnectionRecoveryFailure(ctx, scope, connection, "saved proxy endpoint does not match its stable allocation")
-				continue
-			}
-			listenAddress = allocation.Address()
-		}
-		_, edgeErr := s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, listenAddress)
-		if edgeErr != nil {
-			s.markConnectionRecoveryFailure(ctx, scope, connection, edgeErr.Error())
-			continue
-		}
-		now := time.Now().UTC()
-		persisted.OwnerInstanceID = s.daemonInstanceID
-		persisted.State = "ready"
-		persisted.Reason = ""
-		persisted.ObservedAt = &now
-		if err := s.database.SaveConnectionRuntime(ctx, scope, persisted); err != nil {
-			return err
+		if err := s.restoreDependencyProxy(ctx, scope, connection, targetDefinition, source.Generation); err != nil {
+			s.markConnectionRecoveryFailure(ctx, scope, connection, err.Error())
 		}
 	}
 	current, err = s.database.Environment(ctx, environment.Project, environment.Name)
@@ -272,6 +275,63 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 		_, _ = s.timeline(ctx, scope, "daemon", "environment.reconciled", scope, "warning", "Runtime recovery completed with unavailable services", map[string]any{"daemonInstance": s.daemonInstanceID})
 	}
 	return nil
+}
+
+func (s *Service) restoreDependencyProxiesForSource(ctx context.Context, scope string, definition model.ProjectModel, source string, generation int64) error {
+	for _, connection := range definition.Connections {
+		if connection.Source != source {
+			continue
+		}
+		targetDefinition, exists := serviceDefinition(definition, connection.Target)
+		if !exists {
+			return fmt.Errorf("dependency proxy %s:%s target is not defined", connection.Source, connection.Target)
+		}
+		if err := s.restoreDependencyProxy(ctx, scope, connection, targetDefinition, generation); err != nil {
+			return fmt.Errorf("dependency proxy %s:%s could not be recovered: %w", connection.Source, connection.Target, err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) restoreDependencyProxy(ctx context.Context, scope string, connection model.Connection, targetDefinition model.ServiceDefinition, sourceGeneration int64) error {
+	connection = s.connectionApplicationProtocol(connection, targetDefinition)
+	if !s.proxy.HasTarget(scope, connection.Target) {
+		return errors.New("target runtime is unavailable")
+	}
+	persisted, err := s.database.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
+	if err != nil {
+		if errors.Is(err, database.ErrNotFound) {
+			return errors.New("saved proxy port is missing")
+		}
+		return err
+	}
+	if persisted.SourceGeneration != sourceGeneration {
+		return errors.New("saved proxy generation does not match the running service")
+	}
+	listenAddress := net.JoinHostPort(persisted.ListenIP, strconv.Itoa(persisted.ListenPort))
+	if persisted.ListenIP == "" {
+		listenAddress = net.JoinHostPort("127.0.0.1", strconv.Itoa(persisted.ListenPort))
+	}
+	if connection.Protocol != model.ProtocolHTTP && !s.privateTCPIngress {
+		allocation, allocationErr := s.database.NetworkAllocation(ctx, scope, networking.AllocationConnection, connection.Source, connection.Target, connection.Protocol)
+		if allocationErr != nil {
+			return allocationErr
+		}
+		if persisted.ListenIP != allocation.ListenIP || persisted.ListenPort != allocation.ListenPort || persisted.DNSName != allocation.DNSName {
+			return errors.New("saved proxy endpoint does not match its stable allocation")
+		}
+		listenAddress = allocation.Address()
+	}
+	if _, err := s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, listenAddress); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	persisted.Protocol = connection.Protocol
+	persisted.OwnerInstanceID = s.daemonInstanceID
+	persisted.State = "ready"
+	persisted.Reason = ""
+	persisted.ObservedAt = &now
+	return s.database.SaveConnectionRuntime(ctx, scope, persisted)
 }
 
 func (s *Service) acquireRecoveredSourceLeases(scope string, environment model.Environment) error {
@@ -304,7 +364,7 @@ func (s *Service) acquireRecoveredSourceLeases(scope string, environment model.E
 	return nil
 }
 
-func (s *Service) reconcileProcess(ctx context.Context, scope string, definition model.ServiceDefinition, runtime database.ServiceRuntimeRecord) error {
+func (s *Service) reconcileProcess(ctx context.Context, scope string, definition model.ServiceDefinition, runtime database.ServiceRuntimeRecord, prepareDependencies func() error) error {
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	expected := persistedProcessRun(scope, runtime)
@@ -336,16 +396,25 @@ func (s *Service) reconcileProcess(ctx context.Context, scope string, definition
 		}
 		return errors.New("persisted process state cannot be verified")
 	}
+	if prepareDependencies != nil {
+		if err := prepareDependencies(); err != nil {
+			return err
+		}
+	}
 	result, err := s.processes.Attach(probeCtx, scope, definition.Name, runtime.Generation, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
+	cancel()
 	if err != nil {
 		return err
 	}
-	if err := health.Wait(probeCtx, result.Port, definition.Health); err != nil {
+	if err := health.Wait(ctx, result.Port, definition.Health); err != nil {
 		return err
 	}
 	debugger := cloneDebugger(result.Debugger)
 	if debugger != nil {
-		if err := debuglaunch.Wait(probeCtx, *debugger); err != nil {
+		debugCtx, cancelDebug := context.WithTimeout(ctx, 5*time.Second)
+		err := debuglaunch.Wait(debugCtx, *debugger)
+		cancelDebug()
+		if err != nil {
 			return err
 		}
 		debugger.State = "listening"
@@ -514,11 +583,13 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 		return false, []string{err.Error()}
 	}
 	var reasons []string
+	var serviceChecks []func() []string
 	for _, environment := range environments {
 		if environment.Status == model.EnvironmentStopped {
 			continue
 		}
 		scope := model.EnvironmentSelector(environment.Project, environment.Name)
+		privateKey, privateKeyErr := s.database.PrivateEnvironmentKeyForSelector(ctx, scope)
 		for _, service := range environment.Services {
 			if service.Status == model.ServiceStopped || service.Status == model.ServicePlanned {
 				continue
@@ -536,56 +607,10 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 					binding.Provider = model.ProviderLocal
 				}
 			}
-			switch binding.Provider {
-			case model.ProviderLocal:
-				if runtime.SupervisorSocket == "" || runtime.PrivateRunKey == "" {
-					reasons = append(reasons, scope+"/"+service.Name+": no recoverable supervisor")
-					continue
-				}
-				probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-				status, probeErr := supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
-				if service.Status == model.ServiceExited || service.Status == model.ServiceFailed {
-					status, probeErr = supervisor.StatusFor(probeCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
-					if probeErr == nil && !supervisorTerminalState(status.State) {
-						probeErr = fmt.Errorf("supervisor state is %s, expected a terminal state", status.State)
-					}
-				}
-				cancel()
-				if probeErr != nil || status.Scope != scope || status.Service != service.Name || status.Generation != runtime.Generation {
-					detail := "supervisor is unavailable"
-					if probeErr != nil {
-						detail = probeErr.Error()
-					} else if status.Scope != scope || status.Service != service.Name || status.Generation != runtime.Generation {
-						detail = "supervisor identity does not match persisted service run"
-					}
-					reasons = append(reasons, scope+"/"+service.Name+": "+detail)
-				}
-				if probeErr == nil && (status.LaunchMode != runtime.LaunchMode || !debuggersEqual(status.Debugger, runtime.Debugger)) {
-					reasons = append(reasons, scope+"/"+service.Name+": supervisor launch mode does not match persisted service run")
-				}
-			case model.ProviderContainer:
-				if runtime.ContainerName == "" {
-					reasons = append(reasons, scope+"/"+service.Name+": container ownership is missing")
-					break
-				}
-				privateKey, keyErr := s.database.PrivateEnvironmentKeyForSelector(ctx, scope)
-				if keyErr != nil {
-					reasons = append(reasons, scope+"/"+service.Name+": "+keyErr.Error())
-					break
-				}
-				probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-				verifyErr := s.containers.Verify(probeCtx, privateKey, service.ServiceDefinition, runtime.Generation, runtime.ContainerName)
-				cancel()
-				if verifyErr != nil {
-					reasons = append(reasons, scope+"/"+service.Name+": "+verifyErr.Error())
-				}
-			}
-			if runtime.OwnerInstanceID != s.daemonInstanceID {
-				reasons = append(reasons, scope+"/"+service.Name+": runtime is not claimed by the current daemon")
-			}
-			if service.Status == model.ServiceReady && !s.proxy.HasTarget(scope, service.Name) {
-				reasons = append(reasons, scope+"/"+service.Name+": ingress target is not installed in the current daemon")
-			}
+			service := service
+			serviceChecks = append(serviceChecks, func() []string {
+				return s.handoffServiceProblems(ctx, scope, privateKey, privateKeyErr, service, binding, runtime)
+			})
 		}
 		for _, connection := range environment.Connections {
 			source := runtimeFor(environment, connection.Source)
@@ -618,7 +643,93 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 			}
 		}
 	}
-	return len(reasons) == 0, uniqueStrings(reasons)
+	for _, result := range runBoundedHandoffChecks(serviceChecks, 4) {
+		reasons = append(reasons, result...)
+	}
+	reasons = uniqueStrings(reasons)
+	sort.Strings(reasons)
+	return len(reasons) == 0, reasons
+}
+
+func (s *Service) handoffServiceProblems(ctx context.Context, scope, privateKey string, privateKeyErr error, service model.Service, binding model.ComponentBinding, runtime database.ServiceRuntimeRecord) []string {
+	var reasons []string
+	prefix := scope + "/" + service.Name + ": "
+	switch binding.Provider {
+	case model.ProviderLocal:
+		if runtime.SupervisorSocket == "" || runtime.PrivateRunKey == "" {
+			reasons = append(reasons, prefix+"no recoverable supervisor")
+			break
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		status, probeErr := supervisor.LiveStatus(probeCtx, runtime.SupervisorSocket, runtime.PrivateRunKey)
+		if service.Status == model.ServiceExited || service.Status == model.ServiceFailed {
+			status, probeErr = supervisor.StatusFor(probeCtx, runtime.SupervisorSocket, runtime.SupervisorState, runtime.PrivateRunKey)
+			if probeErr == nil && !supervisorTerminalState(status.State) {
+				probeErr = fmt.Errorf("supervisor state is %s, expected a terminal state", status.State)
+			}
+		}
+		cancel()
+		if probeErr != nil || status.Scope != scope || status.Service != service.Name || status.Generation != runtime.Generation {
+			detail := "supervisor is unavailable"
+			if probeErr != nil {
+				detail = probeErr.Error()
+			} else {
+				detail = "supervisor identity does not match persisted service run"
+			}
+			reasons = append(reasons, prefix+detail)
+		}
+		if probeErr == nil && (status.LaunchMode != runtime.LaunchMode || !debuggersEqual(status.Debugger, runtime.Debugger)) {
+			reasons = append(reasons, prefix+"supervisor launch mode does not match persisted service run")
+		}
+	case model.ProviderContainer:
+		switch {
+		case runtime.ContainerName == "":
+			reasons = append(reasons, prefix+"container ownership is missing")
+		case privateKeyErr != nil:
+			reasons = append(reasons, prefix+privateKeyErr.Error())
+		default:
+			probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			verifyErr := s.containers.Verify(probeCtx, privateKey, service.ServiceDefinition, runtime.Generation, runtime.ContainerName)
+			cancel()
+			if verifyErr != nil {
+				reasons = append(reasons, prefix+verifyErr.Error())
+			}
+		}
+	}
+	if runtime.OwnerInstanceID != s.daemonInstanceID {
+		reasons = append(reasons, prefix+"runtime is not claimed by the current daemon")
+	}
+	if service.Status == model.ServiceReady && !s.proxy.HasTarget(scope, service.Name) {
+		reasons = append(reasons, prefix+"ingress target is not installed in the current daemon")
+	}
+	return reasons
+}
+
+func runBoundedHandoffChecks(checks []func() []string, limit int) [][]string {
+	results := make([][]string, len(checks))
+	if len(checks) == 0 {
+		return results
+	}
+	if limit < 1 || limit > len(checks) {
+		limit = len(checks)
+	}
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	workers.Add(limit)
+	for range limit {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results[index] = checks[index]()
+			}
+		}()
+	}
+	for index := range checks {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	return results
 }
 
 func connectionRuntimeAddress(runtime database.ConnectionRuntime) string {

@@ -1,9 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficExchange } from '../types'
+import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficActivity, TrafficExchange } from '../types'
 import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, overviewServiceEndpoint, providerBindingMatches, providerDisplayName, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, mergeTopologySignal, overviewServiceEndpoint, providerBindingMatches, providerDisplayName, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
 
 const service = (name: string): Service => ({ name } as Service)
 
@@ -325,6 +325,53 @@ describe('environment topology', () => {
     expect(metric?.samples).toHaveLength(1)
     expect(topologyEdgeTone(metric, false, now)).toBe('slow')
     expect(topologyEdgeTone(metric, true, now)).toBe('fault')
+  })
+
+  it('ignores background operations and protocol heartbeats while retaining real TCP activity', () => {
+    const now = Date.parse('2026-08-25T12:00:30Z')
+    const heartbeat = {
+      project: 'store', environment: 'local', protocol: 'tcp', applicationProtocol: 'redis',
+      source: 'orders', target: 'redis', observedAt: new Date(now).toISOString(),
+      phase: 'heartbeat', activeConnections: 2,
+    } as TrafficActivity
+    const heartbeatMetrics = mergeTopologySignal(new Map(), heartbeat, now)
+    const heartbeatMetric = heartbeatMetrics.get(topologyEdgeKey('orders', 'redis'))
+    expect(heartbeatMetric?.activeConnections).toBe(2)
+    expect(heartbeatMetric?.bytes).toBe(0)
+    expect(topologyEdgeTone(heartbeatMetric, false, now)).toBe('idle')
+    expect(topologyParticleMotion(heartbeatMetric, now).count).toBe(0)
+
+    const housekeeping = {
+      project: 'store', environment: 'local', sequence: 1, protocol: 'tcp', background: true,
+      source: 'orders', target: 'redis', startedAt: new Date(now-2).toISOString(), completedAt: new Date(now-1).toISOString(),
+      durationMs: 1, requestBytes: 20, responseBytes: 10,
+      tcp: { kind: 'operation', applicationProtocol: 'redis', operation: 'PING', inspection: 'decoded', outcome: 'success' },
+    } as TrafficExchange
+    expect(mergeTopologySignal(heartbeatMetrics, housekeeping, now)).toBe(heartbeatMetrics)
+    expect(summarizeTopologyTraffic([housekeeping], now).size).toBe(0)
+
+    const applicationOperation = {
+      ...housekeeping, sequence: 2, background: false,
+      tcp: { ...housekeeping.tcp!, operation: 'GET' },
+    } as TrafficExchange
+    const activeMetrics = mergeTopologySignal(heartbeatMetrics, applicationOperation, now)
+    const activeMetric = activeMetrics.get(topologyEdgeKey('orders', 'redis'))
+    expect(activeMetric?.bytes).toBe(30)
+    expect(topologyEdgeTone(activeMetric, false, now)).toBe('active')
+    expect(topologyParticleMotion(activeMetric, now).count).toBe(1)
+  })
+
+  it('uses byte activity for undeclared TCP without letting zero-byte heartbeats animate it', () => {
+    const now = Date.parse('2026-08-25T12:00:30Z')
+    const activity = (phase: TrafficActivity['phase'], requestBytes: number) => ({
+      project: 'store', environment: 'local', protocol: 'tcp', source: 'worker', target: 'queue',
+      observedAt: new Date(now).toISOString(), phase, activeConnections: 1, requestBytes,
+    }) as TrafficActivity
+
+    const idle = mergeTopologySignal(new Map(), activity('heartbeat', 0), now)
+    expect(topologyEdgeTone(idle.get(topologyEdgeKey('worker', 'queue')), false, now)).toBe('idle')
+    const active = mergeTopologySignal(idle, activity('data', 12), now)
+    expect(topologyEdgeTone(active.get(topologyEdgeKey('worker', 'queue')), false, now)).toBe('active')
   })
 
   it('paces particles according to request rate', () => {

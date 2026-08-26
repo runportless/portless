@@ -27,11 +27,11 @@ type exportOptions struct {
 }
 
 type recordingOptions struct {
-	edge          string
-	duration      time.Duration
-	maxEvents     int64
-	captureBodies bool
-	maxBodyBytes  int64
+	edge            string
+	duration        time.Duration
+	maxEvents       int64
+	capturePayloads bool
+	maxPayloadBytes int64
 }
 
 type faultOptions struct {

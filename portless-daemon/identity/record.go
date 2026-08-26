@@ -22,7 +22,6 @@ type Record struct {
 	InstanceID       string    `json:"instanceId,omitempty"`
 	BuildID          string    `json:"buildId,omitempty"`
 	State            string    `json:"state,omitempty"`
-	HandoffReady     bool      `json:"handoffReady,omitempty"`
 	RecoveryProblems []string  `json:"recoveryProblems,omitempty"`
 	TokenPath        string    `json:"tokenPath"`
 	StartedAt        time.Time `json:"startedAt"`

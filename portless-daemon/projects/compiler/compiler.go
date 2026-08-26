@@ -374,15 +374,62 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 	return result
 }
 
-// RefreshDiscoveredTopology rebuilds a logical project's connections from its
-// current source snapshots. Connections are discovery-owned in this release;
-// provider bindings are the environment-owned configuration that is preserved.
-func RefreshDiscoveredTopology(project model.ProjectModel, currentSources []model.SourceBinding) model.ProjectModel {
-	currentConnections, currentReferences := sourceTopology(project.Services, currentSources)
+// RefreshDiscoveredTopology rebuilds a logical project's managed resources and
+// connections from current source snapshots while preserving process provider
+// choices. New resources receive container bindings and retired resource
+// bindings are removed.
+func RefreshDiscoveredTopology(project model.ProjectModel, currentSources []model.SourceBinding, currentBindings []model.ComponentBinding) (model.ProjectModel, []model.ComponentBinding, error) {
 	result := project
+	result.Services = nil
+	services := make(map[string]model.ServiceDefinition, len(project.Services))
+	for _, service := range project.Services {
+		if service.Kind == model.ServiceResource {
+			continue
+		}
+		result.Services = append(result.Services, service)
+		services[strings.ToLower(service.Name)] = service
+	}
+	for _, source := range currentSources {
+		for _, service := range source.Definition.Services {
+			if service.Kind != model.ServiceResource {
+				continue
+			}
+			key := strings.ToLower(service.Name)
+			if previous, exists := services[key]; exists {
+				if sameResourceService(service, previous) {
+					continue
+				}
+				return model.ProjectModel{}, nil, fmt.Errorf("discovered resource %s conflicts with an existing project service", service.Name)
+			}
+			logical := service
+			logical.WorkingDirectory = ""
+			logical.ServiceDirectory = ""
+			result.Services = append(result.Services, logical)
+			services[key] = logical
+		}
+	}
+	sort.Slice(result.Services, func(i, j int) bool { return result.Services[i].Name < result.Services[j].Name })
+	currentConnections, currentReferences := sourceTopology(result.Services, currentSources)
 	result.Connections = currentConnections
-	result.References = uniqueConnectionReferences(unresolvedReferences(project.Services, currentReferences))
-	return result
+	result.References = uniqueConnectionReferences(unresolvedReferences(result.Services, currentReferences))
+
+	bindingsByService := make(map[string]model.ComponentBinding, len(currentBindings))
+	for _, binding := range currentBindings {
+		bindingsByService[strings.ToLower(binding.Service)] = binding
+	}
+	bindings := make([]model.ComponentBinding, 0, len(result.Services))
+	for _, service := range result.Services {
+		binding, exists := bindingsByService[strings.ToLower(service.Name)]
+		if exists {
+			bindings = append(bindings, binding)
+			continue
+		}
+		if service.Kind == model.ServiceResource {
+			bindings = append(bindings, model.ComponentBinding{Service: service.Name, Provider: model.ProviderContainer})
+		}
+	}
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].Service < bindings[j].Service })
+	return result, bindings, nil
 }
 
 func sourceTopology(services []model.ServiceDefinition, sources []model.SourceBinding) ([]model.Connection, []model.ConnectionReference) {

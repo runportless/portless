@@ -16,15 +16,17 @@ independent Git repositories:
 | `operations` | FastAPI and Fastify | `api`, `notifier` | Delivery persistence, orchestration, and the NATS-backed event feed. |
 | `maps` | Go | `routing`, `geocoder` | Deterministic route estimates and location lookup. |
 
-Portless also discovers `mysql` and `nats` as managed resources. The resulting
-directed topology is:
+Portless discovers the API's generic `mysql` host as the consumer-scoped
+`api-mysql` resource. API and notifier deliberately use the same specific
+`dispatch-nats` hostname, so discovery gives them one shared broker. The
+resulting directed topology is:
 
 ```text
 external -> console -> api -> geocoder
                     |     -> routing -> geocoder
-                    |     -> mysql
-                    |     -> nats
-                    -> notifier -> nats
+                    |     -> api-mysql
+                    |     -> dispatch-nats
+                    -> notifier -> dispatch-nats
 ```
 
 This exercises three languages, several framework detectors, multiple services
@@ -120,12 +122,20 @@ portless --env dispatch/local traffic traces --service console
 portless --env dispatch/local traffic list --edge console:api
 portless --env dispatch/local traffic list --edge api:routing
 portless --env dispatch/local traffic list --edge routing:geocoder
+portless --env dispatch/local traffic list --edge api:api-mysql
+portless --env dispatch/local traffic list --edge api:dispatch-nats
+portless --env dispatch/local traffic list --edge notifier:dispatch-nats
 portless --env dispatch/local connection show routing:geocoder
 ```
 
 `api:geocoder` and `routing:geocoder` remain distinct even though both target
 the same service. That distinction is what keeps traffic, recordings, and
 faults scoped to the actual caller.
+
+MySQL statements are emitted as logical operations as soon as their result
+sets finish, even though the FastAPI connection pool remains open. NATS
+publishes and deliveries show subjects, headers, and bounded payloads. Open
+either exchange to use the same Request and Response tabs as HTTP traffic.
 
 ## Record one dependency
 
@@ -134,7 +144,7 @@ Start a bounded recording, estimate a route in the dashboard, and stop it:
 ```bash
 portless --env dispatch/local record start route-estimate \
   --edge api:routing \
-  --capture-bodies \
+  --capture-payloads \
   --duration 5m
 
 portless --env dispatch/local record stop route-estimate
@@ -142,8 +152,9 @@ portless --env dispatch/local record show route-estimate
 portless --env dispatch/local record export route-estimate
 ```
 
-Body capture is intentionally explicit because retained application traffic
-can contain sensitive data.
+Payload persistence is intentionally explicit because recordings keep HTTP
+bodies and decoded TCP application content after the live traffic window has
+moved on.
 
 ## Inject an edge-specific fault
 

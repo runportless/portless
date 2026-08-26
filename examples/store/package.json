@@ -1,5 +1,9 @@
 {
   "name": "portless-store",
   "private": true,
-  "workspaces": ["apps/*"]
+  "engines": { "node": ">=22.12" },
+  "workspaces": ["apps/checkout", "apps/orders"],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present"
+  }
 }

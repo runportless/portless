@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/runportless/portless/portless-daemon/model"
 	resourcebuiltin "github.com/runportless/portless/portless-daemon/providers/builtin"
@@ -129,6 +130,19 @@ func TestApplicationProcessHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if environmentName := os.Getenv("PORTLESS_APPLICATION_HEALTH_DEPENDENCY"); environmentName != "" {
+			dependency := strings.TrimRight(os.Getenv(environmentName), "/") + "/health"
+			client := &http.Client{Timeout: time.Second}
+			response, dependencyErr := client.Get(dependency)
+			if dependencyErr != nil || response.StatusCode < 200 || response.StatusCode >= 400 {
+				if response != nil {
+					response.Body.Close()
+				}
+				http.Error(writer, "dependency unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			response.Body.Close()
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"service":"checkout"}`))
 	})}

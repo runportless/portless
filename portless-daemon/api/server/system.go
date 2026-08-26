@@ -51,6 +51,34 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 		writeJSON(writer, http.StatusOK, identity)
 		return
 	}
+	if len(segments) == 2 && segments[1] == "logs" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
+			return
+		}
+		snapshot, err := s.daemonControl.Logs(request.Context())
+		if err != nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, contract.APIError{Code: "DAEMON_LOG_UNAVAILABLE", Message: err.Error(), Remediation: []contract.Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+			return
+		}
+		writeJSON(writer, http.StatusOK, snapshot)
+		return
+	}
+	if len(segments) == 2 && segments[1] == "handoff" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer, http.MethodGet)
+			return
+		}
+		status, err := s.daemonControl.HandoffStatus(request.Context())
+		if err != nil {
+			writeAPIError(writer, http.StatusServiceUnavailable, contract.APIError{Code: "DAEMON_HANDOFF_STATE_UNAVAILABLE", Message: err.Error(), Remediation: []contract.Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+			return
+		}
+		status.Problems = nonNil(append([]string(nil), status.Problems...))
+		status.ActiveEnvironments = nonNil(append([]string(nil), status.ActiveEnvironments...))
+		writeJSON(writer, http.StatusOK, status)
+		return
+	}
 	if len(segments) != 2 || segments[1] != "restart" {
 		writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "daemon route not found"})
 		return

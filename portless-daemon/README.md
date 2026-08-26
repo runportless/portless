@@ -45,6 +45,7 @@ Adjacent products keep separate responsibilities:
 | `api/server` | HTTP routing and adapters from the wire contract to injected daemon capabilities. |
 | `control` | Out-of-process inspection, serialized startup, replacement, shutdown, reset, and uninstall coordination. |
 | `controlplane` | Application behavior for projects, environments, lifecycle operations, provider changes, observability, and reconciliation. |
+| `daemonlog` | Bounded, fixed-path inspection and known-secret redaction for the private daemon log. |
 | `database` | SQLite persistence for topology, operations, ownership, runtime state, traffic artifacts, mocks, and faults. |
 | `projects` | Project compilation and bounded, root-confined static discovery. |
 | `providers` | Managed-resource plugin contracts, bounded discovery, declarative container plans, and safe bindings. |

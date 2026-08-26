@@ -78,7 +78,7 @@ func (r *runtime) startRecording(ctx context.Context, _ *mcp.CallToolRequest, in
 	expires := time.Now().UTC().Add(time.Duration(input.DurationSeconds) * time.Second)
 	requested := contract.Recording{
 		Name: input.Recording, Source: input.Source, Target: input.Target,
-		CaptureBodies: false, MaxEvents: input.MaxEvents, ExpiresAt: &expires,
+		CapturePayloads: false, MaxEvents: input.MaxEvents, ExpiresAt: &expires,
 	}
 	recording, err := selected.client.StartRecording(ctx, selected.project, selected.environment, requested)
 	if err != nil {

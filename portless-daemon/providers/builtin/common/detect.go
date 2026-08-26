@@ -5,6 +5,8 @@ package common
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -16,18 +18,27 @@ import (
 // Detection configures shared marker-based resource discovery.
 type Detection struct {
 	Name                string
+	GenericNames        []string
 	Explanation         string
 	Markers             []string
 	DefaultEnvironment  func(providers.Consumer) string
 	ExplicitEnvironment func(string, providers.Consumer) string
+	ResourceName        func(string) string
 }
 
 // Detect scans topology files for resource markers and assigns consumer binding claims.
 func Detect(ctx context.Context, workspace providers.Workspace, consumers []providers.Consumer, config Detection) (providers.Findings, error) {
-	var evidence []model.Evidence
+	var unownedEvidence []model.Evidence
+	evidenceByConsumer := make(map[string][]model.Evidence)
+	consumerByKey := make(map[string]providers.Consumer, len(consumers))
+	for _, consumer := range consumers {
+		consumerByKey[consumer.Key] = consumer
+	}
 	type detectedBinding struct {
-		claim    providers.BindingClaim
-		explicit bool
+		claim               providers.BindingClaim
+		environmentExplicit bool
+		resourceName        string
+		resourceExplicit    bool
 	}
 	bindings := make(map[string]detectedBinding)
 	for _, file := range workspace.Files() {
@@ -46,16 +57,18 @@ func Detect(ctx context.Context, workspace providers.Workspace, consumers []prov
 		if !ContainsMarker(lower, config.Markers) {
 			continue
 		}
-		evidence = append(evidence, model.Evidence{File: file, Explanation: config.Explanation, Confidence: "high"})
+		evidence := model.Evidence{File: file, Explanation: config.Explanation, Confidence: "high"}
 		consumer := OwningConsumer(file, consumers)
 		if consumer == nil {
+			unownedEvidence = append(unownedEvidence, evidence)
 			continue
 		}
+		evidenceByConsumer[consumer.Key] = append(evidenceByConsumer[consumer.Key], evidence)
 		environment := ""
-		explicit := false
+		environmentExplicit := false
 		if config.ExplicitEnvironment != nil {
 			environment = config.ExplicitEnvironment(content, *consumer)
-			explicit = environment != ""
+			environmentExplicit = environment != ""
 		}
 		if environment == "" && config.DefaultEnvironment != nil {
 			environment = config.DefaultEnvironment(*consumer)
@@ -63,30 +76,170 @@ func Detect(ctx context.Context, workspace providers.Workspace, consumers []prov
 		if environment == "" {
 			continue
 		}
+		resourceName := config.Name
+		resourceExplicit := false
+		if config.ResourceName != nil {
+			if configured := config.ResourceName(content); configured != "" {
+				resourceName = configured
+				resourceExplicit = true
+			}
+		}
+		if genericResourceName(resourceName, config) {
+			resourceName = consumerResourceName(consumer.Name, config.Name)
+		}
 		claim := providers.BindingClaim{ConsumerKey: consumer.Key, Environment: environment, Required: true}
+		detected := detectedBinding{
+			claim: claim, environmentExplicit: environmentExplicit,
+			resourceName: resourceName, resourceExplicit: resourceExplicit,
+		}
 		if existing, exists := bindings[consumer.Key]; exists {
-			if existing.claim.Environment == environment {
+			if existing.claim.Environment == environment && existing.resourceName == resourceName {
+				if bindingPriority(detected) > bindingPriority(existing) {
+					bindings[consumer.Key] = detected
+				}
 				continue
 			}
-			if existing.explicit && explicit || !existing.explicit && !explicit {
-				return providers.Findings{}, fmt.Errorf("resource configuration for %s uses conflicting environment variables %s and %s", consumer.Name, existing.claim.Environment, environment)
+			if bindingPriority(detected) == bindingPriority(existing) {
+				return providers.Findings{}, fmt.Errorf(
+					"resource configuration for %s conflicts between %s on %s and %s on %s",
+					consumer.Name, existing.resourceName, existing.claim.Environment, resourceName, environment,
+				)
 			}
-			if existing.explicit {
+			if bindingPriority(detected) < bindingPriority(existing) {
 				continue
 			}
 		}
-		bindings[consumer.Key] = detectedBinding{claim: claim, explicit: explicit}
+		bindings[consumer.Key] = detected
 	}
-	if len(evidence) == 0 {
+	if len(unownedEvidence) == 0 && len(evidenceByConsumer) == 0 {
 		return providers.Findings{}, nil
 	}
-	sort.Slice(evidence, func(i, j int) bool { return evidence[i].File < evidence[j].File })
-	claims := make([]providers.BindingClaim, 0, len(bindings))
-	for _, binding := range bindings {
-		claims = append(claims, binding.claim)
+	if len(bindings) == 0 {
+		evidence := append([]model.Evidence(nil), unownedEvidence...)
+		for _, owned := range evidenceByConsumer {
+			evidence = append(evidence, owned...)
+		}
+		sortEvidence(evidence)
+		return providers.Findings{Candidates: []providers.Candidate{{Key: ".", Name: config.Name, Evidence: evidence}}}, nil
 	}
-	sort.Slice(claims, func(i, j int) bool { return claims[i].ConsumerKey < claims[j].ConsumerKey })
-	return providers.Findings{Candidates: []providers.Candidate{{Key: ".", Name: config.Name, Evidence: evidence, Bindings: claims}}}, nil
+	type candidateGroup struct {
+		name        string
+		evidence    []model.Evidence
+		bindings    []providers.BindingClaim
+		directories []string
+	}
+	groups := make(map[string]*candidateGroup)
+	consumerKeys := make([]string, 0, len(bindings))
+	for consumerKey := range bindings {
+		consumerKeys = append(consumerKeys, consumerKey)
+	}
+	sort.Strings(consumerKeys)
+	for _, consumerKey := range consumerKeys {
+		binding := bindings[consumerKey]
+		group := groups[binding.resourceName]
+		if group == nil {
+			group = &candidateGroup{name: binding.resourceName}
+			groups[binding.resourceName] = group
+		}
+		group.evidence = append(group.evidence, evidenceByConsumer[consumerKey]...)
+		group.bindings = append(group.bindings, binding.claim)
+		group.directories = append(group.directories, consumerByKey[consumerKey].Directory)
+	}
+	groupNames := make([]string, 0, len(groups))
+	for name := range groups {
+		groupNames = append(groupNames, name)
+	}
+	sort.Strings(groupNames)
+	groups[groupNames[0]].evidence = append(groups[groupNames[0]].evidence, unownedEvidence...)
+	candidates := make([]providers.Candidate, 0, len(groups))
+	for _, name := range groupNames {
+		group := groups[name]
+		sortEvidence(group.evidence)
+		sort.Slice(group.bindings, func(i, j int) bool { return group.bindings[i].ConsumerKey < group.bindings[j].ConsumerKey })
+		sort.Strings(group.directories)
+		key := "."
+		if len(groups) > 1 {
+			key = group.directories[0]
+		}
+		candidates = append(candidates, providers.Candidate{
+			Key: key, Name: group.name, Evidence: group.evidence, Bindings: group.bindings,
+		})
+	}
+	return providers.Findings{Candidates: candidates}, nil
+}
+
+func bindingPriority(binding struct {
+	claim               providers.BindingClaim
+	environmentExplicit bool
+	resourceName        string
+	resourceExplicit    bool
+}) int {
+	priority := 0
+	if binding.environmentExplicit {
+		priority++
+	}
+	if binding.resourceExplicit {
+		priority += 2
+	}
+	return priority
+}
+
+func sortEvidence(evidence []model.Evidence) {
+	sort.Slice(evidence, func(i, j int) bool { return evidence[i].File < evidence[j].File })
+}
+
+func genericResourceName(name string, config Detection) bool {
+	if strings.EqualFold(name, config.Name) {
+		return true
+	}
+	for _, generic := range config.GenericNames {
+		if strings.EqualFold(name, generic) {
+			return true
+		}
+	}
+	return false
+}
+
+func consumerResourceName(consumer, resource string) string {
+	const maxServiceNameLength = 63
+	available := maxServiceNameLength - len(resource) - 1
+	if available < 1 {
+		return model.NormalizeDNSName(consumer + "-" + resource)
+	}
+	if len(consumer) > available {
+		consumer = strings.TrimRight(consumer[:available], "-")
+	}
+	return consumer + "-" + resource
+}
+
+// LogicalServiceHost returns the first static single-label service hostname
+// used with one of schemes in content. Localhost, IP addresses, and external
+// DNS names do not declare a Portless resource identity.
+func LogicalServiceHost(content string, schemes ...string) string {
+	lower := strings.ToLower(content)
+	for _, scheme := range schemes {
+		prefix := strings.ToLower(scheme) + "://"
+		for offset := 0; offset < len(lower); {
+			index := strings.Index(lower[offset:], prefix)
+			if index < 0 {
+				break
+			}
+			index += offset
+			value := content[index:]
+			if end := strings.IndexAny(value, " \t\r\n\"'`})]"); end >= 0 {
+				value = value[:end]
+			}
+			parsed, err := url.Parse(value)
+			if err == nil {
+				host := strings.ToLower(parsed.Hostname())
+				if host != "localhost" && !strings.Contains(host, ".") && net.ParseIP(host) == nil && model.ValidateServiceName(host) == nil {
+					return host
+				}
+			}
+			offset = index + len(prefix)
+		}
+	}
+	return ""
 }
 
 // TopologyFile reports whether a source file is safe and useful for dependency discovery.

@@ -42,19 +42,19 @@ func TestDispatchExampleCompilesThreeCheckoutsIntoOneProject(t *testing.T) {
 	if project.PrimaryService != "console" {
 		t.Fatalf("primary service = %q", project.PrimaryService)
 	}
-	if got := serviceNames(project.Services); strings.Join(got, ",") != "api,console,geocoder,mysql,nats,notifier,routing" {
+	if got := serviceNames(project.Services); strings.Join(got, ",") != "api,api-mysql,console,dispatch-nats,geocoder,notifier,routing" {
 		t.Fatalf("services = %v", got)
 	}
 	if got := sourceServices(sources); strings.Join(got, ",") != "console=console,maps=geocoder+routing,operations=api+notifier" {
 		t.Fatalf("source services = %v", got)
 	}
-	if got := connectionKeys(project.Connections); strings.Join(got, ",") != "api:geocoder:http,api:mysql:tcp,api:nats:tcp,api:routing:http,console:api:http,console:notifier:http,notifier:nats:tcp,routing:geocoder:http" {
+	if got := connectionKeys(project.Connections); strings.Join(got, ",") != "api:api-mysql:tcp,api:dispatch-nats:tcp,api:geocoder:http,api:routing:http,console:api:http,console:notifier:http,notifier:dispatch-nats:tcp,routing:geocoder:http" {
 		t.Fatalf("connections = %v", got)
 	}
 	if len(project.References) != 0 {
 		t.Fatalf("unresolved references = %#v", project.References)
 	}
-	if got := providerDefaults(defaults); strings.Join(got, ",") != "api=local:operations,console=local:console,geocoder=local:maps,mysql=container,nats=container,notifier=local:operations,routing=local:maps" {
+	if got := providerDefaults(defaults); strings.Join(got, ",") != "api-mysql=container,api=local:operations,console=local:console,dispatch-nats=container,geocoder=local:maps,notifier=local:operations,routing=local:maps" {
 		t.Fatalf("provider defaults = %v", got)
 	}
 }

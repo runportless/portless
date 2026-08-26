@@ -72,13 +72,16 @@ func TestCLIHumanAndJSONOutputContracts(t *testing.T) {
 	}
 	var status struct {
 		State              string   `json:"state"`
+		HandoffState       string   `json:"handoffState"`
+		HandoffProblems    []string `json:"handoffProblems"`
+		RecoveryProblems   []string `json:"recoveryProblems"`
 		ActiveEnvironments []string `json:"activeEnvironments"`
 		Problems           []string `json:"problems"`
 	}
 	if err := json.Unmarshal([]byte(encoded), &status); err != nil {
 		t.Fatalf("--json output is not valid JSON: %v\n%s", err, encoded)
 	}
-	if status.State != "stopped" || status.ActiveEnvironments == nil || status.Problems == nil {
+	if status.State != "stopped" || status.HandoffState != "not-required" || status.HandoffProblems == nil || status.RecoveryProblems == nil || status.ActiveEnvironments == nil || status.Problems == nil {
 		t.Fatalf("unexpected stopped daemon JSON contract: %#v", status)
 	}
 	if strings.Contains(encoded, "\x1b[") {

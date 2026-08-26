@@ -1,6 +1,6 @@
 # End-to-end testing
 
-Portless has two default end-to-end suites and three explicit opt-in integration
+Portless has two default end-to-end suites and four explicit opt-in integration
 boundaries. All of them exercise the compiled product rather than replacing
 the daemon or API with test doubles:
 
@@ -10,15 +10,17 @@ the daemon or API with test doubles:
   Chromium with Playwright.
 - The managed-resource suite additionally provisions real PostgreSQL, Valkey,
   MySQL, and NATS containers with Docker or Podman.
+- The Store example suite runs the real stateful single-checkout example with
+  Spring Boot, Node.js, two PostgreSQL instances, and Valkey.
 - The Dispatch example suite runs the real three-source example, including its
   Next.js, FastAPI, Fastify, and Go services plus MySQL and NATS.
 - The destructive relay suite installs the production machine relay and uses
   the real port-80 and DNS integration.
 
-The default, managed-resource, and Dispatch tests receive a temporary
-`PORTLESS_HOME`. The first two also receive temporary source checkouts;
-Dispatch runs the tracked templates and writes only their ignored dependency
-and build output. Teardown performs a forced Portless reset, stops the isolated
+The default, managed-resource, Store, and Dispatch tests receive a temporary
+`PORTLESS_HOME`. The first two also receive temporary source checkouts. Store
+and Dispatch run tracked example sources and write only ignored dependency and
+build output. Teardown performs a forced Portless reset, stops the isolated
 daemon, and removes the temporary directory. Those suites do not read or
 change the developer's normal `~/.portless` installation. The relay suite is
 the explicit machine-level exception described below.
@@ -63,6 +65,14 @@ make test-e2e-dispatch
 make test-e2e-dispatch RESOURCE_E2E_RUNTIME=docker
 ```
 
+The stateful Store application has a corresponding opt-in target for two
+managed PostgreSQL instances and Valkey:
+
+```bash
+make test-e2e-store
+make test-e2e-store RESOURCE_E2E_RUNTIME=podman
+```
+
 `make test` remains the fast unit, component, and build-validation suite. It
 does not install a browser or run E2E tests.
 
@@ -83,7 +93,9 @@ The CLI E2E suite protects these product contracts:
   clean environment-wide reset with `up --managed`;
 - human-readable default output, valid `--json` output, grouped help, and
   useful help for incomplete commands;
-- exact traffic targets, repeated header capture, and credential-header redaction;
+- exact traffic targets, repeated header capture, credential-header redaction,
+  bounded Redis, PostgreSQL, MySQL, and NATS operation decoding, and explicit
+  session fallbacks for encrypted or incomplete protocol traffic;
 - bounded recordings and persistent fault creation, matching, disable,
   re-enable, export, and deletion;
 - authenticated daemon restart with adoption of the original service
@@ -134,8 +146,8 @@ The Playwright suite protects these browser journeys:
   and HTTP/TCP switching;
 - keyboard topology inspection, command-palette navigation, runtime status,
   not-found routes, and automatic recovery from a failed control-plane poll;
-- daemon details, full-screen drawer behavior, restart, reconnect, and runtime
-  adoption.
+- daemon details and logs, full-screen drawer behavior, restart, reconnect, and
+  runtime adoption.
 
 ## Test-only ingress
 
@@ -190,6 +202,29 @@ Each scenario uses a temporary Portless home and cleans up its containers and
 volumes. The suite is safe for normal application state, but it intentionally
 exercises the selected local container engine and may download several images.
 
+## Store example integration
+
+`make test-e2e-store` enables only `TestStoreExampleEndToEnd` with
+`PORTLESS_STORE_EXAMPLE_E2E=1`. It runs the tracked Store source against a
+temporary Portless home and private E2E ingress. It verifies:
+
+- discovery and readiness of checkout, orders, inventory, consumer-scoped
+  `inventory-postgres`, `orders-postgres`, and `orders-redis` resources;
+- an atomic inventory reservation followed by a checkout persisted with a
+  PostgreSQL-generated order ID;
+- cache-aside reads that miss through PostgreSQL and then hit Valkey;
+- decoded inventory PostgreSQL `UPDATE` plus order PostgreSQL `INSERT` and
+  `SELECT` exchanges with captured SQL;
+- decoded Redis `GET` and `SET` exchanges with the expected cache key;
+- stock and order persistence across their owning process restarts; and
+- both PostgreSQL volumes persisting across ordinary environment down/up.
+
+The normal Go suite separately asserts the statically discovered Store
+topology and application-protocol classifications. `make test-example-store`
+runs the Node unit tests and the Spring Boot inventory tests. See the
+[Store walkthrough](../examples/store/README.md) for the interactive traffic,
+fault, lifecycle, and debugger workflow.
+
 ## Dispatch example integration
 
 `make test-e2e-dispatch` enables only `TestDispatchExampleEndToEnd` with
@@ -198,8 +233,9 @@ three source roots against a temporary Portless home and private E2E ingress.
 It verifies:
 
 - compilation of `console`, `operations`, and `maps` into one seven-service
-  project;
-- readiness of five local processes and managed MySQL and NATS;
+  project, including consumer-scoped `api-mysql` and explicitly shared
+  `dispatch-nats`;
+- readiness of five local processes and both managed resources;
 - location lookup and a route estimate across the source-aware HTTP graph;
 - a delivery persisted to MySQL with a readable public ID;
 - publication and consumption of the corresponding NATS event; and

@@ -19,7 +19,7 @@ func New() providers.Plugin { return Plugin{} }
 
 // Descriptor returns Valkey plugin registration metadata and the Redis alias.
 func (Plugin) Descriptor() providers.Descriptor {
-	return providers.Descriptor{ID: "valkey", Aliases: []string{"redis"}, DefaultVersion: "8"}
+	return providers.Descriptor{ID: "valkey", Aliases: []string{"redis"}, DefaultVersion: "8", ApplicationProtocol: model.ApplicationProtocolRedis}
 }
 
 // Detect finds Redis-compatible dependencies and their consumer environment variables.
@@ -32,6 +32,10 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 		},
 		ExplicitEnvironment: func(content string, consumer providers.Consumer) string {
 			return common.FirstEnvironment(content, "SPRING_DATA_REDIS_URL", "REDIS_URL", "VALKEY_URL")
+		},
+		GenericNames: []string{"valkey"},
+		ResourceName: func(content string) string {
+			return common.LogicalServiceHost(content, "redis", "rediss", "valkey")
 		},
 	})
 }

@@ -82,6 +82,12 @@ PostgreSQL, Valkey, MySQL, and NATS. The
 [implementation boundary](docs/implementation-status.md) is the maintained
 inventory of supported behavior and deferred release work.
 
+The compact [Store example](examples/store/README.md) discovers one mixed-stack
+checkout with Spring Boot and Node services, persists inventory reservations
+and orders in two independently managed PostgreSQL instances, caches order
+reads in managed Valkey, and exposes the decoded SQL and Redis operations in
+Traffic.
+
 For a larger walkthrough, the [Dispatch example](examples/dispatch/README.md)
 materializes one logical courier application as three independent Git
 checkouts. It exercises mixed frameworks, MySQL and NATS, environment-specific
@@ -110,15 +116,19 @@ TCP services retain conventional ports while receiving distinct loopback
 identities:
 
 ```text
-postgres.local.billing.portless.test:5432
-redis.local.billing.portless.test:6379
+orders-postgres.local.billing.portless.test:5432
+orders-redis.local.billing.portless.test:6379
 ```
 
 Processes and containers still use private dynamic ports. A caller receives a
 source-aware dependency name such as
-`postgres.via-orders.local.billing.portless.test`, so traffic, recordings, and
-faults can distinguish `orders:postgres` from another service reaching the
-same database.
+`orders-postgres.via-orders.local.billing.portless.test`, so traffic,
+recordings, and faults retain the exact `orders:orders-postgres` edge. Generic
+configuration hosts such as `postgres`, `mysql`, `redis`, and `nats` are
+consumer-scoped during discovery; `postgresql://postgres` in orders therefore
+becomes `orders-postgres`. Reusing a specific logical host such as
+`shared-postgres` in multiple services explicitly declares one shared
+resource.
 
 The public naming model and private ownership keys are explained in
 [ADR 0002](docs/architecture/decisions/0002-names-public-keys-private.md);
@@ -183,9 +193,27 @@ Both can inspect services and effective connections, tail structured logs,
 follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
 
+The control plane's daemon drawer also exposes a live, bounded tail of the
+fixed private daemon log. Older output is explicitly marked when omitted, and
+known installation authentication and ownership secrets are redacted again at
+the inspection boundary.
+
+HTTP exchanges retain bounded inspectable headers and bodies. Declared
+PostgreSQL, Redis/Valkey, MySQL, and NATS connections are decoded into bounded
+logical operations while their TCP connections remain open, so queries,
+commands, results, subjects, and message payloads can be inspected from the
+same Request and Response views. Unknown, encrypted, oversized, or malformed
+TCP traffic remains byte-count-only and never interrupts forwarding.
+
+Successful driver and connection-pool housekeeping is marked as background:
+for example, PostgreSQL session setup and validation queries or Redis handshakes
+and client metadata. Raw Exchanges and recordings still retain those operations,
+while standalone housekeeping traces and topology animation are hidden by
+default. Failed or faulted housekeeping always remains visible.
+
 The [command reference](portless-cli/COMMANDS.md) contains complete CLI usage.
-Traffic bodies can contain sensitive application data; see
-[Local data and safety](#local-data-and-safety) before enabling durable body
+Traffic payloads can contain application data; see
+[Local data and safety](#local-data-and-safety) before enabling durable payload
 capture.
 
 ## Command reference
@@ -229,9 +257,10 @@ inventory, permission boundaries, limits, and troubleshooting.
   before serving traffic.
 - Discovery is static, bounded, read-only, and confined to the supplied
   checkout. It does not run project code or fetch network resources.
-- Secret-bearing provider values remain separate from redacted inspection
-  data. Authorization, cookie, and common token headers are redacted before
-  retention. Captured bodies remain local but may still contain secrets.
+- Secret-bearing provider values remain separate from redacted configuration
+  inspection data. Authorization, cookie, common token headers, and
+  unambiguously identified protocol-authentication fields are redacted before
+  retention. Captured HTTP and decoded TCP application payloads remain local.
 - Runtime adoption, forced lifecycle actions, reset, and uninstall fail closed
   when process or container ownership cannot be proven.
 

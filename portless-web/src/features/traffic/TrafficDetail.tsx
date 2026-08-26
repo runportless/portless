@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useId, useState } from 'react'
 import { DrawerSizeButton } from '../../components/DrawerSizeButton'
 import { duration } from '../../components/Status'
-import type { ComponentBinding, TrafficExchange, TrafficTrace } from '../../types'
+import type { ComponentBinding, TrafficExchange, TrafficMessage, TrafficTrace } from '../../types'
 
 type TrafficDirection = 'request' | 'response'
 type TrafficDetailView = TrafficDirection | 'compare'
@@ -229,6 +229,8 @@ export function trafficStartedTime(timestamp: string) {
 }
 
 function TrafficOverview({ exchange, targetBinding }: { exchange: TrafficExchange; targetBinding?: ComponentBinding }) {
+	const tcp = exchange.tcp
+	const showTCPNotice = exchange.protocol !== 'http' && (!tcp || tcp.kind === 'session' || (tcp.inspection !== 'decoded' && tcp.inspection !== 'limited'))
   return <section className="traffic-overview" aria-label="Exchange overview">
     <div className="traffic-overview__context">
       <OverviewDetail label="ENVIRONMENT" value={exchange.environment} />
@@ -236,13 +238,44 @@ function TrafficOverview({ exchange, targetBinding }: { exchange: TrafficExchang
       <OverviewDetail label="STARTED" value={trafficStartedTime(exchange.startedAt)} />
       <OverviewDetail label="COMPLETED" value={duration(exchange.durationMs)} />
     </div>
-    {exchange.error && <div className="traffic-detail__error"><span>REQUEST ERROR</span><strong>{exchange.error}</strong></div>}
-    {exchange.protocol !== 'http' && <section className="traffic-tcp-summary"><span>TCP SESSION</span><strong>Payload content is not captured.</strong><small>{formatTrafficBytes(Math.max(0, exchange.requestBytes))} sent · {formatTrafficBytes(Math.max(0, exchange.responseBytes))} received</small></section>}
+    {exchange.error && <div className="traffic-detail__error"><span>{exchange.protocol === 'http' ? 'REQUEST ERROR' : 'OPERATION ERROR'}</span><strong>{exchange.error}</strong></div>}
+    {showTCPNotice && <section className="traffic-tcp-summary"><span>{tcp?.inspection?.toUpperCase() || 'TCP SESSION'}</span><strong>{tcp?.inspectionReason || 'Application protocol details are not available for this connection.'}</strong><small>{formatTrafficBytes(Math.max(0, exchange.requestBytes))} sent · {formatTrafficBytes(Math.max(0, exchange.responseBytes))} received</small></section>}
+  </section>
+}
+
+function protocolMessageText(message: TrafficMessage) {
+  const fields = (message.fields || []).map((field) => `${field.name}: ${field.value}`).join('\n')
+  return [message.summary, fields, message.content].filter(Boolean).join('\n')
+}
+
+function TCPProtocolMessage({ message }: { message: TrafficMessage }) {
+  const presentation = message.content && message.encoding !== 'base64'
+    ? trafficBodyPresentation(message.content, message.contentType || '')
+    : { text: message.content || '', json: false }
+  return <article className="traffic-protocol-message">
+    <header><div><span>{message.type.toUpperCase()}</span><strong>{message.summary || message.type}</strong></div><small>{message.offsetMs} ms · {formatTrafficBytes(Math.max(0, message.wireBytes))}</small></header>
+    {(message.fields || []).length > 0 && <dl>{message.fields?.map((field, index) => <div key={`${field.name}:${index}`}><dt>{field.name}</dt><dd>{field.value}</dd></div>)}</dl>}
+    {presentation.text && <div className="traffic-protocol-message__content"><div>{message.contentType && <span>{message.contentType}</span>}{message.encoding === 'base64' && <span>BINARY · BASE64</span>}</div><pre className={presentation.json ? 'traffic-json' : undefined}>{presentation.json ? highlightedJSON(presentation.text) : presentation.text}</pre></div>}
+    {message.truncated && <footer>PAYLOAD TRUNCATED · {formatTrafficBytes(message.capturedBytes || 0)} OF {formatTrafficBytes(message.contentBytes || 0)}</footer>}
+  </article>
+}
+
+function TCPMessageInspector({ exchange, direction, compact = false }: { exchange: TrafficExchange; direction: TrafficDirection; compact?: boolean }) {
+  const request = direction === 'request'
+  const messages = (request ? exchange.tcp?.requestMessages : exchange.tcp?.responseMessages) || []
+  const messageCount = (request ? exchange.tcp?.requestMessageCount : exchange.tcp?.responseMessageCount) || messages.length
+  const bytes = Math.max(0, request ? exchange.requestBytes : exchange.responseBytes)
+  const truncated = Boolean(request ? exchange.tcp?.requestTruncated : exchange.tcp?.responseTruncated)
+  const copy = () => navigator.clipboard.writeText(messages.map(protocolMessageText).join('\n\n')).catch(() => undefined)
+  return <section className={`traffic-message-workbench traffic-message-workbench--${direction} traffic-protocol-workbench${compact ? ' traffic-message-workbench--compact' : ''}`} aria-label={`${direction} protocol messages`}>
+    <div className="traffic-message-workbench__summary"><code>{messageCount} {messageCount === 1 ? 'MESSAGE' : 'MESSAGES'}</code><div><span>{formatTrafficBytes(bytes)}</span><button className="traffic-copy-button" type="button" onClick={copy} aria-label={`Copy ${direction} messages`} title={`Copy ${direction} messages`} disabled={messages.length === 0}><CopyIcon /><span>COPY</span></button></div></div>
+    <div className="traffic-protocol-messages">{messages.length > 0 ? messages.map((message, index) => <TCPProtocolMessage message={message} key={`${message.offsetMs}:${message.type}:${index}`} />) : <div className="traffic-payload__empty"><strong>No decoded {direction} messages.</strong><small>{formatTrafficBytes(bytes)} transferred</small></div>}</div>
+    {truncated && <footer><span>CAPTURE TRUNCATED</span><span>{captureSummary(bytes, request ? exchange.requestCapturedBytes || 0 : exchange.responseCapturedBytes || 0)}</span></footer>}
   </section>
 }
 
 function statusTone(exchange: TrafficExchange) {
-  if (exchange.error || (exchange.status || 0) >= 500) return 'is-error'
+  if (exchange.error || exchange.tcp?.outcome === 'error' || exchange.tcp?.outcome === 'incomplete' || (exchange.status || 0) >= 500) return 'is-error'
   if ((exchange.status || 0) >= 400) return 'is-warning'
   return 'is-success'
 }
@@ -256,6 +289,8 @@ export function TrafficDetail({ exchange, trace, traceNavigationPending = false,
   onClose: () => void
 }) {
   const http = exchange.protocol === 'http'
+  const decodedTCP = !http && exchange.tcp?.kind === 'operation'
+  const payloadExchange = http || decodedTCP
   const [maximized, setMaximized] = useState(false)
   const [view, setView] = useState<TrafficDetailView>('request')
   const [requestView, setRequestView] = useState<TrafficPayloadView>(() => defaultTrafficPayloadView(exchange, 'request'))
@@ -282,16 +317,19 @@ export function TrafficDetail({ exchange, trace, traceNavigationPending = false,
       return
     }
     setMaximized(true)
-    if (http) setView('compare')
+    if (payloadExchange) setView('compare')
   }
 
-  const status = exchange.error ? 'ERROR' : exchange.status ? String(exchange.status) : http ? 'OK' : 'SESSION'
+  const tcpStatus = exchange.tcp?.outcome === 'success' ? 'OK' : exchange.tcp?.outcome === 'one-way' ? 'SENT' : exchange.tcp?.outcome === 'incomplete' ? 'INCOMPLETE' : exchange.tcp?.outcome === 'error' ? 'ERROR' : 'SESSION'
+  const status = exchange.error ? 'ERROR' : exchange.status ? String(exchange.status) : http ? 'OK' : tcpStatus
   const totalBytes = Math.max(0, exchange.requestBytes) + Math.max(0, exchange.responseBytes)
   const requestTarget = exchange.requestTarget || exchange.path || '/'
+  const applicationProtocol = exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'
+  const operation = exchange.tcp?.operation || 'SESSION'
 
   return <aside className={`traffic-detail${maximized ? ' traffic-detail--maximized' : ''}`} role="dialog" aria-label={`Traffic request and response ${exchange.sequence}`}>
     <header className="traffic-detail__header">
-      <div className="traffic-detail__heading"><span className="eyebrow">{exchange.protocol.toUpperCase()} EXCHANGE #{exchange.sequence}</span><h3>{http && <span>{exchange.method || 'HTTP'}</span>} <code>{http ? requestTarget : 'TCP session'}</code></h3><small><code>{exchange.source}</code><i>→</i><code>{exchange.target}</code></small></div>
+      <div className="traffic-detail__heading"><span className="eyebrow">{http ? 'HTTP' : applicationProtocol} EXCHANGE #{exchange.sequence}</span><h3><span>{http ? exchange.method || 'HTTP' : applicationProtocol}</span> <code>{http ? requestTarget : operation}</code></h3><small><code>{exchange.source}</code><i>→</i><code>{exchange.target}</code></small></div>
       <div className="traffic-detail__outcome"><b className={statusTone(exchange)}>{status}</b><span><strong>{duration(exchange.durationMs)}</strong></span><span><strong>{formatTrafficBytes(totalBytes)}</strong></span></div>
       <div className="traffic-detail__actions"><DrawerSizeButton fullScreen={maximized} subject="traffic details" onToggle={toggleMaximized} /><button type="button" onClick={onClose} aria-label="Close traffic details" title="Close">×</button></div>
       <div className="traffic-detail__header-context">
@@ -302,15 +340,15 @@ export function TrafficDetail({ exchange, trace, traceNavigationPending = false,
 
     <div className="traffic-detail__content">
       {(!maximized || !http) && <TrafficOverview exchange={exchange} targetBinding={targetBinding} />}
-      {http && <>
+      {payloadExchange && <>
         <nav className="traffic-detail__tabs" role="tablist" aria-label="Exchange payload">
           <button type="button" role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'is-active' : ''} onClick={() => setView('request')}>REQUEST</button>
           <button type="button" role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'is-active' : ''} onClick={() => setView('response')}>RESPONSE</button>
           {maximized && <button className="traffic-detail__compare" type="button" role="tab" aria-selected={view === 'compare'} onClick={() => setView('compare')}><CompareIcon />COMPARE</button>}
         </nav>
-        {view === 'request' && <div className="traffic-detail__message" role="tabpanel"><TrafficMessageInspector exchange={exchange} direction="request" view={requestView} onView={setRequestView} /></div>}
-        {view === 'response' && <div className="traffic-detail__message" role="tabpanel"><TrafficMessageInspector exchange={exchange} direction="response" view={responseView} onView={setResponseView} /></div>}
-        {view === 'compare' && <div className="traffic-detail__comparison" role="tabpanel"><TrafficMessageInspector compact exchange={exchange} direction="request" view={requestView} onView={setRequestView} /><TrafficMessageInspector compact exchange={exchange} direction="response" view={responseView} onView={setResponseView} /></div>}
+        {view === 'request' && <div className="traffic-detail__message" role="tabpanel">{http ? <TrafficMessageInspector exchange={exchange} direction="request" view={requestView} onView={setRequestView} /> : <TCPMessageInspector exchange={exchange} direction="request" />}</div>}
+        {view === 'response' && <div className="traffic-detail__message" role="tabpanel">{http ? <TrafficMessageInspector exchange={exchange} direction="response" view={responseView} onView={setResponseView} /> : <TCPMessageInspector exchange={exchange} direction="response" />}</div>}
+        {view === 'compare' && <div className="traffic-detail__comparison" role="tabpanel">{http ? <><TrafficMessageInspector compact exchange={exchange} direction="request" view={requestView} onView={setRequestView} /><TrafficMessageInspector compact exchange={exchange} direction="response" view={responseView} onView={setResponseView} /></> : <><TCPMessageInspector compact exchange={exchange} direction="request" /><TCPMessageInspector compact exchange={exchange} direction="response" /></>}</div>}
       </>}
     </div>
   </aside>

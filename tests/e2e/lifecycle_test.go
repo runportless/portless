@@ -321,7 +321,7 @@ func TestCLIFaultAndRecordingRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(exportOutput), &exported); err != nil {
 		t.Fatalf("decode recording export: %v\n%s", err, exportOutput)
 	}
-	if exported.SchemaVersion != 2 || exported.Project != "experiments-e2e" || exported.Environment != "local" || exported.Recording != "orders-failure" || len(exported.Exchanges) != 2 {
+	if exported.SchemaVersion != 3 || exported.Project != "experiments-e2e" || exported.Environment != "local" || exported.Recording != "orders-failure" || len(exported.Exchanges) != 2 {
 		t.Fatalf("unexpected recording export: %#v", exported)
 	}
 	if exported.Exchanges[0].Source != "checkout" || exported.Exchanges[0].Target != "orders" || exported.Exchanges[0].Recording != "orders-failure" {
@@ -343,7 +343,7 @@ func TestCLIDaemonRestartAdoptsRunningServices(t *testing.T) {
 	before := environmentStatus(t, binary, home, checkout)
 	beforePIDs := servicePIDs(before)
 	beforeDaemon := daemonStatus(t, binary, home, checkout)
-	if !beforeDaemon.HandoffReady {
+	if beforeDaemon.HandoffState != "ready" {
 		t.Fatalf("daemon was not ready for handoff before restart: %#v", beforeDaemon)
 	}
 
@@ -392,7 +392,7 @@ type e2eDaemonStatus struct {
 	PID              int      `json:"pid"`
 	InstanceID       string   `json:"instanceId"`
 	RuntimeState     string   `json:"runtimeState"`
-	HandoffReady     bool     `json:"handoffReady"`
+	HandoffState     string   `json:"handoffState"`
 	RecoveryProblems []string `json:"recoveryProblems"`
 }
 

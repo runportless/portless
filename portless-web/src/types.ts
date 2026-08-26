@@ -30,8 +30,19 @@ export interface DaemonStatus {
   buildId: string
   protocolVersion: string
   apiVersion: string
-  handoffReady: boolean
   recoveryProblems: string[]
+  activeEnvironments: string[]
+}
+
+export interface DaemonLogSnapshot {
+  content: string
+  truncated: boolean
+}
+
+export interface DaemonHandoffStatus {
+  state: 'ready' | 'blocked'
+  verifiedAt: string
+  problems: string[]
   activeEnvironments: string[]
 }
 
@@ -89,6 +100,7 @@ export interface ServiceDefinition {
 }
 
 export type Protocol = 'http' | 'tcp'
+export type ApplicationProtocol = 'postgresql' | 'redis' | 'mysql' | 'nats'
 export type EndpointKind = 'public' | 'connection'
 export interface Endpoint {
   kind: EndpointKind
@@ -118,6 +130,7 @@ export interface Connection {
   source: string
   target: string
   protocol: Protocol
+  applicationProtocol?: ApplicationProtocol
   binding?: string
   environment?: string
   required: boolean
@@ -249,6 +262,44 @@ export interface LogEntry { timestamp: string; service: string; stream: string; 
 export type TrafficRequestKind = 'navigation' | 'subresource' | 'fetch' | 'service' | 'unknown'
 export type TrafficTraceContextSource = 'generated' | 'portless' | 'w3c' | 'b3' | 'datadog'
 export type TrafficCorrelation = 'exact' | 'inferred' | 'partial' | 'ambiguous'
+export type TrafficInspection = 'decoded' | 'opaque' | 'encrypted' | 'unsupported' | 'malformed' | 'limited'
+export type TrafficTCPOutcome = 'success' | 'error' | 'one-way' | 'incomplete'
+export type TrafficMessageEncoding = 'utf8' | 'base64'
+
+export interface TrafficMessageField {
+  name: string
+  value: string
+  encoding?: TrafficMessageEncoding
+}
+
+export interface TrafficMessage {
+  type: string
+  offsetMs: number
+  summary?: string
+  wireBytes: number
+  contentBytes?: number
+  capturedBytes?: number
+  truncated?: boolean
+  content?: string
+  contentType?: string
+  encoding?: TrafficMessageEncoding
+  fields?: TrafficMessageField[]
+}
+
+export interface TrafficTCPExchange {
+  kind: 'operation' | 'session'
+  applicationProtocol?: ApplicationProtocol
+  operation?: string
+  inspection: TrafficInspection
+  inspectionReason?: string
+  outcome?: TrafficTCPOutcome
+  requestMessageCount?: number
+  responseMessageCount?: number
+  requestMessages?: TrafficMessage[]
+  responseMessages?: TrafficMessage[]
+  requestTruncated?: boolean
+  responseTruncated?: boolean
+}
 
 export interface TrafficExchange {
   project: string
@@ -257,6 +308,7 @@ export interface TrafficExchange {
   protocol: string
   source: string
   target: string
+  background: boolean
   targetProvider?: ProviderKind
   remoteClassification?: RemoteClassification
   startedAt: string
@@ -287,6 +339,7 @@ export interface TrafficExchange {
   responseBody?: string
   requestBodyTruncated?: boolean
   responseBodyTruncated?: boolean
+  tcp?: TrafficTCPExchange
 }
 
 export interface TrafficTraceSpan {
@@ -326,6 +379,7 @@ export interface TrafficActivity {
   project: string
   environment: string
   protocol: string
+  applicationProtocol?: ApplicationProtocol
   source: string
   target: string
   observedAt: string
@@ -336,7 +390,7 @@ export interface TrafficActivity {
   fault?: string
 }
 
-export interface Recording { project: string; environment: string; name: string; source?: string; target?: string; captureBodies: boolean; maxEvents: number; maxBodyBytes: number; status: string; startedAt: string; completedAt?: string; expiresAt?: string; eventCount: number }
+export interface Recording { project: string; environment: string; name: string; source?: string; target?: string; capturePayloads: boolean; maxEvents: number; maxPayloadBytes: number; status: string; startedAt: string; completedAt?: string; expiresAt?: string; eventCount: number }
 export interface FaultRule { project: string; environment: string; name: string; source: string; target: string; method?: string; path?: string; probability: number; latencyMs?: number; jitterMs?: number; statusCode?: number; abort?: boolean; enabled: boolean; createdAt: string; expiresAt?: string; matchCount: number; revision: number; scopeSummary: string }
 export interface TimelineEvent { project: string; environment: string; sequence: number; timestamp: string; actor: string; type: string; subject?: string; severity: string; summary: string; details?: Record<string, unknown> }
 

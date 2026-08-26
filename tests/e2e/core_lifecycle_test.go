@@ -298,7 +298,7 @@ func TestCLIDaemonCrashRecoveryAdoptsSupervisors(t *testing.T) {
 
 	afterEnvironment := environmentStatus(t, binary, home, checkout)
 	afterDaemon := daemonStatus(t, binary, home, checkout)
-	if afterDaemon.PID == beforeDaemon.PID || afterDaemon.InstanceID == beforeDaemon.InstanceID || afterDaemon.RuntimeState != "ready" || !afterDaemon.HandoffReady {
+	if afterDaemon.PID == beforeDaemon.PID || afterDaemon.InstanceID == beforeDaemon.InstanceID || afterDaemon.RuntimeState != "ready" || afterDaemon.HandoffState != "ready" {
 		t.Fatalf("daemon did not recover after crash: before=%#v after=%#v", beforeDaemon, afterDaemon)
 	}
 	if afterEnvironment.Status != model.EnvironmentHealthy || !maps.Equal(beforePIDs, servicePIDs(afterEnvironment)) {

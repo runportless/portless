@@ -5,7 +5,7 @@ import { EnvironmentPage } from './features/ProjectPage'
 import { ProjectsPage } from './features/ProjectsPage'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
-import type { DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
+import type { DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
 
 interface Session { actor: string; browser: boolean; csrf: string }
 type Tab = EnvironmentView
@@ -42,27 +42,13 @@ export function App() {
     setThemePreference(preference)
   }, [])
 
-  const refresh = useCallback(async () => {
-    try {
-      const [projectResponse, environmentResponse, runtime, daemon] = await Promise.all([
-        api<{ projects: Project[] }>('/projects'),
-        api<{ environments: Environment[] }>('/environments'),
-        api<RuntimeStatus>('/runtime'),
-        api<DaemonStatus>('/daemon'),
-      ])
-      setProjects(projectResponse.projects)
-      setEnvironments(environmentResponse.environments)
-      setRuntimeStatus(runtime)
-      setDaemonStatus(daemon)
-      setLive(true)
-    } catch (error) {
-      if (error instanceof APIError && error.status === 401) setAuthRequired(true)
-      setLive(false)
-    }
-  }, [])
-
-  const refreshRelay = useCallback(async () => {
-    setRelayStatus(await api<RelayStatus>('/relay').catch(() => null))
+  const refreshCore = useCallback(async () => {
+    const [projectResponse, environmentResponse] = await Promise.all([
+      api<{ projects: Project[] }>('/projects'),
+      api<{ environments: Environment[] }>('/environments'),
+    ])
+    setProjects(projectResponse.projects)
+    setEnvironments(environmentResponse.environments)
   }, [])
 
   const refreshDaemon = useCallback(async () => {
@@ -71,12 +57,34 @@ export function App() {
     return status
   }, [])
 
+  const refreshRuntime = useCallback(async () => {
+    setRuntimeStatus(await api<RuntimeStatus>('/runtime').catch(() => null))
+  }, [])
+
+  const refresh = useCallback(async () => {
+    try {
+      await Promise.all([refreshCore(), refreshDaemon()])
+      setLive(true)
+    } catch (error) {
+      if (error instanceof APIError && error.status === 401) setAuthRequired(true)
+      setLive(false)
+    }
+  }, [refreshCore, refreshDaemon])
+
+  const refreshRelay = useCallback(async () => {
+    setRelayStatus(await api<RelayStatus>('/relay').catch(() => null))
+  }, [])
+
   useEffect(() => {
     const initialize = async () => {
       try {
         const value = await api<Session>('/session')
         setSession(value); setCSRF(value.csrf)
-        await Promise.all([refresh(), refreshRelay()])
+        await refreshCore()
+        setLive(true)
+        void refreshDaemon().catch(() => setLive(false))
+        void refreshRuntime()
+        void refreshRelay()
       } catch (error) {
         if (error instanceof APIError && error.status === 401) setAuthRequired(true)
       } finally { setLoading(false) }
@@ -85,7 +93,7 @@ export function App() {
     const popstate = () => setRoute(`${location.pathname}${location.search}`)
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
-  }, [refresh, refreshRelay])
+  }, [refreshCore, refreshDaemon, refreshRelay, refreshRuntime])
 
   useEffect(() => {
     if (!session) return
@@ -95,9 +103,9 @@ export function App() {
 
   useEffect(() => {
     if (!session) return
-    const timer = window.setInterval(refreshRelay, 15000)
+    const timer = window.setInterval(() => { void refreshRuntime(); void refreshRelay() }, 15000)
     return () => window.clearInterval(timer)
-  }, [refreshRelay, session])
+  }, [refreshRelay, refreshRuntime, session])
 
   const navigate = useCallback((path: string) => {
     if (`${location.pathname}${location.search}` !== path) history.pushState({}, '', path)
@@ -126,6 +134,7 @@ export function App() {
   const restartDaemon = useCallback(async (instanceId: string) => {
     return api<DaemonRestart>('/daemon/restart', { method: 'POST', ...jsonBody({ instanceId }) })
   }, [])
+  const verifyDaemonHandoff = useCallback(async () => api<DaemonHandoffStatus>('/daemon/handoff'), [])
   const commands = useMemo<Command[]>(() => activeEnvironment ? [
     ...(activeEnvironment.status === 'recovering' ? [] : [{ group: 'Actions', label: activeEnvironment.status === 'stopped' ? 'Start environment' : 'Stop environment', detail: `${activeEnvironment.project}/${activeEnvironment.name}`, run: () => void mutateEnvironment(activeEnvironment.status === 'stopped' ? 'up' : 'down') } as Command]),
     { group: 'Views', label: 'Open topology', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'topology')) },
@@ -151,7 +160,7 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refresh}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

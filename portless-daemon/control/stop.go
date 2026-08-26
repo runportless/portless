@@ -95,7 +95,7 @@ func (m *Manager) stopVerifiedDaemon(ctx context.Context, inspection Inspection,
 		options.Timeout = 15 * time.Second
 	}
 	active := append([]string(nil), inspection.Identity.ActiveEnvironments...)
-	if len(active) > 0 && !options.Force && !(options.Handoff && inspection.Identity.HandoffReady) {
+	if len(active) > 0 && !options.Force && !options.Handoff {
 		return StopResult{}, &ActiveEnvironmentsError{Environments: active}
 	}
 	// Older authenticated lifecycle protocols do not know the handoff field and

@@ -122,7 +122,7 @@ export function MCPSettings({ environments, initialEnvironment }: {
             <label><input type="checkbox" checked disabled /><span><strong>Inspection</strong><small>Environments, services, logs, traffic summaries, recordings, faults, operations, and timeline.</small></span><b>ALWAYS</b></label>
             <label><input type="checkbox" checked={capabilities.lifecycle} onChange={() => toggleCapability('lifecycle')} /><span><strong>Lifecycle</strong><small>Start or stop environments and change service state.</small></span><b>+3 TOOLS</b></label>
             <label><input type="checkbox" checked={capabilities.trafficControl} onChange={() => toggleCapability('trafficControl')} /><span><strong>Traffic control</strong><small>Start or stop recordings and apply or disable bounded faults.</small></span><b>+5 TOOLS</b></label>
-            <label><input type="checkbox" checked={capabilities.sensitiveTraffic} onChange={() => toggleCapability('sensitiveTraffic')} /><span><strong>Sensitive traffic</strong><small>Read bounded headers and captured request or response body prefixes.</small></span><b>+1 TOOL</b></label>
+            <label><input type="checkbox" checked={capabilities.sensitiveTraffic} onChange={() => toggleCapability('sensitiveTraffic')} /><span><strong>Sensitive traffic</strong><small>Read bounded headers and captured request, response, or decoded message payload prefixes.</small></span><b>+1 TOOL</b></label>
             </div>
           </div>
 

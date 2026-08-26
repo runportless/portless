@@ -17,7 +17,7 @@ describe('trace waterfall', () => {
       source: 'external', target: 'checkout', error: false, faulted: false, background: false, spanCount: 2, correlation: 'inferred',
       spans: [
         { exchange: { ...base, sequence: 11, source: 'external', target: 'checkout', method: 'POST', requestTarget: '/checkout' }, depth: 0, startOffsetMs: 0, correlation: 'exact' },
-        { exchange: { ...base, sequence: 12, protocol: 'tcp', source: 'orders', target: 'postgres', status: undefined, durationMs: 35 }, parentSequence: 11, depth: 1, startOffsetMs: 20, correlation: 'inferred' },
+        { exchange: { ...base, sequence: 12, protocol: 'tcp', source: 'orders', target: 'postgres', status: undefined, durationMs: 35, tcp: { kind: 'operation', applicationProtocol: 'postgresql', operation: 'SELECT', inspection: 'decoded', outcome: 'success' } }, parentSequence: 11, depth: 1, startOffsetMs: 20, correlation: 'inferred' },
       ],
     } as TrafficTrace
 
@@ -28,6 +28,8 @@ describe('trace waterfall', () => {
     expect(markup).toContain('aria-pressed="false"')
     expect(markup).toContain('external <i>→</i> checkout')
     expect(markup).toContain('POST /checkout')
+    expect(markup).toContain('POSTGRESQL SELECT')
+    expect(markup).toContain('aria-label="Inspect orders to postgres POSTGRESQL SELECT"')
     expect(markup).toContain('class="trace-span is-tcp"')
     expect(markup).toContain('--span-depth:1')
     expect(markup).toContain('correlation-badge--inferred')

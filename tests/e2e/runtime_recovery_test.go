@@ -50,7 +50,7 @@ func TestCLIRebootRecoveryRestartsProvablyGoneRuntimes(t *testing.T) {
 		}
 	}
 	afterDaemon := daemonStatus(t, binary, home, checkout)
-	if afterDaemon.PID == beforeDaemon.PID || afterDaemon.RuntimeState != "ready" || !afterDaemon.HandoffReady || len(afterDaemon.RecoveryProblems) != 0 {
+	if afterDaemon.PID == beforeDaemon.PID || afterDaemon.RuntimeState != "ready" || afterDaemon.HandoffState != "ready" || len(afterDaemon.RecoveryProblems) != 0 {
 		t.Fatalf("daemon remained unhealthy after reboot recovery: before=%#v after=%#v", beforeDaemon, afterDaemon)
 	}
 	response := applicationRequest(t, home, "checkout.local.reboot-recovery-e2e.localhost", "/checkout?sku=coffee-mug&quantity=1", nil)

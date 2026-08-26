@@ -95,11 +95,13 @@ type Findings struct {
 	Diagnostics []Diagnostic
 }
 
-// Descriptor declares a resource plugin's canonical ID, aliases, and default version.
+// Descriptor declares a resource plugin's canonical ID, aliases, default
+// version, and optional inspectable application protocol.
 type Descriptor struct {
-	ID             string
-	Aliases        []string
-	DefaultVersion string
+	ID                  string
+	Aliases             []string
+	DefaultVersion      string
+	ApplicationProtocol model.ApplicationProtocol
 }
 
 // EnvironmentVariable declares a container setting or generated secret.

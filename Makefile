@@ -9,6 +9,7 @@ E2E_BINARY ?= bin/portless-e2e
 RELAY_E2E_BINARY ?= bin/portless-relay-e2e
 RESOURCE_E2E_RUNTIME ?= auto
 DISPATCH_EXAMPLE := examples/dispatch
+STORE_EXAMPLE := examples/store
 WEB_PROJECT := portless-web
 SITE_PROJECT := portless-site
 CLI_PACKAGE := ./portless-cli/cmd/portless
@@ -22,7 +23,7 @@ SITE_MANIFESTS := $(SITE_PROJECT)/package.json $(SITE_PROJECT)/package-lock.json
 SITE_NPM_CACHE := $(abspath $(SITE_PROJECT)/.npm-cache)
 
 # Declare command-style targets phony so matching files never suppress their recipes.
-.PHONY: build web site site-dev test test-go test-web test-site example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
+.PHONY: build web site site-dev test test-go test-web test-site example-store-dependencies test-example-store example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-store test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
 
 # Build the web control plane and the Portless executable.
 build: web
@@ -73,6 +74,14 @@ test-site: $(SITE_DEPENDENCIES)
 example-dispatch-bootstrap:
 	$(MAKE) -C $(DISPATCH_EXAMPLE) bootstrap
 
+# Install the Store example's locked Node dependencies.
+example-store-dependencies:
+	$(MAKE) -C $(STORE_EXAMPLE) dependencies
+
+# Validate the Store example applications.
+test-example-store:
+	$(MAKE) -C $(STORE_EXAMPLE) test
+
 # Materialize the Dispatch example and install its locked application dependencies.
 example-dispatch-bootstrap-install:
 	$(MAKE) -C $(DISPATCH_EXAMPLE) bootstrap-install
@@ -116,6 +125,14 @@ test-e2e-dispatch: e2e-binary
 	PORTLESS_MANAGED_RESOURCE_RUNTIME="$(RESOURCE_E2E_RUNTIME)" \
 	PORTLESS_E2E_BINARY="$(abspath $(E2E_BINARY))" \
 	$(GO) test -count=1 -tags=e2e ./tests/e2e -run '^TestDispatchExampleEndToEnd$$' -v
+
+# Run the real Store application with two managed PostgreSQL instances and Valkey.
+test-e2e-store: e2e-binary
+	$(MAKE) -C $(STORE_EXAMPLE) dependencies
+	PORTLESS_STORE_EXAMPLE_E2E=1 \
+	PORTLESS_MANAGED_RESOURCE_RUNTIME="$(RESOURCE_E2E_RUNTIME)" \
+	PORTLESS_E2E_BINARY="$(abspath $(E2E_BINARY))" \
+	$(GO) test -count=1 -tags=e2e ./tests/e2e -run '^TestStoreExampleEndToEnd$$' -v
 
 # Run the machine-destructive relay end-to-end suite.
 test-e2e-relay-destructive: relay-e2e-binary

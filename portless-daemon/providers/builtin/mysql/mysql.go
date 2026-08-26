@@ -22,7 +22,7 @@ func New() providers.Plugin { return Plugin{} }
 
 // Descriptor returns MySQL plugin registration metadata.
 func (Plugin) Descriptor() providers.Descriptor {
-	return providers.Descriptor{ID: "mysql", DefaultVersion: "8.4"}
+	return providers.Descriptor{ID: "mysql", DefaultVersion: "8.4", ApplicationProtocol: model.ApplicationProtocolMySQL}
 }
 
 // Detect finds MySQL dependencies and their consumer environment variables.
@@ -35,6 +35,10 @@ func (Plugin) Detect(ctx context.Context, workspace providers.Workspace, consume
 		},
 		ExplicitEnvironment: func(content string, consumer providers.Consumer) string {
 			return common.FirstEnvironment(content, "SPRING_DATASOURCE_URL", "DATABASE_URL", "MYSQL_URL")
+		},
+		GenericNames: []string{"mysql2"},
+		ResourceName: func(content string) string {
+			return common.LogicalServiceHost(content, "mysql", "mysql2")
 		},
 	})
 }

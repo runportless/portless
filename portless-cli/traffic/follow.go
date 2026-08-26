@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/runportless/portless/portless-cli/command"
@@ -89,9 +90,9 @@ func (c *Commands) printTrafficList(environment model.Environment, protocol stri
 	if protocol == "http" {
 		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    METHOD  PATH               CODE  TIME    EDGE"))
 	} else if protocol == "tcp" {
-		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    PROTOCOL   TIME    EDGE                         RESULT"))
+		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    PROTOCOL    OPERATION          TIME    EDGE                         RESULT"))
 	} else {
-		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    PROTO  REQUEST / SESSION       RESULT  TIME    EDGE"))
+		fmt.Fprintln(c.Out, c.Muted(c.Out, "SEQ    PROTO  REQUEST / OPERATION     RESULT  TIME    EDGE"))
 	}
 	for _, exchange := range exchanges {
 		c.printTraffic(exchange)
@@ -112,13 +113,20 @@ func (c *Commands) printTraffic(event model.TrafficExchange) {
 	}
 	if event.Protocol != model.ProtocolHTTP {
 		result := "ok"
-		if event.Error != "" {
+		if event.Error != "" || event.TCP != nil && event.TCP.Outcome == model.TrafficTCPOutcomeError {
 			result = c.Failure(c.Out, event.Error)
+			if event.Error == "" {
+				result = c.Failure(c.Out, "error")
+			}
+		} else if event.TCP != nil && event.TCP.Outcome == model.TrafficTCPOutcomeOneWay {
+			result = "sent"
+		} else if event.TCP != nil && event.TCP.Outcome == model.TrafficTCPOutcomeIncomplete {
+			result = c.Warning(c.Out, "incomplete")
 		}
 		if event.Fault != "" {
 			result = c.Warning(c.Out, "fault="+event.Fault)
 		}
-		fmt.Fprintf(c.Out, "#%-5d %-10s %5dms %-28s %s\n", event.Sequence, strings.ToUpper(string(event.Protocol)), event.DurationMS, event.Source+":"+event.Target, result)
+		fmt.Fprintf(c.Out, "#%-5d %-11s %-18s %5dms %-28s %s\n", event.Sequence, tcpProtocolName(event), tcpOperationName(event), event.DurationMS, event.Source+":"+event.Target, result)
 		return
 	}
 	status := fmt.Sprintf("%4d", event.Status)
@@ -148,7 +156,11 @@ func (c *Commands) printTraffic(event model.TrafficExchange) {
 }
 
 func (c *Commands) printTrafficDetail(event model.TrafficExchange) {
-	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, strings.ToUpper(string(event.Protocol))+" exchange"), event.Sequence)
+	title := strings.ToUpper(string(event.Protocol))
+	if event.Protocol == model.ProtocolTCP {
+		title = tcpProtocolName(event)
+	}
+	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, title+" exchange"), event.Sequence)
 	fmt.Fprintf(c.Out, "  %-18s %s → %s\n", "Edge:", event.Source, event.Target)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Provider:", command.EmptyAs(string(event.TargetProvider), "unknown"))
 	if event.MockProfile != "" {
@@ -166,6 +178,16 @@ func (c *Commands) printTrafficDetail(event model.TrafficExchange) {
 	}
 	if event.Status != 0 {
 		fmt.Fprintf(c.Out, "  %-18s %d\n", "Status:", event.Status)
+	}
+	if event.TCP != nil {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Operation:", command.EmptyAs(event.TCP.Operation, "session"))
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Inspection:", event.TCP.Inspection)
+		if event.TCP.InspectionReason != "" {
+			fmt.Fprintf(c.Out, "  %-18s %s\n", "Inspection detail:", event.TCP.InspectionReason)
+		}
+		if event.TCP.Outcome != "" {
+			fmt.Fprintf(c.Out, "  %-18s %s\n", "Outcome:", event.TCP.Outcome)
+		}
 	}
 	fmt.Fprintf(c.Out, "  %-18s %dms\n", "Duration:", event.DurationMS)
 	fmt.Fprintf(c.Out, "  %-18s %d / %d\n", "Bytes in / out:", event.RequestBytes, event.ResponseBytes)
@@ -186,6 +208,10 @@ func (c *Commands) printTrafficDetail(event model.TrafficExchange) {
 	}
 	printHeaderMap(c.Out, "Request headers", event.RequestHeaders)
 	printHeaderMap(c.Out, "Response headers", event.ResponseHeaders)
+	if event.TCP != nil {
+		printProtocolMessages(c.Out, "Request messages", event.TCP.RequestMessages)
+		printProtocolMessages(c.Out, "Response messages", event.TCP.ResponseMessages)
+	}
 }
 
 func (c *Commands) printTraceList(environment model.Environment, traces []model.TrafficTrace) {
@@ -220,9 +246,44 @@ func (c *Commands) printTrace(trace model.TrafficTrace) {
 		exchange := span.Exchange
 		operation := strings.TrimSpace(exchange.Method + " " + exchange.RequestTarget)
 		if operation == "" {
-			operation = strings.ToUpper(string(exchange.Protocol)) + " session"
+			operation = tcpProtocolName(exchange) + " " + tcpOperationName(exchange)
 		}
 		fmt.Fprintf(c.Out, "  %s%s → %s  %-28s %dms  %s\n", strings.Repeat("  ", span.Depth), exchange.Source, exchange.Target, operation, exchange.DurationMS, span.Correlation)
+	}
+}
+
+func tcpProtocolName(event model.TrafficExchange) string {
+	if event.TCP != nil && event.TCP.ApplicationProtocol != "" {
+		return strings.ToUpper(string(event.TCP.ApplicationProtocol))
+	}
+	return "TCP"
+}
+
+func tcpOperationName(event model.TrafficExchange) string {
+	if event.TCP != nil && event.TCP.Operation != "" {
+		return event.TCP.Operation
+	}
+	return "SESSION"
+}
+
+func printProtocolMessages(output io.Writer, label string, messages []model.TrafficMessage) {
+	if len(messages) == 0 {
+		return
+	}
+	fmt.Fprintf(output, "\n%s\n", label)
+	for _, message := range messages {
+		fmt.Fprintf(output, "  %-18s %s (%dms, %d bytes)\n", strings.ToUpper(message.Type)+":", message.Summary, message.OffsetMS, message.WireBytes)
+		for _, field := range message.Fields {
+			fmt.Fprintf(output, "    %-16s %s\n", field.Name+":", field.Value)
+		}
+		if message.Content != "" {
+			for _, line := range strings.Split(message.Content, "\n") {
+				fmt.Fprintf(output, "    %s\n", line)
+			}
+		}
+		if message.Truncated {
+			fmt.Fprintf(output, "    [truncated: %d of %d bytes]\n", message.CapturedBytes, message.ContentBytes)
+		}
 	}
 }
 

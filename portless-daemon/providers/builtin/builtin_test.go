@@ -37,6 +37,10 @@ func TestBuiltinsExposeValidatedRuntimePlans(t *testing.T) {
 		if definition.Version != expected.version || port != expected.port || plan.ClientPort != expected.port || !strings.HasPrefix(plan.Image, "docker.io/") {
 			t.Errorf("%s definition=%#v plan=%#v", resourceType, definition, plan)
 		}
+		descriptor, ok := registry.Descriptor(resourceType)
+		if !ok || descriptor.ApplicationProtocol == "" {
+			t.Errorf("%s has no traffic application protocol: %#v", resourceType, descriptor)
+		}
 		delete(wanted, resourceType)
 	}
 	if len(wanted) != 0 {

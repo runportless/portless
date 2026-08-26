@@ -24,6 +24,20 @@ function resultTone(error: boolean | string | undefined, status: number | undefi
   return ''
 }
 
+function exchangeOperation(exchange: TrafficExchange) {
+  if (exchange.protocol === 'http') return `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}`
+  const application = exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'
+  return `${application} ${exchange.tcp?.operation || 'SESSION'}`
+}
+
+function exchangeResult(exchange: TrafficExchange) {
+  if (exchange.error || exchange.tcp?.outcome === 'error') return 'ERR'
+  if (exchange.status) return exchange.status
+  if (exchange.tcp?.outcome === 'one-way') return 'SENT'
+  if (exchange.tcp?.outcome === 'incomplete') return 'INCOMPLETE'
+  return 'OK'
+}
+
 function traceHasEdge(trace: TrafficTrace, edge: string) {
   if (!edge) return true
   return (trace.spans || []).some((span) => `${span.exchange.source}:${span.exchange.target}` === edge)
@@ -242,7 +256,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     }
   }
 
-  const windowSummary = useMemo(() => trafficWindowSummary(exchanges), [exchanges])
+  const windowSummary = useMemo(() => trafficWindowSummary(mode === 'traces' && !includeBackground ? exchanges.filter((exchange) => !exchange.background) : exchanges), [exchanges, includeBackground, mode])
   const visibleTraces = useMemo(() => filterTraces(traces, search, resultFilter, includeBackground), [traces, search, resultFilter, includeBackground])
   const visibleExchanges = useMemo(() => filterExchanges(exchanges.filter((exchange) => exchangeHasEdge(exchange, edgeFilter)), search, resultFilter, protocol), [exchanges, edgeFilter, search, resultFilter, protocol])
   const tracePagination = useMemo(() => paginateItems(visibleTraces, tracePage, trafficPageSize), [visibleTraces, tracePage])
@@ -269,7 +283,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="filter path, service, edge, status…" aria-label="Filter traffic" />
         <select value={resultFilter} onChange={(event) => setResultFilter(event.target.value as TrafficResultFilter)} aria-label="Traffic result filter"><option value="all">All results</option><option value="errors">Errors</option><option value="slow">Slow · 500ms+</option><option value="faulted">Faulted</option></select>
         {mode === 'exchanges' && <div className="traffic-protocol" role="group" aria-label="Traffic protocol">{(['all', 'http', 'tcp'] as const).map((value) => <button key={value} className={protocol === value ? 'is-active' : ''} onClick={() => setProtocol(value)}>{value.toUpperCase()}</button>)}</div>}
-        {mode === 'traces' && <button className={`traffic-background${includeBackground ? ' is-active' : ''}`} type="button" aria-pressed={includeBackground} onClick={() => setIncludeBackground((value) => !value)}>SHOW SUBRESOURCES</button>}
+        {mode === 'traces' && <button className={`traffic-background${includeBackground ? ' is-active' : ''}`} type="button" aria-pressed={includeBackground} onClick={() => setIncludeBackground((value) => !value)}>SHOW BACKGROUND</button>}
         {edgeFilter && <button className="traffic-filter-chip" type="button" onClick={() => setEdgeFilter('')}><span>EDGE</span>{edgeFilter.replace(':', ' → ')} ×</button>}
       </div>
 
@@ -282,8 +296,8 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         {visibleTraces.length === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
         <PanelPagination label="traces" pagination={tracePagination} onPage={setTracePage} />
       </div> : <div className="exchange-list">
-        <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Protocol</span><span>Request / session</span><span>Edge</span><span>Result</span><span>Duration</span><span>Fault / recording</span></div>
-        {exchangePagination.items.map((exchange) => <button className="table-row traffic-row" key={exchange.sequence} onClick={() => void inspectExchange(exchange)}><code>#{exchange.sequence}</code><span>{new Date(exchange.startedAt).toLocaleTimeString()}</span><strong>{exchange.protocol.toUpperCase()}</strong><code className="truncate">{exchange.protocol === 'http' ? `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}` : 'TCP session'}</code><span>{exchange.source}<i className="edge-arrow">→</i>{exchange.target}</span><span className={resultTone(exchange.error, exchange.status)}>{exchange.error ? 'ERR' : exchange.status || 'OK'}</span><span>{duration(exchange.durationMs)}</span><span>{exchange.fault ? <b className="fault-chip">▲ {exchange.fault}</b> : exchange.recording ? <b className="record-chip">● {exchange.recording}</b> : '—'}</span></button>)}
+        <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Protocol</span><span>Request / operation</span><span>Edge</span><span>Result</span><span>Duration</span><span>Fault / recording</span></div>
+        {exchangePagination.items.map((exchange) => <button className="table-row traffic-row" key={exchange.sequence} onClick={() => void inspectExchange(exchange)}><code>#{exchange.sequence}</code><span>{trafficStartedTime(exchange.startedAt)}</span><strong>{exchange.protocol === 'tcp' ? exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP' : 'HTTP'}</strong><code className="truncate">{exchangeOperation(exchange)}</code><span>{exchange.source}<i className="edge-arrow">→</i>{exchange.target}</span><span className={resultTone(exchange.error || exchange.tcp?.outcome === 'error' || exchange.tcp?.outcome === 'incomplete', exchange.status)}>{exchangeResult(exchange)}</span><span>{duration(exchange.durationMs)}</span><span>{exchange.fault ? <b className="fault-chip">▲ {exchange.fault}</b> : exchange.recording ? <b className="record-chip">● {exchange.recording}</b> : '—'}</span></button>)}
         {visibleExchanges.length === 0 && <div className="empty-row">No matching exchanges yet.</div>}
         <PanelPagination label="exchanges" pagination={exchangePagination} onPage={setExchangePage} />
       </div>}

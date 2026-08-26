@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { APIError } from '../api'
-import type { DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
+import type { DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
+import { DaemonLogs } from './DaemonLogs'
 import { DrawerSizeButton } from './DrawerSizeButton'
 import { relativeTime, StatusMark } from './Status'
 
 type RestartPhase = 'idle' | 'confirm' | 'restarting' | 'reconnected' | 'failed'
+type HandoffPhase = 'idle' | 'checking' | 'ready' | 'blocked' | 'failed'
+type DaemonDrawerTab = 'overview' | 'logs'
 
-export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh, onRestart, onReconnected }: {
+export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh, onVerifyHandoff, onRestart, onReconnected }: {
   status: DaemonStatus | null
   runtime: RuntimeStatus | null
   relay: RelayStatus | null
   live: boolean
   onClose: () => void
   onRefresh: () => Promise<DaemonStatus>
+  onVerifyHandoff: () => Promise<DaemonHandoffStatus>
   onRestart: (instanceId: string) => Promise<DaemonRestart>
   onReconnected: () => Promise<void>
 }) {
@@ -20,13 +24,41 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
   const [error, setError] = useState('')
   const [copyState, setCopyState] = useState('COPY DIAGNOSTICS')
   const [fullScreen, setFullScreen] = useState(false)
+  const [tab, setTab] = useState<DaemonDrawerTab>('overview')
+  const [handoff, setHandoff] = useState<DaemonHandoffStatus | null>(null)
+  const [handoffPhase, setHandoffPhase] = useState<HandoffPhase>('idle')
+  const [handoffError, setHandoffError] = useState('')
   const mounted = useRef(true)
-  const active = status?.activeEnvironments ?? []
-  const restartSafe = active.length === 0 || status?.handoffReady === true
+  const active = handoff?.activeEnvironments ?? status?.activeEnvironments ?? []
+  const handoffReady = handoff?.state === 'ready'
+  const restartSafe = active.length === 0 || handoffReady
+  const handoffBlocked = active.length > 0 && (handoffPhase === 'blocked' || handoffPhase === 'failed')
   const restarting = phase === 'restarting'
   const effectiveState = restarting ? 'restarting' : phase === 'reconnected' ? 'ready' : live ? status?.state ?? 'unknown' : 'unreachable'
 
   useEffect(() => () => { mounted.current = false }, [])
+  const activeKey = status?.activeEnvironments.join('\u0000') ?? ''
+  useEffect(() => {
+    if (!status || !live) {
+      setHandoff(null)
+      setHandoffPhase('idle')
+      return
+    }
+    let current = true
+    setHandoff(null)
+    setHandoffError('')
+    setHandoffPhase('checking')
+    void onVerifyHandoff().then((result) => {
+      if (!current || !mounted.current) return
+      setHandoff(result)
+      setHandoffPhase(result.state)
+    }).catch((value) => {
+      if (!current || !mounted.current) return
+      setHandoffError(errorMessage(value))
+      setHandoffPhase('failed')
+    })
+    return () => { current = false }
+  }, [activeKey, live, onVerifyHandoff, status?.instanceId])
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -70,7 +102,7 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
   const copyDiagnostics = async () => {
     if (!status || !navigator.clipboard) return
     try {
-      await navigator.clipboard.writeText(daemonDiagnostics(status, runtime, relay))
+      await navigator.clipboard.writeText(daemonDiagnostics(status, runtime, relay, handoff))
       setCopyState('COPIED')
       window.setTimeout(() => mounted.current && setCopyState('COPY DIAGNOSTICS'), 1600)
     } catch {
@@ -82,10 +114,15 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
     <aside className={`drawer daemon-drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Portless Daemon" onMouseDown={(event) => event.stopPropagation()}>
       <header><div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div><div className="drawer-header-actions"><DrawerSizeButton fullScreen={fullScreen} subject="Portless Daemon" onToggle={() => setFullScreen((value) => !value)} /><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
       <div className="drawer-actions">
-        <button className="button button--warning" onClick={() => setPhase('confirm')} disabled={!status || !live || !restartSafe || restarting}>RESTART DAEMON</button>
+        <button className="button button--warning" onClick={() => { setTab('overview'); setPhase('confirm') }} disabled={!status || !live || !restartSafe || restarting || (active.length > 0 && handoffPhase === 'checking')}>RESTART DAEMON</button>
         <button className="button" onClick={() => void copyDiagnostics()} disabled={!status}>{copyState}</button>
       </div>
+      <div className="drawer-tabs daemon-drawer-tabs" role="tablist" aria-label="Daemon details">
+        <button className={tab === 'overview' ? 'is-active' : ''} type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')}>OVERVIEW</button>
+        <button className={tab === 'logs' ? 'is-active' : ''} type="button" role="tab" aria-selected={tab === 'logs'} onClick={() => setTab('logs')}>LOGS</button>
+      </div>
       <div className="drawer-content">
+        {tab === 'overview' ? <>
         {status ? <>
           <div className="detail-grid daemon-detail-grid">
             <Detail label="PID" value={String(status.pid)} />
@@ -95,10 +132,13 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
             <Detail label="API" value={status.apiVersion} />
             <Detail label="RUNTIME" value={runtimeDescription(runtime)} />
           </div>
-          <section className={`drawer-section daemon-handoff ${restartSafe ? '' : 'daemon-handoff--blocked'}`}>
-            <div className="daemon-section-heading"><span className="eyebrow">RUNTIME HANDOFF</span><StatusMark status={active.length === 0 ? 'not required' : status.handoffReady ? 'ready' : 'failed'} /></div>
-            <p>{active.length === 0 ? 'No active environments need to be handed off.' : status.handoffReady ? 'Managed services can be adopted by a replacement daemon without stopping the environment.' : 'The daemon cannot restart safely while it manages active environments.'}</p>
-            {active.length > 0 && <div className="daemon-environments">{active.map((environment) => <div key={environment}><StatusMark status={status.handoffReady ? 'active' : 'unknown'} label={false} /><code>{environment}</code><small>ACTIVE</small></div>)}</div>}
+          <section className={`drawer-section daemon-handoff ${handoffBlocked ? 'daemon-handoff--blocked' : ''}`}>
+            <div className="daemon-section-heading"><span className="eyebrow">RUNTIME HANDOFF</span><StatusMark status={handoffDisplayState(active, handoffPhase)} /></div>
+            <p>{handoffDescription(active, handoffPhase)}</p>
+            {handoff?.verifiedAt && <small>Verified {relativeTime(handoff.verifiedAt)} ago</small>}
+            {active.length > 0 && <div className="daemon-environments">{active.map((environment) => <div key={environment}><StatusMark status={handoffReady ? 'active' : 'unknown'} label={false} /><code>{environment}</code><small>ACTIVE</small></div>)}</div>}
+            {handoffError && <ul className="daemon-problems"><li>{handoffError}</li></ul>}
+            {handoff?.problems.length ? <ul className="daemon-problems">{handoff.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul> : null}
             {status.recoveryProblems.length > 0 && <ul className="daemon-problems">{status.recoveryProblems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
           </section>
           <section className={`drawer-section daemon-network ${relay?.healthy ? '' : 'daemon-network--degraded'}`}>
@@ -130,6 +170,7 @@ export function DaemonDrawer({ status, runtime, relay, live, onClose, onRefresh,
           <p>{error || 'The UI is waiting for the local daemon to become reachable.'}</p>
           <pre><span>$</span> portless doctor</pre>
         </section>}
+        </> : live ? <DaemonLogs instanceId={status?.instanceId} /> : <section className="daemon-restart-error daemon-log-unavailable" role="alert"><span className="eyebrow">DAEMON LOGS UNAVAILABLE</span><p>The UI is waiting for the local daemon to become reachable.</p><pre><span>$</span> portless doctor</pre></section>}
       </div>
     </aside>
   </div>
@@ -152,9 +193,10 @@ function runtimeDescription(runtime: RuntimeStatus | null) {
   return `${runtime.selected} ${runtime.version ?? ''}`.trim()
 }
 
-export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus | null, relay: RelayStatus | null = null) {
+export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus | null, relay: RelayStatus | null = null, handoff: DaemonHandoffStatus | null = null) {
   const environments = status.activeEnvironments.length ? `\n${status.activeEnvironments.map((value) => `  ${value}`).join('\n')}` : ' none'
-  const problems = status.recoveryProblems.length ? `\n${status.recoveryProblems.map((value) => `  ${value}`).join('\n')}` : ' none'
+  const recoveryProblems = status.recoveryProblems.length ? `\n${status.recoveryProblems.map((value) => `  ${value}`).join('\n')}` : ' none'
+  const handoffProblems = handoff?.problems.length ? `\n${handoff.problems.map((value) => `  ${value}`).join('\n')}` : ' none'
   return [
     'Portless daemon',
     `State: ${status.state}`,
@@ -165,14 +207,33 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
     `Protocol Version: ${status.protocolVersion}`,
     `API Version: ${status.apiVersion}`,
     `Runtime: ${runtimeDescription(runtime)}`,
-    `Runtime handoff: ${status.handoffReady ? 'ready' : 'not ready'}`,
+    `Runtime handoff: ${handoff?.state ?? 'unchecked'}`,
+    `Handoff verified: ${handoff?.verifiedAt ?? 'not yet'}`,
     `Active environments:${environments}`,
-    `Recovery problems:${problems}`,
+    `Handoff problems:${handoffProblems}`,
+    `Recovery problems:${recoveryProblems}`,
     `HTTP ingress: ${relay?.httpHealthy ? 'ready' : 'not ready'} (127.0.0.1:80)`,
     `Endpoint DNS: ${relay?.dnsHealthy ? 'ready' : 'not ready'} (${relay?.dnsListenAddress || '127.77.0.1:1053'})`,
     `DNS resolver: ${relay?.resolverHealthy ? 'ready' : 'not ready'} (localhost, portless.test)`,
     `TCP endpoint pool: ${relay?.endpointPoolReady ? 'ready' : 'not ready'}${relay?.endpointPoolDetail ? ` (${relay.endpointPoolDetail})` : ''}`,
   ].join('\n')
+}
+
+function handoffDisplayState(active: string[], phase: HandoffPhase) {
+  if (active.length === 0 && phase !== 'checking') return 'not required'
+  if (phase === 'checking') return 'checking'
+  if (phase === 'ready') return 'ready'
+  if (phase === 'blocked') return 'failed'
+  return 'unknown'
+}
+
+function handoffDescription(active: string[], phase: HandoffPhase) {
+  if (phase === 'checking') return 'Verifying supervisors, containers, and proxy listeners…'
+  if (active.length === 0) return 'No active environments need to be handed off.'
+  if (phase === 'ready') return 'Managed services can be adopted by a replacement daemon without stopping the environment.'
+  if (phase === 'blocked') return 'The daemon cannot restart safely while it manages active environments.'
+  if (phase === 'failed') return 'Portless could not verify runtime handoff safety.'
+  return 'Runtime handoff has not been verified.'
 }
 
 function errorMessage(value: unknown) {

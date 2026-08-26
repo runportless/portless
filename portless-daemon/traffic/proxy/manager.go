@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -23,17 +24,20 @@ import (
 	"github.com/runportless/portless/portless-daemon/mocks"
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/traffic"
+	"github.com/runportless/portless/portless-daemon/traffic/protocol"
+	protocolbuiltin "github.com/runportless/portless/portless-daemon/traffic/protocol/builtin"
 )
 
 type edge struct {
-	scope             string
-	source            string
-	target            string
-	protocol          model.Protocol
-	listener          net.Listener
-	server            *http.Server
-	cancel            context.CancelFunc
-	activeConnections atomic.Int64
+	scope               string
+	source              string
+	target              string
+	protocol            model.Protocol
+	applicationProtocol model.ApplicationProtocol
+	listener            net.Listener
+	server              *http.Server
+	cancel              context.CancelFunc
+	activeConnections   atomic.Int64
 }
 
 type target struct {
@@ -49,18 +53,24 @@ type target struct {
 
 // Manager owns source-scoped HTTP and TCP proxies, targets, capture, and fault behavior.
 type Manager struct {
-	database  *database.Store
-	broker    *events.Broker
-	traffic   *traffic.Store
-	mu        sync.RWMutex
-	targets   map[string]target
-	edges     map[string]*edge
-	transport *http.Transport
-	contexts  injectedTraceContextRegistry
-	closed    atomic.Bool
+	database               *database.Store
+	broker                 *events.Broker
+	traffic                *traffic.Store
+	mu                     sync.RWMutex
+	targets                map[string]target
+	edges                  map[string]*edge
+	transport              *http.Transport
+	contexts               injectedTraceContextRegistry
+	protocols              *protocol.Registry
+	activeProtocolSessions atomic.Int64
+	closed                 atomic.Bool
 }
 
-const trafficBodyLimit = 64 << 10
+const (
+	trafficBodyLimit               = 64 << 10
+	maximumProtocolSessions        = 256
+	maximumReorderedProtocolChunks = 4
+)
 
 type bodyCapture struct {
 	body  []byte
@@ -112,7 +122,11 @@ func NewManager(controlStore *database.Store, trafficStore *traffic.Store, broke
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.ResponseHeaderTimeout = 30 * time.Second
-	return &Manager{database: controlStore, broker: broker, traffic: trafficStore, targets: make(map[string]target), edges: make(map[string]*edge), transport: transport}
+	return &Manager{
+		database: controlStore, broker: broker, traffic: trafficStore,
+		targets: make(map[string]target), edges: make(map[string]*edge), transport: transport,
+		protocols: protocolbuiltin.Registry(),
+	}
 }
 
 // SetTarget registers a local loopback HTTP or TCP target for a service.
@@ -236,7 +250,10 @@ func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model
 		return nil, err
 	}
 	edgeContext, cancel := context.WithCancel(context.Background())
-	created := &edge{scope: scope, source: connection.Source, target: connection.Target, protocol: connection.Protocol, listener: listener, cancel: cancel}
+	created := &edge{
+		scope: scope, source: connection.Source, target: connection.Target, protocol: connection.Protocol,
+		applicationProtocol: connection.ApplicationProtocol, listener: listener, cancel: cancel,
+	}
 	m.mu.Lock()
 	if existing := m.edges[key]; existing != nil {
 		m.mu.Unlock()
@@ -452,8 +469,8 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
 	}
 	var persistBodies bool
-	var maxBodyBytes int64
-	exchange.Recording, persistBodies, maxBodyBytes = m.matchRecording(ctx, scope, source, targetName)
+	var maxPayloadBytes int64
+	exchange.Recording, persistBodies, maxPayloadBytes = m.matchRecording(ctx, scope, source, targetName)
 	persisted := exchange
 	if !persistBodies {
 		persisted.RequestBody = ""
@@ -463,10 +480,10 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 		persisted.RequestCapturedBytes = 0
 		persisted.ResponseCapturedBytes = 0
 	} else {
-		persisted.RequestBody, persisted.RequestBodyTruncated = boundedBody(persisted.RequestBody, persisted.RequestBodyTruncated, maxBodyBytes)
-		persisted.ResponseBody, persisted.ResponseBodyTruncated = boundedBody(persisted.ResponseBody, persisted.ResponseBodyTruncated, maxBodyBytes)
-		persisted.RequestCapturedBytes = boundedCapturedBytes(persisted.RequestCapturedBytes, maxBodyBytes)
-		persisted.ResponseCapturedBytes = boundedCapturedBytes(persisted.ResponseCapturedBytes, maxBodyBytes)
+		persisted.RequestBody, persisted.RequestBodyTruncated = boundedBody(persisted.RequestBody, persisted.RequestBodyTruncated, maxPayloadBytes)
+		persisted.ResponseBody, persisted.ResponseBodyTruncated = boundedBody(persisted.ResponseBody, persisted.ResponseBodyTruncated, maxPayloadBytes)
+		persisted.RequestCapturedBytes = boundedCapturedBytes(persisted.RequestCapturedBytes, maxPayloadBytes)
+		persisted.ResponseCapturedBytes = boundedCapturedBytes(persisted.ResponseCapturedBytes, maxPayloadBytes)
 	}
 	exchange.RequestBody, exchange.RequestBodyTruncated = boundedBody(exchange.RequestBody, exchange.RequestBodyTruncated, trafficBodyLimit)
 	exchange.ResponseBody, exchange.ResponseBodyTruncated = boundedBody(exchange.ResponseBody, exchange.ResponseBodyTruncated, trafficBodyLimit)
@@ -475,6 +492,7 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 	exchange = m.traffic.CompleteHTTPRequest(activeRequest, exchange)
 	if exchange.Recording != "" {
 		persisted.Sequence = exchange.Sequence
+		persisted.Background = exchange.Background
 		_ = m.database.PersistTraffic(context.Background(), persisted)
 	}
 }
@@ -509,31 +527,35 @@ func (m *Manager) forwardTCP(ctx context.Context, current *edge, downstream net.
 	if fault != nil {
 		m.applyDelay(ctx, *fault)
 		if fault.Abort || fault.StatusCode != 0 {
-			m.finishTCP(current, started, 0, 0, fault.Name, "connection rejected by fault")
+			m.finishTCPSession(current, started, 0, 0, fault.Name, "connection rejected by fault", model.TrafficInspectionOpaque, "connection rejected before protocol inspection")
 			return
 		}
 	}
 	upstreamTarget, ok := m.target(current.scope, current.target)
 	if !ok || upstreamTarget.provider == model.ProviderRemote {
-		m.finishTCP(current, started, 0, 0, faultName(fault), "target is not running")
+		m.finishTCPSession(current, started, 0, 0, faultName(fault), "target is not running", model.TrafficInspectionOpaque, "connection did not reach the target")
 		return
 	}
 	upstream, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", upstreamTarget.address)
 	if err != nil {
-		m.finishTCP(current, started, 0, 0, faultName(fault), err.Error())
+		m.finishTCPSession(current, started, 0, 0, faultName(fault), err.Error(), model.TrafficInspectionOpaque, "connection did not reach the target")
 		return
 	}
 	defer upstream.Close()
+	observation, fallbackInspection, fallbackReason := m.protocolObservation(current, faultName(fault))
+	if observation != nil {
+		defer m.activeProtocolSessions.Add(-1)
+	}
 	type countResult struct {
 		err error
 	}
 	results := make(chan countResult, 2)
 	go func() {
-		_, err := io.Copy(upstream, io.TeeReader(downstream, trafficCounter{value: &requestBytes}))
+		_, err := io.Copy(observingWriter{destination: upstream, counter: &requestBytes, direction: protocol.DirectionRequest, observation: observation}, downstream)
 		results <- countResult{err: err}
 	}()
 	go func() {
-		_, err := io.Copy(downstream, io.TeeReader(upstream, trafficCounter{value: &responseBytes}))
+		_, err := io.Copy(observingWriter{destination: downstream, counter: &responseBytes, direction: protocol.DirectionResponse, observation: observation}, upstream)
 		results <- countResult{err: err}
 	}()
 	first := <-results
@@ -553,15 +575,183 @@ func (m *Manager) forwardTCP(ctx context.Context, current *edge, downstream net.
 	} else if !forcedShutdown && second.err != nil && !isClosedConnection(second.err) {
 		errorText = second.err.Error()
 	}
-	m.finishTCP(current, started, requestBytes.Load(), responseBytes.Load(), faultName(fault), errorText)
+	if observation != nil {
+		observation.close(time.Now().UTC(), errorText)
+		state := observation.state()
+		remainingRequest := maxInt64(0, requestBytes.Load()-observation.requestBytes.Load())
+		remainingResponse := maxInt64(0, responseBytes.Load()-observation.responseBytes.Load())
+		if observation.operations.Load() == 0 || state.Inspection != model.TrafficInspectionDecoded {
+			m.finishTCPSession(current, started, remainingRequest, remainingResponse, faultName(fault), errorText, state.Inspection, state.Reason)
+		}
+		return
+	}
+	m.finishTCPSession(current, started, requestBytes.Load(), responseBytes.Load(), faultName(fault), errorText, fallbackInspection, fallbackReason)
 }
 
-type trafficCounter struct{ value *atomic.Int64 }
+type observingWriter struct {
+	destination io.Writer
+	counter     *atomic.Int64
+	direction   protocol.Direction
+	observation *tcpProtocolObservation
+}
 
-// Write counts proxied bytes while behaving as a successful sink.
-func (counter trafficCounter) Write(value []byte) (int, error) {
-	counter.value.Add(int64(len(value)))
-	return len(value), nil
+// Write forwards bytes before observing the successfully written portion so
+// protocol inspection cannot prevent delivery of the current chunk.
+func (writer observingWriter) Write(value []byte) (int, error) {
+	var ticket uint64
+	observed := time.Now().UTC()
+	if writer.observation != nil {
+		ticket = writer.observation.reserve()
+	}
+	written, err := writer.destination.Write(value)
+	if written > 0 {
+		writer.counter.Add(int64(written))
+	}
+	if writer.observation != nil {
+		writer.observation.submit(ticket, writer.direction, value[:written], observed)
+	}
+	return written, err
+}
+
+type observedProtocolChunk struct {
+	direction protocol.Direction
+	content   []byte
+	observed  time.Time
+}
+
+type tcpProtocolObservation struct {
+	session         protocol.Session
+	emit            func([]protocol.Operation)
+	disabled        atomic.Bool
+	disabledState   atomic.Value
+	nextTicket      atomic.Uint64
+	orderMu         sync.Mutex
+	nextObservation uint64
+	pendingChunks   map[uint64]observedProtocolChunk
+	operations      atomic.Int64
+	requestBytes    atomic.Int64
+	responseBytes   atomic.Int64
+}
+
+func (o *tcpProtocolObservation) reserve() uint64 {
+	return o.nextTicket.Add(1) - 1
+}
+
+func (o *tcpProtocolObservation) submit(ticket uint64, direction protocol.Direction, content []byte, observed time.Time) {
+	if o == nil || o.disabled.Load() {
+		return
+	}
+	chunk := observedProtocolChunk{direction: direction, content: append([]byte(nil), content...), observed: observed}
+	o.orderMu.Lock()
+	defer o.orderMu.Unlock()
+	if o.disabled.Load() {
+		return
+	}
+	if o.pendingChunks == nil {
+		o.pendingChunks = make(map[uint64]observedProtocolChunk)
+	}
+	o.pendingChunks[ticket] = chunk
+	if len(o.pendingChunks) > maximumReorderedProtocolChunks {
+		o.disable(protocol.State{Inspection: model.TrafficInspectionLimited, Reason: "protocol observation ordering exceeded its bounded buffer"})
+		o.pendingChunks = nil
+		return
+	}
+	for {
+		current, ok := o.pendingChunks[o.nextObservation]
+		if !ok {
+			return
+		}
+		delete(o.pendingChunks, o.nextObservation)
+		o.nextObservation++
+		if len(current.content) > 0 {
+			o.observe(current.direction, current.content, current.observed)
+			if o.disabled.Load() {
+				o.pendingChunks = nil
+				return
+			}
+		}
+	}
+}
+
+func (o *tcpProtocolObservation) observe(direction protocol.Direction, content []byte, observed time.Time) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			o.disable(protocol.State{Inspection: model.TrafficInspectionMalformed, Reason: fmt.Sprintf("protocol decoder failed: %v", recovered)})
+		}
+	}()
+	o.publish(o.session.Observe(direction, content, observed))
+}
+
+func (o *tcpProtocolObservation) close(completed time.Time, errorText string) {
+	if o == nil || o.disabled.Load() {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			o.disable(protocol.State{Inspection: model.TrafficInspectionMalformed, Reason: fmt.Sprintf("protocol decoder failed while closing: %v", recovered)})
+		}
+	}()
+	var connectionErr error
+	if errorText != "" {
+		connectionErr = errors.New(errorText)
+	}
+	o.publish(o.session.Close(completed, connectionErr))
+}
+
+func (o *tcpProtocolObservation) disable(state protocol.State) {
+	if o.disabled.Load() {
+		return
+	}
+	o.disabledState.Store(state)
+	o.disabled.Store(true)
+}
+
+func (o *tcpProtocolObservation) publish(operations []protocol.Operation) {
+	if len(operations) == 0 {
+		return
+	}
+	for _, operation := range operations {
+		o.operations.Add(1)
+		o.requestBytes.Add(operation.RequestBytes)
+		o.responseBytes.Add(operation.ResponseBytes)
+	}
+	o.emit(operations)
+}
+
+func (o *tcpProtocolObservation) state() protocol.State {
+	if o == nil {
+		return protocol.State{Inspection: model.TrafficInspectionOpaque}
+	}
+	if o.disabled.Load() {
+		state, _ := o.disabledState.Load().(protocol.State)
+		return state
+	}
+	return o.session.State()
+}
+
+func (m *Manager) protocolObservation(current *edge, fault string) (*tcpProtocolObservation, model.TrafficInspection, string) {
+	if current.applicationProtocol == "" {
+		return nil, model.TrafficInspectionOpaque, "application protocol is not declared"
+	}
+	if m.activeProtocolSessions.Add(1) > maximumProtocolSessions {
+		m.activeProtocolSessions.Add(-1)
+		return nil, model.TrafficInspectionLimited, "active protocol-session limit reached"
+	}
+	session, ok := m.protocols.Open(current.applicationProtocol, protocol.Config{Policy: func() protocol.CapturePolicy {
+		name, capturePayloads, maximum := m.matchRecording(context.Background(), current.scope, current.source, current.target)
+		return protocol.CapturePolicy{Recording: name, PersistPayloads: capturePayloads, PayloadLimit: int(maximum)}
+	}})
+	if !ok {
+		m.activeProtocolSessions.Add(-1)
+		return nil, model.TrafficInspectionUnsupported, "no decoder is registered for " + string(current.applicationProtocol)
+	}
+	observation := &tcpProtocolObservation{session: session}
+	observation.emit = func(operations []protocol.Operation) {
+		for _, operation := range operations {
+			m.finishTCPOperation(current, operation, fault)
+		}
+	}
+	return observation, "", ""
 }
 
 func (m *Manager) reportTCPActivity(ctx context.Context, current *edge, requestBytes, responseBytes *atomic.Int64, fault string, done <-chan struct{}, stopped chan<- struct{}) {
@@ -607,19 +797,28 @@ func (m *Manager) publishTCPActivity(current *edge, phase string, activeConnecti
 	m.broker.Publish(events.Event{
 		Type: "traffic.tcp.activity", Project: project, Environment: environment,
 		Data: model.TrafficActivity{
-			Project: project, Environment: environment, Protocol: current.protocol,
+			Project: project, Environment: environment, Protocol: current.protocol, ApplicationProtocol: current.applicationProtocol,
 			Source: current.source, Target: current.target, ObservedAt: time.Now().UTC(), Phase: phase,
 			ActiveConnections: activeConnections, RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault,
 		},
 	})
 }
 
-func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, responseBytes int64, fault, errorText string) {
+func (m *Manager) finishTCPSession(current *edge, started time.Time, requestBytes, responseBytes int64, fault, errorText string, inspection model.TrafficInspection, inspectionReason string) {
 	completed := time.Now().UTC()
 	project, environment := scopeNames(current.scope)
 	exchange := model.TrafficExchange{Project: project, Environment: environment, Protocol: current.protocol, Source: current.source, Target: current.target,
 		StartedAt: started, CompletedAt: completed, DurationMS: completed.Sub(started).Milliseconds(),
-		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText}
+		RequestBytes: requestBytes, ResponseBytes: responseBytes, Fault: fault, Error: errorText,
+		TCP: &model.TrafficTCPExchange{
+			Kind: model.TrafficTCPKindSession, ApplicationProtocol: current.applicationProtocol,
+			Operation: "SESSION", Inspection: inspection, InspectionReason: inspectionReason,
+			Outcome: model.TrafficTCPOutcomeSuccess,
+		},
+	}
+	if errorText != "" {
+		exchange.TCP.Outcome = model.TrafficTCPOutcomeError
+	}
 	if upstream, ok := m.target(current.scope, current.target); ok {
 		exchange.TargetProvider = upstream.provider
 		exchange.RemoteClassification = upstream.classification
@@ -629,6 +828,148 @@ func (m *Manager) finishTCP(current *edge, started time.Time, requestBytes, resp
 	if exchange.Recording != "" {
 		_ = m.database.PersistTraffic(context.Background(), exchange)
 	}
+}
+
+func (m *Manager) finishTCPOperation(current *edge, operation protocol.Operation, fault string) {
+	if operation.StartedAt.IsZero() {
+		operation.StartedAt = time.Now().UTC()
+	}
+	if operation.CompletedAt.IsZero() {
+		operation.CompletedAt = operation.StartedAt
+	}
+	if operation.Inspection == "" {
+		operation.Inspection = model.TrafficInspectionDecoded
+	}
+	project, environment := scopeNames(current.scope)
+	exchange := model.TrafficExchange{
+		Project: project, Environment: environment, Protocol: model.ProtocolTCP, Source: current.source, Target: current.target,
+		Background: backgroundTCPOperation(operation, fault),
+		StartedAt:  operation.StartedAt, CompletedAt: operation.CompletedAt,
+		DurationMS:   maxInt64(0, operation.CompletedAt.Sub(operation.StartedAt).Milliseconds()),
+		RequestBytes: operation.RequestBytes, ResponseBytes: operation.ResponseBytes,
+		RequestCapturedBytes: capturedMessageBytes(operation.RequestMessages), ResponseCapturedBytes: capturedMessageBytes(operation.ResponseMessages),
+		Fault: fault, Recording: operation.Policy.Recording, Error: operation.Error,
+		TCP: &model.TrafficTCPExchange{
+			Kind: model.TrafficTCPKindOperation, ApplicationProtocol: current.applicationProtocol,
+			Operation: operation.Name, Inspection: operation.Inspection, InspectionReason: operation.InspectionReason, Outcome: operation.Outcome,
+			RequestMessageCount: len(operation.RequestMessages), ResponseMessageCount: len(operation.ResponseMessages),
+			RequestMessages: operation.RequestMessages, ResponseMessages: operation.ResponseMessages,
+		},
+	}
+	if upstream, ok := m.target(current.scope, current.target); ok {
+		exchange.TargetProvider = upstream.provider
+		exchange.RemoteClassification = upstream.classification
+	}
+	persisted := cloneTCPExchange(exchange)
+	if !operation.Policy.PersistPayloads {
+		stripTCPPayloads(&persisted)
+	} else {
+		boundTCPPayloads(&persisted, operation.Policy.PayloadLimit)
+	}
+	boundTCPPayloads(&exchange, protocol.LivePayloadLimit)
+	exchange = m.traffic.AddExchange(exchange)
+	if exchange.Recording != "" {
+		persisted.Sequence = exchange.Sequence
+		persisted.Background = exchange.Background
+		_ = m.database.PersistTraffic(context.Background(), persisted)
+	}
+}
+
+func backgroundTCPOperation(operation protocol.Operation, fault string) bool {
+	return operation.Background && operation.Outcome == model.TrafficTCPOutcomeSuccess && operation.Error == "" && fault == ""
+}
+
+func cloneTCPExchange(exchange model.TrafficExchange) model.TrafficExchange {
+	if exchange.TCP == nil {
+		return exchange
+	}
+	tcp := *exchange.TCP
+	tcp.RequestMessages = cloneTrafficMessages(tcp.RequestMessages)
+	tcp.ResponseMessages = cloneTrafficMessages(tcp.ResponseMessages)
+	exchange.TCP = &tcp
+	return exchange
+}
+
+func cloneTrafficMessages(messages []model.TrafficMessage) []model.TrafficMessage {
+	if messages == nil {
+		return nil
+	}
+	result := make([]model.TrafficMessage, len(messages))
+	for index, message := range messages {
+		result[index] = message
+		result[index].Fields = append([]model.TrafficMessageField(nil), message.Fields...)
+	}
+	return result
+}
+
+func stripTCPPayloads(exchange *model.TrafficExchange) {
+	if exchange.TCP == nil {
+		return
+	}
+	exchange.TCP.RequestMessages = nil
+	exchange.TCP.ResponseMessages = nil
+	exchange.RequestCapturedBytes = 0
+	exchange.ResponseCapturedBytes = 0
+	exchange.TCP.RequestTruncated = false
+	exchange.TCP.ResponseTruncated = false
+}
+
+func boundTCPPayloads(exchange *model.TrafficExchange, limit int) {
+	if exchange.TCP == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = protocol.LivePayloadLimit
+	}
+	exchange.TCP.RequestMessages, exchange.TCP.RequestTruncated = boundedTrafficMessages(exchange.TCP.RequestMessages, limit)
+	exchange.TCP.ResponseMessages, exchange.TCP.ResponseTruncated = boundedTrafficMessages(exchange.TCP.ResponseMessages, limit)
+	exchange.RequestCapturedBytes = capturedMessageBytes(exchange.TCP.RequestMessages)
+	exchange.ResponseCapturedBytes = capturedMessageBytes(exchange.TCP.ResponseMessages)
+}
+
+func boundedTrafficMessages(messages []model.TrafficMessage, limit int) ([]model.TrafficMessage, bool) {
+	result := cloneTrafficMessages(messages)
+	remaining := int64(limit)
+	truncated := false
+	for index := range result {
+		message := &result[index]
+		if message.CapturedBytes <= remaining {
+			remaining -= message.CapturedBytes
+			truncated = truncated || message.Truncated
+			continue
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		if message.Encoding == model.TrafficMessageEncodingBase64 {
+			decoded, err := base64.StdEncoding.DecodeString(message.Content)
+			if err == nil && int64(len(decoded)) > remaining {
+				message.Content = base64.StdEncoding.EncodeToString(decoded[:remaining])
+			}
+		} else if int64(len([]byte(message.Content))) > remaining {
+			message.Content = strings.ToValidUTF8(string([]byte(message.Content)[:remaining]), "�")
+		}
+		message.CapturedBytes = remaining
+		message.Truncated = true
+		remaining = 0
+		truncated = true
+	}
+	return result, truncated
+}
+
+func capturedMessageBytes(messages []model.TrafficMessage) int64 {
+	var total int64
+	for _, message := range messages {
+		total += message.CapturedBytes
+	}
+	return total
+}
+
+func maxInt64(left, right int64) int64 {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func (m *Manager) matchFault(ctx context.Context, project, source, target, method, requestPath string) *model.FaultRule {
@@ -670,7 +1011,7 @@ func (m *Manager) matchRecording(ctx context.Context, project, source, target st
 		if recording.Target != "" && recording.Target != target {
 			continue
 		}
-		return recording.Name, recording.CaptureBodies, recording.MaxBodyBytes
+		return recording.Name, recording.CapturePayloads, recording.MaxPayloadBytes
 	}
 	return "", false, 0
 }

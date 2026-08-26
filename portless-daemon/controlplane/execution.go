@@ -322,9 +322,10 @@ func (s *Service) ensurePublicTCPProxies(ctx context.Context, environment model.
 		if allocation.Kind != networking.AllocationPublic || !s.proxy.HasTarget(scope, allocation.Target) {
 			continue
 		}
-		connection := model.Connection{
+		target, _ := serviceDefinitionForEnvironment(environment, allocation.Target)
+		connection := s.connectionApplicationProtocol(model.Connection{
 			Source: "external", Target: allocation.Target, Protocol: allocation.Protocol, Required: false,
-		}
+		}, target)
 		if _, err := s.proxy.EnsureEdgeAtAddress(ctx, scope, connection, allocation.Address()); err != nil {
 			return fmt.Errorf("publish %s at %s: %w", allocation.Target, allocation.Address(), err)
 		}
@@ -434,6 +435,11 @@ func (s *Service) prepareProcessEnvironment(ctx context.Context, environment mod
 		if connection.Source != definition.Name {
 			continue
 		}
+		target, exists := serviceDefinition(modelDefinition, connection.Target)
+		if !exists {
+			return nil, fmt.Errorf("connection target %s is not defined", connection.Target)
+		}
+		connection = s.connectionApplicationProtocol(connection, target)
 		listenIP, dnsName, port := "127.0.0.1", "", 0
 		persisted, persistedErr := s.database.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
 		if persistedErr != nil && !errors.Is(persistedErr, database.ErrNotFound) {
@@ -465,10 +471,6 @@ func (s *Service) prepareProcessEnvironment(ctx context.Context, environment mod
 		host := listenIP
 		if dnsName != "" {
 			host = dnsName
-		}
-		target, exists := serviceDefinition(modelDefinition, connection.Target)
-		if !exists {
-			return nil, fmt.Errorf("connection target %s is not defined", connection.Target)
 		}
 		binding, bindErr := s.connectionBinding(target, connection, host, port, s.containerEnvironmentFor(scope, connection.Target), true)
 		if bindErr != nil {

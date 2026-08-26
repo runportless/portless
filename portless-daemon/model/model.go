@@ -142,6 +142,21 @@ const (
 	ProtocolTCP Protocol = "tcp"
 )
 
+// ApplicationProtocol identifies a decoded application protocol transported
+// over a TCP connection. An empty value means the edge remains opaque.
+type ApplicationProtocol string
+
+const (
+	// ApplicationProtocolPostgreSQL identifies the PostgreSQL frontend/backend protocol.
+	ApplicationProtocolPostgreSQL ApplicationProtocol = "postgresql"
+	// ApplicationProtocolRedis identifies the Redis serialization protocol used by Redis and Valkey.
+	ApplicationProtocolRedis ApplicationProtocol = "redis"
+	// ApplicationProtocolMySQL identifies the MySQL classic protocol.
+	ApplicationProtocolMySQL ApplicationProtocol = "mysql"
+	// ApplicationProtocolNATS identifies the NATS client protocol.
+	ApplicationProtocolNATS ApplicationProtocol = "nats"
+)
+
 // EndpointKind identifies an endpoint's role in local routing.
 type EndpointKind string
 
@@ -229,12 +244,13 @@ type Evidence struct {
 
 // Connection describes a resolved dependency edge between two services.
 type Connection struct {
-	Source      string   `json:"source"`
-	Target      string   `json:"target"`
-	Protocol    Protocol `json:"protocol"`
-	Binding     string   `json:"binding,omitempty"`
-	Environment string   `json:"environment,omitempty"`
-	Required    bool     `json:"required"`
+	Source              string              `json:"source"`
+	Target              string              `json:"target"`
+	Protocol            Protocol            `json:"protocol"`
+	ApplicationProtocol ApplicationProtocol `json:"applicationProtocol,omitempty"`
+	Binding             string              `json:"binding,omitempty"`
+	Environment         string              `json:"environment,omitempty"`
+	Required            bool                `json:"required"`
 }
 
 // EffectiveConnection combines a declared edge with its environment-specific target.
@@ -503,7 +519,100 @@ const (
 	TrafficCorrelationAmbiguous TrafficCorrelation = "ambiguous"
 )
 
-// TrafficExchange records one completed HTTP or TCP exchange observed by Portless.
+// TrafficTCPKind identifies whether a TCP exchange represents one decoded
+// application operation or an opaque connection session.
+type TrafficTCPKind string
+
+const (
+	// TrafficTCPKindOperation identifies a decoded logical application operation.
+	TrafficTCPKindOperation TrafficTCPKind = "operation"
+	// TrafficTCPKindSession identifies an opaque or undecodable connection session.
+	TrafficTCPKindSession TrafficTCPKind = "session"
+)
+
+// TrafficInspection identifies the result of bounded TCP protocol inspection.
+type TrafficInspection string
+
+const (
+	// TrafficInspectionDecoded means application messages were decoded successfully.
+	TrafficInspectionDecoded TrafficInspection = "decoded"
+	// TrafficInspectionOpaque means no application protocol was declared.
+	TrafficInspectionOpaque TrafficInspection = "opaque"
+	// TrafficInspectionEncrypted means encrypted bytes prevented protocol inspection.
+	TrafficInspectionEncrypted TrafficInspection = "encrypted"
+	// TrafficInspectionUnsupported means a recognized but unsupported protocol mode was used.
+	TrafficInspectionUnsupported TrafficInspection = "unsupported"
+	// TrafficInspectionMalformed means invalid framing stopped protocol inspection.
+	TrafficInspectionMalformed TrafficInspection = "malformed"
+	// TrafficInspectionLimited means a bounded inspection limit was reached.
+	TrafficInspectionLimited TrafficInspection = "limited"
+)
+
+// TrafficTCPOutcome describes the protocol-level result of a TCP operation.
+type TrafficTCPOutcome string
+
+const (
+	// TrafficTCPOutcomeSuccess means the protocol reported successful completion.
+	TrafficTCPOutcomeSuccess TrafficTCPOutcome = "success"
+	// TrafficTCPOutcomeError means the protocol reported an application error.
+	TrafficTCPOutcomeError TrafficTCPOutcome = "error"
+	// TrafficTCPOutcomeOneWay means the protocol operation has no paired response.
+	TrafficTCPOutcomeOneWay TrafficTCPOutcome = "one-way"
+	// TrafficTCPOutcomeIncomplete means the connection closed before completion.
+	TrafficTCPOutcomeIncomplete TrafficTCPOutcome = "incomplete"
+)
+
+// TrafficMessageEncoding identifies how retained message content is represented.
+type TrafficMessageEncoding string
+
+const (
+	// TrafficMessageEncodingUTF8 identifies human-readable UTF-8 content.
+	TrafficMessageEncodingUTF8 TrafficMessageEncoding = "utf8"
+	// TrafficMessageEncodingBase64 identifies base64-encoded binary content.
+	TrafficMessageEncodingBase64 TrafficMessageEncoding = "base64"
+)
+
+// TrafficMessageField is one ordered decoded protocol field.
+type TrafficMessageField struct {
+	Name     string                 `json:"name"`
+	Value    string                 `json:"value"`
+	Encoding TrafficMessageEncoding `json:"encoding,omitempty"`
+}
+
+// TrafficMessage records one bounded decoded application-protocol message.
+type TrafficMessage struct {
+	Type          string                 `json:"type"`
+	OffsetMS      int64                  `json:"offsetMs"`
+	Summary       string                 `json:"summary,omitempty"`
+	WireBytes     int64                  `json:"wireBytes"`
+	ContentBytes  int64                  `json:"contentBytes,omitempty"`
+	CapturedBytes int64                  `json:"capturedBytes,omitempty"`
+	Truncated     bool                   `json:"truncated,omitempty"`
+	Content       string                 `json:"content,omitempty"`
+	ContentType   string                 `json:"contentType,omitempty"`
+	Encoding      TrafficMessageEncoding `json:"encoding,omitempty"`
+	Fields        []TrafficMessageField  `json:"fields,omitempty"`
+}
+
+// TrafficTCPExchange contains bounded protocol-aware details for a TCP
+// operation or the inspection result for an opaque session.
+type TrafficTCPExchange struct {
+	Kind                 TrafficTCPKind      `json:"kind"`
+	ApplicationProtocol  ApplicationProtocol `json:"applicationProtocol,omitempty"`
+	Operation            string              `json:"operation,omitempty"`
+	Inspection           TrafficInspection   `json:"inspection"`
+	InspectionReason     string              `json:"inspectionReason,omitempty"`
+	Outcome              TrafficTCPOutcome   `json:"outcome,omitempty"`
+	RequestMessageCount  int                 `json:"requestMessageCount,omitempty"`
+	ResponseMessageCount int                 `json:"responseMessageCount,omitempty"`
+	RequestMessages      []TrafficMessage    `json:"requestMessages,omitempty"`
+	ResponseMessages     []TrafficMessage    `json:"responseMessages,omitempty"`
+	RequestTruncated     bool                `json:"requestTruncated,omitempty"`
+	ResponseTruncated    bool                `json:"responseTruncated,omitempty"`
+}
+
+// TrafficExchange records one completed HTTP request, decoded TCP operation,
+// or opaque TCP session observed by Portless.
 type TrafficExchange struct {
 	Project               string                    `json:"project"`
 	Environment           string                    `json:"environment"`
@@ -511,6 +620,7 @@ type TrafficExchange struct {
 	Protocol              Protocol                  `json:"protocol"`
 	Source                string                    `json:"source"`
 	Target                string                    `json:"target"`
+	Background            bool                      `json:"background"`
 	TargetProvider        ProviderKind              `json:"targetProvider,omitempty"`
 	MockProfile           string                    `json:"mockProfile,omitempty"`
 	MockRoute             string                    `json:"mockRoute,omitempty"`
@@ -541,6 +651,7 @@ type TrafficExchange struct {
 	ResponseBody          string                    `json:"responseBody,omitempty"`
 	RequestBodyTruncated  bool                      `json:"requestBodyTruncated,omitempty"`
 	ResponseBodyTruncated bool                      `json:"responseBodyTruncated,omitempty"`
+	TCP                   *TrafficTCPExchange       `json:"tcp,omitempty"`
 }
 
 // TrafficTraceSpan places one exchange within a trace tree and waterfall.
@@ -582,17 +693,18 @@ type TrafficTrace struct {
 
 // TrafficActivity describes a live connection or request phase for topology animation.
 type TrafficActivity struct {
-	Project           string    `json:"project"`
-	Environment       string    `json:"environment"`
-	Protocol          Protocol  `json:"protocol"`
-	Source            string    `json:"source"`
-	Target            string    `json:"target"`
-	ObservedAt        time.Time `json:"observedAt"`
-	Phase             string    `json:"phase"`
-	ActiveConnections int64     `json:"activeConnections"`
-	RequestBytes      int64     `json:"requestBytes,omitempty"`
-	ResponseBytes     int64     `json:"responseBytes,omitempty"`
-	Fault             string    `json:"fault,omitempty"`
+	Project             string              `json:"project"`
+	Environment         string              `json:"environment"`
+	Protocol            Protocol            `json:"protocol"`
+	ApplicationProtocol ApplicationProtocol `json:"applicationProtocol,omitempty"`
+	Source              string              `json:"source"`
+	Target              string              `json:"target"`
+	ObservedAt          time.Time           `json:"observedAt"`
+	Phase               string              `json:"phase"`
+	ActiveConnections   int64               `json:"activeConnections"`
+	RequestBytes        int64               `json:"requestBytes,omitempty"`
+	ResponseBytes       int64               `json:"responseBytes,omitempty"`
+	Fault               string              `json:"fault,omitempty"`
 }
 
 // ConfigurationValue is an effective service setting with its source and sensitivity.
@@ -624,19 +736,19 @@ type LogEntry struct {
 
 // Recording describes a bounded traffic-capture session and its retained event count.
 type Recording struct {
-	Project       string     `json:"project"`
-	Environment   string     `json:"environment"`
-	Name          string     `json:"name"`
-	Source        string     `json:"source,omitempty"`
-	Target        string     `json:"target,omitempty"`
-	CaptureBodies bool       `json:"captureBodies"`
-	MaxEvents     int64      `json:"maxEvents"`
-	MaxBodyBytes  int64      `json:"maxBodyBytes"`
-	Status        string     `json:"status"`
-	StartedAt     time.Time  `json:"startedAt"`
-	CompletedAt   *time.Time `json:"completedAt,omitempty"`
-	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
-	EventCount    int64      `json:"eventCount"`
+	Project         string     `json:"project"`
+	Environment     string     `json:"environment"`
+	Name            string     `json:"name"`
+	Source          string     `json:"source,omitempty"`
+	Target          string     `json:"target,omitempty"`
+	CapturePayloads bool       `json:"capturePayloads"`
+	MaxEvents       int64      `json:"maxEvents"`
+	MaxPayloadBytes int64      `json:"maxPayloadBytes"`
+	Status          string     `json:"status"`
+	StartedAt       time.Time  `json:"startedAt"`
+	CompletedAt     *time.Time `json:"completedAt,omitempty"`
+	ExpiresAt       *time.Time `json:"expiresAt,omitempty"`
+	EventCount      int64      `json:"eventCount"`
 }
 
 // FaultRule defines a scoped traffic failure and its current activation state.

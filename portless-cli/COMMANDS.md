@@ -248,7 +248,7 @@ directed and retain caller identity.
 | --- | --- |
 | `portless traffic list` | List captured exchanges. `--protocol <all|http|tcp>` defaults to `all`; `--limit <n>` defaults to `250`; `--service <name>` matches either endpoint; `--edge <source:target>` matches one directed edge; `-t, --tail` streams live exchanges. `--service` and `--edge` are mutually exclusive. Alias: `traffic ls`. |
 | `portless traffic show <sequence>` | Show one captured exchange by its sequence number. |
-| `portless traffic traces` | List correlated traces. `--limit <n>` defaults to `100`; filter with mutually exclusive `--service <name>` or `--edge <source:target>`; `--include-background` includes browser background activity. |
+| `portless traffic traces` | List correlated traces. `--limit <n>` defaults to `100`; filter with mutually exclusive `--service <name>` or `--edge <source:target>`; `--include-background` includes browser subresources and successful connection housekeeping. |
 | `portless traffic trace <number>` | Show one correlated trace by trace number. |
 
 Examples:
@@ -348,7 +348,7 @@ recording is implied by `record stop` when a name is omitted.
 | Command | Usage |
 | --- | --- |
 | `portless record list` | List retained recordings. `--limit <n>` defaults to `100`. |
-| `portless record start <name>` | Start a bounded recording. `--edge <source:target>` scopes it; `--duration <duration>` defaults to `15m` and must be greater than zero and at most `1h`; `--max-events <n>` defaults to `10000` and accepts `1..100000`; `--capture-bodies` retains inspectable bodies; `--max-body-bytes <n>` defaults to `65536` and accepts `1..1048576` bytes per request or response body. |
+| `portless record start <name>` | Start a bounded recording. `--edge <source:target>` scopes it; `--duration <duration>` defaults to `15m` and must be greater than zero and at most `1h`; `--max-events <n>` defaults to `10000` and accepts `1..100000`; `--capture-payloads` retains HTTP bodies and decoded TCP application content; `--max-payload-bytes <n>` defaults to `65536` and accepts `1..1048576` bytes per direction. |
 | `portless record stop [name]` | Stop the named recording, or the active recording when omitted. |
 | `portless record show <name>` | Show recording metadata and retained-event summary. |
 | `portless record export <name>` | Export recording JSON. `-o, --output <path>` defaults to `-` for stdout; `--force` overwrites an existing file. |
@@ -392,7 +392,7 @@ Examples:
 ```bash
 portless record start checkout-debug \
   --edge checkout:orders \
-  --capture-bodies
+  --capture-payloads
 portless fault add slow-orders checkout:orders \
   --latency 1500 \
   --probability 0.5 \
@@ -443,7 +443,7 @@ help.
 
 | Command | Usage |
 | --- | --- |
-| `portless daemon status` | Inspect and authenticate the local daemon without starting a replacement. |
+| `portless daemon status` | Inspect and authenticate the local daemon without starting a replacement, including a fresh runtime-handoff safety audit. |
 | `portless daemon stop` | Gracefully stop the authenticated daemon. `--timeout <duration>` defaults to `15s`; `--force` permits a guarded stop with active environments or a legacy fallback. |
 | `portless daemon restart` | Stop the authenticated daemon and start the current executable build. `--timeout <duration>` defaults to `15s`; `--force` permits a guarded replacement with active environments or a legacy daemon. |
 | `portless runtime status` | Show configured and detected Docker or Podman runtime status. |
@@ -453,6 +453,12 @@ help.
 A normal daemon restart is designed to adopt owned runtimes. Forced
 replacement can interrupt active environments and is not a routine refresh
 mechanism.
+
+The browser's routine connection and status polling use shallow daemon identity
+and active-environment state. Opening the daemon drawer or requesting a restart
+performs the deeper supervisor, container, proxy-listener, and ownership audit;
+restart always repeats that audit immediately before replacement and fails
+closed if current ownership cannot be proven.
 
 ### Diagnostics
 

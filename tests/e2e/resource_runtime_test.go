@@ -28,17 +28,19 @@ func TestCLIManagedResourcePluginLifecycle(t *testing.T) {
 		t.Skip(managedResourceE2EEnvironment + "=1 is required for real container lifecycle coverage")
 	}
 	cases := []struct {
-		name         string
-		resource     string
-		resourceType string
-		marker       string
-		environment  string
-		prefix       string
+		name                string
+		resource            string
+		resourceType        string
+		marker              string
+		environment         string
+		prefix              string
+		applicationProtocol model.ApplicationProtocol
+		operation           string
 	}{
-		{name: "postgres", resource: "postgres", resourceType: "postgres", marker: "DATABASE_URL=postgresql://postgres/portless\n", environment: "DATABASE_URL", prefix: "postgresql://"},
-		{name: "valkey", resource: "redis", resourceType: "valkey", marker: "REDIS_URL=redis://redis\n", environment: "REDIS_URL", prefix: "redis://"},
-		{name: "mysql", resource: "mysql", resourceType: "mysql", marker: "MYSQL_URL=mysql://mysql/portless\n", environment: "MYSQL_URL", prefix: "mysql://"},
-		{name: "nats", resource: "nats", resourceType: "nats", marker: "NATS_URL=nats://nats\n", environment: "NATS_URL", prefix: "nats://"},
+		{name: "postgres", resource: "checkout-postgres", resourceType: "postgres", marker: "DATABASE_URL=postgresql://postgres/portless\n", environment: "DATABASE_URL", prefix: "postgresql://", applicationProtocol: model.ApplicationProtocolPostgreSQL},
+		{name: "valkey", resource: "checkout-redis", resourceType: "valkey", marker: "REDIS_URL=redis://redis\n", environment: "REDIS_URL", prefix: "redis://", applicationProtocol: model.ApplicationProtocolRedis, operation: "PING"},
+		{name: "mysql", resource: "checkout-mysql", resourceType: "mysql", marker: "MYSQL_URL=mysql://mysql/portless\n", environment: "MYSQL_URL", prefix: "mysql://", applicationProtocol: model.ApplicationProtocolMySQL},
+		{name: "nats", resource: "checkout-nats", resourceType: "nats", marker: "NATS_URL=nats://nats\n", environment: "NATS_URL", prefix: "nats://", applicationProtocol: model.ApplicationProtocolNATS, operation: "PUB"},
 	}
 
 	for _, testCase := range cases {
@@ -62,6 +64,12 @@ func TestCLIManagedResourcePluginLifecycle(t *testing.T) {
 			address := managedResourceProbeAddress(t, resource)
 			probeManagedResource(t, testCase.resourceType, address)
 			assertGeneratedResourceBinding(t, binary, home, checkout, "checkout", testCase.environment, testCase.prefix)
+			connection := managedResourceConnection(t, binary, home, checkout, project+"/local", "checkout", testCase.resource)
+			if connection.ApplicationProtocol != testCase.applicationProtocol || connection.Endpoint == nil || connection.Endpoint.Address == "" {
+				t.Fatalf("%s connection protocol endpoint = %#v", testCase.name, connection)
+			}
+			probeManagedResource(t, testCase.resourceType, connection.Endpoint.Address)
+			assertProtocolAwareTraffic(t, binary, home, checkout, project+"/local", "checkout", testCase.resource, testCase.applicationProtocol, testCase.operation)
 
 			if testCase.resourceType == "valkey" {
 				if response := valkeyCommand(t, address, "SET", "portless-e2e", "preserved"); response != "OK" {
@@ -123,7 +131,7 @@ func TestCLIManagedResourceRebootRecovery(t *testing.T) {
 		t.Fatalf("start managed-resource reboot environment: %v\n%s\ndaemon log:\n%s", err, output, readDaemonLog(home))
 	}
 	before := environmentStatus(t, binary, home, checkout)
-	redisBefore := requireService(t, before, "redis")
+	redisBefore := requireService(t, before, "checkout-redis")
 	if response := valkeyCommand(t, managedResourceProbeAddress(t, redisBefore), "SET", "reboot-proof", "preserved"); response != "OK" {
 		t.Fatalf("Valkey SET response = %q", response)
 	}
@@ -132,7 +140,7 @@ func TestCLIManagedResourceRebootRecovery(t *testing.T) {
 	}
 	selector := "resource-reboot-e2e/local"
 	processes := persistedProcessRuntimes(t, home, selector)
-	resource := persistedServiceRuntime(t, home, selector, "redis")
+	resource := persistedServiceRuntime(t, home, selector, "checkout-redis")
 	if resource.ContainerName == "" {
 		t.Fatal("managed Valkey runtime has no persisted container name")
 	}
@@ -156,7 +164,7 @@ func TestCLIManagedResourceRebootRecovery(t *testing.T) {
 	if after.Status != model.EnvironmentHealthy {
 		t.Fatalf("managed-resource environment after reboot recovery = %s: %#v", after.Status, after)
 	}
-	redisAfter := requireService(t, after, "redis")
+	redisAfter := requireService(t, after, "checkout-redis")
 	if redisAfter.Status != model.ServiceReady || redisAfter.Generation != redisBefore.Generation+1 || redisAfter.UpstreamPort == 0 {
 		t.Fatalf("Valkey container was not recreated at the next generation: before=%#v after=%#v", redisBefore, redisAfter)
 	}
@@ -173,7 +181,7 @@ func TestCLIManagedResourceRebootRecovery(t *testing.T) {
 		}
 	}
 	recoveredDaemon := daemonStatus(t, binary, home, checkout)
-	if recoveredDaemon.RuntimeState != "ready" || !recoveredDaemon.HandoffReady || len(recoveredDaemon.RecoveryProblems) != 0 {
+	if recoveredDaemon.RuntimeState != "ready" || recoveredDaemon.HandoffState != "ready" || len(recoveredDaemon.RecoveryProblems) != 0 {
 		t.Fatalf("daemon remained unhealthy after managed-resource recovery: %#v", recoveredDaemon)
 	}
 }
@@ -211,8 +219,8 @@ func TestCLIManagedResourcesAreIsolatedAcrossEnvironments(t *testing.T) {
 
 	local = explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/local")
 	isolated := explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/isolated")
-	localRedis := requireService(t, local, "redis")
-	isolatedRedis := requireService(t, isolated, "redis")
+	localRedis := requireService(t, local, "checkout-redis")
+	isolatedRedis := requireService(t, isolated, "checkout-redis")
 	localAddress, isolatedAddress := managedResourceProbeAddress(t, localRedis), managedResourceProbeAddress(t, isolatedRedis)
 	if localAddress == isolatedAddress || localRedis.UpstreamPort == isolatedRedis.UpstreamPort {
 		t.Fatalf("resource environments share runtime endpoints: local=%#v isolated=%#v", localRedis, isolatedRedis)
@@ -229,8 +237,8 @@ func TestCLIManagedResourcesAreIsolatedAcrossEnvironments(t *testing.T) {
 	if output, err := runCLIAt(binary, home, checkout, "daemon", "restart", "--timeout", "30s"); err != nil {
 		t.Fatalf("restart daemon with isolated resources: %v\n%s", err, output)
 	}
-	localRedis = requireService(t, explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/local"), "redis")
-	isolatedRedis = requireService(t, explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/isolated"), "redis")
+	localRedis = requireService(t, explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/local"), "checkout-redis")
+	isolatedRedis = requireService(t, explicitEnvironmentStatus(t, binary, home, checkout, "resource-isolation/isolated"), "checkout-redis")
 	if localRedis.Generation != localGeneration || isolatedRedis.Generation != isolatedGeneration || localRedis.UpstreamPort != localPort || isolatedRedis.UpstreamPort != isolatedPort {
 		t.Fatalf("daemon restart did not adopt isolated containers: local=%#v isolated=%#v", localRedis, isolatedRedis)
 	}
@@ -365,6 +373,73 @@ func assertGeneratedResourceBinding(t *testing.T, binary, home, checkout, servic
 	t.Fatalf("generated resource binding %s not found: %#v", key, configuration.Environment)
 }
 
+func managedResourceConnection(t *testing.T, binary, home, checkout, environment, source, target string) model.EffectiveConnection {
+	t.Helper()
+	output, err := runCLIAt(binary, home, checkout, "--env", environment, "--json", "connection", "show", source+":"+target)
+	if err != nil {
+		t.Fatalf("show managed-resource connection %s:%s: %v\n%s", source, target, err, output)
+	}
+	var connection model.EffectiveConnection
+	if err := json.Unmarshal([]byte(output), &connection); err != nil {
+		t.Fatalf("decode managed-resource connection: %v\n%s", err, output)
+	}
+	return connection
+}
+
+func assertProtocolAwareTraffic(t *testing.T, binary, home, checkout, environment, source, target string, applicationProtocol model.ApplicationProtocol, operation string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var lastOutput string
+	for time.Now().Before(deadline) {
+		output, err := runCLIAt(binary, home, checkout, "--env", environment, "--json", "traffic", "list", "--protocol", "tcp", "--edge", source+":"+target, "--limit", "20")
+		lastOutput = output
+		if err == nil {
+			var traffic struct {
+				Exchanges []model.TrafficExchange `json:"exchanges"`
+			}
+			if json.Unmarshal([]byte(output), &traffic) == nil {
+				for _, exchange := range traffic.Exchanges {
+					if exchange.TCP == nil || exchange.TCP.ApplicationProtocol != applicationProtocol {
+						continue
+					}
+					if operation != "" && exchange.TCP.Operation != operation {
+						continue
+					}
+					if operation == "" && exchange.TCP.Kind != model.TrafficTCPKindSession {
+						continue
+					}
+					assertProtocolTrafficDetail(t, binary, home, checkout, environment, exchange, operation)
+					return
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("%s traffic for %s:%s was not captured; last response:\n%s", applicationProtocol, source, target, lastOutput)
+}
+
+func assertProtocolTrafficDetail(t *testing.T, binary, home, checkout, environment string, summary model.TrafficExchange, operation string) {
+	t.Helper()
+	output, err := runCLIAt(binary, home, checkout, "--env", environment, "--json", "traffic", "show", strconv.FormatInt(summary.Sequence, 10))
+	if err != nil {
+		t.Fatalf("show protocol exchange %d: %v\n%s", summary.Sequence, err, output)
+	}
+	var detail model.TrafficExchange
+	if err := json.Unmarshal([]byte(output), &detail); err != nil || detail.TCP == nil {
+		t.Fatalf("decode protocol exchange %d: err=%v detail=%#v", summary.Sequence, err, detail)
+	}
+	if operation == "PING" {
+		if len(detail.TCP.RequestMessages) != 1 || len(detail.TCP.ResponseMessages) != 1 || !strings.Contains(detail.TCP.RequestMessages[0].Content, "PING") || !strings.Contains(detail.TCP.ResponseMessages[0].Content, "PONG") {
+			t.Fatalf("Redis operation payload detail = %#v", detail)
+		}
+	}
+	if operation == "PUB" {
+		if len(detail.TCP.RequestMessages) != 1 || detail.TCP.RequestMessages[0].Content != "test" {
+			t.Fatalf("NATS publish payload detail = %#v", detail)
+		}
+	}
+}
+
 func probeManagedResource(t *testing.T, resourceType, address string) {
 	t.Helper()
 	switch resourceType {
@@ -385,6 +460,9 @@ func probeManagedResource(t *testing.T, resourceType, address string) {
 			t.Fatalf("NATS greeting = %q, err=%v", line, err)
 		}
 		if _, err := io.WriteString(connection, "PING\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(connection, "PUB portless.e2e 4\r\ntest\r\n"); err != nil {
 			t.Fatal(err)
 		}
 		for attempts := 0; attempts < 4; attempts++ {
@@ -433,6 +511,9 @@ func valkeyCommand(t *testing.T, address string, arguments ...string) string {
 	}
 	if strings.HasPrefix(line, "+") {
 		return strings.TrimPrefix(line, "+")
+	}
+	if strings.HasPrefix(line, ":") {
+		return strings.TrimPrefix(line, ":")
 	}
 	if strings.HasPrefix(line, "-") {
 		t.Fatalf("Valkey returned %s", line)

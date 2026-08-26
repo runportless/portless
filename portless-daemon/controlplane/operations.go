@@ -119,6 +119,8 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 	scope := model.EnvironmentSelector(projectName, environmentName)
 	result := make([]model.EffectiveConnection, 0, len(environment.Connections))
 	for _, connection := range environment.Connections {
+		targetDefinition, targetExists := serviceDefinitionForEnvironment(environment, connection.Target)
+		connection = s.connectionApplicationProtocol(connection, targetDefinition)
 		proxyAddress, provider, runtimeTarget := s.proxy.ConnectionRuntime(scope, connection.Source, connection.Target)
 		target := runtimeFor(environment, connection.Target)
 		if provider == "" {
@@ -151,7 +153,6 @@ func (s *Service) Connections(ctx context.Context, projectName, environmentName 
 			value := allocation.Endpoint(model.EndpointConnection)
 			endpoint = &value
 		}
-		targetDefinition, targetExists := serviceDefinitionForEnvironment(environment, connection.Target)
 		injected := map[string]string{}
 		if targetExists && connection.Environment != "" {
 			host, port := "", 0

@@ -65,7 +65,7 @@ func TestDiscoverNestServicesAndDependenciesWithoutExecutingCommands(t *testing.
 	if result.Model.SuggestedName == "" || len(result.Model.Services) != 4 {
 		t.Fatalf("unexpected model: %#v", result.Model)
 	}
-	wanted := map[string]bool{"gateway": false, "orders": false, "postgres": false, "redis": false}
+	wanted := map[string]bool{"gateway": false, "gateway-redis": false, "orders": false, "orders-postgres": false}
 	for _, service := range result.Model.Services {
 		if _, ok := wanted[service.Name]; ok {
 			wanted[service.Name] = true
@@ -78,21 +78,21 @@ func TestDiscoverNestServicesAndDependenciesWithoutExecutingCommands(t *testing.
 	}
 	for _, service := range result.Model.Services {
 		switch service.Name {
-		case "postgres":
+		case "orders-postgres":
 			if service.Kind != model.ServiceResource || service.Resource == nil || service.Resource.Type != "postgres" || service.Resource.Version != "17" || service.Port != 5432 {
 				t.Errorf("PostgreSQL resource = %#v", service)
 			}
-		case "redis":
+		case "gateway-redis":
 			if service.Kind != model.ServiceResource || service.Resource == nil || service.Resource.Type != "valkey" || service.Resource.Version != "8" || service.Port != 6379 {
 				t.Errorf("Valkey resource = %#v", service)
 			}
 		}
 	}
 	for _, connection := range result.Model.Connections {
-		if connection.Target == "postgres" && (connection.Protocol != model.ProtocolTCP || connection.Binding != "postgres") {
+		if connection.Target == "orders-postgres" && (connection.Protocol != model.ProtocolTCP || connection.Binding != "postgres") {
 			t.Errorf("PostgreSQL connection = %#v", connection)
 		}
-		if connection.Target == "redis" && (connection.Protocol != model.ProtocolTCP || connection.Binding != "valkey") {
+		if connection.Target == "gateway-redis" && (connection.Protocol != model.ProtocolTCP || connection.Binding != "valkey") {
 			t.Errorf("Valkey connection = %#v", connection)
 		}
 	}
@@ -101,6 +101,83 @@ func TestDiscoverNestServicesAndDependenciesWithoutExecutingCommands(t *testing.
 	}
 	if len(result.Model.References) != 0 {
 		t.Fatalf("managed dependency URLs became unresolved service references: %#v", result.Model.References)
+	}
+}
+
+func TestDiscoverDistinctNamedPostgresInstances(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, filepath.Join(root, "package.json"), `{"private":true,"workspaces":["apps/*"]}`)
+	writeFixture(t, filepath.Join(root, "apps", "orders", "package.json"), `{"name":"orders","scripts":{"start:dev":"node server.mjs"},"dependencies":{"@nestjs/core":"11","pg":"8"}}`)
+	writeFixture(t, filepath.Join(root, "apps", "orders", ".env.example"), "DATABASE_URL=postgresql://postgres\n")
+	writeFixture(t, filepath.Join(root, "apps", "inventory", "package.json"), `{"name":"inventory","scripts":{"start:dev":"node server.mjs"},"dependencies":{"@nestjs/core":"11","pg":"8"}}`)
+	writeFixture(t, filepath.Join(root, "apps", "inventory", ".env.example"), "DATABASE_URL=postgresql://postgres\n")
+
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := make(map[string]string)
+	for _, service := range result.Model.Services {
+		if service.Kind == model.ServiceResource && service.Resource != nil {
+			resources[service.Name] = service.Resource.Type
+		}
+	}
+	if !reflect.DeepEqual(resources, map[string]string{"inventory-postgres": "postgres", "orders-postgres": "postgres"}) {
+		t.Fatalf("PostgreSQL resources = %#v", resources)
+	}
+	connections := make(map[string]string)
+	for _, connection := range result.Model.Connections {
+		if connection.Binding == "postgres" {
+			connections[connection.Source] = connection.Target
+		}
+	}
+	if !reflect.DeepEqual(connections, map[string]string{"inventory": "inventory-postgres", "orders": "orders-postgres"}) {
+		t.Fatalf("PostgreSQL connections = %#v", connections)
+	}
+}
+
+func TestDiscoverSpecificPostgresNameIsShared(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, filepath.Join(root, "package.json"), `{"private":true,"workspaces":["apps/*"]}`)
+	for _, app := range []string{"orders", "reporting"} {
+		writeFixture(t, filepath.Join(root, "apps", app, "package.json"), `{"name":"`+app+`","scripts":{"start:dev":"node server.mjs"},"dependencies":{"@nestjs/core":"11","pg":"8"}}`)
+		writeFixture(t, filepath.Join(root, "apps", app, ".env.example"), "DATABASE_URL=postgresql://shared-postgres/portless\n")
+	}
+
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := make(map[string]string)
+	connections := make(map[string]string)
+	for _, service := range result.Model.Services {
+		if service.Kind == model.ServiceResource && service.Resource != nil {
+			resources[service.Name] = service.Resource.Type
+		}
+	}
+	for _, connection := range result.Model.Connections {
+		if connection.Binding == "postgres" {
+			connections[connection.Source] = connection.Target
+		}
+	}
+	if !reflect.DeepEqual(resources, map[string]string{"shared-postgres": "postgres"}) {
+		t.Fatalf("shared PostgreSQL resources = %#v", resources)
+	}
+	if !reflect.DeepEqual(connections, map[string]string{"orders": "shared-postgres", "reporting": "shared-postgres"}) {
+		t.Fatalf("shared PostgreSQL connections = %#v", connections)
+	}
+}
+
+func TestDiscoverConsumerScopedResourceNameCollisionFailsWithRemediation(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, filepath.Join(root, "package.json"), `{"private":true,"workspaces":["apps/*"]}`)
+	writeFixture(t, filepath.Join(root, "apps", "orders", "package.json"), `{"name":"orders","scripts":{"start:dev":"node server.mjs"},"dependencies":{"@nestjs/core":"11","pg":"8"}}`)
+	writeFixture(t, filepath.Join(root, "apps", "orders", ".env.example"), "DATABASE_URL=postgresql://postgres\n")
+	writeFixture(t, filepath.Join(root, "apps", "orders-postgres", "package.json"), `{"name":"orders-postgres","scripts":{"start:dev":"node server.mjs"},"dependencies":{"@nestjs/core":"11"}}`)
+
+	_, err := Discover(context.Background(), root)
+	if err == nil || !strings.Contains(err.Error(), "configure a distinct static logical host") {
+		t.Fatalf("resource name collision error = %v", err)
 	}
 }
 
@@ -118,8 +195,8 @@ func TestDiscoverMySQLAndNATSResourcePlugins(t *testing.T) {
 		version      string
 		port         int
 	}{
-		"mysql": {resourceType: "mysql", version: "8.4", port: 3306},
-		"nats":  {resourceType: "nats", version: "2", port: 4222},
+		"worker-mysql": {resourceType: "mysql", version: "8.4", port: 3306},
+		"worker-nats":  {resourceType: "nats", version: "2", port: 4222},
 	}
 	for _, service := range result.Model.Services {
 		expected, exists := wanted[service.Name]
@@ -140,7 +217,7 @@ func TestDiscoverMySQLAndNATSResourcePlugins(t *testing.T) {
 			bindings[connection.Target] = connection.Binding + ":" + connection.Environment
 		}
 	}
-	if bindings["mysql"] != "mysql:MYSQL_URL" || bindings["nats"] != "nats:NATS_URL" {
+	if bindings["worker-mysql"] != "mysql:MYSQL_URL" || bindings["worker-nats"] != "nats:NATS_URL" {
 		t.Fatalf("resource bindings = %#v", bindings)
 	}
 	if len(result.Model.References) != 0 {
@@ -213,7 +290,7 @@ func TestStoreExampleMatchesItsRuntimeTopology(t *testing.T) {
 			}
 		}
 	}
-	for _, service := range []string{"checkout", "inventory", "orders", "postgres", "redis"} {
+	for _, service := range []string{"checkout", "inventory", "inventory-postgres", "orders", "orders-postgres", "orders-redis"} {
 		if !services[service] {
 			t.Errorf("service %s was not discovered", service)
 		}
@@ -223,7 +300,7 @@ func TestStoreExampleMatchesItsRuntimeTopology(t *testing.T) {
 	for _, connection := range result.Model.Connections {
 		actual[connection.Source+":"+connection.Target] = true
 	}
-	expected := []string{"checkout:inventory", "checkout:orders", "orders:postgres", "orders:redis"}
+	expected := []string{"checkout:inventory", "checkout:orders", "inventory:inventory-postgres", "orders:orders-postgres", "orders:orders-redis"}
 	if len(actual) != len(expected) {
 		t.Fatalf("connections = %#v, want only %v", result.Model.Connections, expected)
 	}

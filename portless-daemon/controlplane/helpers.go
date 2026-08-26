@@ -171,6 +171,20 @@ func (s *Service) connectionBinding(target model.ServiceDefinition, connection m
 	}, nil
 }
 
+func (s *Service) connectionApplicationProtocol(connection model.Connection, target model.ServiceDefinition) model.Connection {
+	if connection.Protocol != model.ProtocolTCP || connection.ApplicationProtocol != "" {
+		return connection
+	}
+	resourceType := connection.Binding
+	if resourceType == "" && target.Resource != nil {
+		resourceType = target.Resource.Type
+	}
+	if descriptor, ok := s.resources.Descriptor(resourceType); ok {
+		connection.ApplicationProtocol = descriptor.ApplicationProtocol
+	}
+	return connection
+}
+
 func secretConfigurationKey(key string) bool {
 	upper := strings.ToUpper(key)
 	return strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "SECRET") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "API_KEY") || strings.HasSuffix(upper, "_KEY")

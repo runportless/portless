@@ -31,8 +31,12 @@ type Server struct {
 
 // DaemonControl exposes process lifecycle operations to the authenticated API.
 type DaemonControl interface {
-	// Status returns the current daemon identity, compatibility, and recovery state.
+	// Status returns the current shallow daemon identity and recovery state.
 	Status(context.Context) (contract.DaemonStatus, error)
+	// Logs returns one bounded, safely redacted daemon-log tail.
+	Logs(context.Context) (contract.DaemonLogSnapshot, error)
+	// HandoffStatus performs a fresh runtime-adoption safety audit.
+	HandoffStatus(context.Context) (contract.DaemonHandoffStatus, error)
 	// Restart requests replacement of the identified daemon instance.
 	Restart(context.Context, string) (contract.DaemonRestart, error)
 }

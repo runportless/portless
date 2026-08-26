@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { DaemonRestart, DaemonStatus, Environment, Project, RelayStatus, RuntimeStatus } from '../types'
+import type { DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Project, RelayStatus, RuntimeStatus } from '../types'
 import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 
@@ -9,7 +9,7 @@ export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const expandedProjectsKey = 'portless.expanded-projects'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
@@ -25,6 +25,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   commands: Command[]
   live?: boolean
   onDaemonRefresh: () => Promise<DaemonStatus>
+  onDaemonHandoffVerify: () => Promise<DaemonHandoffStatus>
   onDaemonRestart: (instanceId: string) => Promise<DaemonRestart>
   onDaemonReconnected: () => Promise<void>
 }) {
@@ -135,7 +136,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
-    {daemonOpen && <DaemonDrawer status={daemon} runtime={runtime ?? null} relay={relay ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
+    {daemonOpen && <DaemonDrawer status={daemon} runtime={runtime ?? null} relay={relay ?? null} live={live} onClose={() => setDaemonOpen(false)} onRefresh={onDaemonRefresh} onVerifyHandoff={onDaemonHandoffVerify} onRestart={onDaemonRestart} onReconnected={onDaemonReconnected} />}
   </div>
 }
 

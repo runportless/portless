@@ -40,7 +40,7 @@ export function filterExchanges(exchanges: TrafficExchange[], search: string, re
     if (protocol !== 'all' && exchange.protocol !== protocol) return false
     if (!matchesResult(exchange.error, exchange.status, exchange.durationMs, exchange.fault, result)) return false
     if (!query) return true
-    return `${exchange.method || ''} ${exchange.requestTarget || exchange.path || ''} ${exchange.source} ${exchange.target} ${exchange.source}:${exchange.target} ${exchange.status || ''} ${exchange.fault || ''} ${exchange.recording || ''}`.toLowerCase().includes(query)
+    return `${exchange.method || ''} ${exchange.requestTarget || exchange.path || ''} ${exchange.tcp?.applicationProtocol || ''} ${exchange.tcp?.operation || ''} ${exchange.source} ${exchange.target} ${exchange.source}:${exchange.target} ${exchange.status || ''} ${exchange.fault || ''} ${exchange.recording || ''}`.toLowerCase().includes(query)
   })
 }
 

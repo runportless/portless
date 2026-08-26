@@ -346,7 +346,7 @@ func (e *Engine) Discover(ctx context.Context, start string) (Result, error) {
 			}
 			resourceNames[nameKey] = identity
 			if err := mergeService(&definition.Services, service); err != nil {
-				return Result{}, fmt.Errorf("resource plugin %s: %w", resourceType, err)
+				return Result{}, fmt.Errorf("resource plugin %s: %w; configure a distinct static logical host in the application resource URL", resourceType, err)
 			}
 			for _, connection := range connections {
 				definition.Connections = append(definition.Connections, connection)
@@ -492,6 +492,7 @@ func (e *Engine) normalizeResourceCandidate(workspace spec.Workspace, resourceTy
 	}
 	service.Health = model.HealthCheck{Kind: plan.Readiness.Kind, Timeout: plan.Readiness.Timeout, Interval: plan.Readiness.Interval}
 	seenConsumers := make(map[string]string)
+	descriptor, _ := e.resources.Descriptor(definition.Type)
 	connections := make([]model.Connection, 0, len(candidate.Bindings))
 	for _, binding := range candidate.Bindings {
 		consumer, exists := consumers[binding.ConsumerKey]
@@ -509,7 +510,7 @@ func (e *Engine) normalizeResourceCandidate(workspace spec.Workspace, resourceTy
 		}
 		seenConsumers[binding.ConsumerKey] = binding.Environment
 		connections = append(connections, model.Connection{
-			Source: consumer.Name, Target: candidate.Name, Protocol: model.ProtocolTCP, Binding: definition.Type,
+			Source: consumer.Name, Target: candidate.Name, Protocol: model.ProtocolTCP, ApplicationProtocol: descriptor.ApplicationProtocol, Binding: definition.Type,
 			Environment: binding.Environment, Required: binding.Required,
 		})
 	}
