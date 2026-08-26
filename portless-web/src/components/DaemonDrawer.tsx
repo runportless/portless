@@ -282,11 +282,12 @@ function RuntimePanel({ status, diagnostics, runtime, relay, active, handoff, ha
   handoffReady: boolean
 }) {
   if (!status) return <Unavailable title="RUNTIME STATUS UNAVAILABLE" message="Portless could not load daemon runtime information." />
+  const networkingReady = relay?.healthy === true && relay.helperCurrent === true
   return <>
     <RuntimeEngine runtime={runtime} />
     <ManagedInventory diagnostics={diagnostics} />
-    <section className={`drawer-section daemon-network ${relay?.healthy ? '' : 'daemon-network--degraded'}`}>
-      <div className="daemon-section-heading"><span className="eyebrow">LOCAL NETWORKING</span><StatusMark status={relay?.healthy ? 'ready' : relay?.installed ? 'degraded' : 'missing'} /></div>
+    <section className={`drawer-section daemon-network ${networkingReady ? '' : 'daemon-network--degraded'}`}>
+      <div className="daemon-section-heading"><span className="eyebrow">LOCAL NETWORKING</span><StatusMark status={networkingReady ? 'ready' : relay?.installed ? 'degraded' : 'missing'} /></div>
       <div className="daemon-network-grid">
         <NetworkDetail label="HTTP INGRESS" value="127.0.0.1:80" healthy={relay?.httpHealthy === true} />
         <NetworkDetail label="ENDPOINT DNS" value={relay?.dnsListenAddress || '127.77.0.1:1053'} healthy={relay?.dnsHealthy === true} />
@@ -557,7 +558,7 @@ function recoveryState(value?: DaemonDiagnostics['recovery']['result']) {
 
 function daemonTabAlert(tab: DaemonDrawerTab, live: boolean, diagnostics: DaemonDiagnostics | null, health: ControlPlaneHealth, runtime: RuntimeStatus | null, relay: RelayStatus | null, handoffPhase: HandoffPhase) {
   if (tab === 'status') return !live || health.api.state !== 'ready' || diagnostics?.recovery.result === 'degraded' || diagnostics?.recovery.result === 'failed' || diagnostics?.build.current === false
-  if (tab === 'runtime') return runtime?.state === 'failed' || runtime?.state === 'missing' || relay?.healthy === false || handoffPhase === 'blocked' || handoffPhase === 'failed'
+  if (tab === 'runtime') return runtime?.state === 'failed' || runtime?.state === 'missing' || relay?.healthy === false || relay?.helperCurrent === false || handoffPhase === 'blocked' || handoffPhase === 'failed'
   if (tab === 'storage') return Boolean(diagnostics?.storage?.problems.length)
   return !live
 }
