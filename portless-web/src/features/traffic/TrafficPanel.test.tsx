@@ -1,7 +1,17 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TrafficExchange, TrafficTrace } from '../../types'
-import { traceCandidatesForExchange, TraceSummaryRow } from './TrafficPanel'
+import { traceCandidatesForExchange, TraceSummaryRow, TrafficTableHeader } from './TrafficPanel'
+
+describe('traffic table headers', () => {
+  it('labels the time column as Timestamp in traces and exchanges', () => {
+    for (const mode of ['traces', 'exchanges'] as const) {
+      const markup = renderToStaticMarkup(<TrafficTableHeader mode={mode} />)
+      expect(markup).toContain('Timestamp')
+      expect(markup).not.toContain('When')
+    }
+  })
+})
 
 describe('trace summary row', () => {
   it('does not present the internal root-exchange sequence as a trace number', () => {

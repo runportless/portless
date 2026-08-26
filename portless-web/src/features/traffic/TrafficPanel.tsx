@@ -67,6 +67,11 @@ export function traceCandidatesForExchange(traces: TrafficTrace[], exchange: Tra
     .sort((left, right) => priority(left) - priority(right) || (left.lastSequence - left.number) - (right.lastSequence - right.number) || right.number - left.number)
 }
 
+export function TrafficTableHeader({ mode }: { mode: 'traces' | 'exchanges' }) {
+  if (mode === 'traces') return <div className="trace-row trace-row--header"><span>Timestamp</span><span>Root request</span><span>Result</span><span>Duration</span><span>Spans</span><span>Correlation</span></div>
+  return <div className="table-row table-row--header traffic-row"><span>Seq</span><span>Timestamp</span><span>Protocol</span><span>Request / operation</span><span>Edge</span><span>Result</span><span>Duration</span><span>Fault / recording</span></div>
+}
+
 export function TraceSummaryRow({ trace, expanded, onToggle }: { trace: TrafficTrace; expanded: boolean; onToggle: () => void }) {
   return <button className="trace-row" type="button" onClick={onToggle} aria-expanded={expanded}>
     <span>{trafficStartedTime(trace.startedAt)}</span><strong className="truncate">{traceRequest(trace)}</strong><span className={resultTone(trace.error, trace.status)}>{trace.error ? 'ERR' : trace.status || 'OK'}</span><span>{duration(trace.durationMs)}</span><span>{trace.spanCount}</span><span className={`correlation-badge correlation-badge--${trace.correlation}`}>{trace.correlation}</span>
@@ -288,7 +293,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
       </div>
 
       {mode === 'traces' ? <div className="trace-list">
-        <div className="trace-row trace-row--header"><span>When</span><span>Root request</span><span>Result</span><span>Duration</span><span>Spans</span><span>Correlation</span></div>
+        <TrafficTableHeader mode="traces" />
         {tracePagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
           <TraceSummaryRow trace={trace} expanded={expandedTrace === trace.number} onToggle={() => void toggleTrace(trace)} />
           {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onExchange={(exchange) => void inspectExchange(exchange, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
@@ -296,7 +301,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         {visibleTraces.length === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
         <PanelPagination label="traces" pagination={tracePagination} onPage={setTracePage} />
       </div> : <div className="exchange-list">
-        <div className="table-row table-row--header traffic-row"><span>Seq</span><span>When</span><span>Protocol</span><span>Request / operation</span><span>Edge</span><span>Result</span><span>Duration</span><span>Fault / recording</span></div>
+        <TrafficTableHeader mode="exchanges" />
         {exchangePagination.items.map((exchange) => <button className="table-row traffic-row" key={exchange.sequence} onClick={() => void inspectExchange(exchange)}><code>#{exchange.sequence}</code><span>{trafficStartedTime(exchange.startedAt)}</span><strong>{exchange.protocol === 'tcp' ? exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP' : 'HTTP'}</strong><code className="truncate">{exchangeOperation(exchange)}</code><span>{exchange.source}<i className="edge-arrow">→</i>{exchange.target}</span><span className={resultTone(exchange.error || exchange.tcp?.outcome === 'error' || exchange.tcp?.outcome === 'incomplete', exchange.status)}>{exchangeResult(exchange)}</span><span>{duration(exchange.durationMs)}</span><span>{exchange.fault ? <b className="fault-chip">▲ {exchange.fault}</b> : exchange.recording ? <b className="record-chip">● {exchange.recording}</b> : '—'}</span></button>)}
         {visibleExchanges.length === 0 && <div className="empty-row">No matching exchanges yet.</div>}
         <PanelPagination label="exchanges" pagination={exchangePagination} onPage={setExchangePage} />
