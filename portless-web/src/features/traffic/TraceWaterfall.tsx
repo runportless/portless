@@ -20,12 +20,12 @@ export type TraceNavigationItem =
 const transactionBoundaryOperations = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'])
 
 export function traceTransactionCommandSpans(spans: TrafficTraceSpan[]) {
-  const commands = spans.filter((span) => !transactionBoundaryOperations.has((span.exchange.tcp?.operation || '').toUpperCase()))
-  return commands.length > 0 ? commands : spans
+  return spans.filter((span) => !transactionBoundaryOperations.has((span.exchange.tcp?.operation || '').toUpperCase()))
 }
 
 function transactionCommandLabel(spans: TrafficTraceSpan[]) {
   const operations = traceTransactionCommandSpans(spans).map((span) => span.exchange.tcp?.operation || 'COMMAND')
+  if (operations.length === 0) return 'TRANSACTION'
   if (operations.length <= 3) return operations.join(' + ')
   return `${operations.slice(0, 2).join(' + ')} + ${operations.length - 2} MORE`
 }

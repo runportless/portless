@@ -376,6 +376,8 @@ test('inspects captured request and response details in the exchange workbench',
   const traceNavigation = detailHeader.getByRole('navigation', { name: 'Trace span navigation' })
   await expect(traceNavigation).toBeVisible()
   await expect(traceNavigation).not.toContainText('TRACE')
+  await expect(traceNavigation.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'false')
   const tracePosition = traceNavigation.locator('output')
   const initialPosition = await tracePosition.getAttribute('aria-label')
   const positionMatch = initialPosition?.match(/^Span (\d+) of (\d+)$/)
@@ -488,7 +490,7 @@ test('keeps short trace payloads pinned and preserves compare while navigating',
   const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
   const tracePosition = detail.getByRole('navigation', { name: 'Trace span navigation' }).locator('output')
   const payloadBottomGap = () => detail.evaluate((element) => {
-    const payload = element.querySelector('.traffic-payload, .traffic-protocol-messages, .traffic-semantic-card')
+    const payload = element.querySelector('.traffic-payload, .traffic-semantic-card')
     if (!(payload instanceof HTMLElement)) return null
     return Math.round(element.getBoundingClientRect().bottom - payload.getBoundingClientRect().bottom)
   })
@@ -897,6 +899,10 @@ test('renders consistent database summaries while collapsing transactions and hi
     const tcpSpan = (offset: number, operation: string, background = false, transactionGroup?: number, source = 'inventory', target = 'inventory-postgres') => {
       const sequence = rootExchange.sequence + offset
       const query = operation === 'UPDATE' ? 'UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2' : operation
+      const requestMessages = [
+        { type: operation === 'UPDATE' ? 'parse' : 'query', offsetMs: 0, summary: operation === 'UPDATE' ? `Parse ${query}` : operation, wireBytes: 6, content: query, contentType: 'text/x-sql', encoding: 'utf8' },
+        ...(operation === 'UPDATE' ? [{ type: 'bind', offsetMs: 0, summary: 'Bind parameters', wireBytes: 20, content: '[1,"coffee-mug"]', contentType: 'application/json', encoding: 'utf8' }] : []),
+      ]
       const exchange = {
         project: rootExchange.project, environment: rootExchange.environment, sequence: rootExchange.sequence + offset,
         protocol: 'tcp', source, target, background,
@@ -904,8 +910,8 @@ test('renders consistent database summaries while collapsing transactions and hi
         requestBytes: 6, responseBytes: 6,
         tcp: {
           kind: 'operation', applicationProtocol: 'postgresql', operation, inspection: 'decoded', outcome: 'success',
-          requestMessageCount: 1, responseMessageCount: 1,
-          requestMessages: [{ type: operation === 'UPDATE' ? 'parse' : 'query', offsetMs: 0, summary: operation === 'UPDATE' ? `Parse ${query}` : operation, wireBytes: 6, content: query, contentType: 'text/x-sql', encoding: 'utf8' }],
+          requestMessageCount: requestMessages.length, responseMessageCount: 1,
+          requestMessages,
           responseMessages: [{ type: 'command-complete', offsetMs: 1, summary: operation === 'UPDATE' ? 'UPDATE 1' : operation, wireBytes: 6, fields: [{ name: 'command', value: operation === 'UPDATE' ? 'UPDATE 1' : operation }] }],
         },
       }
@@ -943,15 +949,23 @@ test('renders consistent database summaries while collapsing transactions and hi
 
   await waterfall.getByRole('button', { name: /Inspect inventory to inventory-postgres POSTGRESQL command summary with 1 command/ }).click()
   let detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND / RESULT')
+  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND')
   await expect(detail.locator('.traffic-detail__heading')).toContainText('1 COMMAND')
-  await expect(detail.locator('.traffic-overview__context')).toHaveCount(0)
+  const transactionOverview = detail.getByRole('region', { name: 'Exchange overview' })
+  await expect(transactionOverview).toContainText('ENVIRONMENT')
+  await expect(transactionOverview).toContainText('TARGET BINDING')
+  await expect(transactionOverview).toContainText('STARTED')
+  await expect(transactionOverview).toContainText('COMPLETED')
   const transactionCommandTab = detail.getByRole('tab', { name: 'COMMAND', exact: true })
   const transactionResultTab = detail.getByRole('tab', { name: 'RESULT', exact: true })
-  const transactionTCPDetailsTab = detail.getByRole('tab', { name: 'TCP DETAILS' })
   await expect(transactionCommandTab).toHaveAttribute('aria-selected', 'true')
+  await expect(detail.getByRole('tablist', { name: 'Exchange payload' }).getByRole('tab')).toHaveCount(2)
+  await expect(detail.getByRole('tab', { name: 'TCP DETAILS' })).toHaveCount(0)
   const transactionCommand = detail.getByRole('region', { name: 'Command', exact: true })
-  await expect(transactionCommand).toContainText('UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2')
+  await expect(transactionCommand).toContainText("UPDATE store_inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee-mug'")
+  await expect(transactionCommand.getByRole('region', { name: 'Bound parameters' })).toHaveCount(0)
+  await expect(transactionCommand).not.toContainText('$1')
+  await expect(transactionCommand).not.toContainText('$2')
   await expect(transactionCommand).not.toContainText('UPDATE 1')
   await expect(transactionCommand).not.toContainText('BEGIN')
   await expect(transactionCommand).not.toContainText('COMMIT')
@@ -960,21 +974,12 @@ test('renders consistent database summaries while collapsing transactions and hi
   await expect(transactionResult).toContainText('UPDATE 1')
   await expect(transactionResult).not.toContainText('UPDATE store_inventory SET')
   await transactionCommandTab.click()
-  await expect(detail.getByRole('navigation', { name: 'Trace span navigation' }).locator('output')).toHaveAttribute('aria-label', 'Span 2 of 3')
-  await transactionTCPDetailsTab.click()
-  const transactionTCPDetails = detail.getByRole('region', { name: 'TCP details' })
-  await expect(transactionTCPDetails).toContainText('TCP operations remain hidden from trace navigation.')
-  await expect(transactionTCPDetails).toContainText('BEGIN')
-  await expect(transactionTCPDetails).toContainText('UPDATE')
-  await expect(transactionTCPDetails).toContainText('COMMIT')
-  const includeInTrace = transactionTCPDetails.getByRole('button', { name: 'INCLUDE IN TRACE' })
-  const [tcpDetailsHeaderBox, includeInTraceBox] = await Promise.all([transactionTCPDetails.locator('.traffic-command-results__toolbar').boundingBox(), includeInTrace.boundingBox()])
-  expect((includeInTraceBox?.x || 0) + (includeInTraceBox?.width || 0)).toBeLessThan((tcpDetailsHeaderBox?.x || 0) + (tcpDetailsHeaderBox?.width || 0))
-  await includeInTrace.click()
-  await expect(transactionTCPDetails).toContainText('TCP operations are included in trace navigation.')
-  await expect(detail.getByRole('navigation', { name: 'Trace span navigation' }).locator('output')).toHaveAttribute('aria-label', 'Span 2 of 6')
+  const transactionNavigation = detail.getByRole('navigation', { name: 'Trace span navigation' })
+  await expect(transactionNavigation.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(transactionNavigation.locator('output')).toHaveAttribute('aria-label', 'Current span is outside HTTP navigation; 1 HTTP span available')
   await detail.getByRole('button', { name: 'Close traffic details' }).click()
 
+  await expandTransaction.click()
   await expect(transaction).toHaveAttribute('aria-expanded', 'true')
   await expect(waterfall.getByRole('button', { name: /Collapse inventory to inventory-postgres POSTGRESQL TCP details/ })).toBeVisible()
   await expect(waterfall.getByRole('button', { name: /POSTGRESQL · BEGIN/ })).toBeVisible()
@@ -986,53 +991,62 @@ test('renders consistent database summaries while collapsing transactions and hi
 
   await waterfall.getByRole('button', { name: /Inspect inventory to inventory-postgres POSTGRESQL · UPDATE/ }).click()
   detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  const tracePosition = detail.getByRole('navigation', { name: 'Trace span navigation' }).locator('output')
+  const traceNavigation = detail.getByRole('navigation', { name: 'Trace span navigation' })
+  const tracePosition = traceNavigation.locator('output')
+  await expect(traceNavigation.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tracePosition).toHaveAttribute('aria-label', 'Current span is outside HTTP navigation; 1 HTTP span available')
+  await traceNavigation.getByRole('button', { name: 'ALL' }).click()
+  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tracePosition).toHaveAttribute('aria-label', 'Span 5 of 7')
   const operationCommandTab = detail.getByRole('tab', { name: 'COMMAND', exact: true })
   const operationResultTab = detail.getByRole('tab', { name: 'RESULT', exact: true })
   await expect(operationCommandTab).toHaveAttribute('aria-selected', 'true')
   const summary = detail.getByRole('region', { name: 'Command', exact: true })
-  await expect(summary).toContainText('UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2')
+  await expect(summary).toContainText("UPDATE store_inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee-mug'")
   await expect(summary).not.toContainText('UPDATE 1')
   await operationResultTab.click()
   await expect(detail.getByRole('region', { name: 'Result', exact: true })).toContainText('UPDATE 1')
   await operationCommandTab.click()
   await expect(detail.locator('.traffic-protocol-message')).toHaveCount(0)
-
-  await detail.getByRole('tab', { name: 'TCP DETAILS' }).click()
-  await expect(detail.getByRole('region', { name: 'command protocol messages' })).toBeVisible()
-  await expect(detail.locator('.traffic-protocol-message')).toHaveCount(1)
-  await detail.getByRole('tablist', { name: 'Protocol message direction' }).getByRole('tab', { name: 'RESULT', exact: true }).click()
-  await expect(detail.getByRole('region', { name: 'result protocol messages' })).toContainText('UPDATE 1')
+  await expect(detail.getByRole('tab', { name: 'TCP DETAILS' })).toHaveCount(0)
 
   await detail.getByRole('button', { name: 'Full screen traffic details' }).click()
   await expect(detail).toHaveClass(/traffic-detail--maximized/)
+  await expect(transactionOverview).toHaveCount(0)
   const compareTab = detail.getByRole('tab', { name: 'COMPARE' })
   await expect(compareTab).toHaveAttribute('aria-selected', 'true')
+  const commandPane = detail.locator('.traffic-semantic-card--request')
+  const resultPane = detail.locator('.traffic-semantic-card--response')
+  await expect(commandPane).toBeVisible()
+  await expect(resultPane).toBeVisible()
+  const [commandPaneBox, resultPaneBox] = await Promise.all([commandPane.boundingBox(), resultPane.boundingBox()])
+  expect(Math.abs(commandPaneBox!.width - resultPaneBox!.width)).toBeLessThanOrEqual(1)
   await detail.getByRole('button', { name: 'Next visible span in trace' }).click()
   await expect(detail.locator('.traffic-detail__heading')).toContainText('COMMIT')
   await expect(detail).toHaveClass(/traffic-detail--maximized/)
+  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'true')
   await expect(compareTab).toHaveAttribute('aria-selected', 'true')
   await expect(detail.locator('.traffic-protocol-message')).toHaveCount(0)
 
   await detail.getByRole('button', { name: 'Previous visible span in trace' }).click()
   await expect(detail.locator('.traffic-detail__heading')).toContainText('UPDATE')
   await expect(detail).toHaveClass(/traffic-detail--maximized/)
+  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'true')
   await expect(compareTab).toHaveAttribute('aria-selected', 'true')
 
   await page.keyboard.press('Escape')
   await waterfall.getByRole('button', { name: /Collapse inventory to inventory-postgres POSTGRESQL TCP details/ }).click()
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND / RESULT')
+  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND')
   await expect(detail.locator('.traffic-detail__heading')).toContainText('1 COMMAND')
   await expect(tracePosition).toHaveAttribute('aria-label', 'Span 3 of 4')
-  await expect(detail.getByRole('region', { name: 'Command', exact: true })).toContainText('UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2')
+  await expect(detail.getByRole('region', { name: 'Command', exact: true })).toContainText("UPDATE store_inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee-mug'")
 
   await detail.getByRole('button', { name: 'Close traffic details' }).click()
   await standaloneOperation.click()
   detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND / RESULT')
+  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND')
   await expect(detail.locator('.traffic-detail__heading')).toContainText('INSERT')
-  await expect(detail.locator('.traffic-overview__context')).toHaveCount(0)
+  await expect(detail.getByRole('region', { name: 'Exchange overview' })).toBeVisible()
   const standaloneCommand = detail.getByRole('region', { name: 'Command', exact: true })
   await expect(standaloneCommand.getByText('COMMAND', { exact: true })).toBeVisible()
   await expect(standaloneCommand).toContainText('INSERT')

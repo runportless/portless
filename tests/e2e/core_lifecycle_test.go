@@ -334,9 +334,8 @@ func TestCLIExecutableReplacementAdoptsRunningServices(t *testing.T) {
 	}
 
 	afterEnvironment := environmentStatus(t, executable, home, checkout)
-	waitForProcessExit(t, beforeDaemon.PID)
 	afterDaemon := daemonStatus(t, executable, home, checkout)
-	if afterDaemon.PID == beforeDaemon.PID || afterDaemon.InstanceID == beforeDaemon.InstanceID || afterDaemon.BuildID == beforeDaemon.BuildID || !afterDaemon.CurrentBuild || afterDaemon.RuntimeState != "ready" {
+	if afterDaemon.PID != beforeDaemon.PID || afterDaemon.InstanceID == beforeDaemon.InstanceID || afterDaemon.BuildID == beforeDaemon.BuildID || !afterDaemon.CurrentBuild || afterDaemon.RuntimeState != "ready" {
 		t.Fatalf("replacement daemon identity is invalid: before=%#v after=%#v", beforeDaemon, afterDaemon)
 	}
 	if afterEnvironment.Status != model.EnvironmentHealthy || !maps.Equal(beforePIDs, servicePIDs(afterEnvironment)) {

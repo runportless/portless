@@ -214,10 +214,11 @@ logical operations while their TCP connections remain open, so queries,
 commands, results, subjects, and message payloads can be inspected from the
 same traffic drawer. Decoded TCP spans use Command and Result views parallel to
 HTTP's Request and Response views, with a side-by-side Compare view when the
-drawer is maximized. TCP drawers open directly on those useful views without
-repeating the HTTP overview metadata strip. Their bounded wire messages remain
-available through the explicit TCP Details view. Unknown, encrypted, oversized, or
-malformed TCP traffic remains byte-count-only and never interrupts forwarding.
+drawer is maximized. PostgreSQL transaction summaries show application SQL
+while folding `BEGIN`, `COMMIT`, and `ROLLBACK` into the transaction's duration
+and outcome; expanding a transaction exposes those protocol operations when
+needed. Unknown, encrypted, oversized, or malformed TCP traffic remains
+byte-count-only and never interrupts forwarding.
 
 Successful driver and connection-pool housekeeping is marked as background:
 for example, PostgreSQL session setup and validation queries or Redis handshakes

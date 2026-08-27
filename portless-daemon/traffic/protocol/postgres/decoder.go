@@ -18,8 +18,11 @@ import (
 )
 
 const (
-	sslRequestCode    = 80877103
-	cancelRequestCode = 80877102
+	sslRequestCode                     = 80877103
+	cancelRequestCode                  = 80877102
+	maximumPreparedStatements          = protocol.MaximumPendingOperations
+	maximumPreparedStatementNameBytes  = 1 << 10
+	maximumPreparedStatementParameters = 1 << 10
 )
 
 type packet struct {
@@ -29,9 +32,16 @@ type packet struct {
 }
 
 type pendingOperation struct {
-	operation protocol.Operation
-	limit     int
-	columns   []string
+	operation      protocol.Operation
+	limit          int
+	columns        []string
+	parameterTypes []uint32
+}
+
+type preparedStatement struct {
+	operation      string
+	background     bool
+	parameterTypes []uint32
 }
 
 // Decoder incrementally decodes one PostgreSQL protocol v3 connection.
@@ -44,6 +54,7 @@ type Decoder struct {
 	sslPending                bool
 	pending                   []*pendingOperation
 	current                   *pendingOperation
+	prepared                  map[string]preparedStatement
 	nextTransactionSequence   uint64
 	activeTransactionSequence uint64
 	state                     protocol.State
@@ -51,7 +62,10 @@ type Decoder struct {
 
 // New creates a PostgreSQL protocol decoder.
 func New(config protocol.Config) protocol.Session {
-	return &Decoder{config: config, startup: true, state: protocol.State{Inspection: model.TrafficInspectionDecoded}}
+	return &Decoder{
+		config: config, startup: true, prepared: make(map[string]preparedStatement),
+		state: protocol.State{Inspection: model.TrafficInspectionDecoded},
+	}
 }
 
 // Observe consumes one unchanged TCP stream chunk.
@@ -189,6 +203,11 @@ func (d *Decoder) observeResponse(content []byte, observed time.Time) []protocol
 			continue
 		}
 		pending := d.pending[0]
+		if decoded.kind == 'C' && pending.operation.Name == "EXTENDED QUERY" {
+			if command := cstring(decoded.payload); command != "" {
+				pending.operation.Name = sqlOperation(command)
+			}
+		}
 		message, columns, errorText := serverMessage(decoded, pending.operation.StartedAt, observed, pending.limit, pending.columns)
 		if len(columns) > 0 {
 			pending.columns = columns
@@ -241,6 +260,7 @@ func (d *Decoder) clientPacket(decoded packet, observed time.Time) []protocol.Op
 		return nil
 	}
 	if decoded.kind == 'Q' {
+		delete(d.prepared, "")
 		query := cstring(decoded.payload)
 		pending := d.newPending(sqlOperation(query), observed)
 		pending.operation.Background = backgroundQuery(query)
@@ -253,14 +273,23 @@ func (d *Decoder) clientPacket(decoded packet, observed time.Time) []protocol.Op
 		d.current = d.newPending("EXTENDED QUERY", observed)
 	}
 	pending := d.current
-	message := clientMessage(decoded, pending.operation.StartedAt, observed, pending.limit)
 	if decoded.kind == 'P' {
-		_, query, _ := parseStrings(decoded.payload, 2)
+		statement, query, rest := parseStrings(decoded.payload, 2)
+		pending.parameterTypes = parseParameterTypes(rest)
 		pending.operation.Background = backgroundQuery(query)
 		if query != "" {
 			pending.operation.Name = sqlOperation(query)
 		}
+		d.rememberPrepared(statement, query, pending.parameterTypes)
 	}
+	if decoded.kind == 'B' {
+		_, statement, _ := parseStrings(decoded.payload, 2)
+		d.resolvePrepared(pending, statement)
+	}
+	if decoded.kind == 'C' && len(decoded.payload) > 1 && decoded.payload[0] == 'S' {
+		delete(d.prepared, cstring(decoded.payload[1:]))
+	}
+	message := clientMessage(decoded, pending.operation.StartedAt, observed, pending.limit, pending.parameterTypes)
 	if message.Type != "" {
 		d.appendRequest(pending, message, decoded.wireBytes)
 	} else {
@@ -271,6 +300,29 @@ func (d *Decoder) clientPacket(decoded packet, observed time.Time) []protocol.Op
 		return d.enqueue(pending, observed)
 	}
 	return nil
+}
+
+func (d *Decoder) rememberPrepared(name, query string, parameterTypes []uint32) {
+	if len(name) > maximumPreparedStatementNameBytes || len(parameterTypes) > maximumPreparedStatementParameters {
+		return
+	}
+	if _, exists := d.prepared[name]; !exists && len(d.prepared) >= maximumPreparedStatements {
+		return
+	}
+	d.prepared[name] = preparedStatement{
+		operation: sqlOperation(query), background: backgroundQuery(query),
+		parameterTypes: append([]uint32(nil), parameterTypes...),
+	}
+}
+
+func (d *Decoder) resolvePrepared(pending *pendingOperation, name string) {
+	prepared, exists := d.prepared[name]
+	if !exists {
+		return
+	}
+	pending.operation.Name = prepared.operation
+	pending.operation.Background = prepared.background
+	pending.parameterTypes = prepared.parameterTypes
 }
 
 func (d *Decoder) newPending(name string, observed time.Time) *pendingOperation {
@@ -364,7 +416,7 @@ func parsePackets(buffer *[]byte) ([]packet, error) {
 	return result, nil
 }
 
-func clientMessage(decoded packet, started, observed time.Time, limit int) model.TrafficMessage {
+func clientMessage(decoded packet, started, observed time.Time, limit int, parameterTypes []uint32) model.TrafficMessage {
 	switch decoded.kind {
 	case 'P':
 		statement, query, _ := parseStrings(decoded.payload, 2)
@@ -373,7 +425,7 @@ func clientMessage(decoded packet, started, observed time.Time, limit int) model
 		message.Fields = append(message.Fields, model.TrafficMessageField{Name: "statement", Value: statement})
 		return message
 	case 'B':
-		portal, statement, parameters := parseBind(decoded.payload)
+		portal, statement, parameters := parseBind(decoded.payload, parameterTypes)
 		content, _ := json.MarshalIndent(parameters, "", "  ")
 		message := bytesMessage("bind", "Bind parameters", content, "application/json", decoded, started, observed, limit)
 		message.Fields = append(message.Fields,
@@ -505,7 +557,23 @@ func parseStrings(content []byte, count int) (string, string, []byte) {
 	return values[0], values[1], rest
 }
 
-func parseBind(content []byte) (string, string, []any) {
+func parseParameterTypes(content []byte) []uint32 {
+	if len(content) < 2 {
+		return nil
+	}
+	count := int(binary.BigEndian.Uint16(content[:2]))
+	content = content[2:]
+	if count == 0 || len(content) < count*4 {
+		return nil
+	}
+	types := make([]uint32, count)
+	for index := range types {
+		types[index] = binary.BigEndian.Uint32(content[index*4:])
+	}
+	return types
+}
+
+func parseBind(content []byte, parameterTypes []uint32) (string, string, []any) {
 	portal, statement, rest := parseStrings(content, 2)
 	if len(rest) < 2 {
 		return portal, statement, nil
@@ -514,6 +582,10 @@ func parseBind(content []byte) (string, string, []any) {
 	rest = rest[2:]
 	if len(rest) < formatCount*2+2 {
 		return portal, statement, nil
+	}
+	formats := make([]uint16, formatCount)
+	for index := range formats {
+		formats[index] = binary.BigEndian.Uint16(rest[index*2:])
 	}
 	rest = rest[formatCount*2:]
 	parameterCount := int(binary.BigEndian.Uint16(rest[:2]))
@@ -534,13 +606,63 @@ func parseBind(content []byte) (string, string, []any) {
 		}
 		value := rest[:length]
 		rest = rest[length:]
-		if utf8.Valid(value) {
-			parameters = append(parameters, string(value))
-		} else {
-			parameters = append(parameters, map[string]string{"base64": base64.StdEncoding.EncodeToString(value)})
+		format := uint16(0)
+		if len(formats) == 1 {
+			format = formats[0]
+		} else if index < len(formats) {
+			format = formats[index]
 		}
+		parameterType := uint32(0)
+		if index < len(parameterTypes) {
+			parameterType = parameterTypes[index]
+		}
+		parameters = append(parameters, decodeParameter(value, format, parameterType))
 	}
 	return portal, statement, parameters
+}
+
+func decodeParameter(value []byte, format uint16, parameterType uint32) any {
+	if format == 0 {
+		if utf8.Valid(value) {
+			return string(value)
+		}
+		return map[string]string{"base64": base64.StdEncoding.EncodeToString(value)}
+	}
+	switch parameterType {
+	case 16: // bool
+		if len(value) == 1 {
+			return value[0] != 0
+		}
+	case 20: // int8
+		if len(value) == 8 {
+			return int64(binary.BigEndian.Uint64(value))
+		}
+	case 21: // int2
+		if len(value) == 2 {
+			return int16(binary.BigEndian.Uint16(value))
+		}
+	case 23: // int4
+		if len(value) == 4 {
+			return int32(binary.BigEndian.Uint32(value))
+		}
+	case 26: // oid
+		if len(value) == 4 {
+			return binary.BigEndian.Uint32(value)
+		}
+	case 18, 19, 25, 1042, 1043, 114: // char, name, text, bpchar, varchar, json
+		if utf8.Valid(value) {
+			return string(value)
+		}
+	case 3802: // jsonb
+		if len(value) > 1 && value[0] == 1 && utf8.Valid(value[1:]) {
+			return string(value[1:])
+		}
+	case 2950: // uuid
+		if len(value) == 16 {
+			return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[:4], value[4:6], value[6:8], value[8:10], value[10:])
+		}
+	}
+	return map[string]string{"base64": base64.StdEncoding.EncodeToString(value)}
 }
 
 func rowColumns(content []byte) []string {

@@ -362,7 +362,6 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
       traceNavigationPending={traceNavigationPending}
       targetBinding={environment.bindings?.find((binding) => binding.service.toLowerCase() === (selectedTraceNavigationItem?.exchange.target || selectedExchange.target).toLowerCase())}
       onTraceNavigate={(item) => traceNavigationScoped && selectedTrace ? inspectTraceItem(item, selectedTrace) : void inspectExchange(item.exchange, selectedTrace || undefined)}
-      onTraceTransactionToggle={toggleTraceTransaction}
       onClose={closeExchange}
     />}
   </div>

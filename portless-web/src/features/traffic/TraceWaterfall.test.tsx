@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TrafficExchange, TrafficTrace } from '../../types'
-import { traceNavigationItems, traceWaterfallItems, TraceWaterfall } from './TraceWaterfall'
+import type { TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../types'
+import { traceNavigationItems, traceTransactionCommandSpans, traceWaterfallItems, TraceWaterfall } from './TraceWaterfall'
 
 const waterfallProps = {
   expandedTransactions: new Set<number>(),
@@ -95,5 +95,30 @@ describe('trace waterfall', () => {
     const expandedMarkup = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} expandedTransactions={new Set([1])} />)
     expect(expandedMarkup).toContain('Collapse inventory to inventory-postgres POSTGRESQL TCP details')
     expect(expandedMarkup).toContain('POSTGRESQL · BEGIN')
+    expect(expandedMarkup).toContain('POSTGRESQL · COMMIT')
+  })
+
+  it('does not promote transaction boundaries to commands when no application SQL ran', () => {
+    const startedAt = '2026-08-25T12:00:00Z'
+    const boundary = (sequence: number, operation: string): TrafficTraceSpan => ({
+      exchange: {
+        project: 'store', environment: 'local', sequence, protocol: 'tcp', source: 'inventory', target: 'inventory-postgres',
+        startedAt, completedAt: startedAt, durationMs: 2, requestBytes: 6, responseBytes: 6, background: false,
+        tcp: { kind: 'operation', applicationProtocol: 'postgresql', operation, inspection: 'decoded', outcome: 'success' },
+      },
+      depth: 1, startOffsetMs: sequence, correlation: 'inferred', transactionGroup: 1,
+    })
+    const spans = [boundary(1, 'BEGIN'), boundary(2, 'COMMIT')]
+    const trace = {
+      project: 'store', environment: 'local', number: 2, lastSequence: 2, protocol: 'tcp',
+      startedAt, completedAt: startedAt, durationMs: 4, source: 'inventory', target: 'inventory-postgres',
+      error: false, faulted: false, background: false, provisional: false, spanCount: 2, correlation: 'inferred', spans,
+    } as TrafficTrace
+
+    expect(traceTransactionCommandSpans(spans)).toEqual([])
+    const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} />)
+    expect(markup).toContain('POSTGRESQL · TRANSACTION')
+    expect(markup).toContain('command summary with 0 commands')
+    expect(markup).not.toContain('POSTGRESQL · COMMIT')
   })
 })

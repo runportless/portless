@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +66,94 @@ func TestDecoderClassifiesExtendedDriverQueryAsBackground(t *testing.T) {
 	operations := decoder.Observe(protocol.DirectionResponse, typedPacket('Z', []byte{'I'}), now.Add(2*time.Millisecond))
 	if len(operations) != 1 || operations[0].Name != "SELECT" || !operations[0].Background {
 		t.Fatalf("extended validation operation = %#v", operations)
+	}
+}
+
+func TestDecoderDecodesExtendedQueryBoundParameters(t *testing.T) {
+	decoder := New(protocol.Config{})
+	now := time.Now().UTC()
+	decoder.Observe(protocol.DirectionRequest, startupPacket(196608), now)
+
+	query := "UPDATE inventory SET on_hand = on_hand - $1 WHERE sku = $2 AND on_hand >= $3"
+	parse := append([]byte{0}, []byte(query)...)
+	parse = append(parse, 0, 0, 3)
+	for _, oid := range []uint32{23, 1043, 23} {
+		encoded := make([]byte, 4)
+		binary.BigEndian.PutUint32(encoded, oid)
+		parse = append(parse, encoded...)
+	}
+
+	bind := []byte{0, 0, 0, 1, 0, 1, 0, 3}
+	for _, value := range [][]byte{{0, 0, 0, 1}, []byte("coffee-mug"), {0, 0, 0, 2}} {
+		length := make([]byte, 4)
+		binary.BigEndian.PutUint32(length, uint32(len(value)))
+		bind = append(bind, length...)
+		bind = append(bind, value...)
+	}
+	bind = append(bind, 0, 0)
+
+	request := append(typedPacket('P', parse), typedPacket('B', bind)...)
+	request = append(request, typedPacket('S', nil)...)
+	decoder.Observe(protocol.DirectionRequest, request, now.Add(time.Millisecond))
+	operations := decoder.Observe(protocol.DirectionResponse, typedPacket('Z', []byte{'I'}), now.Add(2*time.Millisecond))
+	if len(operations) != 1 || len(operations[0].RequestMessages) != 3 {
+		t.Fatalf("extended query operations = %#v", operations)
+	}
+	var parameters []any
+	if err := json.Unmarshal([]byte(operations[0].RequestMessages[1].Content), &parameters); err != nil {
+		t.Fatalf("decode bind parameters: %v", err)
+	}
+	if expected := []any{float64(1), "coffee-mug", float64(2)}; !reflect.DeepEqual(parameters, expected) {
+		t.Fatalf("bind parameters = %#v, want %#v", parameters, expected)
+	}
+}
+
+func TestDecoderResolvesReusedPreparedCommit(t *testing.T) {
+	decoder := New(protocol.Config{})
+	now := time.Now().UTC()
+	decoder.Observe(protocol.DirectionRequest, startupPacket(196608), now)
+
+	query := func(statement string, status byte, offset time.Duration) protocol.Operation {
+		decoder.Observe(protocol.DirectionRequest, typedPacket('Q', append([]byte(statement), 0)), now.Add(offset))
+		operations := decoder.Observe(protocol.DirectionResponse, typedPacket('Z', []byte{status}), now.Add(offset+time.Millisecond))
+		if len(operations) != 1 {
+			t.Fatalf("%s operations = %#v, want one", statement, operations)
+		}
+		return operations[0]
+	}
+	commitResponse := func(offset time.Duration, parsed bool) protocol.Operation {
+		var response []byte
+		if parsed {
+			response = append(response, typedPacket('1', nil)...)
+		}
+		response = append(response, typedPacket('2', nil)...)
+		response = append(response, typedPacket('C', append([]byte("COMMIT"), 0))...)
+		response = append(response, typedPacket('Z', []byte{'I'})...)
+		operations := decoder.Observe(protocol.DirectionResponse, response, now.Add(offset+time.Millisecond))
+		if len(operations) != 1 {
+			t.Fatalf("commit operations = %#v, want one", operations)
+		}
+		return operations[0]
+	}
+
+	query("BEGIN", 'T', time.Millisecond)
+	parse := append([]byte("S_1\x00COMMIT\x00"), 0, 0)
+	firstRequest := append(typedPacket('P', parse), preparedBindPacket("S_1")...)
+	firstRequest = append(firstRequest, typedPacket('E', []byte{0, 0, 0, 0, 0})...)
+	firstRequest = append(firstRequest, typedPacket('S', nil)...)
+	decoder.Observe(protocol.DirectionRequest, firstRequest, now.Add(3*time.Millisecond))
+	firstCommit := commitResponse(3*time.Millisecond, true)
+	if firstCommit.Name != "COMMIT" || firstCommit.TransactionSequence != 1 {
+		t.Fatalf("prepared commit = %#v, want named transaction 1 commit", firstCommit)
+	}
+
+	query("BEGIN", 'T', 5*time.Millisecond)
+	reusedRequest := append(preparedBindPacket("S_1"), typedPacket('E', []byte{0, 0, 0, 0, 0})...)
+	reusedRequest = append(reusedRequest, typedPacket('S', nil)...)
+	decoder.Observe(protocol.DirectionRequest, reusedRequest, now.Add(7*time.Millisecond))
+	reusedCommit := commitResponse(7*time.Millisecond, false)
+	if reusedCommit.Name != "COMMIT" || reusedCommit.TransactionSequence != 2 {
+		t.Fatalf("reused commit = %#v, want named transaction 2 commit", reusedCommit)
 	}
 }
 
@@ -142,4 +232,10 @@ func typedPacket(kind byte, payload []byte) []byte {
 	binary.BigEndian.PutUint32(result[1:5], uint32(4+len(payload)))
 	copy(result[5:], payload)
 	return result
+}
+
+func preparedBindPacket(statement string) []byte {
+	payload := append([]byte{0}, []byte(statement)...)
+	payload = append(payload, 0, 0, 0, 0, 0, 0, 0)
+	return typedPacket('B', payload)
 }
