@@ -1,4 +1,6 @@
 export { TrafficPanel } from './TrafficPanel'
-export { TrafficDetail, formattedTrafficHeaders } from './TrafficDetail'
+export { ExchangeTraceDrawer } from './ExchangeTraceDrawer'
+export { formattedTrafficHeaders } from './protocols/HttpTrafficDetail'
 export { TraceWaterfall } from './TraceWaterfall'
+export { WaterfallTraceDrawer } from './WaterfallTraceDrawer'
 export * from './trafficState'

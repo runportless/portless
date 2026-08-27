@@ -4,8 +4,6 @@ import type { TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../type
 import { traceNavigationItems, traceTransactionCommandSpans, traceWaterfallItems, TraceWaterfall } from './TraceWaterfall'
 
 const waterfallProps = {
-  expandedTransactions: new Set<number>(),
-  onTransactionToggle: () => undefined,
   onItem: () => undefined,
 }
 
@@ -37,12 +35,12 @@ describe('trace waterfall', () => {
     expect(markup).toContain('POSTGRESQL · SELECT')
     expect(markup).toContain('aria-label="Inspect orders to postgres POSTGRESQL · SELECT"')
     expect(markup).toContain('class="trace-span trace-span--dependency-summary is-tcp"')
-    expect(markup).toContain('trace-span__disclosure-placeholder')
+    expect(markup).not.toContain('trace-span__disclosure')
     expect(markup).toContain('--span-depth:1')
     expect(markup).toContain('correlation-badge--inferred')
   })
 
-  it('hides background spans and collapses one database transaction', () => {
+  it('hides background spans and represents one database transaction as a single aggregate span', () => {
     const startedAt = '2026-08-25T12:00:00Z'
     const tcpExchange = (sequence: number, operation: string, background = false): TrafficExchange => ({
       project: 'store', environment: 'local', sequence, protocol: 'tcp', source: 'inventory', target: 'inventory-postgres', background,
@@ -68,34 +66,31 @@ describe('trace waterfall', () => {
     if (items[0].kind === 'transaction') expect(items[0].spans).toHaveLength(4)
     expect(items[1]).toMatchObject({ kind: 'span', span: { exchange: { sequence: 7 } } })
 
-    const collapsedNavigation = traceNavigationItems(trace)
-    expect(collapsedNavigation.map((item) => item.key)).toEqual(['transaction:1', 'exchange:7'])
-    expect(collapsedNavigation[0]).toMatchObject({ kind: 'transaction', expanded: false, exchange: { tcp: { operation: 'TRANSACTION' } } })
-
-    const expandedNavigation = traceNavigationItems(trace, false, new Set([1]))
-    expect(expandedNavigation.map((item) => item.key)).toEqual(['transaction:1', 'exchange:3', 'exchange:4', 'exchange:5', 'exchange:6', 'exchange:7'])
+    const navigation = traceNavigationItems(trace)
+    expect(navigation.map((item) => item.key)).toEqual(['transaction:1', 'exchange:7'])
+    expect(navigation[0]).toMatchObject({ kind: 'transaction', exchange: { durationMs: 11, tcp: { operation: 'TRANSACTION' } } })
 
     const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} />)
-    expect(markup).toContain('POSTGRESQL · UPDATE + INSERT')
+    expect(markup).toContain('POSTGRESQL · TRANSACTION')
     expect(markup).toContain('POSTGRESQL · INSERT')
     expect(markup).toContain('Inspect orders to orders-postgres POSTGRESQL · INSERT')
     expect(markup.match(/trace-span--dependency-summary/g)).toHaveLength(2)
-    expect(markup).toContain('aria-expanded="false"')
-    expect(markup).toContain('Inspect inventory to inventory-postgres POSTGRESQL command summary with 2 commands')
-    expect(markup).toContain('Expand inventory to inventory-postgres POSTGRESQL TCP details')
+    expect(markup).toContain('Inspect inventory to inventory-postgres POSTGRESQL transaction')
+    expect(markup).not.toContain('aria-expanded')
+    expect(markup).not.toContain('trace-span__disclosure')
     expect(markup).not.toContain('POSTGRESQL · QUERY')
     expect(markup).not.toContain('POSTGRESQL · BEGIN')
+    expect(markup).not.toContain('POSTGRESQL · UPDATE')
+    expect(markup).not.toContain('POSTGRESQL · COMMIT')
 
     const backgroundNavigation = traceNavigationItems(trace, true)
     expect(backgroundNavigation.map((item) => item.key)).toEqual(['exchange:2', 'transaction:1', 'exchange:7'])
 
     const backgroundMarkup = renderToStaticMarkup(<TraceWaterfall trace={trace} includeBackground {...waterfallProps} />)
     expect(backgroundMarkup).toContain('POSTGRESQL · QUERY')
-
-    const expandedMarkup = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} expandedTransactions={new Set([1])} />)
-    expect(expandedMarkup).toContain('Collapse inventory to inventory-postgres POSTGRESQL TCP details')
-    expect(expandedMarkup).toContain('POSTGRESQL · BEGIN')
-    expect(expandedMarkup).toContain('POSTGRESQL · COMMIT')
+    expect(backgroundMarkup).not.toContain('POSTGRESQL · BEGIN')
+    expect(backgroundMarkup).not.toContain('POSTGRESQL · UPDATE')
+    expect(backgroundMarkup).not.toContain('POSTGRESQL · COMMIT')
   })
 
   it('does not promote transaction boundaries to commands when no application SQL ran', () => {
@@ -118,7 +113,7 @@ describe('trace waterfall', () => {
     expect(traceTransactionCommandSpans(spans)).toEqual([])
     const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} />)
     expect(markup).toContain('POSTGRESQL · TRANSACTION')
-    expect(markup).toContain('command summary with 0 commands')
+    expect(markup).toContain('Inspect inventory to inventory-postgres POSTGRESQL transaction')
     expect(markup).not.toContain('POSTGRESQL · COMMIT')
   })
 })

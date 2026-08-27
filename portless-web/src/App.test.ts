@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { environmentSessionKey, LoadingScreen, pageTitle, parseRoute } from './App'
+import { environmentSessionKey, LoadingScreen, pageTitle, parseRoute, settingsToggleDestination } from './App'
 
 describe('application routes', () => {
   it('recognizes the top-level settings page without inventing project scope', () => {
@@ -33,6 +33,14 @@ describe('application routes', () => {
       tab: 'mocks',
     })
     expect(parseRoute('/environments/store/local?tab=traffic&profile=ignored')).not.toHaveProperty('mockProfile')
+  })
+
+  it('toggles settings back to the exact previous route', () => {
+    const environmentRoute = '/environments/store/local?tab=traffic&edge=checkout%3Aorders'
+
+    expect(settingsToggleDestination(environmentRoute)).toBe('/settings')
+    expect(settingsToggleDestination('/settings?tab=mcp', environmentRoute)).toBe(environmentRoute)
+    expect(settingsToggleDestination('/settings', '/settings?tab=runtime')).toBe('/projects')
   })
 
   it('replaces environment view state when the daemon instance changes', () => {

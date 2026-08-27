@@ -214,11 +214,18 @@ logical operations while their TCP connections remain open, so queries,
 commands, results, subjects, and message payloads can be inspected from the
 same traffic drawer. Decoded TCP spans use Command and Result views parallel to
 HTTP's Request and Response views, with a side-by-side Compare view when the
-drawer is maximized. PostgreSQL transaction summaries show application SQL
-while folding `BEGIN`, `COMMIT`, and `ROLLBACK` into the transaction's duration
-and outcome; expanding a transaction exposes those protocol operations when
-needed. Unknown, encrypted, oversized, or malformed TCP traffic remains
-byte-count-only and never interrupts forwarding.
+drawer is maximized. Decoded PostgreSQL and MySQL result sets render as compact
+database rows with captured column names instead of their JSON representation.
+Result tables show at most ten rows per page, while Copy exports every captured
+row as CSV. Mutation outcomes and undecodable payloads remain concise text.
+Redis commands render in their familiar command-line form instead of their
+decoded wire array, and JSON stored in Redis renders as highlighted JSON rather
+than an escaped string.
+PostgreSQL transactions render as one aggregate waterfall span whose duration
+and outcome cover the complete transaction. The traffic drawer shows the
+application SQL breakdown while folding protocol boundaries such as `BEGIN`,
+`COMMIT`, and `ROLLBACK` into that aggregate. Unknown, encrypted, oversized, or
+malformed TCP traffic remains byte-count-only and never interrupts forwarding.
 
 Successful driver and connection-pool housekeeping is marked as background:
 for example, PostgreSQL session setup and validation queries or Redis handshakes
@@ -227,15 +234,16 @@ while standalone housekeeping traces, housekeeping spans inside foreground
 traces, and topology animation are hidden by default. Failed or faulted
 housekeeping always remains visible. Decoded TCP dependencies use one consistent
 summary-row treatment in the trace waterfall. Explicit database transactions
-remain individually inspectable in Exchanges and are grouped into expandable
-command/result summaries, while standalone commands use the same presentation
-and open directly. Transaction boundaries such as `BEGIN` and `COMMIT` stay in
-the opt-in TCP details instead of competing with application commands.
+remain individually inspectable in Exchanges and are grouped into one aggregate
+waterfall span, while standalone commands use the same presentation and open
+directly. The transaction's command/result breakdown is available in its
+traffic drawer instead of competing with the trace timeline.
 
 The trace drawer's previous and next controls follow the waterfall's visible
-span model: a collapsed transaction is one command/result summary, and showing
-its TCP details opts the individual protocol operations into navigation. Hidden
+span model: a transaction is always one command/result summary. Hidden
 background spans do not appear in that sequence until they are shown.
+Drawers opened from the raw Exchanges table instead provide only previous and
+next exchange controls, following the table's active filters across pages.
 
 The trace list is HTTP-rooted by default while retaining decoded TCP dependency
 spans inside those requests; standalone TCP roots are an explicit opt-in.

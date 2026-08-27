@@ -10,7 +10,7 @@ export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 const expandedProjectsKey = 'portless.expanded-projects'
 const sidebarCollapsedKey = 'portless.sidebar-collapsed'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
@@ -25,6 +25,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   relay?: RelayStatus | null
   children: ReactNode
   onNavigate: (path: string) => void
+  onSettingsToggle: () => void
   commands: Command[]
   live?: boolean
   onDaemonRefresh: () => Promise<DaemonStatus>
@@ -72,8 +73,8 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
     { group: 'System', label: 'Configure MCP', detail: activeEnvironment ? `${activeEnvironment.project}/${activeEnvironment.name}` : 'AI client access', run: () => onNavigate(mcpSettingsRoute(activeEnvironment)) },
-    { group: 'System', label: 'Settings', detail: 'Appearance, runtime, and MCP', run: () => onNavigate('/settings') },
-  ], [activeEnvironment, commands, environments, onNavigate, projects])
+    { group: 'System', label: 'Settings', detail: 'Appearance, runtime, and MCP', run: onSettingsToggle },
+  ], [activeEnvironment, commands, environments, onNavigate, onSettingsToggle, projects])
 
   const expandProject = (name: string) => {
     setExpandedProjects((current) => current.has(name) ? current : new Set([...current, name]))
@@ -141,7 +142,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
         </>}
       </div>
       <nav className="sidebar__utility" aria-label="Application">
-        <button type="button" className={settingsActive ? 'is-active' : ''} aria-label="Settings" aria-current={settingsActive ? 'page' : undefined} title={sidebarCollapsed ? 'Settings' : undefined} onClick={() => onNavigate('/settings')}><SettingsIcon /><span>Settings</span></button>
+        <button type="button" className={settingsActive ? 'is-active' : ''} aria-label="Settings" aria-current={settingsActive ? 'page' : undefined} title={sidebarCollapsed ? 'Settings' : undefined} onClick={onSettingsToggle}><SettingsIcon /><span>Settings</span></button>
       </nav>
       <button className="sidebar__footer" type="button" aria-label={`Daemon ${daemonStateLabel}`} aria-expanded={daemonOpen} title={sidebarCollapsed ? `Daemon ${daemonStateLabel}` : undefined} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span className={live ? undefined : 'daemon-state--reconnecting'}>{daemonStateLabel}</span><small>DETAILS ›</small></button>
     </aside>

@@ -37,6 +37,43 @@ test('keeps projects, environments, and breadcrumbs navigable', async ({ page })
   await expect(page.locator('.project-nav__project-link').filter({ hasText: state.project })).toBeVisible()
 })
 
+test('toggles settings back to the exact environment view', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+  const topologyPath = environmentPath('topology')
+  await page.goto(`${state.baseURL}${topologyPath}`)
+
+  const settings = page.getByRole('button', { name: 'Settings' })
+  await settings.click()
+  await expect(page).toHaveURL(/\/settings$/)
+  await expect(settings).toHaveAttribute('aria-current', 'page')
+
+  await settings.click()
+  await expect(page).toHaveURL(new RegExp(`${topologyPath.replace('?', '\\?')}$`))
+  await expect(page.getByRole('navigation', { name: `${state.project}/${state.environment} views` }).getByRole('button', { name: 'Topology' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('keeps scrollable pages within the standard bottom gutter', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+
+  const expectBottomGutter = async (lastContent: string) => {
+    await expect(page.locator(lastContent)).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+    const gap = await page.locator('.page').evaluate((element) => {
+      const last = element.lastElementChild
+      if (!last) return -1
+      return Math.round(element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom)
+    })
+    expect(gap).toBe(28)
+  }
+
+  await expectBottomGutter('.overview-grid')
+  await page.goto(`${state.baseURL}${environmentPath('timeline')}`)
+  await expectBottomGutter('.timeline-panel')
+})
+
 test('collapses the sidebar into a persistent icon navigation rail', async ({ page }) => {
   const state = readE2EState()
   await authenticate(page)
@@ -373,40 +410,31 @@ test('inspects captured request and response details in the exchange workbench',
   const detailHeaderBox = await detailHeader.boundingBox()
   expect((interventionBox?.y ?? 0) + (interventionBox?.height ?? 0)).toBeLessThanOrEqual((detailHeaderBox?.y ?? 0) + (detailHeaderBox?.height ?? 0))
   expect((interventionBox?.y ?? 0) + (interventionBox?.height ?? 0)).toBeLessThanOrEqual(overviewDataBox?.y ?? 0)
-  const traceNavigation = detailHeader.getByRole('navigation', { name: 'Trace span navigation' })
-  await expect(traceNavigation).toBeVisible()
-  await expect(traceNavigation).not.toContainText('TRACE')
-  await expect(traceNavigation.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'false')
-  const tracePosition = traceNavigation.locator('output')
-  const initialPosition = await tracePosition.getAttribute('aria-label')
-  const positionMatch = initialPosition?.match(/^Span (\d+) of (\d+)$/)
+  const exchangeNavigation = detailHeader.getByRole('navigation', { name: 'Exchange navigation' })
+  await expect(exchangeNavigation).toBeVisible()
+  await expect(detailHeader.getByRole('navigation', { name: 'Trace span navigation' })).toHaveCount(0)
+  await expect(exchangeNavigation.getByRole('button')).toHaveCount(2)
+  const previousExchange = exchangeNavigation.getByRole('button', { name: 'Previous exchange' })
+  const nextExchange = exchangeNavigation.getByRole('button', { name: 'Next exchange' })
+  const exchangePosition = exchangeNavigation.locator('output')
+  const initialPosition = await exchangePosition.getAttribute('aria-label')
+  const positionMatch = initialPosition?.match(/^Exchange (\d+) of (\d+)$/)
   expect(positionMatch).not.toBeNull()
   const initialIndex = Number(positionMatch?.[1])
-  const traceLength = Number(positionMatch?.[2])
-  expect(initialIndex).toBe(1)
-  expect(traceLength).toBeGreaterThan(1)
-  const firstTraceExchange = traceNavigation.getByRole('button', { name: 'First visible span in trace' })
-  const previousTraceExchange = traceNavigation.getByRole('button', { name: 'Previous visible span in trace' })
-  const nextTraceExchange = traceNavigation.getByRole('button', { name: 'Next visible span in trace' })
-  const lastTraceExchange = traceNavigation.getByRole('button', { name: 'Last visible span in trace' })
-  await expect(firstTraceExchange).toBeDisabled()
-  await expect(previousTraceExchange).toBeDisabled()
-  await expect(nextTraceExchange).toBeEnabled()
-  await expect(lastTraceExchange).toBeEnabled()
-  const firstExchangeHeading = await detail.locator('.traffic-detail__heading .eyebrow').textContent()
-  await lastTraceExchange.click()
-  await expect(tracePosition).toHaveAttribute('aria-label', `Exchange ${traceLength} of ${traceLength}`)
-  await expect(detail.locator('.traffic-detail__heading .eyebrow')).not.toHaveText(firstExchangeHeading || '')
-  await expect(nextTraceExchange).toBeDisabled()
-  await expect(lastTraceExchange).toBeDisabled()
-  await firstTraceExchange.click()
-  await expect(tracePosition).toHaveAttribute('aria-label', `Span 1 of ${traceLength}`)
-  await expect(detail.locator('.traffic-detail__heading .eyebrow')).toHaveText(firstExchangeHeading || '')
-  await nextTraceExchange.click()
-  await expect(tracePosition).toHaveAttribute('aria-label', `Span 2 of ${traceLength}`)
-  await previousTraceExchange.click()
-  await expect(tracePosition).toHaveAttribute('aria-label', `Span 1 of ${traceLength}`)
+  const exchangeLength = Number(positionMatch?.[2])
+  expect(initialIndex).toBeGreaterThanOrEqual(1)
+  expect(initialIndex).toBeLessThan(exchangeLength)
+  if (initialIndex === 1) await expect(previousExchange).toBeDisabled()
+  else await expect(previousExchange).toBeEnabled()
+  await expect(nextExchange).toBeEnabled()
+  const initialDialogLabel = await detail.getAttribute('aria-label')
+  await nextExchange.click()
+  await expect(exchangePosition).toHaveAttribute('aria-label', `Exchange ${initialIndex + 1} of ${exchangeLength}`)
+  await expect(detail).not.toHaveAttribute('aria-label', initialDialogLabel || '')
+  await expect(previousExchange).toBeEnabled()
+  await previousExchange.click()
+  await expect(exchangePosition).toHaveAttribute('aria-label', `Exchange ${initialIndex} of ${exchangeLength}`)
+  await expect(detail).toHaveAttribute('aria-label', initialDialogLabel || '')
   await expect(overview.locator('.traffic-overview__context > div').first()).toHaveCSS('padding-bottom', '14px')
   await expect(overview).toContainText('ENVIRONMENT')
   await expect(overview).toContainText('TARGET BINDING')
@@ -522,6 +550,69 @@ test('keeps short trace payloads pinned and preserves compare while navigating',
   await expect(tracePosition).toHaveAttribute('aria-label', /Span 1 of \d+/)
   await expect(detail).toHaveClass(/traffic-detail--maximized/)
   await expect(compareTab).toHaveAttribute('aria-selected', 'true')
+})
+
+test('preserves maximized compare mode while paging through exchanges', async ({ page }) => {
+  await authenticate(page, environmentPath('traffic'))
+  const marker = `/exchange-drawer-state-${Date.now()}`
+  expect((await applicationRequest(`${marker}-first`)).status).toBe(404)
+  expect((await applicationRequest(`${marker}-second`)).status).toBe(404)
+
+  const filter = page.getByPlaceholder('filter path, service, edge, status…')
+  await filter.fill(marker)
+  await page.getByRole('tab', { name: 'EXCHANGES' }).click()
+  const rows = page.locator('button.traffic-row').filter({ hasText: marker })
+  await expect(rows).toHaveCount(2)
+  await rows.first().click()
+
+  const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
+  const navigation = detail.getByRole('navigation', { name: 'Exchange navigation' })
+  const position = navigation.locator('output')
+  await expect(position).toHaveAttribute('aria-label', 'Exchange 1 of 2')
+  await detail.getByRole('button', { name: 'Full screen traffic details' }).click()
+  const compareTab = detail.getByRole('tab', { name: 'COMPARE' })
+  await expect(detail).toHaveClass(/traffic-detail--maximized/)
+  await expect(compareTab).toHaveAttribute('aria-selected', 'true')
+
+  await navigation.getByRole('button', { name: 'Next exchange' }).click()
+  await expect(position).toHaveAttribute('aria-label', 'Exchange 2 of 2')
+  await expect(detail).toHaveClass(/traffic-detail--maximized/)
+  await expect(compareTab).toHaveAttribute('aria-selected', 'true')
+
+  await navigation.getByRole('button', { name: 'Previous exchange' }).click()
+  await expect(position).toHaveAttribute('aria-label', 'Exchange 1 of 2')
+  await expect(detail).toHaveClass(/traffic-detail--maximized/)
+  await expect(compareTab).toHaveAttribute('aria-selected', 'true')
+})
+
+test('resets trace navigation to the first span when changing scope', async ({ page }) => {
+  await authenticate(page, environmentPath('traffic'))
+  const response = await applicationRequest(`/checkout?sku=coffee-mug&quantity=1&scope=${Date.now()}`)
+  expect(response.status).toBe(200)
+
+  const row = page.locator('button.trace-row').filter({ hasText: '/checkout' }).first()
+  await expect(row).toBeVisible()
+  await row.click()
+  const waterfall = page.getByRole('region', { name: 'Trace waterfall' })
+  await waterfall.getByRole('button', { name: /Inspect external to checkout GET \/checkout/ }).click()
+
+  const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
+  const navigation = detail.getByRole('navigation', { name: 'Trace span navigation' })
+  const httpScope = navigation.getByRole('button', { name: 'HTTP' })
+  const allScope = navigation.getByRole('button', { name: 'ALL' })
+  const position = navigation.locator('output')
+  await expect(httpScope).toHaveAttribute('aria-pressed', 'true')
+  await expect(position).toHaveAttribute('aria-label', /Span 1 of \d+/)
+  await navigation.getByRole('button', { name: 'Next visible span in trace' }).click()
+  await expect(position).toHaveAttribute('aria-label', /Span 2 of \d+/)
+
+  await allScope.click()
+  await expect(allScope).toHaveAttribute('aria-pressed', 'true')
+  await expect(position).toHaveAttribute('aria-label', /Span 1 of \d+/)
+
+  await httpScope.click()
+  await expect(httpScope).toHaveAttribute('aria-pressed', 'true')
+  await expect(position).toHaveAttribute('aria-label', /Span 1 of \d+/)
 })
 
 test('creates, captures, exports, and deletes a recording', async ({ page }) => {
@@ -864,7 +955,7 @@ test('shows a concise traffic error while the daemon reconnects', async ({ page 
   await expect(notice).toHaveCount(0, { timeout: 8_000 })
 })
 
-test('renders consistent database summaries while collapsing transactions and hiding background spans', async ({ page }) => {
+test('renders database transactions as aggregate waterfall spans with command details in the drawer', async ({ page }) => {
   await authenticate(page, environmentPath('traffic'))
   const marker = `/transaction-waterfall-${Date.now()}`
   expect((await applicationRequest(marker)).status).toBe(404)
@@ -881,6 +972,11 @@ test('renders consistent database summaries while collapsing transactions and hi
   await tcpRoots.click()
 
   const syntheticExchanges = new Map<number, Record<string, unknown>>()
+  const selectRows = Array.from({ length: 12 }, (_, index) => ({
+    id: String(42 + index),
+    state: index === 0 ? 'created' : index === 1 ? 'paid' : 'queued',
+    note: index === 0 ? null : index === 1 ? 'priority' : `note-${42 + index}`,
+  }))
   await page.route('**/traffic/exchanges/*', async (route) => {
     const sequence = Number(new URL(route.request().url()).pathname.split('/').pop())
     const exchange = syntheticExchanges.get(sequence)
@@ -898,11 +994,18 @@ test('renders consistent database summaries while collapsing transactions and hi
     const rootExchange = root.exchange as { sequence: number; project: string; environment: string; startedAt: string; completedAt: string }
     const tcpSpan = (offset: number, operation: string, background = false, transactionGroup?: number, source = 'inventory', target = 'inventory-postgres') => {
       const sequence = rootExchange.sequence + offset
-      const query = operation === 'UPDATE' ? 'UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2' : operation
+      const query = operation === 'UPDATE'
+        ? 'UPDATE store_inventory SET on_hand = on_hand - $1 WHERE sku = $2'
+        : operation === 'SELECT' ? 'SELECT id, state, note FROM orders ORDER BY id' : operation
       const requestMessages = [
         { type: operation === 'UPDATE' ? 'parse' : 'query', offsetMs: 0, summary: operation === 'UPDATE' ? `Parse ${query}` : operation, wireBytes: 6, content: query, contentType: 'text/x-sql', encoding: 'utf8' },
         ...(operation === 'UPDATE' ? [{ type: 'bind', offsetMs: 0, summary: 'Bind parameters', wireBytes: 20, content: '[1,"coffee-mug"]', contentType: 'application/json', encoding: 'utf8' }] : []),
       ]
+      const responseMessages = operation === 'SELECT' ? [
+        { type: 'row-description', offsetMs: 0, summary: '3 columns', wireBytes: 24, fields: [{ name: 'column', value: 'id' }, { name: 'column', value: 'state' }, { name: 'column', value: 'note' }] },
+        ...selectRows.map((row, index) => ({ type: 'data-row', offsetMs: index + 1, summary: 'Data row', wireBytes: 24, content: JSON.stringify(row), contentType: 'application/json', encoding: 'utf8' })),
+        { type: 'command-complete', offsetMs: selectRows.length + 1, summary: 'SELECT 12', wireBytes: 6, fields: [{ name: 'command', value: 'SELECT 12' }] },
+      ] : [{ type: 'command-complete', offsetMs: 1, summary: operation === 'UPDATE' ? 'UPDATE 1' : operation, wireBytes: 6, fields: [{ name: 'command', value: operation === 'UPDATE' ? 'UPDATE 1' : operation }] }]
       const exchange = {
         project: rootExchange.project, environment: rootExchange.environment, sequence: rootExchange.sequence + offset,
         protocol: 'tcp', source, target, background,
@@ -910,13 +1013,31 @@ test('renders consistent database summaries while collapsing transactions and hi
         requestBytes: 6, responseBytes: 6,
         tcp: {
           kind: 'operation', applicationProtocol: 'postgresql', operation, inspection: 'decoded', outcome: 'success',
-          requestMessageCount: requestMessages.length, responseMessageCount: 1,
+          requestMessageCount: requestMessages.length, responseMessageCount: responseMessages.length,
           requestMessages,
-          responseMessages: [{ type: 'command-complete', offsetMs: 1, summary: operation === 'UPDATE' ? 'UPDATE 1' : operation, wireBytes: 6, fields: [{ name: 'command', value: operation === 'UPDATE' ? 'UPDATE 1' : operation }] }],
+          responseMessages,
         },
       }
       syntheticExchanges.set(sequence, exchange)
       return { exchange, parentSequence: rootExchange.sequence, depth: 1, startOffsetMs: offset * 2, correlation: 'inferred', transactionGroup }
+    }
+    const redisSpan = (offset: number) => {
+      const sequence = rootExchange.sequence + offset
+      const cachedOrder = JSON.stringify({ id: 56, sku: 'coffee-mug', quantity: 1, state: 'created' })
+      const exchange = {
+        project: rootExchange.project, environment: rootExchange.environment, sequence,
+        protocol: 'tcp', source: 'orders', target: 'orders-redis', background: false,
+        startedAt: rootExchange.startedAt, completedAt: rootExchange.completedAt, durationMs: 1,
+        requestBytes: 34, responseBytes: cachedOrder.length + 7,
+        tcp: {
+          kind: 'operation', applicationProtocol: 'redis', operation: 'GET', inspection: 'decoded', outcome: 'success',
+          requestMessageCount: 1, responseMessageCount: 1,
+          requestMessages: [{ type: 'command', offsetMs: 0, summary: 'GET store:order:56', wireBytes: 34, contentType: 'application/json', encoding: 'utf8', content: JSON.stringify(['GET', 'store:order:56'], null, 2) }],
+          responseMessages: [{ type: 'response', offsetMs: 1, summary: `${cachedOrder.length} byte value`, wireBytes: cachedOrder.length + 7, contentType: 'application/json', encoding: 'utf8', content: JSON.stringify(cachedOrder) }],
+        },
+      }
+      syntheticExchanges.set(sequence, exchange)
+      return { exchange, parentSequence: rootExchange.sequence, depth: 1, startOffsetMs: offset * 2, correlation: 'inferred' }
     }
     const spans = [
       root,
@@ -924,20 +1045,24 @@ test('renders consistent database summaries while collapsing transactions and hi
       tcpSpan(2, 'BEGIN', false, 1),
       tcpSpan(3, 'UPDATE', false, 1),
       tcpSpan(4, 'COMMIT', false, 1),
-      tcpSpan(5, 'INSERT', false, undefined, 'orders', 'orders-postgres'),
+      tcpSpan(5, 'SELECT', false, undefined, 'orders', 'orders-postgres'),
+      redisSpan(6),
     ]
-    await route.fulfill({ response, json: { ...trace, lastSequence: rootExchange.sequence + 5, spanCount: spans.length, spans } })
+    await route.fulfill({ response, json: { ...trace, lastSequence: rootExchange.sequence + 6, spanCount: spans.length, spans } })
   })
 
   await row.click()
   const waterfall = page.getByRole('region', { name: 'Trace waterfall' })
   const transaction = waterfall.locator('.trace-span--transaction')
   await expect(transaction).toBeVisible()
-  const expandTransaction = waterfall.getByRole('button', { name: /Expand inventory to inventory-postgres POSTGRESQL TCP details/ })
-  const standaloneOperation = waterfall.getByRole('button', { name: /Inspect orders to orders-postgres POSTGRESQL · INSERT/ })
-  await expect(expandTransaction).toBeVisible()
+  const standaloneOperation = waterfall.getByRole('button', { name: /Inspect orders to orders-postgres POSTGRESQL · SELECT/ })
+  const redisOperation = waterfall.getByRole('button', { name: /Inspect orders to orders-redis REDIS · GET/ })
   await expect(standaloneOperation).toBeVisible()
+  await expect(redisOperation).toBeVisible()
   await expect(transaction).toHaveClass(/trace-span--dependency-summary/)
+  await expect(transaction).toContainText('POSTGRESQL · TRANSACTION')
+  await expect(transaction.locator('.trace-span__track small')).toHaveText('6ms')
+  await expect(waterfall.locator('.trace-span__disclosure')).toHaveCount(0)
   await expect(standaloneOperation).toHaveClass(/trace-span--dependency-summary/)
   const [transactionBackground, standaloneBackground] = await Promise.all([
     transaction.evaluate((element) => getComputedStyle(element).backgroundColor),
@@ -946,11 +1071,16 @@ test('renders consistent database summaries while collapsing transactions and hi
   expect(standaloneBackground).toBe(transactionBackground)
   await expect(waterfall.getByRole('button', { name: /POSTGRESQL · QUERY/ })).toHaveCount(0)
   await expect(waterfall.getByRole('button', { name: /POSTGRESQL · BEGIN/ })).toHaveCount(0)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · UPDATE/ })).toHaveCount(0)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · COMMIT/ })).toHaveCount(0)
 
-  await waterfall.getByRole('button', { name: /Inspect inventory to inventory-postgres POSTGRESQL command summary with 1 command/ }).click()
+  await waterfall.getByRole('button', { name: /Inspect inventory to inventory-postgres POSTGRESQL transaction/ }).click()
   let detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND')
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('1 COMMAND')
+  await expect(detail.locator('.traffic-detail__protocol-badge')).toHaveText('TCP')
+  await expect(detail.locator('.traffic-detail__heading .eyebrow')).toHaveCount(0)
+  await expect(detail.locator('.traffic-detail__heading h3 > span')).toHaveText('POSTGRESQL')
+  await expect(detail.locator('.traffic-detail__heading h3 code')).toHaveText('TRANSACTION')
+  await expect(detail.locator('.traffic-detail__transaction-count')).toHaveText('1 command')
   const transactionOverview = detail.getByRole('region', { name: 'Exchange overview' })
   await expect(transactionOverview).toContainText('ENVIRONMENT')
   await expect(transactionOverview).toContainText('TARGET BINDING')
@@ -979,81 +1109,68 @@ test('renders consistent database summaries while collapsing transactions and hi
   await expect(transactionNavigation.locator('output')).toHaveAttribute('aria-label', 'Current span is outside HTTP navigation; 1 HTTP span available')
   await detail.getByRole('button', { name: 'Close traffic details' }).click()
 
-  await expandTransaction.click()
-  await expect(transaction).toHaveAttribute('aria-expanded', 'true')
-  await expect(waterfall.getByRole('button', { name: /Collapse inventory to inventory-postgres POSTGRESQL TCP details/ })).toBeVisible()
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · BEGIN/ })).toBeVisible()
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · UPDATE/ })).toBeVisible()
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · COMMIT/ })).toBeVisible()
-
   await page.getByRole('button', { name: 'SHOW BACKGROUND' }).click()
   await expect(waterfall.getByRole('button', { name: /POSTGRESQL · QUERY/ })).toBeVisible()
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · BEGIN/ })).toHaveCount(0)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · UPDATE/ })).toHaveCount(0)
+  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · COMMIT/ })).toHaveCount(0)
 
-  await waterfall.getByRole('button', { name: /Inspect inventory to inventory-postgres POSTGRESQL · UPDATE/ }).click()
-  detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  const traceNavigation = detail.getByRole('navigation', { name: 'Trace span navigation' })
-  const tracePosition = traceNavigation.locator('output')
-  await expect(traceNavigation.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tracePosition).toHaveAttribute('aria-label', 'Current span is outside HTTP navigation; 1 HTTP span available')
-  await traceNavigation.getByRole('button', { name: 'ALL' }).click()
-  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tracePosition).toHaveAttribute('aria-label', 'Span 5 of 7')
-  const operationCommandTab = detail.getByRole('tab', { name: 'COMMAND', exact: true })
-  const operationResultTab = detail.getByRole('tab', { name: 'RESULT', exact: true })
-  await expect(operationCommandTab).toHaveAttribute('aria-selected', 'true')
-  const summary = detail.getByRole('region', { name: 'Command', exact: true })
-  await expect(summary).toContainText("UPDATE store_inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee-mug'")
-  await expect(summary).not.toContainText('UPDATE 1')
-  await operationResultTab.click()
-  await expect(detail.getByRole('region', { name: 'Result', exact: true })).toContainText('UPDATE 1')
-  await operationCommandTab.click()
-  await expect(detail.locator('.traffic-protocol-message')).toHaveCount(0)
-  await expect(detail.getByRole('tab', { name: 'TCP DETAILS' })).toHaveCount(0)
-
-  await detail.getByRole('button', { name: 'Full screen traffic details' }).click()
-  await expect(detail).toHaveClass(/traffic-detail--maximized/)
-  await expect(transactionOverview).toHaveCount(0)
-  const compareTab = detail.getByRole('tab', { name: 'COMPARE' })
-  await expect(compareTab).toHaveAttribute('aria-selected', 'true')
-  const commandPane = detail.locator('.traffic-semantic-card--request')
-  const resultPane = detail.locator('.traffic-semantic-card--response')
-  await expect(commandPane).toBeVisible()
-  await expect(resultPane).toBeVisible()
-  const [commandPaneBox, resultPaneBox] = await Promise.all([commandPane.boundingBox(), resultPane.boundingBox()])
-  expect(Math.abs(commandPaneBox!.width - resultPaneBox!.width)).toBeLessThanOrEqual(1)
-  await detail.getByRole('button', { name: 'Next visible span in trace' }).click()
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('COMMIT')
-  await expect(detail).toHaveClass(/traffic-detail--maximized/)
-  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(compareTab).toHaveAttribute('aria-selected', 'true')
-  await expect(detail.locator('.traffic-protocol-message')).toHaveCount(0)
-
-  await detail.getByRole('button', { name: 'Previous visible span in trace' }).click()
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('UPDATE')
-  await expect(detail).toHaveClass(/traffic-detail--maximized/)
-  await expect(traceNavigation.getByRole('button', { name: 'ALL' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(compareTab).toHaveAttribute('aria-selected', 'true')
-
-  await page.keyboard.press('Escape')
-  await waterfall.getByRole('button', { name: /Collapse inventory to inventory-postgres POSTGRESQL TCP details/ }).click()
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND')
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('1 COMMAND')
-  await expect(tracePosition).toHaveAttribute('aria-label', 'Span 3 of 4')
-  await expect(detail.getByRole('region', { name: 'Command', exact: true })).toContainText("UPDATE store_inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee-mug'")
-
-  await detail.getByRole('button', { name: 'Close traffic details' }).click()
   await standaloneOperation.click()
   detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('POSTGRESQL COMMAND')
-  await expect(detail.locator('.traffic-detail__heading')).toContainText('INSERT')
+  await expect(detail.locator('.traffic-detail__protocol-badge')).toHaveText('TCP')
+  await expect(detail.locator('.traffic-detail__heading')).toContainText('SELECT')
   await expect(detail.getByRole('region', { name: 'Exchange overview' })).toBeVisible()
   const standaloneCommand = detail.getByRole('region', { name: 'Command', exact: true })
   await expect(standaloneCommand.getByText('COMMAND', { exact: true })).toBeVisible()
-  await expect(standaloneCommand).toContainText('INSERT')
+  await expect(standaloneCommand).toContainText('SELECT id, state, note FROM orders ORDER BY id')
   await detail.getByRole('tab', { name: 'RESULT', exact: true }).click()
   const standaloneResult = detail.getByRole('region', { name: 'Result', exact: true })
   await expect(standaloneResult.getByText('RESULT', { exact: true })).toBeVisible()
-  await expect(standaloneResult).toContainText('INSERT')
+  await expect(standaloneResult).toContainText('12 rows · 3 columns')
+  const resultRows = standaloneResult.getByRole('table', { name: 'Database result rows' })
+  await expect(resultRows.getByRole('columnheader')).toHaveText(['id', 'state', 'note'])
+  const databaseRows = resultRows.getByRole('row')
+  await expect(databaseRows).toHaveCount(11)
+  await expect(databaseRows.nth(1)).toContainText('42')
+  await expect(databaseRows.nth(1)).toContainText('created')
+  await expect(databaseRows.nth(1)).toContainText('NULL')
+  await expect(databaseRows.nth(2)).toContainText('43')
+  await expect(databaseRows.nth(2)).toContainText('paid')
+  await expect(databaseRows.nth(2)).toContainText('priority')
+  const resultPagination = standaloneResult.getByLabel('database result rows pagination')
+  await expect(resultPagination).toContainText('1–10 of 12')
+  await resultPagination.getByRole('button', { name: 'Next database result rows page' }).click()
+  await expect(resultPagination).toContainText('11–12 of 12')
+  await expect(databaseRows).toHaveCount(3)
+  await expect(databaseRows.nth(1)).toContainText('52')
+  await expect(databaseRows.nth(2)).toContainText('53')
+  await expect(resultPagination.getByRole('button', { name: 'Next database result rows page' })).toBeDisabled()
+  await expect(standaloneResult.locator('.traffic-json')).toHaveCount(0)
+  await expect(standaloneResult.locator('.traffic-semantic-card__body--table')).toHaveCSS('padding', '0px')
+  await expect(resultRows.locator('..')).toHaveCSS('border-top-width', '0px')
+  await expect(databaseRows.last().locator('td').first()).toHaveCSS('border-bottom-width', '1px')
+  const copyCSV = standaloneResult.getByRole('button', { name: 'Copy database results as CSV' })
+  await expect(copyCSV).toHaveText('COPY')
+  await copyCSV.click()
+  const expectedCSV = ['id,state,note', ...selectRows.map((row) => `${row.id},${row.state},${row.note || ''}`)].join('\n')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expectedCSV)
+
+  await detail.getByRole('button', { name: 'Close traffic details' }).click()
+  await redisOperation.click()
+  detail = page.getByRole('dialog', { name: /Traffic request and response/ })
+  await expect(detail.locator('.traffic-detail__heading h3 > span')).toHaveText('REDIS')
+  await expect(detail.locator('.traffic-detail__heading h3 code')).toHaveText('GET')
+  const redisCommand = detail.getByRole('region', { name: 'Command', exact: true })
+  await expect(redisCommand.locator('.traffic-redis-command')).toHaveText('GET store:order:56')
+  await expect(redisCommand).toContainText('1 argument')
+  await expect(redisCommand).not.toContainText('[\n  "GET"')
+  await expect(redisCommand.locator('dl')).toHaveCount(0)
+  await detail.getByRole('tab', { name: 'RESULT', exact: true }).click()
+  const redisResult = detail.getByRole('region', { name: 'Result', exact: true })
+  await expect(redisResult.getByText('string', { exact: true })).toBeVisible()
+  await expect(redisResult.locator('.traffic-json')).toBeVisible()
+  await expect(redisResult).toContainText('coffee-mug')
+  await expect(redisResult).not.toContainText('\\"id\\"')
 })
 
 test('paginates traces and exchanges at 25 rows', async ({ page }) => {
@@ -1089,6 +1206,18 @@ test('paginates traces and exchanges at 25 rows', async ({ page }) => {
   const exchangePagination = page.getByLabel('exchanges pagination')
   await expect(exchangeRows).toHaveCount(25)
   await expect(exchangePagination).toContainText('1–25 of 26')
+  await exchangeRows.last().click()
+  const exchangeDetail = page.getByRole('dialog', { name: /Traffic request and response/ })
+  const exchangeDetailPagination = exchangeDetail.getByRole('navigation', { name: 'Exchange navigation' })
+  await expect(exchangeDetailPagination.locator('output')).toHaveAttribute('aria-label', 'Exchange 25 of 26')
+  await exchangeDetailPagination.getByRole('button', { name: 'Next exchange' }).click()
+  await expect(exchangeDetailPagination.locator('output')).toHaveAttribute('aria-label', 'Exchange 26 of 26')
+  await expect(exchangeDetailPagination.getByRole('button', { name: 'Next exchange' })).toBeDisabled()
+  await expect(exchangePagination).toContainText('26–26 of 26')
+  await exchangeDetailPagination.getByRole('button', { name: 'Previous exchange' }).click()
+  await expect(exchangeDetailPagination.locator('output')).toHaveAttribute('aria-label', 'Exchange 25 of 26')
+  await expect(exchangePagination).toContainText('1–25 of 26')
+  await exchangeDetail.getByRole('button', { name: 'Close traffic details' }).click()
   await exchangePagination.getByRole('button', { name: 'Next exchanges page' }).click()
   await expect(exchangeRows).toHaveCount(1)
   await expect(exchangePagination).toContainText('26–26 of 26')

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { duration } from '../../components/Status'
 import type { TrafficCorrelation, TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../types'
 
@@ -15,19 +15,12 @@ export type TraceWaterfallItem =
 
 export type TraceNavigationItem =
   | { kind: 'exchange'; key: string; exchange: TrafficExchange }
-  | { kind: 'transaction'; key: string; group: number; exchange: TrafficExchange; spans: TrafficTraceSpan[]; expanded: boolean }
+  | { kind: 'transaction'; key: string; group: number; exchange: TrafficExchange; spans: TrafficTraceSpan[] }
 
 const transactionBoundaryOperations = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'])
 
 export function traceTransactionCommandSpans(spans: TrafficTraceSpan[]) {
   return spans.filter((span) => !transactionBoundaryOperations.has((span.exchange.tcp?.operation || '').toUpperCase()))
-}
-
-function transactionCommandLabel(spans: TrafficTraceSpan[]) {
-  const operations = traceTransactionCommandSpans(spans).map((span) => span.exchange.tcp?.operation || 'COMMAND')
-  if (operations.length === 0) return 'TRANSACTION'
-  if (operations.length <= 3) return operations.join(' + ')
-  return `${operations.slice(0, 2).join(' + ')} + ${operations.length - 2} MORE`
 }
 
 function visibleSpan(span: TrafficTraceSpan, includeBackground: boolean) {
@@ -96,14 +89,13 @@ function transactionExchange(spans: TrafficTraceSpan[]) {
   } as TrafficExchange
 }
 
-function transactionNavigationItem(item: Extract<TraceWaterfallItem, { kind: 'transaction' }>, expanded: boolean): TraceNavigationItem {
+function transactionNavigationItem(item: Extract<TraceWaterfallItem, { kind: 'transaction' }>): TraceNavigationItem {
   return {
     kind: 'transaction',
     key: `transaction:${item.group}`,
     group: item.group,
     exchange: transactionExchange(item.spans),
     spans: item.spans,
-    expanded,
   }
 }
 
@@ -111,12 +103,10 @@ export function exchangeNavigationItem(exchange: TrafficExchange): TraceNavigati
   return { kind: 'exchange', key: `exchange:${exchange.sequence}`, exchange }
 }
 
-export function traceNavigationItems(trace: TrafficTrace, includeBackground = false, expandedTransactions: ReadonlySet<number> = new Set()): TraceNavigationItem[] {
-  return traceWaterfallItems(trace, includeBackground).flatMap((item) => {
-    if (item.kind === 'span') return [exchangeNavigationItem(item.span.exchange)]
-    const expanded = expandedTransactions.has(item.group)
-    const transaction = transactionNavigationItem(item, expanded)
-    return expanded ? [transaction, ...item.spans.map((span) => exchangeNavigationItem(span.exchange))] : [transaction]
+export function traceNavigationItems(trace: TrafficTrace, includeBackground = false): TraceNavigationItem[] {
+  return traceWaterfallItems(trace, includeBackground).map((item) => {
+    if (item.kind === 'span') return exchangeNavigationItem(item.span.exchange)
+    return transactionNavigationItem(item)
   })
 }
 
@@ -148,17 +138,15 @@ function TraceSpanRow({ span, total, depth = span.depth, className = '', depende
 }) {
   const exchange = span.exchange
   return <button className={`trace-span${dependencySummary ? ' trace-span--dependency-summary' : ''}${spanTone(exchange)}${className}`} style={spanStyle(span.startOffsetMs, exchange.durationMs, depth, total)} type="button" onClick={() => onInspect(exchange)} aria-label={`Inspect ${exchange.source} to ${exchange.target} ${spanOperation(exchange)}`}>
-    <span className="trace-span__label"><strong>{dependencySummary && <span className="trace-span__disclosure-placeholder" aria-hidden="true" />}{exchange.source} <i>→</i> {exchange.target}</strong><small>{spanOperation(exchange)}</small></span>
+    <span className="trace-span__label"><strong>{exchange.source} <i>→</i> {exchange.target}</strong><small>{spanOperation(exchange)}</small></span>
     <span className="trace-span__track"><i /><small>{duration(exchange.durationMs)}</small></span>
     <span className={`correlation-badge correlation-badge--${span.correlation}`}>{span.correlation}</span>
   </button>
 }
 
-export function TraceWaterfall({ trace, includeBackground = false, expandedTransactions, onTransactionToggle, onItem }: {
+export function TraceWaterfall({ trace, includeBackground = false, onItem }: {
   trace: TrafficTrace
   includeBackground?: boolean
-  expandedTransactions: ReadonlySet<number>
-  onTransactionToggle: (group: number) => void
   onItem: (item: TraceNavigationItem) => void
 }) {
   const [maximized, setMaximized] = useState(false)
@@ -177,27 +165,18 @@ export function TraceWaterfall({ trace, includeBackground = false, expandedTrans
     {traceWaterfallItems(trace, includeBackground).map((item) => {
       if (item.kind === 'span') return <TraceSpanRow key={item.span.exchange.sequence} span={item.span} total={total} onInspect={(exchange) => inspect(exchangeNavigationItem(exchange))} />
 
-      const first = item.spans[0]
-      const exchange = first.exchange
-      const expanded = expandedTransactions.has(item.group)
-      const navigationItem = transactionNavigationItem(item, expanded)
+      const navigationItem = transactionNavigationItem(item)
+      const exchange = navigationItem.exchange
       const start = Math.min(...item.spans.map((span) => span.startOffsetMs))
-      const end = Math.max(...item.spans.map((span) => span.startOffsetMs + span.exchange.durationMs))
       const depth = Math.min(...item.spans.map((span) => span.depth))
       const application = exchange.tcp?.applicationProtocol?.toUpperCase() || 'TCP'
-      const commandSpans = traceTransactionCommandSpans(item.spans)
-      const commandLabel = `${commandSpans.length} ${commandSpans.length === 1 ? 'command' : 'commands'}`
       const tone = item.spans.some((span) => spanTone(span.exchange) === ' is-error') ? ' is-error' : item.spans.some((span) => span.exchange.fault) ? ' is-faulted' : ' is-tcp'
       const correlation = weakestCorrelation(item.spans)
-      return <Fragment key={`transaction-${item.group}`}>
-        <div className={`trace-span trace-span--dependency-summary trace-span--transaction${tone}`} style={spanStyle(start, Math.max(0, end - start), depth, total)} aria-expanded={expanded}>
-          <button className="trace-span__transaction-inspect" type="button" aria-label={`Inspect ${exchange.source} to ${exchange.target} ${application} command summary with ${commandLabel}`} onClick={() => inspect(navigationItem)} />
-          <span className="trace-span__label"><strong><button className="trace-span__disclosure" type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${exchange.source} to ${exchange.target} ${application} TCP details`} onClick={() => onTransactionToggle(item.group)}>{expanded ? '−' : '+'}</button>{exchange.source} <i>→</i> {exchange.target}</strong><small>{application} · {transactionCommandLabel(item.spans)}</small></span>
-          <span className="trace-span__track"><i /><small>{duration(Math.max(0, end - start))}</small></span>
-          <span className={`correlation-badge correlation-badge--${correlation}`}>{correlation}</span>
-        </div>
-        {expanded && item.spans.map((span) => <TraceSpanRow key={span.exchange.sequence} span={span} total={total} depth={span.depth + 1} className=" trace-span--transaction-child" dependencySummary={false} onInspect={(exchange) => inspect(exchangeNavigationItem(exchange))} />)}
-      </Fragment>
+      return <button key={`transaction-${item.group}`} className={`trace-span trace-span--dependency-summary trace-span--transaction${tone}`} style={spanStyle(start, exchange.durationMs, depth, total)} type="button" aria-label={`Inspect ${exchange.source} to ${exchange.target} ${application} transaction`} onClick={() => inspect(navigationItem)}>
+        <span className="trace-span__label"><strong>{exchange.source} <i>→</i> {exchange.target}</strong><small>{application} · TRANSACTION</small></span>
+        <span className="trace-span__track"><i /><small>{duration(exchange.durationMs)}</small></span>
+        <span className={`correlation-badge correlation-badge--${correlation}`}>{correlation}</span>
+      </button>
     })}
     </div>
   </div>

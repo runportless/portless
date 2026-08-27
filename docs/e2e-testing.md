@@ -123,7 +123,7 @@ The CLI E2E suite protects these product contracts:
 The Playwright suite protects these browser journeys:
 
 - browser authentication and one-use claim consumption;
-- project, environment, persistent collapsible icon-rail sidebar, and breadcrumb navigation;
+- project, environment, persistent collapsible icon-rail sidebar, Settings return, and breadcrumb navigation;
 - environment creation through the modal without duplicating project sources;
 - browser theme persistence;
 - services, copyable endpoints, topology edges, service details, and default-on

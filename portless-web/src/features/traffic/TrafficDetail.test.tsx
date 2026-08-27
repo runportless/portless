@@ -2,8 +2,16 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TrafficExchange, TrafficTrace } from '../../types'
-import { defaultTrafficDetailView, defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, orderedTraceExchanges, rawTrafficMessage, semanticTrafficMessage, trafficStartedTime, trafficTargetBinding, TrafficDetail } from './TrafficDetail'
+import { ExchangeTraceDrawer as TrafficDetail } from './ExchangeTraceDrawer'
+import { databaseResultCSV, databaseResultRows, DatabaseResultTable } from './detail/DatabaseResultTable'
+import { defaultTrafficDetailView } from './detail/TrafficDrawerShell'
+import { trafficStartedTime, trafficTargetBinding } from './detail/TrafficOverview'
+import { genericTcpTrafficPresentation } from './protocols/GenericTcpTrafficDetail'
+import { defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, rawTrafficMessage } from './protocols/HttpTrafficDetail'
+import { postgresTrafficPresentation } from './protocols/PostgreSQLTrafficDetail'
+import { redisTrafficPresentation } from './protocols/RedisPresentation'
 import { traceNavigationItems } from './TraceWaterfall'
+import { orderedTraceExchanges, WaterfallTraceDrawer } from './WaterfallTraceDrawer'
 
 const exchange = {
   project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
@@ -28,6 +36,9 @@ describe('TrafficDetail', () => {
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange, onClose: () => undefined }))
 
     expect(markup).toContain('aria-label="Traffic request and response 7"')
+    expect(markup).toContain('<span class="traffic-detail__protocol-badge">HTTP</span>')
+    expect(markup).toContain('<h3><span>POST</span><code>/orders</code></h3>')
+    expect(markup).not.toContain('HTTP EXCHANGE')
     expect(markup).toContain('class="drawer-size-button"')
     expect(markup).toContain('aria-label="Full screen traffic details"')
     expect(markup).toContain('d="M6 2H2v4M10 2h4v4M2 10v4h4M14 10v4h-4"')
@@ -88,10 +99,10 @@ describe('TrafficDetail', () => {
         { exchange: first, depth: 0, startOffsetMs: 0, correlation: 'exact' },
       ],
     } as TrafficTrace
-    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+    const markup = renderToStaticMarkup(createElement(WaterfallTraceDrawer, {
       exchange,
       trace,
-      onTraceNavigate: () => undefined,
+      onNavigate: () => undefined,
       onClose: () => undefined,
     }))
 
@@ -105,11 +116,44 @@ describe('TrafficDetail', () => {
     expect(markup).toContain('aria-label="Span 2 of 3"')
     expect(markup).toContain('aria-label="Next visible span in trace"')
     expect(markup).toContain('aria-label="Last visible span in trace"')
-    expect(markup).toContain('<span class="traffic-trace-navigator__scope-label">HTTP</span><strong>2</strong><span>OF</span><strong>3</strong>')
+    expect(markup).toContain('<output aria-live="polite" aria-label="Span 2 of 3"><strong>2</strong><span>OF</span><strong>3</strong></output>')
+    expect(markup).not.toContain('traffic-trace-navigator__scope-label')
     expect(markup).not.toContain('>TRACE<')
   })
 
-  it('presents a collapsed database transaction as one navigable summary', () => {
+  it('uses simple previous and next pagination for the filtered exchange list', () => {
+    const newer = { ...exchange, sequence: 8, path: '/newer' } as TrafficExchange
+    const older = { ...exchange, sequence: 6, path: '/older' } as TrafficExchange
+    const items = [newer, exchange, older]
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+      exchange,
+      exchanges: items,
+      onNavigate: () => undefined,
+      onClose: () => undefined,
+    }))
+
+    expect(markup).toContain('aria-label="Exchange navigation"')
+    expect(markup).toContain('aria-label="Navigate filtered exchanges"')
+    expect(markup).toContain('aria-label="Previous exchange"')
+    expect(markup).toContain('aria-label="Exchange 2 of 3"')
+    expect(markup).toContain('aria-label="Next exchange"')
+    expect(markup).not.toContain('Trace span navigation')
+    expect(markup).not.toContain('First visible span in trace')
+    expect(markup).not.toContain('Last visible span in trace')
+    expect(markup).not.toContain('>HTTP</button>')
+    expect(markup).not.toContain('>ALL</button>')
+
+    const boundary = renderToStaticMarkup(createElement(TrafficDetail, {
+      exchange: newer,
+      exchanges: items,
+      onNavigate: () => undefined,
+      onClose: () => undefined,
+    }))
+    expect(boundary).toMatch(/aria-label="Previous exchange" disabled=""/)
+    expect(boundary).not.toMatch(/aria-label="Next exchange" disabled=""/)
+  })
+
+  it('presents a database transaction as one navigable summary', () => {
     const root = { ...exchange, sequence: 6, source: 'external', target: 'checkout' } as TrafficExchange
     const operation = (sequence: number, name: string, content = name, result = name) => ({
       ...exchange,
@@ -146,19 +190,21 @@ describe('TrafficDetail', () => {
     } as TrafficTrace
     const navigationItems = traceNavigationItems(trace)
     const transaction = navigationItems[1]
-    expect(transaction).toMatchObject({ kind: 'transaction', expanded: false })
+    expect(transaction).toMatchObject({ kind: 'transaction' })
 
-    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+    const markup = renderToStaticMarkup(createElement(WaterfallTraceDrawer, {
       exchange: transaction.exchange,
       trace,
       traceNavigationItems: navigationItems,
       traceNavigationItem: transaction,
-      onTraceNavigate: () => undefined,
+      onNavigate: () => undefined,
       onClose: () => undefined,
     }))
 
-    expect(markup).toContain('POSTGRESQL COMMAND')
-    expect(markup).toContain('<code>1 COMMAND</code>')
+    expect(markup).toContain('<span class="traffic-detail__protocol-badge">TCP</span>')
+    expect(markup).toContain('<h3><span>POSTGRESQL</span><code>TRANSACTION</code></h3>')
+    expect(markup).toContain('<span class="traffic-detail__transaction-count">1 command</span>')
+    expect(markup).not.toContain('class="eyebrow"')
     expect(markup).toContain('aria-label="Command"')
     expect(markup).toContain('aria-selected="true" class="is-active">COMMAND</button>')
     expect(markup).toContain('aria-selected="false" class="">RESULT</button>')
@@ -171,14 +217,14 @@ describe('TrafficDetail', () => {
     expect(markup).toContain('<span>COMPLETED</span><strong>28ms</strong>')
     expect(markup).not.toContain('<strong>BEGIN</strong>')
     expect(markup).not.toContain('<strong>COMMIT</strong>')
-    expect(semanticTrafficMessage(trace.spans![2].exchange, 'request')).toMatchObject({ content: "UPDATE inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee'" })
+    expect(postgresTrafficPresentation(trace.spans![2].exchange, 'request')).toMatchObject({ content: "UPDATE inventory SET on_hand = on_hand - 1 WHERE sku = 'coffee'" })
     expect(markup).not.toContain('aria-label="Bound parameters"')
     expect(markup).not.toContain('$1')
     expect(markup).not.toContain('$2')
     expect(markup).not.toContain('UPDATE 1')
-    expect(semanticTrafficMessage(trace.spans![2].exchange, 'response')).toMatchObject({ label: 'RESULT', title: 'UPDATE 1' })
+    expect(postgresTrafficPresentation(trace.spans![2].exchange, 'response')).toMatchObject({ label: 'RESULT', title: 'UPDATE 1' })
     expect(markup).toContain('aria-label="Current span is outside HTTP navigation; 1 HTTP span available"')
-    expect(markup).toContain('<span class="traffic-trace-navigator__scope-label">HTTP</span><strong>—</strong><span>OF</span><strong>1</strong>')
+    expect(markup).toContain('<strong>—</strong><span>OF</span><strong>1</strong>')
     expect(markup).not.toContain('PROTOCOL MESSAGES')
   })
 
@@ -298,8 +344,8 @@ describe('TrafficDetail', () => {
     } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
 
-    expect(markup).toContain('POSTGRESQL EXCHANGE #7')
-    expect(markup).toContain('<code>SESSION</code>')
+    expect(markup).toContain('<span class="traffic-detail__protocol-badge">TCP</span>')
+    expect(markup).toContain('<h3><span>POSTGRESQL</span><code>SESSION</code></h3>')
     expect(markup).toContain('aria-label="Exchange overview"')
     expect(markup).toContain('traffic-overview__context')
     expect(markup).toContain('<span>ENVIRONMENT</span><strong>local</strong>')
@@ -334,8 +380,8 @@ describe('TrafficDetail', () => {
     } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
 
-    expect(markup).toContain('NATS COMMAND')
-    expect(markup).toContain('<code>PUB</code>')
+    expect(markup).toContain('<span class="traffic-detail__protocol-badge">TCP</span>')
+    expect(markup).toContain('<h3><span>NATS</span><code>PUB</code></h3>')
     expect(defaultTrafficDetailView(tcp)).toBe('request')
     expect(markup).toContain('aria-label="Command"')
     expect(markup).toContain('aria-selected="true" class="is-active">COMMAND</button>')
@@ -356,7 +402,7 @@ describe('TrafficDetail', () => {
     expect(markup).toContain('class="traffic-json__key"')
     expect(markup).toContain('&quot;orderId&quot;')
     expect(markup).not.toContain('This command does not have a result.')
-    expect(semanticTrafficMessage(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'No response' })
+    expect(genericTcpTrafficPresentation(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'No response' })
     expect(markup).toContain('>SENT</b>')
   })
 
@@ -382,13 +428,14 @@ describe('TrafficDetail', () => {
       },
     } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
-    const command = semanticTrafficMessage(tcp, 'request')
+    const command = postgresTrafficPresentation(tcp, 'request')
 
     expect(command.content.match(/UPDATE store_inventory/g)).toHaveLength(1)
     expect(markup).not.toContain(`Parse ${sql}`)
     expect(markup).not.toContain('<dt>statement</dt>')
     expect(markup).toContain('<small>text/x-sql</small>')
-    expect(markup).toContain('<strong>UPDATE</strong>')
+    expect(markup.match(/<strong>UPDATE<\/strong>/g)).toHaveLength(1)
+    expect(markup).toContain('<div class="traffic-semantic-card__body"><pre class="traffic-sql">')
     expect(markup).toContain('class="traffic-sql"')
     expect(markup).toContain('class="traffic-sql__keyword"')
     expect(markup).toContain('class="traffic-sql__number"')
@@ -396,12 +443,86 @@ describe('TrafficDetail', () => {
     expect(markup).not.toContain('aria-label="Bound parameters"')
     expect(markup).not.toContain('$1')
     expect(markup).not.toContain('$2')
-    expect(command).toMatchObject({ content: "UPDATE store_inventory SET on_hand = on_hand - 2 WHERE sku = 'coffee-mug'" })
+    expect(command).toMatchObject({ content: "UPDATE store_inventory SET on_hand = on_hand - 2 WHERE sku = 'coffee-mug'", showTitle: false })
     expect(markup).not.toContain('<strong>UPDATE 1</strong>')
-    expect(semanticTrafficMessage(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'UPDATE 1' })
+    expect(postgresTrafficPresentation(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'UPDATE 1' })
     expect(markup).not.toContain('Parse complete')
     expect(markup).not.toContain('Ready for query')
     expect(markup).not.toContain('<span>+0ms</span>')
+  })
+
+  it('renders PostgreSQL result rows as a table instead of JSON', () => {
+    const tcp = {
+      ...exchange,
+      protocol: 'tcp', status: undefined, source: 'orders', target: 'orders-postgres', requestBytes: 0, responseBytes: 72,
+      tcp: {
+        kind: 'operation', applicationProtocol: 'postgresql', operation: 'SELECT', inspection: 'decoded', outcome: 'success',
+        responseMessages: [{
+          type: 'row-description', offsetMs: 0, summary: '3 columns', wireBytes: 24,
+          fields: [{ name: 'column', value: 'id' }, { name: 'column', value: 'state' }, { name: 'column', value: 'note' }],
+        }, {
+          type: 'data-row', offsetMs: 1, summary: 'Data row', wireBytes: 24,
+          content: '{"id":"42","state":"created","note":null}', contentType: 'application/json', encoding: 'utf8',
+        }, {
+          type: 'data-row', offsetMs: 2, summary: 'Data row', wireBytes: 24,
+          content: '{"id":"43","state":"paid","note":"priority"}', contentType: 'application/json', encoding: 'utf8',
+        }, { type: 'command-complete', offsetMs: 2, summary: 'SELECT 2', wireBytes: 6, fields: [{ name: 'command', value: 'SELECT 2' }] }],
+      },
+    } as TrafficExchange
+    const result = databaseResultRows(tcp)
+
+    expect(postgresTrafficPresentation(tcp, 'response')).toMatchObject({ title: 'Data row', content: '{"id":"42","state":"created","note":null}', showTitle: false })
+    expect(result).toMatchObject({
+      columns: ['id', 'state', 'note'],
+      rows: [['42', 'created', null], ['43', 'paid', 'priority']],
+      truncated: false,
+    })
+    expect(databaseResultCSV(result!)).toBe('id,state,note\n42,created,\n43,paid,priority')
+    expect(databaseResultCSV({ columns: ['id', 'note'], rows: [[1, 'priority, "rush"'], [2, 'line\nbreak'], [3, '']] })).toBe('id,note\n1,"priority, ""rush"""\n2,"line\nbreak"\n3,""')
+  })
+
+  it('renders a MySQL result set with its captured column names', () => {
+    const tcp = {
+      ...exchange,
+      protocol: 'tcp', status: undefined, source: 'api', target: 'api-mysql', requestBytes: 42, responseBytes: 36,
+      tcp: {
+        kind: 'operation', applicationProtocol: 'mysql', operation: 'SELECT', inspection: 'decoded', outcome: 'success',
+        requestMessages: [
+          { type: 'query', offsetMs: 0, summary: 'SELECT delivery_id, state FROM deliveries', wireBytes: 42, content: 'SELECT delivery_id, state FROM deliveries', contentType: 'text/x-sql', encoding: 'utf8' },
+        ],
+        responseMessages: [
+          { type: 'result-set', offsetMs: 0, summary: '2 columns', wireBytes: 4, fields: [{ name: 'columns', value: '2' }] },
+          { type: 'column', offsetMs: 0, summary: 'delivery_id', wireBytes: 8, fields: [{ name: 'name', value: 'delivery_id' }] },
+          { type: 'column', offsetMs: 0, summary: 'state', wireBytes: 8, fields: [{ name: 'name', value: 'state' }] },
+          { type: 'row', offsetMs: 1, summary: 'Data row', wireBytes: 16, content: '{"delivery_id":"d-42","state":"created"}', contentType: 'application/json', encoding: 'utf8' },
+          { type: 'result-end', offsetMs: 1, summary: 'Result set complete', wireBytes: 4 },
+        ],
+      },
+    } as TrafficExchange
+    const result = databaseResultRows(tcp)
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
+
+    expect(result).toMatchObject({ columns: ['delivery_id', 'state'], rows: [['d-42', 'created']], truncated: false })
+    expect(markup).toContain('<span class="traffic-detail__protocol-badge">TCP</span>')
+    expect(markup).toContain('<h3><span>MYSQL</span><code>SELECT</code></h3>')
+    expect(markup).toContain('<pre class="traffic-sql">')
+    expect(markup).toContain('class="traffic-sql__keyword">SELECT</span>')
+    expect(markup).toContain('delivery_id')
+  })
+
+  it('shows at most ten database rows per result page', () => {
+    const rows = Array.from({ length: 12 }, (_, index) => [index + 1, `row-${index + 1}`])
+    const markup = renderToStaticMarkup(createElement(DatabaseResultTable, {
+      result: { columns: ['id', 'value'], rows, truncated: false, contentBytes: 0, capturedBytes: 0 },
+    }))
+
+    expect(markup.match(/<tr/g)).toHaveLength(11)
+    expect(markup).toContain('row-10')
+    expect(markup).not.toContain('row-11')
+    expect(markup).not.toContain('row-12')
+    expect(markup).toContain('aria-label="database result rows pagination"')
+    expect(markup).toContain('1–10 of 12')
+    expect(markup).toContain('aria-label="Next database result rows page"')
   })
 
   it('selects Redis commands and decoded results for the semantic summary', () => {
@@ -411,11 +532,18 @@ describe('TrafficDetail', () => {
       tcp: {
         kind: 'operation', applicationProtocol: 'redis', operation: 'GET', inspection: 'decoded', outcome: 'success',
         requestMessages: [{ type: 'command', offsetMs: 0, summary: 'GET store:order:24', wireBytes: 34, contentType: 'application/json', encoding: 'utf8', content: '[\n  "GET",\n  "store:order:24"\n]' }],
-        responseMessages: [{ type: 'response', offsetMs: 1, summary: 'bulk string', wireBytes: 8, contentType: 'application/json', encoding: 'utf8', content: '"cached"' }],
+        responseMessages: [{ type: 'response', offsetMs: 1, summary: '6 byte value', wireBytes: 8, contentType: 'application/json', encoding: 'utf8', content: '"cached"' }],
       },
     } as TrafficExchange
 
-    expect(semanticTrafficMessage(tcp, 'request')).toMatchObject({ label: 'COMMAND', title: 'GET store:order:24' })
-    expect(semanticTrafficMessage(tcp, 'response')).toMatchObject({ label: 'RESULT', title: 'bulk string', content: '"cached"' })
+    expect(redisTrafficPresentation(tcp, 'request')).toMatchObject({ content: 'GET store:order:24', meta: '1 argument', command: { name: 'GET' } })
+    expect(redisTrafficPresentation(tcp, 'response')).toMatchObject({ content: 'cached', meta: 'string', json: false })
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: tcp, onClose: () => undefined }))
+    expect(markup).toContain('class="traffic-redis-command"')
+    expect(markup).toContain('traffic-redis-command__name">GET</span>')
+    expect(markup).toContain('traffic-redis-command__key">store:order:24</span>')
+    expect(markup).not.toContain('[\n  &quot;GET&quot;')
+    expect(markup).not.toContain('<dt>COMMAND</dt>')
+    expect(markup).not.toContain('<dt>KEY</dt>')
   })
 })

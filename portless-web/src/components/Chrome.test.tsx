@@ -26,6 +26,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       controlPlaneHealth={controlPlaneHealth}
       live={live}
       onNavigate={() => undefined}
+      onSettingsToggle={() => undefined}
       onDaemonRefresh={async () => daemon}
       onDaemonDiagnosticsRefresh={async () => diagnostics}
       onDaemonHandoffVerify={async () => handoff}

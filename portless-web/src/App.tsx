@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, APIError, environmentPath, eventStreamHealth, jsonBody, setCSRF, subscribeEventStreamHealth } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { DAEMON_RESTART_SLA_MS } from './daemonRestart'
@@ -22,6 +22,7 @@ export function App() {
   const [apiHealth, setAPIHealth] = useState<ControlPlaneHealth['api']>({ state: 'unreachable' })
   const [eventsHealth, setEventsHealth] = useState<ControlPlaneHealth['events']>(eventStreamHealth)
   const [route, setRoute] = useState(() => `${location.pathname}${location.search}`)
+  const settingsReturnRoute = useRef(parseRoute(route).settings ? '/projects' : route)
   const [loading, setLoading] = useState(true)
   const [authRequired, setAuthRequired] = useState(false)
   const [live, setLive] = useState(true)
@@ -116,7 +117,11 @@ export function App() {
       } finally { setLoading(false) }
     }
     initialize()
-    const popstate = () => setRoute(`${location.pathname}${location.search}`)
+    const popstate = () => {
+      const nextRoute = `${location.pathname}${location.search}`
+      if (!parseRoute(nextRoute).settings) settingsReturnRoute.current = nextRoute
+      setRoute(nextRoute)
+    }
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
   }, [refreshCore, refreshDaemon, refreshRelay, refreshRuntime])
@@ -136,10 +141,20 @@ export function App() {
   }, [refreshRelay, refreshRuntime, session])
 
   const navigate = useCallback((path: string) => {
-    if (`${location.pathname}${location.search}` !== path) history.pushState({}, '', path)
+    const currentRoute = `${location.pathname}${location.search}`
+    if (parseRoute(path).settings) {
+      if (!parseRoute(currentRoute).settings) settingsReturnRoute.current = currentRoute
+    } else {
+      settingsReturnRoute.current = path
+    }
+    if (currentRoute !== path) history.pushState({}, '', path)
     setRoute(path)
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
   }, [])
+
+  const toggleSettings = useCallback(() => {
+    navigate(settingsToggleDestination(`${location.pathname}${location.search}`, settingsReturnRoute.current))
+  }, [navigate])
 
   const parsed = parseRoute(route)
   const activeProject = parsed.project ? projects.find((project) => project.name === parsed.project) : undefined
@@ -200,7 +215,7 @@ export function App() {
   } else {
     content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {
@@ -209,6 +224,11 @@ export function environmentSessionKey(environment: Pick<Environment, 'project' |
 
 export function pageTitle(projectName?: string) {
   return projectName ? `Portless | ${projectName}` : 'Portless'
+}
+
+export function settingsToggleDestination(currentRoute: string, returnRoute = '/projects') {
+  if (!parseRoute(currentRoute).settings) return '/settings'
+  return parseRoute(returnRoute).settings ? '/projects' : returnRoute
 }
 
 export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockProfile?: string; tab: Tab } {
