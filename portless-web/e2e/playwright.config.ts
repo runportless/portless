@@ -12,6 +12,7 @@ export default defineConfig({
   globalTeardown: './global-teardown.ts',
   fullyParallel: false,
   workers: 1,
+  maxFailures: 1,
   retries: 0,
   timeout: 45_000,
   expect: { timeout: 15_000 },

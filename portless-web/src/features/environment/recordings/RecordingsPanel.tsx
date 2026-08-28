@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, environmentPath, jsonBody } from '../../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
 import { relativeTime, StatusMark } from '../../../components/Status'
-import type { Environment, Recording } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { Recording } from '../../../api/contracts/experiments'
 import { experimentScopes, recordingScopeLabel } from '../../experimentScopes'
 
 export function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {

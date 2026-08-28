@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { DaemonLogSnapshot } from '../../types'
+import type { DaemonLogSnapshot } from '../../api/contracts/system'
 import { DaemonLogs, DaemonLogView } from './DaemonLogs'
 import { logBlob } from './logDownload'
 

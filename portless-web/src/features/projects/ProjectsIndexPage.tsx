@@ -1,5 +1,6 @@
 import { StatusMark } from '../../components/Status'
-import type { Environment, Project } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Project } from '../../api/contracts/projects'
 import { projectRoute } from './projectOperations'
 import { formatTimestamp, projectOverview, statusCounts } from './projectPresentation'
 

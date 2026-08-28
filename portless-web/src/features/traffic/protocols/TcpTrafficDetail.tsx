@@ -1,4 +1,4 @@
-import type { TrafficExchange } from '../../../types'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { CompareIcon } from '../detail/TrafficFormatting'
 import type { TrafficDetailView } from '../detail/trafficDetailTypes'
 import { GenericTcpTrafficDetail } from './GenericTcpTrafficDetail'

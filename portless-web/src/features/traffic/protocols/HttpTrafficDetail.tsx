@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import type { TrafficExchange } from '../../../types'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { captureSummary, CompareIcon, CopyIcon, formatTrafficBytes, highlightedJSON, trafficBodyPresentation, trafficBodySummary } from '../detail/TrafficFormatting'
 import type { TrafficDetailView, TrafficDirection, TrafficPayloadView } from '../detail/trafficDetailTypes'
 

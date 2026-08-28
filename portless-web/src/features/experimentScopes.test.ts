@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { Environment, Recording, Service } from '../types'
+import type { Environment } from '../api/contracts/environments'
+import type { Recording } from '../api/contracts/experiments'
+import type { Service } from '../api/contracts/topology'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 
 const service = (name: string, kind: Service['kind']): Service => ({ name, kind } as Service)

@@ -1,0 +1,161 @@
+import { expect, test } from '@playwright/test'
+import { authenticate, environmentPath, issueBrowserClaim } from './helpers'
+import { readE2EState } from './state'
+
+test.describe.configure({ mode: 'serial' })
+
+test('requires and consumes a one-use browser claim', async ({ page, request }) => {
+  const state = readE2EState()
+  await page.goto(`${state.baseURL}/projects`)
+  await expect(page.getByRole('heading', { name: 'Open this control plane from the CLI.' })).toBeVisible()
+
+  const claim = await issueBrowserClaim()
+  await page.goto(claim)
+  await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
+  await expect(page.getByRole('heading', { name: state.environment, exact: true })).toBeVisible()
+
+  const reuse = await request.get(claim)
+  expect(reuse.status()).toBe(401)
+  expect((await reuse.json()).error.code).toBe('INVALID_BROWSER_CLAIM')
+})
+
+test('keeps projects, environments, and breadcrumbs navigable', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+
+  const breadcrumbs = page.getByRole('navigation', { name: 'Breadcrumb' })
+  await breadcrumbs.getByRole('link', { name: state.project }).click()
+  await expect(page).toHaveURL(new RegExp(`/projects/${state.project}$`))
+  await expect(page.getByRole('heading', { name: state.project, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*healthy`) })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toBeVisible()
+
+  await breadcrumbs.getByRole('link', { name: 'projects' }).click()
+  await expect(page).toHaveURL(/\/projects$/)
+  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+  await expect(page.locator('.project-nav__project-link').filter({ hasText: state.project })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toHaveCount(0)
+})
+
+test('keeps scrollable pages within the standard bottom gutter', async ({ page }) => {
+  const state = readE2EState()
+  await page.setViewportSize({ width: 1280, height: 400 })
+  await authenticate(page)
+
+  const expectBottomGutter = async (lastContent: string) => {
+    await expect(page.locator(lastContent)).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+    const gap = await page.locator('.page').evaluate((element) => {
+      const last = element.lastElementChild
+      if (!last) return -1
+      return Math.round(element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom)
+    })
+    expect(gap).toBe(28)
+  }
+
+  await expectBottomGutter('.overview-grid')
+  await page.goto(`${state.baseURL}${environmentPath('timeline')}`)
+  await expectBottomGutter('.timeline-panel')
+})
+
+test('collapses the sidebar into a persistent icon navigation rail', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+
+  const shell = page.locator('.shell')
+  const sidebar = page.locator('.sidebar')
+  const projectNavigation = page.getByRole('navigation', { name: 'Projects' })
+  const environmentViews = page.getByRole('navigation', { name: `${state.project}/${state.environment} views` })
+  await page.getByRole('button', { name: 'Collapse navigation' }).click()
+
+  await expect(shell).toHaveClass(/shell--sidebar-collapsed/)
+  await expect(sidebar).toHaveCSS('width', '64px')
+  await expect(page.locator('.brand__wordmark')).toBeHidden()
+  const project = projectNavigation.getByRole('button', { name: new RegExp(`${state.project} project`) })
+  const environment = projectNavigation.getByRole('button', { name: new RegExp(`${state.project}/${state.environment}`) })
+  const topology = environmentViews.getByRole('button', { name: 'Topology' })
+  for (const item of [project, environment, topology, page.getByRole('button', { name: 'Settings' })]) {
+    await expect(item).toBeVisible()
+    await expect(item.locator('svg')).toBeVisible()
+  }
+
+  await topology.click()
+  await expect(page).toHaveURL(new RegExp(`${environmentPath('topology').replace('?', '\\?')}$`))
+  expect(await page.evaluate(() => localStorage.getItem('portless.sidebar-collapsed'))).toBe('true')
+
+  await page.reload()
+  await expect(page.locator('.shell')).toHaveClass(/shell--sidebar-collapsed/)
+  await expect(page.locator('.sidebar')).toHaveCSS('width', '64px')
+  await page.getByRole('button', { name: 'Expand navigation' }).click()
+  await expect(page.locator('.shell')).not.toHaveClass(/shell--sidebar-collapsed/)
+  await expect(page.locator('.brand__wordmark')).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem('portless.sidebar-collapsed'))).toBe('false')
+})
+
+test('supports keyboard topology inspection and command palette navigation', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page, environmentPath('topology'))
+
+  const canvas = page.getByLabel('Topology canvas; drag to pan')
+  const topologyIsCentered = () => canvas.evaluate((element) => {
+    const viewport = element as HTMLElement
+    const targetLeft = Math.max(0, (viewport.scrollWidth-viewport.clientWidth)/2)
+    const targetTop = Math.min(120, Math.max(0, (viewport.scrollHeight-viewport.clientHeight)/2))
+    return Math.abs(viewport.scrollLeft-targetLeft) < 2 && Math.abs(viewport.scrollTop-targetTop) < 2
+  })
+  await expect.poll(topologyIsCentered).toBe(true)
+  await canvas.evaluate((element) => {
+    element.scrollLeft = 0
+    element.scrollTop = 0
+  })
+  await expect.poll(topologyIsCentered).toBe(false)
+  await page.getByRole('button', { name: 'Center topology' }).click()
+  await expect.poll(topologyIsCentered).toBe(true)
+
+  const edge = page.getByRole('button', { name: 'Inspect traffic from external to checkout' })
+  await edge.focus()
+  await expect(edge).toBeFocused()
+  await edge.press('Enter')
+  await expect(page).toHaveURL(new RegExp(`/environments/${state.project}/${state.environment}\\?tab=traffic&edge=external%3Acheckout&protocol=http$`))
+	await expect(page.locator('.traffic-filter-chip')).toContainText('external → checkout')
+
+  await page.keyboard.press('Control+K')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  const input = palette.getByPlaceholder('jump to a project or environment')
+  await expect(input).toBeFocused()
+  await input.fill('Settings')
+  await input.press('Enter')
+  await expect(page).toHaveURL(new RegExp('/settings$'))
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('radiogroup', { name: 'Theme' })).toBeVisible()
+  await page.getByRole('tab', { name: 'RUNTIME' }).click()
+  await expect(page.getByText('CONTAINER RUNTIME')).toBeVisible()
+  expect(await page.locator('.runtime-candidate').count()).toBeGreaterThan(0)
+
+  await page.keyboard.press('Control+K')
+  await palette.getByPlaceholder('jump to a project or environment').fill('nothing-matches-this-command')
+  await expect(palette).toContainText('No matching project, environment, or action.')
+  await page.keyboard.press('Escape')
+  await expect(palette).toHaveCount(0)
+})
+
+test('shows useful not-found routes and returns to projects', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page, '/projects')
+
+  await page.goto(`${state.baseURL}/projects/not-a-portless-project`)
+  await expect(page.getByText('PROJECT NOT FOUND')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'not-a-portless-project' })).toBeVisible()
+  await page.getByRole('button', { name: 'ALL PROJECTS' }).click()
+  await expect(page).toHaveURL(new RegExp('/projects$'))
+
+  await page.goto(`${state.baseURL}/environments/${state.project}/not-an-environment`)
+  await expect(page.getByText('ENVIRONMENT NOT FOUND')).toBeVisible()
+  await expect(page.getByRole('heading', { name: `${state.project}/not-an-environment` })).toBeVisible()
+  await page.getByRole('button', { name: 'ALL PROJECTS' }).click()
+  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+})
+

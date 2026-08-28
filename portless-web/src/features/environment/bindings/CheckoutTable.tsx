@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
 import { StatusMark } from '../../../components/Status'
-import type { Environment, Project } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { Project } from '../../../api/contracts/projects'
 import { environmentCheckoutRows, formatBindingTimestamp, type EnvironmentCheckoutRow } from './bindingPresentation'
 
 export function CheckoutTable({ environment, project, mutationBusy, onConfigure, onRemove, onManageSources }: {

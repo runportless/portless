@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from './daemonRestart'
-import type { DaemonRestart } from './types'
+import type { DaemonRestart } from './api/contracts/system'
 
 const receipt = (deadlineAt: string): DaemonRestart => ({
   restarting: true,

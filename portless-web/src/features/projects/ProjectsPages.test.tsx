@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Environment, Project } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Project } from '../../api/contracts/projects'
 import { CreateEnvironmentDialog } from './CreateEnvironmentDialog'
 import { ProjectOverviewPage } from './ProjectOverviewPage'
 import { ProjectsIndexPage } from './ProjectsIndexPage'

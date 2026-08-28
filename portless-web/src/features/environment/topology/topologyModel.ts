@@ -1,4 +1,6 @@
-import type { Environment, Service, TrafficActivity, TrafficExchange } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { Service } from '../../../api/contracts/topology'
+import type { TrafficActivity, TrafficExchange } from '../../../api/contracts/traffic'
 
 export type TopologyItem = { kind: 'client'; key: 'external' } | { kind: 'service'; key: string; service: Service }
 export type TopologySignal = TrafficExchange | TrafficActivity

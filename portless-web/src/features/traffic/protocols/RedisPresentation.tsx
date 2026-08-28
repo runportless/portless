@@ -1,4 +1,4 @@
-import type { TrafficExchange, TrafficMessage } from '../../../types'
+import type { TrafficExchange, TrafficMessage } from '../../../api/contracts/traffic'
 
 export type RedisCommandToken = {
   kind: 'key' | 'number' | 'option' | 'value'

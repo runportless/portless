@@ -4,9 +4,10 @@ import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../c
 import { DrawerShell } from '../../components/overlays/DrawerShell'
 import { FormDialog } from '../../components/overlays/FormDialog'
 import { StatusMark } from '../../components/Status'
-import type { Environment, MockPreview, MockProfile, MockRoute, Recording } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Recording, RecordingList } from '../../api/contracts/experiments'
+import type { MockMutation, MockPreview, MockProfile, MockProfileList, MockRoute } from '../../api/contracts/mocks'
 
-type MockMutation = { mock: MockProfile; warnings: string[] }
 type RouteDraft = Pick<MockRoute, 'name' | 'method' | 'path' | 'status' | 'body' | 'delayMs' | 'enabled'> & {
   queryText: string
   headersText: string
@@ -60,8 +61,8 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
 
   const refresh = async () => {
     const [mockResult, recordingResult] = await Promise.all([
-      api<{ mocks: MockProfile[] }>(environmentPath(environment, '/mocks')),
-      api<{ recordings: Recording[] }>(environmentPath(environment, '/recordings')),
+      api<MockProfileList>(environmentPath(environment, '/mocks')),
+      api<RecordingList>(environmentPath(environment, '/recordings')),
     ])
     setProfiles(mockResult.mocks)
     setRecordings(recordingResult.recordings)

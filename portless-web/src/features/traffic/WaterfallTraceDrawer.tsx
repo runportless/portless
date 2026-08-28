@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import type { ComponentBinding, TrafficExchange, TrafficTrace } from '../../types'
+import type { ComponentBinding } from '../../api/contracts/topology'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { TrafficDrawerShell } from './detail/TrafficDrawerShell'
-import { TrafficNavigationArrow } from './TrafficDrawerNavigation'
+import { TrafficNavigationArrow, useTrafficDrawerNavigationKeys } from './TrafficDrawerNavigation'
 import type { TraceNavigationItem } from './TraceWaterfall'
 
 export function orderedTraceExchanges(trace: TrafficTrace | null | undefined) {
@@ -25,7 +26,6 @@ function TraceNavigator({ trace, exchange, items, itemKey, pending, onNavigate }
   const navigationItems = scope === 'http' ? httpItems : allItems
   const allIndex = itemKey ? allItems.findIndex((candidate) => candidate.key === itemKey) : allItems.findIndex((candidate) => candidate.exchange.sequence === exchange.sequence)
   const index = itemKey ? navigationItems.findIndex((candidate) => candidate.key === itemKey) : navigationItems.findIndex((candidate) => candidate.exchange.sequence === exchange.sequence)
-  if (!onNavigate || allItems.length < 2 || allIndex < 0) return null
   const itemIndex = new Map(allItems.map((candidate, candidateIndex) => [candidate.key, candidateIndex]))
   const previous = index >= 0
     ? navigationItems[index - 1]
@@ -36,6 +36,14 @@ function TraceNavigator({ trace, exchange, items, itemKey, pending, onNavigate }
   const first = index === 0
   const last = index === navigationItems.length - 1
   const positionLabel = index >= 0 ? `Span ${index + 1} of ${navigationItems.length}` : `Current span is outside HTTP navigation; ${navigationItems.length} HTTP ${navigationItems.length === 1 ? 'span' : 'spans'} available`
+  useTrafficDrawerNavigationKeys({
+    previous,
+    next,
+    pending,
+    enabled: Boolean(onNavigate && allItems.length >= 2 && allIndex >= 0),
+    onNavigate,
+  })
+  if (!onNavigate || allItems.length < 2 || allIndex < 0) return null
   const changeScope = (nextScope: 'http' | 'all') => {
     if (nextScope === scope) return
     const nextItems = nextScope === 'http' ? httpItems : allItems
@@ -52,9 +60,9 @@ function TraceNavigator({ trace, exchange, items, itemKey, pending, onNavigate }
     </div>
     <div className="traffic-trace-navigator__controls" role="group" aria-label="Navigate visible trace spans">
       <button type="button" title="First visible span in trace" aria-label="First visible span in trace" disabled={pending || navigationItems.length === 0 || first} onClick={() => onNavigate(navigationItems[0])}><TrafficNavigationArrow direction="previous" boundary /></button>
-      <button type="button" title="Previous visible span in trace" aria-label="Previous visible span in trace" disabled={pending || !previous} onClick={() => previous && onNavigate(previous)}><TrafficNavigationArrow direction="previous" /></button>
+      <button type="button" title="Previous visible span in trace" aria-label="Previous visible span in trace" aria-keyshortcuts="ArrowLeft" disabled={pending || !previous} onClick={() => previous && onNavigate(previous)}><TrafficNavigationArrow direction="previous" /></button>
       <output aria-live="polite" aria-label={positionLabel}><strong>{index >= 0 ? index + 1 : '—'}</strong><span>OF</span><strong>{navigationItems.length}</strong></output>
-      <button type="button" title="Next visible span in trace" aria-label="Next visible span in trace" disabled={pending || !next} onClick={() => next && onNavigate(next)}><TrafficNavigationArrow direction="next" /></button>
+      <button type="button" title="Next visible span in trace" aria-label="Next visible span in trace" aria-keyshortcuts="ArrowRight" disabled={pending || !next} onClick={() => next && onNavigate(next)}><TrafficNavigationArrow direction="next" /></button>
       <button type="button" title="Last visible span in trace" aria-label="Last visible span in trace" disabled={pending || navigationItems.length === 0 || last} onClick={() => onNavigate(navigationItems[navigationItems.length - 1])}><TrafficNavigationArrow direction="next" boundary /></button>
     </div>
   </nav>

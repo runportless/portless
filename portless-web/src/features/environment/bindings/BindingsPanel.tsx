@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { api, environmentPath, jsonBody } from '../../../api'
 import { actionError, type ActionErrorDetails } from '../../../components/ActionError'
-import type { Environment, MockProfile, Project, ProjectSource, SourceBinding } from '../../../types'
+import type { Environment, EnvironmentMutation, SourceBinding } from '../../../api/contracts/environments'
+import type { MockProfile, MockProfileList } from '../../../api/contracts/mocks'
+import type { Project, ProjectSource } from '../../../api/contracts/projects'
 import { ConfigureCheckoutModal, RemoveCheckoutModal } from '../../SourceModals'
 import { CheckoutTable } from './CheckoutTable'
 import { ConfigureProviderDialog } from './ConfigureProviderDialog'
 import { ProviderBindingsTable } from './ProviderBindingsTable'
 import type { EnvironmentCheckoutRow } from './bindingPresentation'
-
-type SourcePathMutation = { environment: Environment; warnings: string[] }
 
 export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
   environment: Environment
@@ -25,7 +25,7 @@ export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
   const [checkoutNotice, setCheckoutNotice] = useState('')
 
   useEffect(() => {
-    api<{ mocks: MockProfile[] }>(environmentPath(environment, '/mocks')).then((result) => setMockProfiles(result.mocks)).catch(() => setMockProfiles([]))
+    api<MockProfileList>(environmentPath(environment, '/mocks')).then((result) => setMockProfiles(result.mocks)).catch(() => setMockProfiles([]))
   }, [environment.project, environment.name])
 
   const openCheckoutEdit = (item: EnvironmentCheckoutRow) => {
@@ -45,7 +45,7 @@ export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
     setCheckoutMutationBusy(true)
     setCheckoutMutationError(null)
     try {
-      const result = await api<SourcePathMutation>(environmentPath(environment, `/sources/${encodeURIComponent(checkoutEdit.source.name)}`), {
+      const result = await api<EnvironmentMutation>(environmentPath(environment, `/sources/${encodeURIComponent(checkoutEdit.source.name)}`), {
         method: 'PUT',
         ...jsonBody({ path }),
       })
@@ -64,7 +64,7 @@ export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
     setCheckoutMutationBusy(true)
     setCheckoutMutationError(null)
     try {
-      await api<SourcePathMutation>(environmentPath(environment, `/sources/${encodeURIComponent(checkoutRemove.source.name)}`), { method: 'DELETE' })
+      await api<EnvironmentMutation>(environmentPath(environment, `/sources/${encodeURIComponent(checkoutRemove.source.name)}`), { method: 'DELETE' })
       await onChanged()
       setCheckoutNotice(`${checkoutRemove.source.name} is no longer checked out in ${environment.project}/${environment.name}.`)
       setCheckoutRemove(null)

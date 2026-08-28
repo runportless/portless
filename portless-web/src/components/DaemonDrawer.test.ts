@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
 import { DaemonDrawer, daemonDiagnostics, daemonTabIndexForKey } from './DaemonDrawer'
 
 const runtime: RuntimeStatus = {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
-import type { TimelineEvent } from '../../../types'
+import type { TimelineEvent } from '../../../api/contracts/environments'
 
 const timelinePageSizes = [25, 50, 100] as const
 

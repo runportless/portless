@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { filterExchanges, filterTraces, mergeExchanges, mergeTraces, reconcileExchanges, reconcileTraces, trafficWindowSummary } from './trafficState'
 
 function exchange(sequence: number, overrides: Partial<TrafficExchange> = {}): TrafficExchange {

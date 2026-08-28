@@ -1,7 +1,7 @@
 import type { Pagination } from '../../components/PanelPagination'
 import { PanelPagination } from '../../components/PanelPagination'
 import { duration } from '../../components/Status'
-import type { TrafficTrace } from '../../types'
+import type { TrafficTrace } from '../../api/contracts/traffic'
 import { trafficStartedTime } from './detail/TrafficOverview'
 import { traceRequest, trafficResultTone } from './TrafficListPresentation'
 import { TrafficTableHeader } from './TrafficTableHeader'

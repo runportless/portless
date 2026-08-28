@@ -1,7 +1,7 @@
 import type { Pagination } from '../../components/PanelPagination'
 import { PanelPagination } from '../../components/PanelPagination'
 import { duration } from '../../components/Status'
-import type { TrafficExchange } from '../../types'
+import type { TrafficExchange } from '../../api/contracts/traffic'
 import { trafficStartedTime } from './detail/TrafficOverview'
 import { exchangeOperation, exchangeResult, trafficResultTone } from './TrafficListPresentation'
 import { TrafficTableHeader } from './TrafficTableHeader'

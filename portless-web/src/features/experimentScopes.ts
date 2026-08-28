@@ -1,4 +1,6 @@
-import type { Environment, Protocol, Recording } from '../types'
+import type { Environment } from '../api/contracts/environments'
+import type { Recording } from '../api/contracts/experiments'
+import type { Protocol } from '../api/contracts/topology'
 
 export interface ExperimentScope {
   id: string

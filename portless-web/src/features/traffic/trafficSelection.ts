@@ -1,4 +1,4 @@
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 
 export function traceContainsExchange(trace: TrafficTrace, sequence: number) {
   return Boolean(trace.spans?.some((span) => span.exchange.sequence === sequence))

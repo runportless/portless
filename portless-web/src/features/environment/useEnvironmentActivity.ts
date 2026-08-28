@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath } from '../../api'
-import type { Environment, FaultRule, Recording, TimelineEvent } from '../../types'
+import type { Environment, TimelineEvent, TimelineList } from '../../api/contracts/environments'
+import type { FaultList, FaultRule, Recording, RecordingList } from '../../api/contracts/experiments'
 
 const environmentActivityTopics = ['environment.state', 'service.state', 'recording.state', 'fault.state', 'operation.state']
 
@@ -17,9 +18,9 @@ export function useEnvironmentActivity(environment: Pick<Environment, 'project' 
   const refresh = useCallback(async () => {
     const base = environmentPath(source)
     const [timelineResult, recordingResult, faultResult] = await Promise.all([
-      api<{ timeline: TimelineEvent[] }>(`${base}/timeline?limit=1000`),
-      api<{ recordings: Recording[] }>(`${base}/recordings`),
-      api<{ faults: FaultRule[] }>(`${base}/faults`),
+      api<TimelineList>(`${base}/timeline?limit=1000`),
+      api<RecordingList>(`${base}/recordings`),
+      api<FaultList>(`${base}/faults`),
     ])
     setTimeline(timelineResult.timeline)
     setRecordings(recordingResult.recordings)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { paginateItems } from '../../components/PanelPagination'
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { filterExchanges, filterTraces, trafficWindowSummary, type TrafficProtocolFilter, type TrafficResultFilter } from './trafficState'
 
 export type TrafficMode = 'traces' | 'exchanges'

@@ -1,4 +1,5 @@
-import type { Environment, EnvironmentStatus, Project, ProjectSource } from '../../types'
+import type { Environment, EnvironmentStatus } from '../../api/contracts/environments'
+import type { Project, ProjectSource } from '../../api/contracts/projects'
 
 export type ProjectOverview = {
   project: Project

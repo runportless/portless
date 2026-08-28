@@ -322,9 +322,19 @@ coverage.
 
 ## Failures and artifacts
 
-Playwright runs serially because the scenarios intentionally share one real
-environment. On failure it retains a screenshot, video, trace, and error
-context under `portless-web/test-results/`. Open a trace with:
+The Playwright suite is split into focused access/navigation, settings,
+projects, environment, experiments, traffic-list, traffic-inspection,
+traffic-waterfall, and daemon journey specs. The specs still run with one
+worker and stop after the first failure because they share one real isolated
+Portless stack. To run one journey while developing:
+
+```bash
+make e2e-binary
+npm --prefix portless-web run test:e2e -- traffic-waterfall.spec.ts
+```
+
+On failure Playwright retains a screenshot, video, trace, and error context
+under `portless-web/test-results/`. Open a trace with:
 
 ```bash
 npm --prefix portless-web exec -- playwright show-trace portless-web/test-results/<test>/trace.zip

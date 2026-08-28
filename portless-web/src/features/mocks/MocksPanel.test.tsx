@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Environment, MockProfile } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { MockProfile } from '../../api/contracts/mocks'
 import { MockProfileDrawer, MocksPanel, mockHTTPStatusGroups, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs } from './MocksPanel'
 
 const environment: Environment = {

@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { duration } from '../../components/Status'
-import type { TrafficCorrelation, TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../types'
+import type { TrafficCorrelation, TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../api/contracts/traffic'
 
 function spanOperation(exchange: TrafficExchange) {
   if (exchange.protocol === 'http') return `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}`

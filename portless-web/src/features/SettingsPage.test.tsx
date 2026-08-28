@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Environment, RuntimeStatus } from '../types'
+import type { Environment } from '../api/contracts/environments'
+import type { RuntimeStatus } from '../api/contracts/system'
 import { SettingsPage, settingsPath, type SettingsTab } from './SettingsPage'
 
 const runtime: RuntimeStatus = {

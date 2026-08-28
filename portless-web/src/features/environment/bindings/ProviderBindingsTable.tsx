@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
 import { StatusMark } from '../../../components/Status'
-import type { Environment } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
 import { formatBindingTimestamp, providerDisplayName } from './bindingPresentation'
 
 export function ProviderBindingsTable({ environment, onConfigure }: { environment: Environment; onConfigure: (service?: string) => void }) {

@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { ExchangeTraceDrawer as TrafficDetail } from './ExchangeTraceDrawer'
 import { databaseResultCSV, databaseResultRows, DatabaseResultTable } from './detail/DatabaseResultTable'
 import { defaultTrafficDetailView } from './detail/TrafficDrawerShell'
@@ -113,8 +113,10 @@ describe('TrafficDetail', () => {
     expect(markup).toContain('aria-pressed="false">ALL</button>')
     expect(markup).toContain('aria-label="First visible span in trace"')
     expect(markup).toContain('aria-label="Previous visible span in trace"')
+    expect(markup).toContain('aria-keyshortcuts="ArrowLeft"')
     expect(markup).toContain('aria-label="Span 2 of 3"')
     expect(markup).toContain('aria-label="Next visible span in trace"')
+    expect(markup).toContain('aria-keyshortcuts="ArrowRight"')
     expect(markup).toContain('aria-label="Last visible span in trace"')
     expect(markup).toContain('<output aria-live="polite" aria-label="Span 2 of 3"><strong>2</strong><span>OF</span><strong>3</strong></output>')
     expect(markup).not.toContain('traffic-trace-navigator__scope-label')
@@ -135,8 +137,10 @@ describe('TrafficDetail', () => {
     expect(markup).toContain('aria-label="Exchange navigation"')
     expect(markup).toContain('aria-label="Navigate filtered exchanges"')
     expect(markup).toContain('aria-label="Previous exchange"')
+    expect(markup).toContain('aria-keyshortcuts="ArrowLeft"')
     expect(markup).toContain('aria-label="Exchange 2 of 3"')
     expect(markup).toContain('aria-label="Next exchange"')
+    expect(markup).toContain('aria-keyshortcuts="ArrowRight"')
     expect(markup).not.toContain('Trace span navigation')
     expect(markup).not.toContain('First visible span in trace')
     expect(markup).not.toContain('Last visible span in trace')
@@ -149,8 +153,8 @@ describe('TrafficDetail', () => {
       onNavigate: () => undefined,
       onClose: () => undefined,
     }))
-    expect(boundary).toMatch(/aria-label="Previous exchange" disabled=""/)
-    expect(boundary).not.toMatch(/aria-label="Next exchange" disabled=""/)
+    expect(boundary).toMatch(/aria-label="Previous exchange"[^>]*disabled=""/)
+    expect(boundary).not.toMatch(/aria-label="Next exchange"[^>]*disabled=""/)
   })
 
   it('presents a database transaction as one navigable summary', () => {

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Project, RelayStatus, RuntimeStatus } from '../types'
+import type { Environment } from '../api/contracts/environments'
+import type { Project } from '../api/contracts/projects'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
 import { DaemonDrawer } from './DaemonDrawer'
 import { StatusMark } from './Status'
 

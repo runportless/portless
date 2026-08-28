@@ -4,7 +4,8 @@ import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../.
 import { ServiceLogs } from '../../../components/logs/ServiceLogs'
 import { DrawerShell } from '../../../components/overlays/DrawerShell'
 import { relativeTime, StatusMark } from '../../../components/Status'
-import type { Environment, Operation, Service } from '../../../types'
+import type { Environment, Operation } from '../../../api/contracts/environments'
+import type { Service, ServiceConfiguration } from '../../../api/contracts/topology'
 import { waitForEnvironmentOperation } from '../operationPolling'
 import { bindingFor, displayLaunchMode, publicEndpoint, serviceEndpoints } from './servicePresentation'
 
@@ -16,7 +17,7 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
   onClose: () => void
   onChanged: () => void
 }) {
-  const [configuration, setConfiguration] = useState<{ environment?: Array<{ key: string; value: string; classification: string; source: string }> } | null>(null)
+  const [configuration, setConfiguration] = useState<ServiceConfiguration | null>(null)
   const [drawerTab, setDrawerTab] = useState<'details' | 'logs' | 'configuration'>('details')
   const [busy, setBusy] = useState<ServiceAction | ''>('')
   const [error, setError] = useState<ActionErrorDetails | null>(null)
@@ -24,7 +25,7 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
   const base = environmentPath(environment, `/services/${encodeURIComponent(service.name)}`)
 
   useEffect(() => {
-    api<typeof configuration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
+    api<ServiceConfiguration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
   }, [base, environment.name, service.name])
 
   const action = async (name: ServiceAction) => {

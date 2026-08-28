@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
 import { StatusMark } from '../components/Status'
-import type { Environment, RuntimeStatus } from '../types'
+import type { Environment } from '../api/contracts/environments'
+import type { RuntimeStatus } from '../api/contracts/system'
 import type { ResolvedTheme, ThemePreference } from '../theme'
 import { MCPSettings } from './mcp/MCPSettings'
 

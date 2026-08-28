@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
-import type { TrafficExchange } from '../../../types'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 
 type DatabaseRow = unknown[] | Record<string, unknown>
 

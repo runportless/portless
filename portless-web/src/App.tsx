@@ -7,9 +7,10 @@ import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
 import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
-import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
+import type { Environment, EnvironmentList, Operation } from './api/contracts/environments'
+import type { Project, ProjectList } from './api/contracts/projects'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus, Session } from './api/contracts/system'
 
-interface Session { actor: string; browser: boolean; csrf: string }
 type Tab = EnvironmentView
 
 export function App() {
@@ -50,8 +51,8 @@ export function App() {
 
   const refreshCore = useCallback(async () => {
     const [projectResponse, environmentResponse] = await Promise.all([
-      api<{ projects: Project[] }>('/projects'),
-      api<{ environments: Environment[] }>('/environments'),
+      api<ProjectList>('/projects'),
+      api<EnvironmentList>('/environments'),
     ])
     setProjects(projectResponse.projects)
     setEnvironments(environmentResponse.environments)

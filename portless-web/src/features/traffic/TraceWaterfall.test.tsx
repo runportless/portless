@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../types'
+import type { TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../api/contracts/traffic'
 import { traceNavigationItems, traceTransactionCommandSpans, traceWaterfallItems, TraceWaterfall } from './TraceWaterfall'
 
 const waterfallProps = {

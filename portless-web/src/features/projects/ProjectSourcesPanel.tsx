@@ -3,11 +3,10 @@ import { api, jsonBody, projectPath } from '../../api'
 import { actionError, type ActionErrorDetails } from '../../components/ActionError'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { StatusMark } from '../../components/Status'
-import type { Environment, Project, ProjectSource } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Project, ProjectSource, ProjectSourceMutation } from '../../api/contracts/projects'
 import { AddProjectSourceModal, DeleteProjectSourceModal } from '../SourceModals'
 import { projectSourceRows, projectSourceStatus } from './projectPresentation'
-
-type ProjectSourceMutation = { warnings: string[]; configurationRequired: string[] }
 
 export function ProjectSourcesPanel({ project, environments, onChanged }: {
   project: Project

@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import { api, jsonBody } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { FormDialog } from '../../components/overlays/FormDialog'
-import type { Environment, Project } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Project } from '../../api/contracts/projects'
 import { environmentRoute } from './projectOperations'
 
 export function CreateEnvironmentDialog({ project, environments, onClose, onNavigate, onChanged }: {

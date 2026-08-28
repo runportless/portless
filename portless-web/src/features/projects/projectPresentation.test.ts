@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Environment, Project } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Project } from '../../api/contracts/projects'
 import { aggregateProjectStatus, projectOverview, projectSourceRows, projectSourceStatus } from './projectPresentation'
 
 const baseEnvironment = {

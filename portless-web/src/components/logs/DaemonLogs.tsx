@@ -1,6 +1,6 @@
 import { api } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../ActionError'
-import type { DaemonLogSnapshot } from '../../types'
+import type { DaemonLogSnapshot } from '../../api/contracts/system'
 import { LogViewer, type LogViewerLabels } from './LogViewer'
 import { useLogTail } from './useLogTail'
 

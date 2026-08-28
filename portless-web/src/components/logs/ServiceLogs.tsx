@@ -1,6 +1,6 @@
 import { api, environmentPath } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../ActionError'
-import type { Environment, LogEntry } from '../../types'
+import type { Environment, LogEntry, LogList } from '../../api/contracts/environments'
 import { LogViewer, type LogViewerLabels } from './LogViewer'
 import { useLogTail } from './useLogTail'
 
@@ -21,7 +21,7 @@ export function ServiceLogs({ environment, service }: { environment: Pick<Enviro
   const logs = useLogTail<LogEntry[], ActionErrorDetails>({
     identity: `${environment.project}/${environment.name}/${service}`,
     initialValue: () => [],
-    load: (signal) => api<{ entries: LogEntry[] }>(path, { signal }).then((result) => result.entries),
+    load: (signal) => api<LogList>(path, { signal }).then((result) => result.entries),
     mapError: (error) => actionError(`Logs for ${service} couldn't be loaded`, error),
   })
 

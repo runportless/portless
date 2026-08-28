@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Environment, TrafficExchange, TrafficTrace } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { loadTrafficSnapshot } from './trafficSnapshot'
 
 function jsonResponse(value: unknown) {

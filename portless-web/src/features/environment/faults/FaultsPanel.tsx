@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, environmentPath, jsonBody } from '../../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
 import { StatusMark } from '../../../components/Status'
-import type { Environment, FaultRule } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { FaultRule } from '../../../api/contracts/experiments'
 import { experimentScopes, preferredFaultScope } from '../../experimentScopes'
 
 export function FaultsPanel({ environment, faults, refresh }: { environment: Environment; faults: FaultRule[]; refresh: () => Promise<void> }) {

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath } from '../../api'
 import { actionError, type ActionErrorDetails } from '../../components/ActionError'
-import type { Environment, TrafficExchange, TrafficTrace } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { TrafficClearResponse, TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { loadTrafficSnapshot } from './trafficSnapshot'
 import { mergeExchanges, mergeTraces, reconcileExchanges, reconcileTraces } from './trafficState'
-
-type TrafficClearResult = { cleared: number; throughSequence: number }
 
 function traceHasEdge(trace: TrafficTrace, edge: string) {
   if (!edge) return true
@@ -78,7 +77,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
     void load()
     const disconnect = connectEvents(environment, ['traffic.exchange', 'traffic.trace', 'traffic.cleared'], (type, value) => {
       if (type === 'traffic.cleared') {
-        applyTrafficClear((value as TrafficClearResult).throughSequence)
+        applyTrafficClear((value as TrafficClearResponse).throughSequence)
         return
       }
       if (type === 'traffic.exchange') {
@@ -124,7 +123,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
     setClearing(true)
     setError(null)
     try {
-      const result = await api<TrafficClearResult>(environmentPath(environment, '/traffic'), { method: 'DELETE' })
+      const result = await api<TrafficClearResponse>(environmentPath(environment, '/traffic'), { method: 'DELETE' })
       applyTrafficClear(result.throughSequence)
     } catch (value) {
       setError(actionError("Traffic couldn't be cleared", value))

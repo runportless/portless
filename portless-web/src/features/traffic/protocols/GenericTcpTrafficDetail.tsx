@@ -1,4 +1,4 @@
-import type { TrafficExchange } from '../../../types'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { CommandResultLayout, ProtocolMessageCard } from '../detail/CommandResultLayout'
 import { TrafficTextContent } from '../detail/TrafficFormatting'
 import type { TrafficDetailView, TrafficDirection } from '../detail/trafficDetailTypes'

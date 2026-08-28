@@ -1,4 +1,5 @@
-import type { ComponentBinding, Environment, Protocol, Service } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { ComponentBinding, Protocol, Service } from '../../../api/contracts/topology'
 
 export type ServiceEndpoint = { label: string; value: string; detail: string; href?: string }
 

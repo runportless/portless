@@ -1,4 +1,4 @@
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 
 export function trafficResultTone(error: boolean | string | undefined, status: number | undefined) {
   if (error || (status || 0) >= 500) return 'danger-text'

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { paginateItems } from '../../components/PanelPagination'
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { TrafficControls } from './TrafficControls'
 import { TrafficExchangeList } from './TrafficExchangeList'
 import { traceCandidatesForExchange } from './trafficSelection'

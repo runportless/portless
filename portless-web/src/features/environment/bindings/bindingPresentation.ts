@@ -1,4 +1,6 @@
-import type { ComponentBinding, Environment, Project, ProjectSource, ProviderKind, Service, SourceBinding } from '../../../types'
+import type { Environment, SourceBinding } from '../../../api/contracts/environments'
+import type { Project, ProjectSource } from '../../../api/contracts/projects'
+import type { ComponentBinding, ProviderKind, Service } from '../../../api/contracts/topology'
 
 export type EnvironmentCheckoutRow = {
   source: ProjectSource

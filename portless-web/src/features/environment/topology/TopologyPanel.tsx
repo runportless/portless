@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { Environment, FaultRule, Service } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { FaultRule } from '../../../api/contracts/experiments'
+import type { Service } from '../../../api/contracts/topology'
 import { TopologyCanvas } from './TopologyCanvas'
 import type { TopologyEdge } from './topologyModel'
 

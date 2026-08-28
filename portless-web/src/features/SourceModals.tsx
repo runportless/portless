@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { api, jsonBody } from '../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
 import { FormDialog } from '../components/overlays/FormDialog'
-import type { Environment, Project, ProjectSource, SourceBinding } from '../types'
-
-type DirectorySelection = { path: string }
+import type { Environment, SourceBinding } from '../api/contracts/environments'
+import type { Project, ProjectSource } from '../api/contracts/projects'
+import type { DirectorySelection } from '../api/contracts/system'
 
 async function chooseSourceDirectory(initialPath: string) {
   return api<DirectorySelection | undefined>('/system/directories/select', {

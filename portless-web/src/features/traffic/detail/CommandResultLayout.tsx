@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { duration } from '../../../components/Status'
-import type { TrafficExchange } from '../../../types'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { captureSummary, CopyIcon } from './TrafficFormatting'
 import type { TrafficDetailView, TrafficDirection } from './trafficDetailTypes'
 

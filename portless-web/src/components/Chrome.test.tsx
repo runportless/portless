@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus, Environment, Project } from '../types'
+import type { Environment } from '../api/contracts/environments'
+import type { Project } from '../api/contracts/projects'
+import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus } from '../api/contracts/system'
 import { AppChrome, scrollCommandIntoView, type EnvironmentView, type SettingsView } from './Chrome'
 
 const project = { name: 'billing' } as Project

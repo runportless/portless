@@ -1,5 +1,5 @@
 import { api, environmentPath } from '../../api'
-import type { Environment, Operation } from '../../types'
+import type { Environment, Operation } from '../../api/contracts/environments'
 
 export type EnvironmentAction = 'up' | 'down'
 

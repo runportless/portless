@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
-import type { Environment } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
 import {
   buildMCPCommand,
   defaultMCPCapabilities,

@@ -1,4 +1,5 @@
-import type { EnvironmentStatus, ServiceStatus } from '../types'
+import type { EnvironmentStatus } from '../api/contracts/environments'
+import type { ServiceStatus } from '../api/contracts/topology'
 
 type StatusValue = EnvironmentStatus | ServiceStatus | string
 

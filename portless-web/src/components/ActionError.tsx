@@ -1,5 +1,5 @@
 import { APIError } from '../api'
-import type { APIErrorShape } from '../types'
+import type { APIErrorShape } from '../api/contracts/errors'
 
 export interface ActionErrorDetails {
   title: string

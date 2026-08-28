@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TrafficExchange } from '../../../types'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { redisTrafficPresentation, RedisCommandContent } from './RedisPresentation'
 
 function redisExchange(operation: string, command: unknown[], response: unknown, responseSummary: string): TrafficExchange {

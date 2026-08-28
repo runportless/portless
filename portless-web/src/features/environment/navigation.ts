@@ -1,4 +1,4 @@
-import type { Environment } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
 
 export type EnvironmentTab = 'overview' | 'topology' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'bindings' | 'timeline'
 

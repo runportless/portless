@@ -1,4 +1,5 @@
-import type { Environment, Project } from '../../types'
+import type { Environment } from '../../api/contracts/environments'
+import type { Project } from '../../api/contracts/projects'
 import { ProjectEnvironmentsPanel } from './ProjectEnvironmentsPanel'
 import { ProjectSourcesPanel } from './ProjectSourcesPanel'
 

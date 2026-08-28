@@ -1,5 +1,6 @@
 import { duration } from '../../../components/Status'
-import type { ComponentBinding, TrafficExchange } from '../../../types'
+import type { ComponentBinding } from '../../../api/contracts/topology'
+import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { formatTrafficBytes } from './TrafficFormatting'
 
 function OverviewDetail({ label, value }: { label: string; value: string }) {

@@ -1,4 +1,4 @@
-import type { DaemonRestart } from './types'
+import type { DaemonRestart } from './api/contracts/system'
 
 export const DAEMON_RESTART_SLA_MS = 5_000
 

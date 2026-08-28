@@ -1,5 +1,6 @@
-import type { APIErrorShape, Environment } from './types'
-import type { ControlPlaneHealth } from './types'
+import type { Environment } from './api/contracts/environments'
+import type { APIErrorShape } from './api/contracts/errors'
+import type { ControlPlaneHealth } from './api/contracts/system'
 
 export class APIError extends Error {
   status: number

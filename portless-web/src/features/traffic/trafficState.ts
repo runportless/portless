@@ -1,4 +1,4 @@
-import type { TrafficExchange, TrafficTrace } from '../../types'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 
 export type TrafficResultFilter = 'all' | 'errors' | 'slow' | 'faulted'
 export type TrafficProtocolFilter = 'all' | 'http' | 'tcp'

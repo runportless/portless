@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api, connectEvents, environmentPath } from '../../../api'
 import { StatusMark } from '../../../components/Status'
-import type { Environment, FaultRule, Service, TrafficExchange } from '../../../types'
+import type { Environment } from '../../../api/contracts/environments'
+import type { FaultRule } from '../../../api/contracts/experiments'
+import type { Service } from '../../../api/contracts/topology'
+import type { TrafficExchange, TrafficExchangeList } from '../../../api/contracts/traffic'
 import { publicEndpoint } from '../service/servicePresentation'
 import {
   buildTopology,
@@ -58,7 +61,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
 
   useEffect(() => {
     let active = true
-    api<{ exchanges: TrafficExchange[] }>(environmentPath(environment, '/traffic/exchanges?protocol=all&limit=1000')).then((result) => {
+    api<TrafficExchangeList>(environmentPath(environment, '/traffic/exchanges?protocol=all&limit=1000')).then((result) => {
       if (active) setEdgeMetrics(summarizeTopologyTraffic(result.exchanges))
     }).catch(() => undefined)
     return () => { active = false }
