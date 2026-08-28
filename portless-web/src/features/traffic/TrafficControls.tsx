@@ -26,14 +26,10 @@ export function TrafficControls({ mode, onMode, stream, summary, filters }: {
     search: string
     result: TrafficResultFilter
     protocol: TrafficProtocolFilter
-    includeTCPRoots: boolean
-    includeBackground: boolean
     edge: string
     onSearch: (value: string) => void
     onResult: (value: TrafficResultFilter) => void
     onProtocol: (value: TrafficProtocolFilter) => void
-    onToggleTCPRoots: () => void
-    onToggleBackground: () => void
     onClearEdge: () => void
   }
 }) {
@@ -50,10 +46,6 @@ export function TrafficControls({ mode, onMode, stream, summary, filters }: {
       <input value={filters.search} onChange={(event) => filters.onSearch(event.target.value)} placeholder="filter path, service, edge, status…" aria-label="Filter traffic" />
       <select value={filters.result} onChange={(event) => filters.onResult(event.target.value as TrafficResultFilter)} aria-label="Traffic result filter"><option value="all">All results</option><option value="errors">Errors</option><option value="slow">Slow · 500ms+</option><option value="faulted">Faulted</option></select>
       {mode === 'exchanges' && <div className="traffic-protocol" role="group" aria-label="Traffic protocol">{(['all', 'http', 'tcp'] as const).map((value) => <button key={value} className={filters.protocol === value ? 'is-active' : ''} onClick={() => filters.onProtocol(value)}>{value.toUpperCase()}</button>)}</div>}
-      {mode === 'traces' && <>
-        <button className={`traffic-trace-option${filters.includeTCPRoots ? ' is-active' : ''}`} type="button" aria-pressed={filters.includeTCPRoots} onClick={filters.onToggleTCPRoots}>SHOW TCP ROOTS</button>
-        <button className={`traffic-trace-option${filters.includeBackground ? ' is-active' : ''}`} type="button" aria-pressed={filters.includeBackground} onClick={filters.onToggleBackground}>SHOW BACKGROUND</button>
-      </>}
       {filters.edge && <button className="traffic-filter-chip" type="button" onClick={filters.onClearEdge}><span>EDGE</span>{filters.edge.replace(':', ' → ')} ×</button>}
     </div>
   </>

@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { LogEntry } from '../types'
-import { rawLogBlob, rawLogText, ServiceLogs, ServiceLogView } from './ServiceLogs'
+import type { LogEntry } from '../../types'
+import { logBlob } from './logDownload'
+import { serviceLogText, ServiceLogs, ServiceLogView } from './ServiceLogs'
 
 const entries: LogEntry[] = [
   { timestamp: '2026-08-20T16:30:00.000Z', service: 'checkout', stream: 'stdout', generation: 3, message: 'ready on an allocated port' },
@@ -20,7 +21,7 @@ describe('service logs', () => {
   })
 
   it('renders structured lines with time, stream, and message context', () => {
-    const markup = renderToStaticMarkup(<ServiceLogView entries={entries} loaded tailing service="checkout" onRaw={() => undefined} onTail={() => undefined} />)
+    const markup = renderToStaticMarkup(<ServiceLogView entries={entries} loaded tailing service="checkout" onTail={() => undefined} />)
 
     expect(markup).not.toContain('class="log-view__meta"')
     expect(markup).not.toContain('last 2 lines')
@@ -32,12 +33,13 @@ describe('service logs', () => {
   })
 
   it('creates plain-text raw output and exposes paused tail controls', async () => {
-    const markup = renderToStaticMarkup(<ServiceLogView entries={entries} loaded tailing={false} service="checkout" onRaw={() => undefined} onTail={() => undefined} />)
-    const blob = rawLogBlob(entries)
+    const markup = renderToStaticMarkup(<ServiceLogView entries={entries} loaded tailing={false} service="checkout" onTail={() => undefined} />)
+    const rawText = serviceLogText(entries)
+    const blob = logBlob(rawText)
 
-    expect(rawLogText(entries)).toBe('ready on an allocated port\nretrying <private> dependency')
+    expect(rawText).toBe('ready on an allocated port\nretrying <private> dependency')
     expect(blob.type).toBe('text/plain;charset=utf-8')
-    expect(await blob.text()).toBe(rawLogText(entries))
+    expect(await blob.text()).toBe(rawText)
     expect(markup).toContain('aria-label="Open raw logs in new tab"')
     expect(markup).toContain('aria-label="Resume live tail"')
     expect(markup).not.toContain('aria-label="Live tail active"')

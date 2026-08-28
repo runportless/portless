@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { DaemonLogSnapshot } from '../types'
-import { daemonLogBlob, DaemonLogs, DaemonLogView } from './DaemonLogs'
+import type { DaemonLogSnapshot } from '../../types'
+import { DaemonLogs, DaemonLogView } from './DaemonLogs'
+import { logBlob } from './logDownload'
 
 describe('daemon logs', () => {
   it('starts with bounded live tailing and a raw-log action', () => {
@@ -18,7 +19,7 @@ describe('daemon logs', () => {
 
   it('renders raw content and explains when older output was omitted', () => {
     const snapshot: DaemonLogSnapshot = { content: 'time=now level=INFO msg="ready <locally>"\n', truncated: true }
-    const markup = renderToStaticMarkup(<DaemonLogView snapshot={snapshot} loaded tailing={false} onRaw={() => undefined} onTail={() => undefined} />)
+    const markup = renderToStaticMarkup(<DaemonLogView snapshot={snapshot} loaded tailing={false} onTail={() => undefined} />)
 
     expect(markup).toContain('aria-label="Daemon logs"')
     expect(markup).toContain('Latest 256 KiB · older output omitted')
@@ -30,7 +31,7 @@ describe('daemon logs', () => {
 
   it('creates an exact plain-text raw snapshot', async () => {
     const content = 'first line\nsecond line\n'
-    const blob = daemonLogBlob(content)
+    const blob = logBlob(content)
 
     expect(blob.type).toBe('text/plain;charset=utf-8')
     expect(await blob.text()).toBe(content)

@@ -13,10 +13,9 @@ export function TraceSummaryRow({ trace, expanded, onToggle }: { trace: TrafficT
   </button>
 }
 
-export function TrafficTraceList({ pagination, expandedTrace, includeBackground, onToggleTrace, onInspect, onPage }: {
+export function TrafficTraceList({ pagination, expandedTrace, onToggleTrace, onInspect, onPage }: {
   pagination: Pagination<TrafficTrace>
   expandedTrace: number | null
-  includeBackground: boolean
   onToggleTrace: (trace: TrafficTrace) => void
   onInspect: (item: TraceNavigationItem, trace: TrafficTrace) => void
   onPage: (page: number) => void
@@ -25,7 +24,7 @@ export function TrafficTraceList({ pagination, expandedTrace, includeBackground,
     <TrafficTableHeader mode="traces" />
     {pagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
       <TraceSummaryRow trace={trace} expanded={expandedTrace === trace.number} onToggle={() => onToggleTrace(trace)} />
-      {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} includeBackground={includeBackground} onItem={(item) => onInspect(item, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
+      {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onItem={(item) => onInspect(item, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
     </div>)}
     {pagination.total === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
     <PanelPagination label="traces" pagination={pagination} onPage={onPage} />

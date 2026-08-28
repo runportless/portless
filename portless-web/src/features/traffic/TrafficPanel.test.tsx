@@ -57,17 +57,17 @@ describe('traffic page components', () => {
   const stream = { paused: false, bufferedCount: 0, clearing: false, empty: false, onClear: () => undefined, onTogglePaused: () => undefined }
   const summary = { exchanges: 3, requestsPerSecond: 0.1, errors: 1, p50: 12, p95: 24 }
   const filters = {
-    search: '', result: 'all' as const, protocol: 'all' as const, includeTCPRoots: false, includeBackground: false, edge: '',
+    search: '', result: 'all' as const, protocol: 'all' as const, edge: '',
     onSearch: () => undefined, onResult: () => undefined, onProtocol: () => undefined,
-    onToggleTCPRoots: () => undefined, onToggleBackground: () => undefined, onClearEdge: () => undefined,
+    onClearEdge: () => undefined,
   }
 
-  it('keeps trace and exchange controls scoped to their respective views', () => {
+  it('keeps protocol controls scoped to exchanges and omits trace noise controls', () => {
     const traces = renderToStaticMarkup(<TrafficControls mode="traces" onMode={() => undefined} stream={stream} summary={summary} filters={filters} />)
     const exchanges = renderToStaticMarkup(<TrafficControls mode="exchanges" onMode={() => undefined} stream={stream} summary={summary} filters={filters} />)
 
-    expect(traces).toContain('SHOW TCP ROOTS')
-    expect(traces).toContain('SHOW BACKGROUND')
+    expect(traces).not.toContain('SHOW TCP ROOTS')
+    expect(traces).not.toContain('SHOW BACKGROUND')
     expect(traces).not.toContain('aria-label="Traffic protocol"')
     expect(exchanges).toContain('aria-label="Traffic protocol"')
     expect(exchanges).not.toContain('SHOW TCP ROOTS')
@@ -78,7 +78,6 @@ describe('traffic page components', () => {
     const traceMarkup = renderToStaticMarkup(<TrafficTraceList
       pagination={paginateItems([trace], 0, 25)}
       expandedTrace={null}
-      includeBackground={false}
       onToggleTrace={() => undefined}
       onInspect={() => undefined}
       onPage={() => undefined}

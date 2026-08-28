@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import { APIError } from '../api'
 import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from '../daemonRestart'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
-import { DaemonLogs } from './DaemonLogs'
+import { DaemonLogs } from './logs/DaemonLogs'
 import { DrawerShell } from './overlays/DrawerShell'
 import { relativeTime, StatusMark } from './Status'
 

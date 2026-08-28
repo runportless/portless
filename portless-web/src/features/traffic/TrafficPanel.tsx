@@ -30,8 +30,6 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     edgeFilter: view.edgeFilter,
     resultFilter: view.resultFilter,
     protocol: view.protocol,
-    includeTCPRoots: view.includeTCPRoots,
-    includeBackground: view.includeBackground,
     tracePage: view.tracePage,
     exchangePage: view.exchangePage,
   })
@@ -133,7 +131,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     }
   }
 
-  const selectedTraceNavigationItems = useMemo(() => selectedTrace && traceNavigationScoped ? traceNavigationItems(selectedTrace, view.includeBackground) : undefined, [selectedTrace, traceNavigationScoped, view.includeBackground])
+  const selectedTraceNavigationItems = useMemo(() => selectedTrace && traceNavigationScoped ? traceNavigationItems(selectedTrace) : undefined, [selectedTrace, traceNavigationScoped])
   const selectedTraceNavigationItem = useMemo(() => {
     if (!selectedTraceNavigationItems || !selectedExchange) return undefined
     return selectedTraceNavigationItems.find((item) => item.key === selectedTraceNavigationKey)
@@ -172,14 +170,10 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
           search: view.search,
           result: view.resultFilter,
           protocol: view.protocol,
-          includeTCPRoots: view.includeTCPRoots,
-          includeBackground: view.includeBackground,
           edge: view.edgeFilter,
           onSearch: view.setSearch,
           onResult: view.setResultFilter,
           onProtocol: view.setProtocol,
-          onToggleTCPRoots: () => view.setIncludeTCPRoots((value) => !value),
-          onToggleBackground: () => view.setIncludeBackground((value) => !value),
           onClearEdge: () => view.setEdgeFilter(''),
         }}
       />
@@ -188,7 +182,6 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         ? <TrafficTraceList
           pagination={traffic.tracePagination}
           expandedTrace={expandedTrace}
-          includeBackground={view.includeBackground}
           onToggleTrace={(trace) => void toggleTrace(trace)}
           onInspect={inspectTraceItem}
           onPage={view.setTracePage}

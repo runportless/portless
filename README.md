@@ -230,23 +230,25 @@ malformed TCP traffic remains byte-count-only and never interrupts forwarding.
 Successful driver and connection-pool housekeeping is marked as background:
 for example, PostgreSQL session setup and validation queries or Redis handshakes
 and client metadata. Raw Exchanges and recordings still retain those operations,
-while standalone housekeeping traces, housekeeping spans inside foreground
-traces, and topology animation are hidden by default. Failed or faulted
-housekeeping always remains visible. Decoded TCP dependencies use one consistent
-summary-row treatment in the trace waterfall. Explicit database transactions
-remain individually inspectable in Exchanges and are grouped into one aggregate
-waterfall span, while standalone commands use the same presentation and open
-directly. The transaction's command/result breakdown is available in its
-traffic drawer instead of competing with the trace timeline.
+while successful standalone housekeeping traces, housekeeping spans inside
+foreground traces, and topology animation are omitted from the trace-oriented
+views. Failed or faulted housekeeping always remains visible. Decoded TCP
+dependencies use one consistent summary-row treatment in the trace waterfall.
+Explicit database transactions remain individually inspectable in Exchanges
+and are grouped into one aggregate waterfall span, while standalone commands
+use the same presentation and open directly. The transaction's command/result
+breakdown is available in its traffic drawer instead of competing with the
+trace timeline.
 
 The trace drawer's previous and next controls follow the waterfall's visible
-span model: a transaction is always one command/result summary. Hidden
-background spans do not appear in that sequence until they are shown.
+span model: a transaction is always one command/result summary, and successful
+housekeeping spans are excluded.
 Drawers opened from the raw Exchanges table instead provide only previous and
 next exchange controls, following the table's active filters across pages.
 
-The trace list is HTTP-rooted by default while retaining decoded TCP dependency
-spans inside those requests; standalone TCP roots are an explicit opt-in.
+The trace list is HTTP-rooted while retaining decoded TCP dependency spans
+inside those requests. Standalone TCP operations remain available through the
+raw Exchanges view and its TCP protocol filter.
 
 The [command reference](portless-cli/COMMANDS.md) contains complete CLI usage.
 Traffic payloads can contain application data; see

@@ -56,18 +56,18 @@ describe('traffic state', () => {
     expect(filterExchanges(exchanges, 'orders-down', 'faulted', 'all').map((item) => item.sequence)).toEqual([3])
 
     const traces = [trace(1), trace(2, { background: true, requestTarget: '/favicon.ico' }), trace(3, { durationMs: 700 })]
-    expect(filterTraces(traces, '', 'all', false).map((item) => item.number)).toEqual([1, 3])
-    expect(filterTraces(traces, 'favicon', 'all', true).map((item) => item.number)).toEqual([2])
-    expect(filterTraces(traces, '', 'slow', true).map((item) => item.number)).toEqual([3])
+    expect(filterTraces(traces, '', 'all').map((item) => item.number)).toEqual([1, 3])
+    expect(filterTraces(traces, 'favicon', 'all')).toEqual([])
+    expect(filterTraces(traces, '', 'slow').map((item) => item.number)).toEqual([3])
   })
 
-  it('keeps provisional TCP roots out of traces while preserving settled TCP and correlated request traces', () => {
+  it('keeps all TCP roots out of traces while preserving correlated request traces', () => {
     const provisionalTCP = trace(4, { protocol: 'tcp', provisional: true, method: undefined, requestTarget: undefined, source: 'orders', target: 'redis', spanCount: 1 })
     const correlated = trace(5, { method: 'GET', requestTarget: '/checkout', source: 'external', target: 'checkout', spanCount: 2 })
     const settledTCP = trace(6, { protocol: 'tcp', method: undefined, requestTarget: undefined, source: 'worker', target: 'redis', spanCount: 1 })
 
-    expect(filterTraces([provisionalTCP, correlated, settledTCP], '', 'all', true).map((item) => item.number)).toEqual([5])
-    expect(filterTraces([provisionalTCP, correlated, settledTCP], '', 'all', true, true).map((item) => item.number)).toEqual([5, 6])
+    expect(filterTraces([provisionalTCP, correlated, settledTCP], '', 'all').map((item) => item.number)).toEqual([5])
+    expect(filterTraces([provisionalTCP, correlated, settledTCP], 'redis', 'all')).toEqual([])
   })
 
   it('summarizes only the rolling 60 second window', () => {

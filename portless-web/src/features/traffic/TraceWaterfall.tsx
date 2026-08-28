@@ -23,15 +23,15 @@ export function traceTransactionCommandSpans(spans: TrafficTraceSpan[]) {
   return spans.filter((span) => !transactionBoundaryOperations.has((span.exchange.tcp?.operation || '').toUpperCase()))
 }
 
-function visibleSpan(span: TrafficTraceSpan, includeBackground: boolean) {
+function visibleSpan(span: TrafficTraceSpan) {
   const exchange = span.exchange
-  if (!exchange.background || includeBackground) return true
+  if (!exchange.background) return true
   return Boolean(exchange.error || exchange.fault || exchange.tcp?.outcome === 'error' || exchange.tcp?.outcome === 'incomplete')
 }
 
-export function traceWaterfallItems(trace: TrafficTrace, includeBackground = false): TraceWaterfallItem[] {
+export function traceWaterfallItems(trace: TrafficTrace): TraceWaterfallItem[] {
   const spans = (trace.spans || [])
-    .filter((span) => visibleSpan(span, includeBackground))
+    .filter(visibleSpan)
     .sort((left, right) => left.startOffsetMs - right.startOffsetMs || left.exchange.sequence - right.exchange.sequence)
   const transactions = new Map<number, TrafficTraceSpan[]>()
   for (const span of spans) {
@@ -103,8 +103,8 @@ export function exchangeNavigationItem(exchange: TrafficExchange): TraceNavigati
   return { kind: 'exchange', key: `exchange:${exchange.sequence}`, exchange }
 }
 
-export function traceNavigationItems(trace: TrafficTrace, includeBackground = false): TraceNavigationItem[] {
-  return traceWaterfallItems(trace, includeBackground).map((item) => {
+export function traceNavigationItems(trace: TrafficTrace): TraceNavigationItem[] {
+  return traceWaterfallItems(trace).map((item) => {
     if (item.kind === 'span') return exchangeNavigationItem(item.span.exchange)
     return transactionNavigationItem(item)
   })
@@ -144,9 +144,8 @@ function TraceSpanRow({ span, total, depth = span.depth, className = '', depende
   </button>
 }
 
-export function TraceWaterfall({ trace, includeBackground = false, onItem }: {
+export function TraceWaterfall({ trace, onItem }: {
   trace: TrafficTrace
-  includeBackground?: boolean
   onItem: (item: TraceNavigationItem) => void
 }) {
   const [maximized, setMaximized] = useState(false)
@@ -162,7 +161,7 @@ export function TraceWaterfall({ trace, includeBackground = false, onItem }: {
     {maximized && <div className="panel-title trace-waterfall__toolbar"><span>TRACE WATERFALL</span><div><button className="icon-button" type="button" title="Restore trace" aria-label="Restore trace" aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div></div>}
     <div className="trace-waterfall__content">
     <div className="trace-waterfall__axis"><span>SERVICE / OPERATION</span><div><i>0</i><i>{duration(Math.round(total / 2))}</i><i>{duration(total)}</i></div>{!maximized && <button className="trace-waterfall__size" type="button" title="Maximize trace" aria-label="Maximize trace" aria-pressed="false" onClick={() => setMaximized(true)}><TraceSizeIcon /></button>}</div>
-    {traceWaterfallItems(trace, includeBackground).map((item) => {
+    {traceWaterfallItems(trace).map((item) => {
       if (item.kind === 'span') return <TraceSpanRow key={item.span.exchange.sequence} span={item.span} total={total} onInspect={(exchange) => inspect(exchangeNavigationItem(exchange))} />
 
       const navigationItem = transactionNavigationItem(item)

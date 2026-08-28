@@ -293,10 +293,24 @@ test('renders real services, endpoints, topology, and service details', async ({
   const pausedLogRequests = serviceLogRequests
   await page.waitForTimeout(1_100)
   expect(serviceLogRequests).toBe(pausedLogRequests)
+  const resumedLogRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/logs') && url.searchParams.get('service') === 'checkout'
+  })
   await drawer.getByRole('button', { name: 'Resume live tail' }).click()
+  await resumedLogRequest
   await expect(drawer.getByRole('button', { name: 'Pause live tail' })).toHaveAttribute('aria-pressed', 'true')
-  await expect.poll(() => serviceLogRequests).toBeGreaterThan(pausedLogRequests)
+  expect(serviceLogRequests).toBeGreaterThan(pausedLogRequests)
   await drawer.getByRole('button', { name: 'Close' }).click()
+  await page.waitForTimeout(100)
+  const checkoutRequestsAfterClose = serviceLogRequests
+  await services.filter({ hasText: 'inventory' }).getByRole('button', { name: 'INSPECT' }).click()
+  const inventoryDrawer = page.getByRole('dialog', { name: 'inventory service' })
+  await inventoryDrawer.getByRole('button', { name: 'logs' }).click()
+  await expect(inventoryDrawer.getByLabel('inventory logs')).toBeVisible()
+  await page.waitForTimeout(1_100)
+  expect(serviceLogRequests).toBe(checkoutRequestsAfterClose)
+  await inventoryDrawer.getByRole('button', { name: 'Close' }).click()
 })
 
 test('starts a Portless-owned debugger and returns the service to normal mode', async ({ page }) => {
@@ -985,12 +999,8 @@ test('renders database transactions as aggregate waterfall spans with command de
   await filter.fill(marker)
   const row = page.locator('button.trace-row').filter({ hasText: marker }).first()
   await expect(row).toBeVisible()
-
-  const tcpRoots = page.getByRole('button', { name: 'SHOW TCP ROOTS' })
-  await expect(tcpRoots).toHaveAttribute('aria-pressed', 'false')
-  await tcpRoots.click()
-  await expect(tcpRoots).toHaveAttribute('aria-pressed', 'true')
-  await tcpRoots.click()
+  await expect(page.getByRole('button', { name: 'SHOW TCP ROOTS' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'SHOW BACKGROUND' })).toHaveCount(0)
 
   const syntheticExchanges = new Map<number, Record<string, unknown>>()
   const selectRows = Array.from({ length: 12 }, (_, index) => ({
@@ -1129,12 +1139,6 @@ test('renders database transactions as aggregate waterfall spans with command de
   await expect(transactionNavigation.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true')
   await expect(transactionNavigation.locator('output')).toHaveAttribute('aria-label', 'Current span is outside HTTP navigation; 1 HTTP span available')
   await detail.getByRole('button', { name: 'Close traffic details' }).click()
-
-  await page.getByRole('button', { name: 'SHOW BACKGROUND' }).click()
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · QUERY/ })).toBeVisible()
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · BEGIN/ })).toHaveCount(0)
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · UPDATE/ })).toHaveCount(0)
-  await expect(waterfall.getByRole('button', { name: /POSTGRESQL · COMMIT/ })).toHaveCount(0)
 
   await standaloneOperation.click()
   detail = page.getByRole('dialog', { name: /Traffic request and response/ })

@@ -10,7 +10,7 @@ import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './ex
 import { TrafficPanel } from './traffic'
 import { MocksPanel } from './mocks'
 import { ConfigureCheckoutModal, RemoveCheckoutModal } from './SourceModals'
-import { ServiceLogs } from './ServiceLogs'
+import { ServiceLogs } from '../components/logs/ServiceLogs'
 
 type Tab = 'overview' | 'topology' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'bindings' | 'timeline'
 type SourcePathMutation = { environment: Environment; warnings: string[] }

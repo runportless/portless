@@ -40,7 +40,7 @@ describe('trace waterfall', () => {
     expect(markup).toContain('correlation-badge--inferred')
   })
 
-  it('hides background spans and represents one database transaction as a single aggregate span', () => {
+  it('hides successful background spans and represents one database transaction as a single aggregate span', () => {
     const startedAt = '2026-08-25T12:00:00Z'
     const tcpExchange = (sequence: number, operation: string, background = false): TrafficExchange => ({
       project: 'store', environment: 'local', sequence, protocol: 'tcp', source: 'inventory', target: 'inventory-postgres', background,
@@ -82,15 +82,24 @@ describe('trace waterfall', () => {
     expect(markup).not.toContain('POSTGRESQL · BEGIN')
     expect(markup).not.toContain('POSTGRESQL · UPDATE')
     expect(markup).not.toContain('POSTGRESQL · COMMIT')
+  })
 
-    const backgroundNavigation = traceNavigationItems(trace, true)
-    expect(backgroundNavigation.map((item) => item.key)).toEqual(['exchange:2', 'transaction:1', 'exchange:7'])
+  it('keeps a failed background span visible', () => {
+    const startedAt = '2026-08-25T12:00:00Z'
+    const exchange = {
+      project: 'store', environment: 'local', sequence: 2, protocol: 'tcp', source: 'inventory', target: 'inventory-postgres', background: true,
+      startedAt, completedAt: startedAt, durationMs: 2, requestBytes: 6, responseBytes: 0, error: 'connection closed',
+      tcp: { kind: 'operation', applicationProtocol: 'postgresql', operation: 'QUERY', inspection: 'decoded', outcome: 'error' },
+    } as TrafficExchange
+    const trace = {
+      project: 'store', environment: 'local', number: 1, lastSequence: 2, protocol: 'http',
+      startedAt, completedAt: startedAt, durationMs: 2, source: 'external', target: 'inventory',
+      error: true, faulted: false, background: false, provisional: false, spanCount: 1, correlation: 'inferred',
+      spans: [{ exchange, depth: 1, startOffsetMs: 0, correlation: 'inferred' }],
+    } as TrafficTrace
 
-    const backgroundMarkup = renderToStaticMarkup(<TraceWaterfall trace={trace} includeBackground {...waterfallProps} />)
-    expect(backgroundMarkup).toContain('POSTGRESQL · QUERY')
-    expect(backgroundMarkup).not.toContain('POSTGRESQL · BEGIN')
-    expect(backgroundMarkup).not.toContain('POSTGRESQL · UPDATE')
-    expect(backgroundMarkup).not.toContain('POSTGRESQL · COMMIT')
+    expect(traceNavigationItems(trace).map((item) => item.key)).toEqual(['exchange:2'])
+    expect(renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} />)).toContain('POSTGRESQL · QUERY')
   })
 
   it('does not promote transaction boundaries to commands when no application SQL ran', () => {

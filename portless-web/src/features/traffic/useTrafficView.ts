@@ -22,13 +22,10 @@ export function useTrafficViewState() {
   const [edgeFilter, setEdgeFilter] = useState(() => new URLSearchParams(location.search).get('edge') || '')
   const [resultFilter, setResultFilter] = useState<TrafficResultFilter>('all')
   const [protocol, setProtocol] = useState<TrafficProtocolFilter>(requestedTrafficProtocol)
-  const [includeTCPRoots, setIncludeTCPRoots] = useState(false)
-  const [includeBackground, setIncludeBackground] = useState(false)
   const [tracePage, setTracePage] = useState(0)
   const [exchangePage, setExchangePage] = useState(0)
 
   useEffect(() => { setTracePage(0); setExchangePage(0) }, [search, resultFilter, edgeFilter])
-  useEffect(() => { setTracePage(0) }, [includeBackground, includeTCPRoots])
   useEffect(() => { setExchangePage(0) }, [protocol])
 
   const resetPages = useCallback(() => { setTracePage(0); setExchangePage(0) }, [])
@@ -45,10 +42,6 @@ export function useTrafficViewState() {
     setResultFilter,
     protocol,
     setProtocol,
-    includeTCPRoots,
-    setIncludeTCPRoots,
-    includeBackground,
-    setIncludeBackground,
     tracePage,
     setTracePage,
     exchangePage,
@@ -62,7 +55,7 @@ function exchangeHasEdge(exchange: TrafficExchange, edge: string) {
   return !edge || `${exchange.source}:${exchange.target}` === edge
 }
 
-export function useTrafficViewModel({ traces, exchanges, mode, search, edgeFilter, resultFilter, protocol, includeTCPRoots, includeBackground, tracePage, exchangePage }: {
+export function useTrafficViewModel({ traces, exchanges, mode, search, edgeFilter, resultFilter, protocol, tracePage, exchangePage }: {
   traces: TrafficTrace[]
   exchanges: TrafficExchange[]
   mode: TrafficMode
@@ -70,13 +63,11 @@ export function useTrafficViewModel({ traces, exchanges, mode, search, edgeFilte
   edgeFilter: string
   resultFilter: TrafficResultFilter
   protocol: TrafficProtocolFilter
-  includeTCPRoots: boolean
-  includeBackground: boolean
   tracePage: number
   exchangePage: number
 }) {
-  const windowSummary = useMemo(() => trafficWindowSummary(mode === 'traces' && !includeBackground ? exchanges.filter((exchange) => !exchange.background) : exchanges), [exchanges, includeBackground, mode])
-  const visibleTraces = useMemo(() => filterTraces(traces, search, resultFilter, includeBackground, includeTCPRoots), [traces, search, resultFilter, includeBackground, includeTCPRoots])
+  const windowSummary = useMemo(() => trafficWindowSummary(mode === 'traces' ? exchanges.filter((exchange) => !exchange.background) : exchanges), [exchanges, mode])
+  const visibleTraces = useMemo(() => filterTraces(traces, search, resultFilter), [traces, search, resultFilter])
   const visibleExchanges = useMemo(() => filterExchanges(exchanges.filter((exchange) => exchangeHasEdge(exchange, edgeFilter)), search, resultFilter, protocol), [exchanges, edgeFilter, search, resultFilter, protocol])
   const tracePagination = useMemo(() => paginateItems(visibleTraces, tracePage, trafficPageSize), [visibleTraces, tracePage])
   const exchangePagination = useMemo(() => paginateItems(visibleExchanges, exchangePage, trafficPageSize), [visibleExchanges, exchangePage])

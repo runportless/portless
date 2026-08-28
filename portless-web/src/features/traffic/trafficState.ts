@@ -44,12 +44,11 @@ export function filterExchanges(exchanges: TrafficExchange[], search: string, re
   })
 }
 
-export function filterTraces(traces: TrafficTrace[], search: string, result: TrafficResultFilter, includeBackground: boolean, includeTCPRoots = false) {
+export function filterTraces(traces: TrafficTrace[], search: string, result: TrafficResultFilter) {
   const query = search.trim().toLowerCase()
   return traces.filter((trace) => {
     if (trace.provisional) return false
-    if (trace.protocol === 'tcp' && !includeTCPRoots) return false
-    if (trace.background && !includeBackground) return false
+    if (trace.protocol === 'tcp' || trace.background) return false
     if (!matchesResult(trace.error, trace.status, trace.durationMs, trace.faulted ? 'faulted' : '', result)) return false
     if (!query) return true
     return `${trace.method || ''} ${trace.requestTarget || ''} ${trace.source} ${trace.target} ${trace.source}:${trace.target} ${trace.status || ''} ${trace.correlation}`.toLowerCase().includes(query)
