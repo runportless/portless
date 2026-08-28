@@ -34,12 +34,13 @@ export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, 
   const decodedTCP = !transaction && !http && detailExchange.tcp?.kind === 'operation'
   const semanticTCP = Boolean(transaction || decodedTCP)
   const tcpCommandExchanges = transaction ? transactionCommands : decodedTCP ? [detailExchange] : []
+  const defaultView = defaultTrafficDetailView(detailExchange)
   const [maximized, setMaximized] = useState(false)
-  const [view, setView] = useState<TrafficDetailView>(() => defaultTrafficDetailView(detailExchange))
+  const [view, setView] = useState<TrafficDetailView>(() => defaultView)
 
   useEffect(() => {
-    setView((current) => current === 'compare' && (http || semanticTCP) ? current : defaultTrafficDetailView(detailExchange))
-  }, [detailExchange.project, detailExchange.environment, detailExchange.sequence, http, semanticTCP, traceNavigationItem?.key])
+    setView((current) => current === 'compare' && (http || semanticTCP) ? current : defaultView)
+  }, [defaultView, detailExchange.project, detailExchange.environment, detailExchange.sequence, http, semanticTCP, traceNavigationItem?.key])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {

@@ -109,11 +109,13 @@ export function HttpTrafficDetail({ exchange, maximized, view, onView }: {
 }) {
   const [requestView, setRequestView] = useState<TrafficPayloadView>(() => defaultTrafficPayloadView(exchange, 'request'))
   const [responseView, setResponseView] = useState<TrafficPayloadView>(() => defaultTrafficPayloadView(exchange, 'response'))
+  const defaultRequestView = defaultTrafficPayloadView(exchange, 'request')
+  const defaultResponseView = defaultTrafficPayloadView(exchange, 'response')
 
   useEffect(() => {
-    setRequestView(defaultTrafficPayloadView(exchange, 'request'))
-    setResponseView(defaultTrafficPayloadView(exchange, 'response'))
-  }, [exchange.project, exchange.environment, exchange.sequence])
+    setRequestView(defaultRequestView)
+    setResponseView(defaultResponseView)
+  }, [defaultRequestView, defaultResponseView, exchange.project, exchange.environment, exchange.sequence])
 
   return <>
     <nav className="traffic-detail__tabs" role="tablist" aria-label="Exchange payload">

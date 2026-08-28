@@ -130,6 +130,56 @@ func TestEnsureUsesCoordinatedRestartForOutdatedDaemon(t *testing.T) {
 	}
 }
 
+func TestEnsureWaitsWhenAutomaticReplacementClosesTheHandoffProbe(t *testing.T) {
+	paths, oldIdentity, oldRecord, currentBuildID := restartFixture(t)
+	oldIdentity.BuildID = "outdated-build"
+	oldRecord.BuildID = oldIdentity.BuildID
+	if err := daemonidentity.Write(paths, oldRecord); err != nil {
+		t.Fatal(err)
+	}
+	newIdentity := oldIdentity
+	newIdentity.InstanceID = "automatic-replacement-instance"
+	newIdentity.BuildID = currentBuildID
+	newIdentity.PID++
+	newIdentity.StartedAt = oldIdentity.StartedAt.Add(time.Second)
+	newRecord := oldRecord
+	newRecord.InstanceID = newIdentity.InstanceID
+	newRecord.BuildID = newIdentity.BuildID
+	newRecord.PID = newIdentity.PID
+	newRecord.StartedAt = newIdentity.StartedAt
+	currentIdentity := oldIdentity
+	restartRequests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == lifecycle.IdentityPath:
+			return jsonHTTPResponse(http.StatusOK, currentIdentity), nil
+		case request.Method == http.MethodGet && request.URL.Path == lifecycle.HandoffPath:
+			currentIdentity = newIdentity
+			if err := daemonidentity.Write(paths, newRecord); err != nil {
+				t.Fatal(err)
+			}
+			return nil, io.EOF
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/daemon/restart":
+			restartRequests++
+			return nil, io.EOF
+		default:
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+			return nil, nil
+		}
+	})
+	manager := NewWithHooks(paths, Hooks{HTTPClient: func(time.Duration) *http.Client {
+		return &http.Client{Transport: transport}
+	}})
+
+	record, err := manager.Ensure(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InstanceID != newIdentity.InstanceID || restartRequests != 1 {
+		t.Fatalf("ensure result=%#v restartRequests=%d", record, restartRequests)
+	}
+}
+
 func TestRestartDaemonFailsAtSharedReadinessDeadline(t *testing.T) {
 	paths, oldIdentity, _, currentBuildID := restartFixture(t)
 	now := time.Now()

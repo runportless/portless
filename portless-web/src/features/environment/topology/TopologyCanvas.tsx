@@ -4,7 +4,7 @@ import { StatusMark } from '../../../components/Status'
 import type { Environment } from '../../../api/contracts/environments'
 import type { FaultRule } from '../../../api/contracts/experiments'
 import type { Service } from '../../../api/contracts/topology'
-import type { TrafficExchange, TrafficExchangeList } from '../../../api/contracts/traffic'
+import type { TrafficExchangeList } from '../../../api/contracts/traffic'
 import { publicEndpoint } from '../service/servicePresentation'
 import {
   buildTopology,
@@ -41,6 +41,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
   const [isPanning, setIsPanning] = useState(false)
   const [edgeMetrics, setEdgeMetrics] = useState<Map<string, TopologyEdgeMetric>>(new Map())
   const [now, setNow] = useState(Date.now())
+  const environmentIdentity = useMemo(() => ({ project: environment.project, name: environment.name }), [environment.project, environment.name])
   const { levels, edges } = buildTopology(environment)
   const rowGap = 48
   const nodeWidth = 164
@@ -61,18 +62,18 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
 
   useEffect(() => {
     let active = true
-    api<TrafficExchangeList>(environmentPath(environment, '/traffic/exchanges?protocol=all&limit=1000')).then((result) => {
+    api<TrafficExchangeList>(environmentPath(environmentIdentity, '/traffic/exchanges?protocol=all&limit=1000')).then((result) => {
       if (active) setEdgeMetrics(summarizeTopologyTraffic(result.exchanges))
     }).catch(() => undefined)
     return () => { active = false }
-  }, [environment.project, environment.name])
+  }, [environmentIdentity])
 
   useEffect(() => {
     if (paused) return
-    return connectEvents(environment, ['traffic.exchange', 'traffic.tcp.activity'], (type, value) => {
+    return connectEvents(environmentIdentity, ['traffic.exchange', 'traffic.tcp.activity'], (type, value) => {
       if (type.startsWith('traffic.')) setEdgeMetrics((metrics) => mergeTopologySignal(metrics, value as TopologySignal))
     })
-  }, [environment.project, environment.name, paused])
+  }, [environmentIdentity, paused])
 
   useEffect(() => {
     if (paused) return

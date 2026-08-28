@@ -62,11 +62,10 @@ func (m *Manager) Set(scope, service string, profile model.MockProfile) (int, er
 	created.server = &http.Server{Handler: http.HandlerFunc(created.serveHTTP), ReadHeaderTimeout: 5 * time.Second}
 	m.runtimes[key] = created
 	go func() {
-		if serveErr := created.server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			// The control plane detects an unavailable listener through its normal
-			// proxy and recovery checks. Runtime goroutines intentionally do not
-			// mutate durable state.
-		}
+		// The control plane detects an unavailable listener through its normal
+		// proxy and recovery checks. Runtime goroutines intentionally do not
+		// mutate durable state.
+		_ = created.server.Serve(listener)
 	}()
 	return listenerPort(listener), nil
 }

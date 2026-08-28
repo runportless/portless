@@ -287,16 +287,6 @@ func printProtocolMessages(output io.Writer, label string, messages []model.Traf
 	}
 }
 
-func matchesTraffic(event model.TrafficExchange, selector string) bool {
-	if selector == "" {
-		return true
-	}
-	if source, target, found := strings.Cut(selector, ":"); found {
-		return event.Source == source && event.Target == target
-	}
-	return event.Source == selector || event.Target == selector
-}
-
 func recordingName(ctx context.Context, client *apiclient.Client, project, environment string, arguments []string) (string, error) {
 	if len(arguments) == 1 {
 		return arguments[0], nil

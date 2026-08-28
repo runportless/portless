@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/runportless/portless/portless-cli/command"
 	apiclient "github.com/runportless/portless/portless-daemon/api/client"
@@ -277,29 +276,4 @@ func (c *Commands) open(ctx context.Context, requestedService string) error {
 		fmt.Fprintln(c.Out, "Portless control plane:", c.Accent(c.Out, browserURL))
 	}
 	return launchErr
-}
-
-func (c *Commands) waitOperation(ctx context.Context, client *apiclient.Client, operation model.Operation, jsonOutput bool) (model.Operation, error) {
-	seen := 0
-	for {
-		current, err := client.Operation(ctx, operation.Project, operation.Environment, operation.Number)
-		if err != nil {
-			return model.Operation{}, err
-		}
-		operation = current
-		for _, event := range operation.Events[seen:] {
-			if !jsonOutput {
-				fmt.Fprintf(c.Out, "  %-12s %s\n", event.Subject, event.Message)
-			}
-		}
-		seen = len(operation.Events)
-		if operation.State != "running" {
-			return operation, nil
-		}
-		select {
-		case <-ctx.Done():
-			return model.Operation{}, ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
 }

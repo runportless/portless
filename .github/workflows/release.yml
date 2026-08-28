@@ -16,6 +16,7 @@ jobs:
   release:
     name: Build and stage GitHub release
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: write
       id-token: write
@@ -100,6 +101,7 @@ jobs:
     name: Approve and publish GitHub release
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     permissions:
       contents: write
@@ -113,6 +115,7 @@ jobs:
     name: Propose Homebrew tap update
     needs: publish
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: homebrew
     permissions:
       contents: read
@@ -158,9 +161,11 @@ jobs:
             echo "could not resolve exactly one SHA-256 checksum for $archive" >&2
             exit 1
           fi
-          echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "source_sha256=$source_sha256" >>"$GITHUB_OUTPUT"
-          echo "branch=portless-v$version" >>"$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "source_sha256=$source_sha256"
+            echo "branch=portless-v$version"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Prepare tap branch
         env:

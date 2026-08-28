@@ -10,10 +10,6 @@ import (
 	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
-type listInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"maximum number of results to return"`
-}
-
 type environmentInput struct {
 	Environment string `json:"environment" jsonschema:"target environment in project/environment form"`
 }

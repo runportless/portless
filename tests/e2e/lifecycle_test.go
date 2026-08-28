@@ -593,6 +593,28 @@ func cleanupInstallation(t *testing.T, binary, home, directory string) {
 	if output, err := runCLIAt(binary, home, directory, "daemon", "stop", "--force"); err != nil && !strings.Contains(output, "not running") {
 		t.Logf("E2E daemon cleanup: %v\n%s", err, output)
 	}
+	preserveFailedDaemonLog(t, home)
+}
+
+func preserveFailedDaemonLog(t *testing.T, home string) {
+	t.Helper()
+	artifactDirectory := strings.TrimSpace(os.Getenv("PORTLESS_E2E_ARTIFACT_DIR"))
+	if artifactDirectory == "" || !t.Failed() {
+		return
+	}
+	content, err := os.ReadFile(filepath.Join(home, "daemon.log"))
+	if err != nil {
+		t.Logf("preserve E2E daemon log: %v", err)
+		return
+	}
+	if err := os.MkdirAll(artifactDirectory, 0o755); err != nil {
+		t.Logf("create E2E artifact directory: %v", err)
+		return
+	}
+	name := strings.NewReplacer("/", "-", "\\", "-", " ", "-").Replace(t.Name()) + "-daemon.log"
+	if err := os.WriteFile(filepath.Join(artifactDirectory, name), content, 0o600); err != nil {
+		t.Logf("write E2E daemon log artifact: %v", err)
+	}
 }
 
 func applicationRequest(t *testing.T, home, host, path string, headers map[string]string) *http.Response {

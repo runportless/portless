@@ -348,3 +348,10 @@ make e2e-binary
 PORTLESS_E2E_BINARY="$PWD/bin/portless-e2e" \
   go test -count=1 -tags=e2e ./tests/e2e -run TestCLIZeroConfigurationLifecycle -v
 ```
+
+The CI workflow runs the CLI and Playwright suites in independent jobs with
+bounded step and job timeouts. Failed runs retain the complete command log and
+isolated daemon log for seven days; browser failures also retain the Playwright
+HTML report, trace, screenshot, video, and error context. Set
+`PORTLESS_E2E_ARTIFACT_DIR` locally to preserve the same daemon-log diagnostics
+outside the temporary test installation.

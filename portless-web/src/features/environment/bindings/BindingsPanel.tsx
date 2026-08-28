@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, environmentPath, jsonBody } from '../../../api'
 import { actionError, type ActionErrorDetails } from '../../../components/ActionError'
 import type { Environment, EnvironmentMutation, SourceBinding } from '../../../api/contracts/environments'
@@ -23,10 +23,11 @@ export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
   const [checkoutMutationBusy, setCheckoutMutationBusy] = useState(false)
   const [checkoutMutationError, setCheckoutMutationError] = useState<ActionErrorDetails | null>(null)
   const [checkoutNotice, setCheckoutNotice] = useState('')
+  const environmentIdentity = useMemo(() => ({ project: environment.project, name: environment.name }), [environment.project, environment.name])
 
   useEffect(() => {
-    api<MockProfileList>(environmentPath(environment, '/mocks')).then((result) => setMockProfiles(result.mocks)).catch(() => setMockProfiles([]))
-  }, [environment.project, environment.name])
+    api<MockProfileList>(environmentPath(environmentIdentity, '/mocks')).then((result) => setMockProfiles(result.mocks)).catch(() => setMockProfiles([]))
+  }, [environmentIdentity])
 
   const openCheckoutEdit = (item: EnvironmentCheckoutRow) => {
     setCheckoutMutationError(null)

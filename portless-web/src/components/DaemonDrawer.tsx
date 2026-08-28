@@ -52,9 +52,10 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
   const effectiveState = restarting ? 'restarting' : phase === 'reconnected' ? 'ready' : live ? status?.state ?? 'unknown' : 'unreachable'
 
   useEffect(() => () => { mounted.current = false }, [])
+  const hasStatus = status !== null
   const activeKey = status?.activeEnvironments.join('\u0000') ?? ''
   useEffect(() => {
-    if (!status || !live) {
+    if (!hasStatus || !live) {
       setHandoff(null)
       setHandoffPhase('idle')
       return
@@ -73,7 +74,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
       setHandoffPhase('failed')
     })
     return () => { current = false }
-  }, [activeKey, live, onVerifyHandoff, status?.instanceId])
+  }, [activeKey, hasStatus, live, onVerifyHandoff, status?.instanceId])
   useEffect(() => {
     if (diagnostics?.storage) setStoragePhase('ready')
   }, [diagnostics?.storage])

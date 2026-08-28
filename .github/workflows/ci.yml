@@ -14,14 +14,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux:
-    name: Linux tests and release snapshot
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          fetch-depth: 0
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: portless-web/package-lock.json
+
+      - name: Run static analysis
+        run: make lint
+
+  coverage:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -52,13 +75,125 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Run isolated CLI end-to-end tests
-        run: make test-e2e-cli
-
       - name: Check generated assets and whitespace
         run: |
           git diff --check
           git diff --exit-code -- portless-web/dist
+
+  cli-e2e:
+    name: CLI end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: portless-web/package-lock.json
+
+      - name: Run isolated CLI end-to-end tests
+        timeout-minutes: 20
+        env:
+          PORTLESS_E2E_ARTIFACT_DIR: ${{ runner.temp }}/portless-cli-e2e
+        run: |
+          mkdir -p "$PORTLESS_E2E_ARTIFACT_DIR"
+          set -o pipefail
+          make test-e2e-cli 2>&1 | tee "$PORTLESS_E2E_ARTIFACT_DIR/test.log"
+
+      - name: Upload CLI failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-e2e-failure
+          path: ${{ runner.temp }}/portless-cli-e2e
+          if-no-files-found: warn
+          retention-days: 7
+
+  ui-e2e:
+    name: Browser end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: portless-web/package-lock.json
+
+      - name: Install locked web dependencies
+        run: make reinstall-web-dependencies
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 10
+        env:
+          PORTLESS_E2E_ARTIFACT_DIR: ${{ runner.temp }}/portless-ui-e2e
+        run: |
+          mkdir -p "$PORTLESS_E2E_ARTIFACT_DIR"
+          set -o pipefail
+          npm --prefix portless-web exec -- playwright install --with-deps chromium 2>&1 | tee "$PORTLESS_E2E_ARTIFACT_DIR/browser-install.log"
+
+      - name: Run isolated browser end-to-end tests
+        timeout-minutes: 20
+        env:
+          PORTLESS_E2E_ARTIFACT_DIR: ${{ runner.temp }}/portless-ui-e2e
+        run: |
+          set -o pipefail
+          make test-e2e-ui 2>&1 | tee "$PORTLESS_E2E_ARTIFACT_DIR/test.log"
+
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-e2e-failure
+          path: |
+            ${{ runner.temp }}/portless-ui-e2e
+            portless-web/test-results
+            portless-web/playwright-report
+          if-no-files-found: warn
+          retention-days: 7
+
+  release-snapshot:
+    name: Release snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: portless-web/package-lock.json
 
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -80,6 +215,7 @@ jobs:
   macos:
     name: macOS tests and Homebrew formula
     runs-on: macos-latest
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

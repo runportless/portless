@@ -341,10 +341,3 @@ func mustRecordings(recordings []model.Recording, err error) []model.Recording {
 	}
 	return recordings
 }
-
-func mustLogPath(path string, err error) string {
-	if err != nil {
-		return ""
-	}
-	return path
-}

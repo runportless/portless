@@ -213,6 +213,7 @@ The root Makefile is the supported build interface:
 
 ```bash
 make                 # install locked web dependencies as needed, build web, build bin/portless
+make lint            # Go, React/TypeScript, shell, and GitHub Actions static analysis
 make test            # web typecheck/unit/build, then all Go tests
 make coverage        # full non-destructive validation plus local coverage reports
 make test-go         # all Go tests only
@@ -235,8 +236,8 @@ npm --prefix portless-web test
 ```
 
 Before handing off a normal implementation change, run the narrow tests while
-developing and then `make test`. Also run `git diff --check`. If a complete
-suite cannot run, state exactly what was skipped and why.
+developing and then `make lint` and `make test`. Also run `git diff --check`.
+If a complete suite cannot run, state exactly what was skipped and why.
 
 The ordinary E2E suites use isolated temporary Portless homes and compiled
 product binaries:

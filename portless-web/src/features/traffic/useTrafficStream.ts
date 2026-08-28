@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath } from '../../api'
 import { actionError, type ActionErrorDetails } from '../../components/ActionError'
 import type { Environment } from '../../api/contracts/environments'
@@ -24,6 +24,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
   const exchangeBuffer = useRef(new Map<number, TrafficExchange>())
   const traceBuffer = useRef(new Map<number, TrafficTrace>())
   const expandedRef = useRef<number | null>(null)
+  const environmentIdentity = useMemo(() => ({ project: environment.project, name: environment.name }), [environment.project, environment.name])
 
   const applyTrafficClear = useCallback((throughSequence: number) => {
     setExchanges((current) => current.filter((exchange) => exchange.sequence > throughSequence))
@@ -56,7 +57,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
       if (loading) return
       loading = true
       try {
-        const snapshot = await loadTrafficSnapshot(environment, edgeFilter)
+        const snapshot = await loadTrafficSnapshot(environmentIdentity, edgeFilter)
         if (!active) return
         setError((current) => current?.code === 'DAEMON_UNAVAILABLE' ? null : current)
         if (pausedRef.current) {
@@ -75,7 +76,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
     }
 
     void load()
-    const disconnect = connectEvents(environment, ['traffic.exchange', 'traffic.trace', 'traffic.cleared'], (type, value) => {
+    const disconnect = connectEvents(environmentIdentity, ['traffic.exchange', 'traffic.trace', 'traffic.cleared'], (type, value) => {
       if (type === 'traffic.cleared') {
         applyTrafficClear((value as TrafficClearResponse).throughSequence)
         return
@@ -92,7 +93,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
       const acceptTrace = async () => {
         let candidate = trace
         if (edgeFilter || expandedRef.current === trace.number) {
-          try { candidate = await api<TrafficTrace>(environmentPath(environment, `/traffic/traces/${trace.number}`)) } catch { /* Snapshot polling will reconcile an evicted trace. */ }
+          try { candidate = await api<TrafficTrace>(environmentPath(environmentIdentity, `/traffic/traces/${trace.number}`)) } catch { /* Snapshot polling will reconcile an evicted trace. */ }
         }
         if (!active || (edgeFilter && !traceHasEdge(candidate, edgeFilter))) return
         if (pausedRef.current) traceBuffer.current.set(candidate.number, candidate)
@@ -102,7 +103,7 @@ export function useTrafficStream(environment: Environment, edgeFilter: string, e
     })
     const timer = window.setInterval(() => void load(), 5000)
     return () => { active = false; disconnect(); window.clearInterval(timer) }
-  }, [applyTrafficClear, edgeFilter, environment.name, environment.project])
+  }, [applyTrafficClear, edgeFilter, environmentIdentity])
 
   const togglePaused = useCallback(() => {
     if (!pausedRef.current) {

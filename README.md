@@ -337,6 +337,7 @@ From the repository root:
 
 ```bash
 make
+make lint
 make test
 make coverage
 ```
@@ -344,6 +345,11 @@ make coverage
 `make` installs locked frontend dependencies when needed, builds the embedded
 React control plane, and writes `bin/portless`. `make test` type-checks and
 tests both web projects, builds their production assets, and runs all Go tests.
+`make lint` checks Go formatting and vet diagnostics, runs pinned Staticcheck
+and actionlint versions, lints the React/TypeScript sources with Oxlint and
+React Hooks rules, and checks repository shell scripts with ShellCheck.
+ShellCheck must be installed locally; the remaining lint tools are installed
+from their locked project or Makefile versions.
 `make coverage` runs the same non-destructive validation while writing a
 summary, raw profiles, and browsable HTML reports under `coverage/`. CI adds
 the summary to the workflow run and retains the complete report as an artifact.
@@ -356,6 +362,9 @@ Portless homes:
 make install-e2e-browser
 make test-e2e
 ```
+
+CI runs the CLI and Chromium suites as separate required jobs so a failure is
+attributed to the owning boundary without delaying the unit and release lanes.
 
 Read the [E2E testing guide](docs/e2e-testing.md) before changing or running
 those suites. Machine-level relay suites are intentionally excluded from this

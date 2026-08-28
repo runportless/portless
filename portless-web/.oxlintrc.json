@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "oxc", "react"],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    "react/set-state-in-effect": "off",
+    "react/refs": "off",
+    "react/purity": "off"
+  },
+  "options": {
+    "denyWarnings": true,
+    "respectEslintDisableDirectives": true,
+    "reportUnusedDisableDirectives": "error"
+  }
+}

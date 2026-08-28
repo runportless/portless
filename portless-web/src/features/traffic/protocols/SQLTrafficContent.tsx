@@ -10,7 +10,7 @@ const sqlKeywords = new Set([
   'UPDATE', 'USING', 'VALUES', 'VIEW', 'WHEN', 'WHERE', 'WINDOW', 'WITH',
 ])
 
-const sqlTokenPattern = /(--[^\n]*)|(\/\*[\s\S]*?\*\/)|('(?:''|\\.|[^'])*')|("(?:""|[^\"])*")|(\$\d+\b)|(-?(?:\d+(?:\.\d+)?|\.\d+)\b)|(\b[A-Za-z_][A-Za-z0-9_$]*\b)/g
+const sqlTokenPattern = /(--[^\n]*)|(\/\*[\s\S]*?\*\/)|('(?:''|\\.|[^'])*')|("(?:""|[^"])*")|(\$\d+\b)|(-?(?:\d+(?:\.\d+)?|\.\d+)\b)|(\b[A-Za-z_][A-Za-z0-9_$]*\b)/g
 
 function highlightedSQL(value: string) {
   const nodes: ReactNode[] = []

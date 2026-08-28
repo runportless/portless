@@ -88,7 +88,7 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 	if err != nil {
 		return model.Project{}, model.Environment{}, warnings, err
 	}
-	project, err := s.database.CreateProject(ctx, name, definition, projectSources)
+	_, err = s.database.CreateProject(ctx, name, definition, projectSources)
 	if errors.Is(err, database.ErrNameTaken) {
 		return model.Project{}, model.Environment{}, warnings, NameConflictError{Name: name, Suggestions: projectNameSuggestions(name, sources[0].Path)}
 	}
@@ -107,7 +107,7 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 	}
 	scope := model.EnvironmentSelector(name, "local")
 	_, _ = s.timeline(ctx, scope, "CLI", "environment.discovered", scope, "info", "Discovered local environment", map[string]any{"sources": len(sources)})
-	project, _ = s.database.Project(ctx, name)
+	project, _ := s.database.Project(ctx, name)
 	return s.decorateProject(project), s.decorateEnvironment(environment), warnings, nil
 }
 

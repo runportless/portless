@@ -24,6 +24,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       PUBLIC_EARLY_ACCESS_URL: ${{ vars.PORTLESS_EARLY_ACCESS_URL }}
       PUBLIC_GITHUB_URL: ${{ vars.PORTLESS_GITHUB_URL }}
@@ -67,6 +68,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

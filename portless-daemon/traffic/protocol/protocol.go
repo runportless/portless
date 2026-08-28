@@ -15,7 +15,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
-var inspectionLimitError = errors.New("protocol inspection limit reached")
+var errInspectionLimit = errors.New("protocol inspection limit reached")
 
 const (
 	// LivePayloadLimit is the retained byte limit for each operation direction
@@ -85,16 +85,16 @@ func (p CapturePolicy) CaptureLimit() int {
 
 // LimitError marks a decoder failure as a bounded-inspection limit rather than malformed input.
 func LimitError(reason string) error {
-	return fmt.Errorf("%w: %s", inspectionLimitError, reason)
+	return fmt.Errorf("%w: %s", errInspectionLimit, reason)
 }
 
 // StateForError maps decoder errors to their public inspection classification.
 func StateForError(err error) State {
 	inspection := model.TrafficInspectionMalformed
 	reason := err.Error()
-	if errors.Is(err, inspectionLimitError) {
+	if errors.Is(err, errInspectionLimit) {
 		inspection = model.TrafficInspectionLimited
-		reason = strings.TrimPrefix(reason, inspectionLimitError.Error()+": ")
+		reason = strings.TrimPrefix(reason, errInspectionLimit.Error()+": ")
 	}
 	return State{Inspection: inspection, Reason: reason}
 }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -26,6 +26,12 @@ export function runCLI(binary: string, home: string, checkout: string, args: str
 }
 
 export function stopInstallation(installation: Installation) {
+  const artifactDirectory = process.env.PORTLESS_E2E_ARTIFACT_DIR
+  const daemonLog = join(installation.home, 'daemon.log')
+  if (artifactDirectory && existsSync(daemonLog)) {
+    mkdirSync(artifactDirectory, { recursive: true })
+    cpSync(daemonLog, join(artifactDirectory, 'daemon.log'))
+  }
   runCLI(installation.binary, installation.home, installation.checkout, ['reset', '--force', '--yes'], true)
   runCLI(installation.binary, installation.home, installation.checkout, ['daemon', 'stop', '--force'], true)
   rmSync(installation.root, { recursive: true, force: true })

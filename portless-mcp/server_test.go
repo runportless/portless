@@ -281,6 +281,7 @@ func TestServeNegotiatesOverInjectedStdioAndStopsOnEOF(t *testing.T) {
 	if initialized.ServerInfo == nil || initialized.ServerInfo.Name != "portless" || initialized.ServerInfo.Version != "test-version" {
 		t.Fatalf("server info = %#v", initialized.ServerInfo)
 	}
+	//lint:ignore SA1019 The test keeps the deprecated SDK field from being advertised during the SDK transition.
 	if initialized.Capabilities.Resources != nil || initialized.Capabilities.Prompts != nil || initialized.Capabilities.Logging != nil {
 		t.Fatalf("unexpected advertised capabilities: %#v", initialized.Capabilities)
 	}

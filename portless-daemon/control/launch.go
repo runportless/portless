@@ -127,7 +127,11 @@ func (m *Manager) keepCompatibleDaemon(ctx context.Context, inspection Inspectio
 		return false
 	}
 	handoff, err := m.verifyDaemonHandoff(ctx, inspection)
-	return err != nil || handoff.State != lifecycle.HandoffReady
+	// A failed probe can mean the executable watcher already began a safe
+	// replacement and closed the old listener. Route that race through the
+	// guarded restart path, which waits for the authenticated replacement and
+	// still refuses a daemon whose own handoff audit is blocked.
+	return err == nil && handoff.State != lifecycle.HandoffReady
 }
 
 func startDaemonProcess(paths installation.Layout) error {

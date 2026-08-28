@@ -21,7 +21,6 @@ export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusR
   onEscape?: () => void
 }) {
   const overlayID = useRef(Symbol('overlay'))
-  const initialFocus = useRef<HTMLElement | null>(null)
   const dismissBlockedRef = useRef(dismissBlocked)
   const onDismissRef = useRef(onDismiss)
   const onEscapeRef = useRef(onEscape)
@@ -36,7 +35,8 @@ export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusR
     const view = document.defaultView
     if (!view) return
     const id = overlayID.current
-    initialFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const restoreFocus = restoreFocusRef?.current
     overlayStack.push({ id, document })
     const unlockScroll = lockOverlayScroll(document)
     const focusFrame = view.requestAnimationFrame(() => focusOverlay(container, initialFocusRef?.current))
@@ -65,7 +65,7 @@ export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusR
       const index = overlayStack.findIndex((registration) => registration.id === id)
       if (index >= 0) overlayStack.splice(index, 1)
       unlockScroll()
-      restoreOverlayFocus(restoreFocusRef?.current || initialFocus.current, view)
+      restoreOverlayFocus(restoreFocus || previouslyFocused, view)
     }
   }, [containerRef, initialFocusRef, restoreFocusRef])
 

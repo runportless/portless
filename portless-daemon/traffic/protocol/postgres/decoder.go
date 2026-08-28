@@ -141,7 +141,7 @@ func (d *Decoder) observeRequest(content []byte, observed time.Time) []protocol.
 	}
 	var completed []protocol.Operation
 	if d.startup {
-		for len(d.requestBuffer) >= 4 {
+		if len(d.requestBuffer) >= 4 {
 			length := int(binary.BigEndian.Uint32(d.requestBuffer[:4]))
 			if length < 8 {
 				d.fail(model.TrafficInspectionMalformed, "invalid PostgreSQL startup packet length")
@@ -167,7 +167,6 @@ func (d *Decoder) observeRequest(content []byte, observed time.Time) []protocol.
 			default:
 				d.startup = false
 			}
-			break
 		}
 	}
 	packets, err := parsePackets(&d.requestBuffer)

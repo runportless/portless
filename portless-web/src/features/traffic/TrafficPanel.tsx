@@ -22,6 +22,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   const [selectedTraceNavigationKey, setSelectedTraceNavigationKey] = useState<string | null>(null)
   const [expandedTrace, setExpandedTrace] = useState<number | null>(null)
   const selectionRequest = useRef(0)
+  const { resetPages, setExchangePage, setTracePage } = view
   const stream = useTrafficStream(environment, view.edgeFilter, expandedTrace)
   const traffic = useTrafficViewModel({
     traces: stream.traces,
@@ -47,8 +48,8 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   useEffect(() => {
     resetSelection()
     setExpandedTrace(null)
-    view.resetPages()
-  }, [environment.project, environment.name, resetSelection, view.edgeFilter, view.resetPages])
+    resetPages()
+  }, [environment.project, environment.name, resetPages, resetSelection, view.edgeFilter])
 
   useEffect(() => {
     const throughSequence = stream.lastClearedThroughSequence
@@ -60,16 +61,16 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     setTraceNavigationScoped(false)
     setSelectedTraceNavigationKey(null)
     setExpandedTrace((current) => current !== null && current <= throughSequence ? null : current)
-    view.resetPages()
-  }, [stream.lastClearedThroughSequence, view.resetPages])
+    resetPages()
+  }, [resetPages, stream.lastClearedThroughSequence])
 
   useEffect(() => {
-    if (view.tracePage !== traffic.tracePagination.page) view.setTracePage(traffic.tracePagination.page)
-  }, [traffic.tracePagination.page, view.tracePage])
+    if (view.tracePage !== traffic.tracePagination.page) setTracePage(traffic.tracePagination.page)
+  }, [setTracePage, traffic.tracePagination.page, view.tracePage])
 
   useEffect(() => {
-    if (view.exchangePage !== traffic.exchangePagination.page) view.setExchangePage(traffic.exchangePagination.page)
-  }, [traffic.exchangePagination.page, view.exchangePage])
+    if (view.exchangePage !== traffic.exchangePagination.page) setExchangePage(traffic.exchangePagination.page)
+  }, [setExchangePage, traffic.exchangePagination.page, view.exchangePage])
 
   const resolveTrace = async (exchange: TrafficExchange, hint?: TrafficTrace) => {
     for (const candidate of traceCandidatesForExchange(stream.traces, exchange, hint)) {

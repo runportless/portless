@@ -47,7 +47,7 @@ test('inspects captured request and response details in the exchange workbench',
   await expect(interventions).toHaveCSS('justify-content', 'flex-end')
   await expect(interventions.getByRole('listitem', { name: 'FAULT ui-fault' })).toHaveClass(/traffic-intervention-badge--fault/)
   await expect(interventions.getByRole('listitem', { name: 'RECORDING ui-recording' })).toHaveClass(/traffic-intervention-badge--recording/)
-  await expect(interventions.getByRole('listitem', { name: 'MOCK ui-mock \/ checkout' })).toHaveClass(/traffic-intervention-badge--mock/)
+  await expect(interventions.getByRole('listitem', { name: 'MOCK ui-mock / checkout' })).toHaveClass(/traffic-intervention-badge--mock/)
   const interventionBox = await interventions.boundingBox()
   const overviewDataBox = await overview.locator('.traffic-overview__context').boundingBox()
   const detailHeaderBox = await detailHeader.boundingBox()
@@ -257,4 +257,3 @@ test('resets trace navigation to the first span when changing scope', async ({ p
   await expect(httpScope).toHaveAttribute('aria-pressed', 'true')
   await expect(position).toHaveAttribute('aria-label', /Span 1 of \d+/)
 })
-

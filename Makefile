@@ -4,6 +4,11 @@ SHELL := /bin/bash
 GO ?= go
 NPM ?= npm
 GORELEASER ?= goreleaser
+SHELLCHECK ?= shellcheck
+STATICCHECK_VERSION ?= v0.8.1
+ACTIONLINT_VERSION ?= v1.7.12
+STATICCHECK := $(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+ACTIONLINT := $(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 BINARY ?= bin/portless
 E2E_BINARY ?= bin/portless-e2e
 RELAY_E2E_BINARY ?= bin/portless-relay-e2e
@@ -27,9 +32,10 @@ COVERAGE_DIR := coverage
 GO_COVERAGE_DIR := $(COVERAGE_DIR)/go
 WEB_COVERAGE_DIR := $(COVERAGE_DIR)/web
 SITE_COVERAGE_DIR := $(COVERAGE_DIR)/site
+SHELL_SCRIPTS := scripts/render-homebrew-formula.sh scripts/validate-release-version.sh examples/dispatch/bootstrap.sh
 
 # Declare command-style targets phony so matching files never suppress their recipes.
-.PHONY: build web site site-dev test test-go test-web test-site coverage coverage-clean coverage-go coverage-web coverage-site coverage-summary example-store-dependencies test-example-store example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-store test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
+.PHONY: build web site site-dev lint lint-go lint-web lint-shell lint-actions test test-go test-web test-site coverage coverage-clean coverage-go coverage-web coverage-site coverage-summary example-store-dependencies test-example-store example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-store test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
 
 # Build the web control plane and the Portless executable.
 build: web
@@ -55,6 +61,33 @@ site: $(SITE_DEPENDENCIES)
 # Start the marketing-site development server on the loopback interface.
 site-dev: $(SITE_DEPENDENCIES)
 	$(NPM) --prefix $(SITE_PROJECT) run dev -- --host 127.0.0.1
+
+# Run the complete static-analysis suite used by CI.
+lint: lint-go lint-web lint-shell lint-actions
+
+# Check Go formatting, compiler diagnostics, and higher-level static analysis.
+lint-go:
+	@unformatted="$$(gofmt -l $$(find . -type f -name '*.go' -not -path './.git/*' -not -path './vendor/*'))"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "Go files require gofmt:" >&2; \
+		echo "$$unformatted" >&2; \
+		exit 1; \
+	fi
+	$(GO) vet ./...
+	$(STATICCHECK) ./...
+
+# Lint the embedded React control plane, including TypeScript and React Hooks.
+lint-web: $(WEB_DEPENDENCIES)
+	$(NPM) --prefix $(WEB_PROJECT) run lint
+
+# Check repository-owned shell scripts. Install ShellCheck or override SHELLCHECK locally.
+lint-shell:
+	@command -v "$(SHELLCHECK)" >/dev/null 2>&1 || { echo "ShellCheck is required for make lint (https://www.shellcheck.net)." >&2; exit 1; }
+	"$(SHELLCHECK)" $(SHELL_SCRIPTS)
+
+# Validate GitHub Actions workflows and their embedded shell scripts.
+lint-actions:
+	$(ACTIONLINT)
 
 # Validate the web projects and run the complete Go test suite.
 test: test-web test-site

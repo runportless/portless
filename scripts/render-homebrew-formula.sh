@@ -11,7 +11,7 @@ source_sha256=$2
 commit=$3
 output=$4
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 "$script_directory/validate-release-version.sh" "$version"
 
 if ! printf '%s\n' "$source_sha256" | grep -Eq '^[[:xdigit:]]{64}$'; then
@@ -23,7 +23,7 @@ if ! printf '%s\n' "$commit" | grep -Eq '^[[:xdigit:]]{40}$'; then
   exit 2
 fi
 
-repository_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+repository_root=$(CDPATH='' cd -- "$script_directory/.." && pwd)
 template=$repository_root/packaging/homebrew/portless.rb.tmpl
 
 mkdir -p "$(dirname -- "$output")"

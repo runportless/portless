@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { applicationRequest, authenticate, environmentPath } from './helpers'
 
@@ -211,4 +210,3 @@ test('renders database transactions as aggregate waterfall spans with command de
   await expect(redisResult).toContainText('coffee-mug')
   await expect(redisResult).not.toContainText('\\"id\\"')
 })
-

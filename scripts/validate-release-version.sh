@@ -36,6 +36,8 @@ if [ "$has_prerelease" = true ]; then
 
   saved_ifs=$IFS
   IFS=.
+  # Split the validated prerelease into its dot-delimited identifiers.
+  # shellcheck disable=SC2086
   set -- $prerelease
   IFS=$saved_ifs
   for identifier in "$@"; do
