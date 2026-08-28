@@ -254,6 +254,43 @@ func TestRetiredRelayIdentifiersStayRemoved(t *testing.T) {
 	}
 }
 
+func TestRelayPrivilegedRuntimeInternalsStayPrivate(t *testing.T) {
+	root := repositoryRoot(t)
+	private := map[string]bool{
+		"Config": true, "Run": true, "ServeRelay": true, "ServeDNSStreamRelay": true, "ServeDNSPacketRelay": true,
+		"InstallPrivileged": true, "RestartPrivileged": true, "UninstallPrivileged": true, "PrivilegedCommand": true,
+		"PrepareRuntime": true, "CommandInstall": true, "CommandRestart": true, "CommandUninstall": true,
+	}
+	walkGoFiles(t, filepath.Join(root, "portless-relay"), func(path, _ string, parsed *ast.File) {
+		if strings.HasSuffix(path, "_test.go") {
+			return
+		}
+		for _, declaration := range parsed.Decls {
+			switch value := declaration.(type) {
+			case *ast.FuncDecl:
+				if private[value.Name.Name] {
+					t.Errorf("%s exports privileged relay implementation %s", relativePath(root, path), value.Name.Name)
+				}
+			case *ast.GenDecl:
+				for _, item := range value.Specs {
+					switch spec := item.(type) {
+					case *ast.TypeSpec:
+						if private[spec.Name.Name] {
+							t.Errorf("%s exports privileged relay implementation %s", relativePath(root, path), spec.Name.Name)
+						}
+					case *ast.ValueSpec:
+						for _, name := range spec.Names {
+							if private[name.Name] {
+								t.Errorf("%s exports privileged relay implementation %s", relativePath(root, path), name.Name)
+							}
+						}
+					}
+				}
+			}
+		}
+	})
+}
+
 func forbiddenProductImport(source, target string) string {
 	if target == modulePath+"/internal" || strings.HasPrefix(target, modulePath+"/internal/") {
 		return "the generic internal package tree has been retired"

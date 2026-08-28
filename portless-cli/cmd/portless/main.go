@@ -15,16 +15,10 @@ func main() {
 		switch os.Args[1] {
 		case "__daemon":
 			os.Exit(daemon.Command(os.Args[2:], os.Stderr, daemon.BuildInfo{Version: cli.Version, Distribution: cli.Distribution, Commit: cli.Commit}))
-		case "__relay":
-			os.Exit(relay.Command(os.Args[2:], os.Stderr, relay.PrepareRuntime))
+		case "__relay", "__install-relay", "__restart-relay", "__uninstall-relay":
+			os.Exit(relay.Command(os.Args[1], os.Args[2:], os.Stderr))
 		case "__runner":
 			os.Exit(daemon.RunnerCommand(os.Args[2:], os.Stderr))
-		case "__install-relay":
-			os.Exit(relay.PrivilegedCommand(relay.CommandInstall, os.Args[2:], os.Stderr))
-		case "__restart-relay":
-			os.Exit(relay.PrivilegedCommand(relay.CommandRestart, os.Args[2:], os.Stderr))
-		case "__uninstall-relay":
-			os.Exit(relay.PrivilegedCommand(relay.CommandUninstall, os.Args[2:], os.Stderr))
 		}
 	}
 	application, err := cli.New(os.Stdout, os.Stderr, "")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -64,8 +65,7 @@ func ValidateUninstallOwnership(status InstallationStatus, requestingUID int, fo
 	return validateUninstallOwnership(status, requestingUID, force)
 }
 
-func writeInstallationReceipt(request SetupRequest) error {
-	details := currentPlatformInstallation()
+func writeInstallationReceipt(details platformInstallation, request SetupRequest) error {
 	receipt := installationReceipt{
 		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
 		OwnerUID: request.UID, OwnerGID: request.GID, TargetSocket: request.TargetSocket, DNSTargetSocket: request.DNSTargetSocket,
@@ -84,41 +84,97 @@ func writeInstallationReceipt(request SetupRequest) error {
 }
 
 func readInstallationReceipt(details platformInstallation) (installationReceipt, error) {
+	present, artifactErr := inspectArtifact(details.ReceiptPath, 0o644, details.ArtifactUID, details.ArtifactGID)
+	if artifactErr != nil {
+		return installationReceipt{}, artifactErr
+	}
+	if !present {
+		return installationReceipt{}, os.ErrNotExist
+	}
 	file, err := os.Open(details.ReceiptPath)
 	if err != nil {
 		return installationReceipt{}, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return installationReceipt{}, fmt.Errorf("inspect relay installation receipt size: %w", err)
+	}
+	if info.Size() > 64<<10 {
+		return installationReceipt{}, errors.New("relay installation receipt is unexpectedly larger than 64 KiB")
+	}
 	var receipt installationReceipt
-	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
+	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&receipt); err != nil {
 		return installationReceipt{}, fmt.Errorf("read relay installation receipt: %w", err)
 	}
-	if receipt.SchemaVersion < 1 || receipt.SchemaVersion > installationReceiptSchema {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return installationReceipt{}, errors.New("relay installation receipt contains trailing data")
+	}
+	if receipt.SchemaVersion != installationReceiptSchema {
 		return installationReceipt{}, fmt.Errorf("unsupported relay installation receipt schema %d", receipt.SchemaVersion)
 	}
 	if receipt.Platform != details.Name || receipt.Service != details.Service || receipt.HelperPath != details.HelperPath || receipt.ConfigurationPath != details.ConfigurationPath {
 		return installationReceipt{}, errors.New("relay installation receipt does not match this platform")
 	}
-	if receipt.OwnerUID <= 0 || receipt.OwnerGID <= 0 || !filepath.IsAbs(receipt.TargetSocket) || filepath.Base(filepath.Clean(receipt.TargetSocket)) != "ingress.sock" {
+	validTarget := filepath.IsAbs(receipt.TargetSocket) && filepath.Base(filepath.Clean(receipt.TargetSocket)) == "ingress.sock" && !invalidServicePath(receipt.TargetSocket)
+	if receipt.OwnerUID <= 0 || receipt.OwnerGID <= 0 || receipt.InstalledAt.IsZero() || !validTarget {
 		return installationReceipt{}, errors.New("relay installation receipt contains invalid ownership or socket information")
 	}
-	if receipt.SchemaVersion >= 2 && (!filepath.IsAbs(receipt.DNSTargetSocket) || filepath.Base(filepath.Clean(receipt.DNSTargetSocket)) != "dns.sock") {
+	validDNSTarget := filepath.IsAbs(receipt.DNSTargetSocket) && filepath.Base(filepath.Clean(receipt.DNSTargetSocket)) == "dns.sock" && !invalidServicePath(receipt.DNSTargetSocket)
+	if !validDNSTarget {
 		return installationReceipt{}, errors.New("relay installation receipt contains invalid DNS socket information")
 	}
-	if receipt.SchemaVersion >= 3 {
-		expected := managedRelayLoopbackAddresses()
-		if len(receipt.LoopbackAddresses) != len(expected) {
-			return installationReceipt{}, errors.New("relay installation receipt contains an invalid loopback address pool")
-		}
-		for index := range expected {
-			if receipt.LoopbackAddresses[index] != expected[index] {
-				return installationReceipt{}, errors.New("relay installation receipt contains an invalid loopback address pool")
-			}
-		}
+	if err := validateLoopbackManifest(receipt.LoopbackAddresses); err != nil {
+		return installationReceipt{}, err
 	}
 	return receipt, nil
+}
+
+func validateLoopbackManifest(addresses []string) error {
+	if len(addresses) == 0 || len(addresses) > 254 {
+		return errors.New("relay installation receipt contains an invalid loopback address pool")
+	}
+	seen := make(map[netip.Addr]struct{}, len(addresses))
+	dnsAddress := netip.MustParseAddr("127.77.0.1")
+	hasDNSAddress := false
+	for _, value := range addresses {
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.Is4() {
+			return errors.New("relay installation receipt contains an invalid loopback address pool")
+		}
+		bytes := address.As4()
+		if bytes[0] != 127 || bytes[1] != 77 || bytes[2] != 0 || bytes[3] == 0 || bytes[3] == 255 {
+			return errors.New("relay installation receipt contains an invalid loopback address pool")
+		}
+		if _, duplicate := seen[address]; duplicate {
+			return errors.New("relay installation receipt contains an invalid loopback address pool")
+		}
+		seen[address] = struct{}{}
+		hasDNSAddress = hasDNSAddress || address == dnsAddress
+	}
+	if !hasDNSAddress {
+		return errors.New("relay installation receipt contains an invalid loopback address pool")
+	}
+	return nil
+}
+
+func receiptUsesCurrentLoopbackPool(receipt installationReceipt) bool {
+	expected := managedRelayLoopbackAddresses()
+	if len(receipt.LoopbackAddresses) != len(expected) {
+		return false
+	}
+	actual := make(map[string]struct{}, len(receipt.LoopbackAddresses))
+	for _, address := range receipt.LoopbackAddresses {
+		actual[address] = struct{}{}
+	}
+	for _, address := range expected {
+		if _, ok := actual[address]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func managedRelayLoopbackAddresses() []string {

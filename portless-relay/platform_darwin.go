@@ -5,11 +5,9 @@ package relay
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
-	"io"
 	"net"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,7 +24,13 @@ const (
 	launchdLocalhostResolver = "/etc/resolver/portless.localhost"
 )
 
-func currentPlatformInstallation() platformInstallation {
+type darwinPlatform struct {
+	commands commandRunner
+}
+
+func newHostPlatform() hostPlatform { return darwinPlatform{commands: execCommandRunner{}} }
+
+func (darwinPlatform) installation() platformInstallation {
 	return platformInstallation{
 		Name: "launchd", Service: launchdLabel, HelperPath: launchdHelperPath,
 		ConfigurationPath: launchdPlistPath, ReceiptPath: launchdReceipt, ResolverPath: launchdResolver,
@@ -34,39 +38,62 @@ func currentPlatformInstallation() platformInstallation {
 	}
 }
 
-func installPlatform(ctx context.Context, request SetupRequest) (resultErr error) {
+func (platform darwinPlatform) install(ctx context.Context, request SetupRequest) (resultErr error) {
+	previousState, err := platform.serviceState(ctx)
+	if err != nil {
+		return err
+	}
 	receiptExists, err := pathExists(launchdReceipt)
 	if err != nil {
 		return fmt.Errorf("inspect relay receipt before provisioning loopback addresses: %w", err)
 	}
-	ownsLoopbackPool := false
+	var ownedLoopbackAddresses []string
 	if receiptExists {
-		receipt, receiptErr := readInstallationReceipt(currentPlatformInstallation())
+		receipt, receiptErr := readInstallationReceipt(platform.installation())
 		if receiptErr != nil {
 			return fmt.Errorf("inspect relay receipt before provisioning loopback addresses: %w", receiptErr)
 		}
-		ownsLoopbackPool = receipt.SchemaVersion >= 3
+		ownedLoopbackAddresses = receipt.LoopbackAddresses
 	}
-	if err := prepareRelayLoopbackPool(ctx, !ownsLoopbackPool); err != nil {
+	transaction, err := beginArtifactTransaction(launchdHelperPath, launchdPlistPath, launchdResolver, launchdLocalhostResolver, launchdReceipt)
+	if err != nil {
 		return err
 	}
-	if !ownsLoopbackPool {
-		defer func() {
-			if resultErr != nil {
-				if !receiptExists {
-					_ = runCommand(context.Background(), "/bin/launchctl", "bootout", "system/"+launchdLabel)
-					for _, path := range []string{launchdPlistPath, launchdHelperPath, launchdResolver, launchdLocalhostResolver} {
-						_ = removeExactFile(path)
-					}
-				}
-				_ = removeRelayLoopbackPool(context.Background())
-				flushDarwinResolver(context.Background())
-			}
-		}()
+	committed := false
+	serviceTouched := false
+	artifactsChanged := false
+	addedAddresses := []string{}
+	removedAddresses := []string{}
+	defer func() {
+		if resultErr == nil || committed {
+			return
+		}
+		rollbackContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, platform.rollbackInstall(rollbackContext, transaction, previousState, serviceTouched, artifactsChanged, addedAddresses, removedAddresses))
+	}()
+	if previousState == relayServiceRunning {
+		serviceTouched = true
+		if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "bootout", "system/"+launchdLabel); err != nil {
+			return fmt.Errorf("stop existing relay launch daemon: %w", err)
+		}
+		if err := waitForLaunchdUnloaded(ctx, 5*time.Second, platform.serviceState); err != nil {
+			return err
+		}
+	}
+	addedAddresses, err = prepareRelayLoopbackPool(ctx, platform.commands, ownedLoopbackAddresses)
+	if err != nil {
+		return err
+	}
+	obsoleteAddresses := loopbackAddressDifference(ownedLoopbackAddresses, managedRelayLoopbackAddresses())
+	removedAddresses, err = removeRelayLoopbackPool(ctx, platform.commands, obsoleteAddresses)
+	if err != nil {
+		return err
 	}
 	if err := copyExecutableAtomically(request.Executable, launchdHelperPath); err != nil {
 		return fmt.Errorf("install relay helper executable: %w", err)
 	}
+	artifactsChanged = true
 	plist, err := renderLaunchdPlist(request)
 	if err != nil {
 		return err
@@ -80,18 +107,56 @@ func installPlatform(ctx context.Context, request SetupRequest) (resultErr error
 	if err := writeRootFileAtomically(launchdLocalhostResolver, renderDarwinLocalhostResolverConfiguration(), 0o644); err != nil {
 		return fmt.Errorf("install scoped localhost resolver: %w", err)
 	}
-	_ = runCommand(ctx, "/bin/launchctl", "bootout", "system/"+launchdLabel)
+	if err := writeInstallationReceipt(platform.installation(), request); err != nil {
+		return err
+	}
 	if err := waitForRelayAddressesAvailable(ctx, 2*time.Second); err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "/bin/launchctl", "bootstrap", "system", launchdPlistPath); err != nil {
+	serviceTouched = true
+	if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "bootstrap", "system", launchdPlistPath); err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "/bin/launchctl", "kickstart", "-k", "system/"+launchdLabel); err != nil {
+	if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "kickstart", "-k", "system/"+launchdLabel); err != nil {
 		return err
 	}
-	flushDarwinResolver(ctx)
-	return writeInstallationReceipt(request)
+	flushDarwinResolver(ctx, platform.commands)
+	committed = true
+	return transaction.commit()
+}
+
+func (platform darwinPlatform) rollbackInstall(ctx context.Context, transaction *artifactTransaction, previousState relayServiceState, serviceTouched, artifactsChanged bool, addedAddresses, removedAddresses []string) error {
+	var rollbackErr error
+	if serviceTouched {
+		state, err := platform.serviceState(ctx)
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		} else if state == relayServiceRunning {
+			if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "bootout", "system/"+launchdLabel); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("stop failed relay launch daemon during rollback: %w", err))
+			}
+		}
+	}
+	rollbackErr = errors.Join(rollbackErr, transaction.rollback())
+	if len(addedAddresses) > 0 {
+		if _, err := removeRelayLoopbackPool(ctx, platform.commands, addedAddresses); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	if err := addRelayLoopbackAddresses(ctx, platform.commands, removedAddresses); err != nil {
+		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore Portless loopback addresses: %w", err))
+	}
+	if serviceTouched && previousState == relayServiceRunning {
+		if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "bootstrap", "system", launchdPlistPath); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore relay launch daemon: %w", err))
+		} else if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "kickstart", "-k", "system/"+launchdLabel); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restart restored relay launch daemon: %w", err))
+		}
+	}
+	if artifactsChanged || len(addedAddresses) > 0 || len(removedAddresses) > 0 {
+		flushDarwinResolver(ctx, platform.commands)
+	}
+	return rollbackErr
 }
 
 func renderDarwinResolverConfiguration() []byte {
@@ -103,30 +168,28 @@ func renderDarwinLocalhostResolverConfiguration() []byte {
 	return append([]byte("domain localhost\n"), renderDarwinResolverConfiguration()...)
 }
 
-func restartPlatform(ctx context.Context) error {
-	if err := runCommand(ctx, "/bin/launchctl", "kickstart", "-k", "system/"+launchdLabel); err != nil {
+func (platform darwinPlatform) restart(ctx context.Context) error {
+	if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "kickstart", "-k", "system/"+launchdLabel); err != nil {
 		return fmt.Errorf("restart relay launch daemon: %w", err)
 	}
 	return nil
 }
 
-func uninstallPlatform(ctx context.Context, removeLoopbackPool bool) error {
-	loaded, err := platformServiceRunning(ctx)
+func (platform darwinPlatform) uninstall(ctx context.Context, spec uninstallSpec) error {
+	state, err := platform.serviceState(ctx)
 	if err != nil {
 		return err
 	}
-	if loaded {
-		if err := runCommand(ctx, "/bin/launchctl", "bootout", "system/"+launchdLabel); err != nil {
+	if state == relayServiceRunning {
+		if err := runHostCommand(ctx, platform.commands, "/bin/launchctl", "bootout", "system/"+launchdLabel); err != nil {
 			return fmt.Errorf("stop relay launch daemon: %w", err)
 		}
-	} else {
-		_ = runCommand(ctx, "/bin/launchctl", "bootout", "system/"+launchdLabel)
 	}
-	if err := waitForLaunchdUnloaded(ctx, 5*time.Second, platformServiceRunning); err != nil {
+	if err := waitForLaunchdUnloaded(ctx, 5*time.Second, platform.serviceState); err != nil {
 		return err
 	}
-	if removeLoopbackPool {
-		if err := removeRelayLoopbackPool(ctx); err != nil {
+	if len(spec.loopbackAddresses) > 0 {
+		if _, err := removeRelayLoopbackPool(ctx, platform.commands, spec.loopbackAddresses); err != nil {
 			return err
 		}
 	}
@@ -135,20 +198,23 @@ func uninstallPlatform(ctx context.Context, removeLoopbackPool bool) error {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
 	}
-	flushDarwinResolver(ctx)
+	flushDarwinResolver(ctx, platform.commands)
 	removeDirectoryIfEmpty(filepath.Dir(launchdReceipt))
 	return nil
 }
 
-func waitForLaunchdUnloaded(ctx context.Context, timeout time.Duration, probe func(context.Context) (bool, error)) error {
+func waitForLaunchdUnloaded(ctx context.Context, timeout time.Duration, probe func(context.Context) (relayServiceState, error)) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		loaded, err := probe(ctx)
+		state, err := probe(ctx)
 		if err != nil {
 			return err
 		}
-		if !loaded {
+		if state == relayServiceStopped {
 			return nil
+		}
+		if state == relayServiceUnknown {
+			return errors.New("relay launch daemon state is unknown")
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("relay launch daemon %s is still loaded after %s", launchdLabel, timeout)
@@ -161,39 +227,47 @@ func waitForLaunchdUnloaded(ctx context.Context, timeout time.Duration, probe fu
 	}
 }
 
-func platformServiceRunning(ctx context.Context) (bool, error) {
-	command := exec.CommandContext(ctx, "/bin/launchctl", "print", "system/"+launchdLabel)
-	if err := command.Run(); err == nil {
-		return true, nil
-	} else if _, ok := err.(*exec.ExitError); ok {
-		return false, nil
-	} else {
-		return false, fmt.Errorf("inspect relay launch daemon: %w", err)
+func (platform darwinPlatform) serviceState(ctx context.Context) (relayServiceState, error) {
+	output, err := platform.commands.combinedOutput(ctx, "/bin/launchctl", "print", "system/"+launchdLabel)
+	if err == nil {
+		return relayServiceRunning, nil
 	}
+	detail := strings.TrimSpace(string(output))
+	if _, ok := commandExitCode(err); ok && launchdServiceMissing(detail) {
+		return relayServiceStopped, nil
+	}
+	if detail != "" {
+		return relayServiceUnknown, fmt.Errorf("inspect relay launch daemon: %w: %s", err, detail)
+	}
+	return relayServiceUnknown, fmt.Errorf("inspect relay launch daemon: %w", err)
 }
 
-func platformConfigurationOwner(path string) (int, int, string, string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, 0, "", "", err
-	}
-	defer file.Close()
-	var document struct {
-		Arguments []string `xml:"dict>array>string"`
-	}
-	if err := xml.NewDecoder(io.LimitReader(file, 256<<10)).Decode(&document); err != nil {
-		return 0, 0, "", "", err
-	}
-	return relayArgumentValues(document.Arguments)
+func launchdServiceMissing(output string) bool {
+	normalized := strings.ToLower(output)
+	return strings.Contains(normalized, "could not find service") || strings.Contains(normalized, "service not found")
 }
 
 func renderLaunchdPlist(request SetupRequest) ([]byte, error) {
 	// encoding/xml cannot directly express alternating plist key/value elements,
 	// so render the small fixed document with escaped dynamic values.
-	escape := func(value string) string {
+	escape := func(value string) (string, error) {
 		var encoded strings.Builder
-		_ = xml.EscapeText(&encoded, []byte(value))
-		return encoded.String()
+		if err := xml.EscapeText(&encoded, []byte(value)); err != nil {
+			return "", err
+		}
+		return encoded.String(), nil
+	}
+	helper, err := escape(launchdHelperPath)
+	if err != nil {
+		return nil, fmt.Errorf("encode relay helper path: %w", err)
+	}
+	targetSocket, err := escape(request.TargetSocket)
+	if err != nil {
+		return nil, fmt.Errorf("encode relay target socket: %w", err)
+	}
+	dnsTargetSocket, err := escape(request.DNSTargetSocket)
+	if err != nil {
+		return nil, fmt.Errorf("encode relay DNS target socket: %w", err)
 	}
 	content := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -207,8 +281,8 @@ func renderLaunchdPlist(request SetupRequest) ([]byte, error) {
     <string>__relay</string>
     <string>--socket</string>
     <string>%s</string>
-	<string>--dns-socket</string>
-	<string>%s</string>
+    <string>--dns-socket</string>
+    <string>%s</string>
     <string>--uid</string>
     <string>%d</string>
     <string>--gid</string>
@@ -222,62 +296,126 @@ func renderLaunchdPlist(request SetupRequest) ([]byte, error) {
   <integer>2</integer>
 </dict>
 </plist>
-`, launchdLabel, escape(launchdHelperPath), escape(request.TargetSocket), escape(request.DNSTargetSocket), request.UID, request.GID)
+`, launchdLabel, helper, targetSocket, dnsTargetSocket, request.UID, request.GID)
 	return []byte(content), nil
 }
 
-func flushDarwinResolver(ctx context.Context) {
-	_ = runCommand(ctx, "/usr/bin/dscacheutil", "-flushcache")
-	_ = runCommand(ctx, "/usr/bin/killall", "-HUP", "mDNSResponder")
+func flushDarwinResolver(ctx context.Context, runner commandRunner) {
+	_ = runHostCommand(ctx, runner, "/usr/bin/dscacheutil", "-flushcache")
+	_ = runHostCommand(ctx, runner, "/usr/bin/killall", "-HUP", "mDNSResponder")
 }
 
-func prepareRelayLoopbackPool(ctx context.Context, rejectExisting bool) error {
+func (platform darwinPlatform) prepareRuntime(ctx context.Context) error {
+	receipt, err := readInstallationReceipt(platform.installation())
+	if err != nil {
+		return fmt.Errorf("verify relay installation before provisioning loopback addresses: %w", err)
+	}
+	if !receiptUsesCurrentLoopbackPool(receipt) {
+		return errors.New("relay loopback address manifest is stale; run `portless relay install` to repair it")
+	}
+	added, err := prepareRelayLoopbackPool(ctx, platform.commands, receipt.LoopbackAddresses)
+	if err == nil {
+		return nil
+	}
+	rollbackContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, rollbackErr := removeRelayLoopbackPool(rollbackContext, platform.commands, added)
+	return errors.Join(err, rollbackErr)
+}
+
+func prepareRelayLoopbackPool(ctx context.Context, runner commandRunner, ownedAddresses []string) ([]string, error) {
 	configured, err := configuredRelayLoopbackAddresses()
 	if err != nil {
-		return fmt.Errorf("inspect Portless loopback address pool: %w", err)
+		return nil, fmt.Errorf("inspect Portless loopback address pool: %w", err)
 	}
-	if rejectExisting {
-		for _, address := range managedRelayLoopbackAddresses() {
-			if configured[address] {
-				return fmt.Errorf("reserved Portless loopback address %s is already configured; remove the conflicting lo0 alias and retry", address)
-			}
-		}
+	if conflict := firstUnownedLoopbackAddress(configured, managedRelayLoopbackAddresses(), ownedAddresses); conflict != "" {
+		return nil, fmt.Errorf("reserved Portless loopback address %s is already configured without a matching ownership receipt; remove the conflicting lo0 alias and retry", conflict)
 	}
+	added := make([]string, 0, len(managedRelayLoopbackAddresses()))
 	for _, address := range managedRelayLoopbackAddresses() {
 		if configured[address] {
 			continue
 		}
-		if err := runCommand(ctx, "/sbin/ifconfig", "lo0", "alias", address, "netmask", "255.255.255.255"); err != nil {
-			return fmt.Errorf("provision Portless loopback address %s: %w", address, err)
+		if err := runHostCommand(ctx, runner, "/sbin/ifconfig", "lo0", "alias", address, "netmask", "255.255.255.255"); err != nil {
+			return added, fmt.Errorf("provision Portless loopback address %s: %w", address, err)
 		}
+		added = append(added, address)
 	}
-	ready, detail, err := relayLoopbackPoolStatus()
+	ready, detail, err := (darwinPlatform{}).loopbackPoolStatus()
 	if err != nil {
-		return err
+		return added, err
 	}
 	if !ready {
-		return fmt.Errorf("Portless loopback address pool is incomplete: %s", detail)
+		return added, fmt.Errorf("Portless loopback address pool is incomplete: %s", detail)
+	}
+	return added, nil
+}
+
+func firstUnownedLoopbackAddress(configured map[string]bool, desiredAddresses, ownedAddresses []string) string {
+	owned := make(map[string]struct{}, len(ownedAddresses))
+	for _, address := range ownedAddresses {
+		owned[address] = struct{}{}
+	}
+	for _, address := range desiredAddresses {
+		if configured[address] {
+			if _, ok := owned[address]; !ok {
+				return address
+			}
+		}
+	}
+	return ""
+}
+
+func loopbackAddressDifference(addresses, excluded []string) []string {
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, address := range excluded {
+		excludedSet[address] = struct{}{}
+	}
+	result := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if _, ok := excludedSet[address]; !ok {
+			result = append(result, address)
+		}
+	}
+	return result
+}
+
+func addRelayLoopbackAddresses(ctx context.Context, runner commandRunner, addresses []string) error {
+	configured, err := configuredRelayLoopbackAddresses()
+	if err != nil {
+		return fmt.Errorf("inspect Portless loopback address pool before provisioning: %w", err)
+	}
+	for _, address := range addresses {
+		if configured[address] {
+			continue
+		}
+		if err := runHostCommand(ctx, runner, "/sbin/ifconfig", "lo0", "alias", address, "netmask", "255.255.255.255"); err != nil {
+			return fmt.Errorf("provision Portless loopback address %s: %w", address, err)
+		}
+		configured[address] = true
 	}
 	return nil
 }
 
-func removeRelayLoopbackPool(ctx context.Context) error {
+func removeRelayLoopbackPool(ctx context.Context, runner commandRunner, addresses []string) ([]string, error) {
 	configured, err := configuredRelayLoopbackAddresses()
 	if err != nil {
-		return fmt.Errorf("inspect Portless loopback address pool before removal: %w", err)
+		return nil, fmt.Errorf("inspect Portless loopback address pool before removal: %w", err)
 	}
-	for _, address := range managedRelayLoopbackAddresses() {
+	removed := make([]string, 0, len(addresses))
+	for _, address := range addresses {
 		if !configured[address] {
 			continue
 		}
-		if err := runCommand(ctx, "/sbin/ifconfig", "lo0", "-alias", address); err != nil {
-			return fmt.Errorf("remove Portless loopback address %s: %w", address, err)
+		if err := runHostCommand(ctx, runner, "/sbin/ifconfig", "lo0", "-alias", address); err != nil {
+			return removed, fmt.Errorf("remove Portless loopback address %s: %w", address, err)
 		}
+		removed = append(removed, address)
 	}
-	return nil
+	return removed, nil
 }
 
-func relayLoopbackPoolStatus() (bool, string, error) {
+func (darwinPlatform) loopbackPoolStatus() (bool, string, error) {
 	configured, err := configuredRelayLoopbackAddresses()
 	if err != nil {
 		return false, "", err

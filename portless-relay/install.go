@@ -1,5 +1,3 @@
-// Package install owns privileged relay installation, inspection, restart,
-// ownership validation, and removal.
 package relay
 
 import (
@@ -46,20 +44,17 @@ type RestartRequest struct {
 	Stderr     io.Writer
 }
 
-// PrepareRuntime ensures the machine-level loopback addresses required by the
-// privileged relay are present before the relay binds and drops privileges.
-func PrepareRuntime(ctx context.Context) error {
-	return prepareRelayLoopbackPool(ctx, false)
-}
-
 // Install validates request and installs the relay, elevating through sudo when
 // the current process is not already privileged.
 func Install(ctx context.Context, request SetupRequest) error {
 	if err := validateSetupRequest(request); err != nil {
 		return err
 	}
+	if err := validateInstallOwnership(ctx, newHostPlatform(), request.UID); err != nil {
+		return err
+	}
 	if os.Geteuid() == 0 {
-		return InstallPrivileged(ctx, request.Executable, request.TargetSocket, request.DNSTargetSocket, request.UID, request.GID)
+		return installPrivileged(ctx, newHostPlatform(), request.Executable, request.TargetSocket, request.DNSTargetSocket, request.UID, request.GID)
 	}
 	sudo, err := exec.LookPath("sudo")
 	if err != nil {
@@ -82,9 +77,7 @@ func Install(ctx context.Context, request SetupRequest) error {
 	return nil
 }
 
-// InstallPrivileged installs the platform relay service from a root process and
-// configures it to drop privileges to uid and gid.
-func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket, dnsTargetSocket string, uid, gid int) error {
+func installPrivileged(ctx context.Context, platform hostPlatform, sourceExecutable, targetSocket, dnsTargetSocket string, uid, gid int) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal relay installer must run as root")
 	}
@@ -92,7 +85,10 @@ func InstallPrivileged(ctx context.Context, sourceExecutable, targetSocket, dnsT
 	if err := validateSetupRequest(request); err != nil {
 		return err
 	}
-	return installPlatform(ctx, request)
+	if err := validateInstallOwnership(ctx, platform, request.UID); err != nil {
+		return err
+	}
+	return platform.install(ctx, request)
 }
 
 // Restart verifies relay ownership and restarts the installed service,
@@ -104,7 +100,8 @@ func Restart(ctx context.Context, request RestartRequest) error {
 	if err := validateExecutable(request.Executable); err != nil {
 		return err
 	}
-	status, err := Inspect(ctx)
+	platform := newHostPlatform()
+	status, err := inspectInstallation(ctx, platform)
 	if err != nil {
 		return err
 	}
@@ -115,7 +112,7 @@ func Restart(ctx context.Context, request RestartRequest) error {
 		return err
 	}
 	if os.Geteuid() == 0 {
-		return RestartPrivileged(ctx, request.UID)
+		return restartPrivileged(ctx, platform, request.UID)
 	}
 	sudo, err := exec.LookPath("sudo")
 	if err != nil {
@@ -135,13 +132,11 @@ func Restart(ctx context.Context, request RestartRequest) error {
 	return nil
 }
 
-// RestartPrivileged restarts an installed relay from a root process after
-// validating that it belongs to requestingUID.
-func RestartPrivileged(ctx context.Context, requestingUID int) error {
+func restartPrivileged(ctx context.Context, platform hostPlatform, requestingUID int) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal relay restarter must run as root")
 	}
-	status, err := Inspect(ctx)
+	status, err := inspectInstallation(ctx, platform)
 	if err != nil {
 		return err
 	}
@@ -151,7 +146,7 @@ func RestartPrivileged(ctx context.Context, requestingUID int) error {
 	if err := validateOwnership(status, requestingUID); err != nil {
 		return err
 	}
-	return restartPlatform(ctx)
+	return platform.restart(ctx)
 }
 
 // Uninstall verifies relay ownership and removes the installed service. The
@@ -163,7 +158,8 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 	if err := validateExecutable(request.Executable); err != nil {
 		return false, err
 	}
-	status, err := Inspect(ctx)
+	platform := newHostPlatform()
+	status, err := inspectInstallation(ctx, platform)
 	if err != nil {
 		return false, err
 	}
@@ -174,7 +170,7 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 		return false, err
 	}
 	if os.Geteuid() == 0 {
-		return true, UninstallPrivileged(ctx, request.UID, request.Force)
+		return true, uninstallPrivileged(ctx, platform, request.UID, request.Force)
 	}
 	sudo, err := exec.LookPath("sudo")
 	if err != nil {
@@ -194,13 +190,11 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 	return true, nil
 }
 
-// UninstallPrivileged removes the platform relay from a root process after
-// validating requestingUID unless force explicitly overrides ownership.
-func UninstallPrivileged(ctx context.Context, requestingUID int, force bool) error {
+func uninstallPrivileged(ctx context.Context, platform hostPlatform, requestingUID int, force bool) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the internal relay uninstaller must run as root")
 	}
-	status, err := Inspect(ctx)
+	status, err := inspectInstallation(ctx, platform)
 	if err != nil {
 		return err
 	}
@@ -210,19 +204,33 @@ func UninstallPrivileged(ctx context.Context, requestingUID int, force bool) err
 	if err := validateUninstallOwnership(status, requestingUID, force); err != nil {
 		return err
 	}
-	removeLoopbackPool := false
-	if receipt, receiptErr := readInstallationReceipt(currentPlatformInstallation()); receiptErr == nil {
-		removeLoopbackPool = receipt.SchemaVersion >= 3
+	spec := uninstallSpec{}
+	if receipt, receiptErr := readInstallationReceipt(platform.installation()); receiptErr == nil {
+		spec.loopbackAddresses = append([]string(nil), receipt.LoopbackAddresses...)
 	}
-	if err := uninstallPlatform(ctx, removeLoopbackPool); err != nil {
+	if err := platform.uninstall(ctx, spec); err != nil {
 		return err
 	}
-	remaining, err := Inspect(ctx)
+	remaining, err := inspectInstallation(ctx, platform)
 	if err != nil {
 		return err
 	}
 	if remaining.Installed {
 		return errors.New("localhost relay removal was incomplete; run `portless relay status` for details")
+	}
+	return nil
+}
+
+func validateInstallOwnership(ctx context.Context, platform hostPlatform, requestingUID int) error {
+	status, err := inspectInstallation(ctx, platform)
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return nil
+	}
+	if err := validateOwnership(status, requestingUID); err != nil {
+		return fmt.Errorf("refuse to replace the existing clean-URL relay: %w", err)
 	}
 	return nil
 }

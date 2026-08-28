@@ -6,9 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,69 +20,151 @@ const (
 	systemdResolver   = "/etc/systemd/resolved.conf.d/portless.conf"
 )
 
-func currentPlatformInstallation() platformInstallation {
+type linuxPlatform struct {
+	commands commandRunner
+}
+
+func newHostPlatform() hostPlatform { return linuxPlatform{commands: execCommandRunner{}} }
+
+func (linuxPlatform) installation() platformInstallation {
 	return platformInstallation{
 		Name: "systemd", Service: systemdUnitName, HelperPath: systemdHelperPath,
 		ConfigurationPath: systemdUnitPath, ReceiptPath: systemdReceipt, ResolverPath: systemdResolver,
 	}
 }
 
-func installPlatform(ctx context.Context, request SetupRequest) error {
-	if err := runCommand(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-resolved.service"); err != nil {
-		return errors.New("clean TCP endpoint DNS requires an active systemd-resolved service on Linux")
+func (platform linuxPlatform) install(ctx context.Context, request SetupRequest) (resultErr error) {
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-resolved.service"); err != nil {
+		return fmt.Errorf("clean TCP endpoint DNS requires an active systemd-resolved service on Linux: %w", err)
 	}
+	previousState, err := platform.serviceState(ctx)
+	if err != nil {
+		return err
+	}
+	previouslyEnabled, err := platform.unitEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	transaction, err := beginArtifactTransaction(systemdHelperPath, systemdUnitPath, systemdResolver, systemdReceipt)
+	if err != nil {
+		return err
+	}
+	committed := false
+	serviceTouched := false
+	enablementTouched := false
+	artifactsChanged := false
+	defer func() {
+		if resultErr == nil || committed {
+			return
+		}
+		rollbackContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, platform.rollbackInstall(rollbackContext, transaction, previousState, previouslyEnabled, serviceTouched, enablementTouched, artifactsChanged))
+	}()
 	if err := copyExecutableAtomically(request.Executable, systemdHelperPath); err != nil {
 		return fmt.Errorf("install relay helper executable: %w", err)
 	}
+	artifactsChanged = true
 	if err := writeRootFileAtomically(systemdUnitPath, renderSystemdUnit(request), 0o644); err != nil {
 		return fmt.Errorf("install relay system service: %w", err)
 	}
 	if err := writeRootFileAtomically(systemdResolver, renderResolvedConfiguration(), 0o644); err != nil {
 		return fmt.Errorf("install scoped portless.test resolver: %w", err)
 	}
-	_ = runCommand(ctx, "/usr/bin/systemctl", "stop", systemdUnitName)
+	if previousState == relayServiceRunning {
+		serviceTouched = true
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "stop", systemdUnitName); err != nil {
+			return fmt.Errorf("stop existing relay system service: %w", err)
+		}
+	}
 	if err := waitForRelayAddressesAvailable(ctx, 2*time.Second); err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "/usr/bin/systemctl", "enable", "--now", systemdUnitName); err != nil {
+	enablementTouched = true
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "enable", systemdUnitName); err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "/usr/bin/systemctl", "restart", systemdUnitName); err != nil {
+	serviceTouched = true
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "restart", systemdUnitName); err != nil {
 		return err
 	}
-	if err := runCommand(ctx, "/usr/bin/systemctl", "restart", "systemd-resolved.service"); err != nil {
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "restart", "systemd-resolved.service"); err != nil {
 		return fmt.Errorf("activate scoped portless.test resolver: %w", err)
 	}
-	return writeInstallationReceipt(request)
+	if err := writeInstallationReceipt(platform.installation(), request); err != nil {
+		return err
+	}
+	committed = true
+	return transaction.commit()
 }
 
-func restartPlatform(ctx context.Context) error {
-	if err := runCommand(ctx, "/usr/bin/systemctl", "restart", systemdUnitName); err != nil {
+func (platform linuxPlatform) rollbackInstall(ctx context.Context, transaction *artifactTransaction, previousState relayServiceState, previouslyEnabled, serviceTouched, enablementTouched, artifactsChanged bool) error {
+	var rollbackErr error
+	if serviceTouched {
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "stop", systemdUnitName); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("stop failed relay service during rollback: %w", err))
+		}
+	}
+	if enablementTouched && !previouslyEnabled {
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "disable", systemdUnitName); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore relay service disablement: %w", err))
+		}
+	}
+	rollbackErr = errors.Join(rollbackErr, transaction.rollback())
+	if artifactsChanged {
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("reload restored relay service definition: %w", err))
+		}
+		if enablementTouched && previouslyEnabled {
+			if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "enable", systemdUnitName); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore relay service enablement: %w", err))
+			}
+		}
+		if previousState == relayServiceRunning {
+			if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "restart", systemdUnitName); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restart restored relay service: %w", err))
+			}
+		}
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "restart", "systemd-resolved.service"); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("reload restored system resolver: %w", err))
+		}
+	}
+	return rollbackErr
+}
+
+func (platform linuxPlatform) restart(ctx context.Context) error {
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "restart", systemdUnitName); err != nil {
 		return fmt.Errorf("restart relay system service: %w", err)
 	}
 	return nil
 }
 
-func uninstallPlatform(ctx context.Context, _ bool) error {
-	running, err := platformServiceRunning(ctx)
+func (platform linuxPlatform) uninstall(ctx context.Context, _ uninstallSpec) error {
+	state, err := platform.serviceState(ctx)
 	if err != nil {
 		return err
 	}
-	if running {
-		if err := runCommand(ctx, "/usr/bin/systemctl", "disable", "--now", systemdUnitName); err != nil {
+	configurationPresent, err := pathExists(systemdUnitPath)
+	if err != nil {
+		return fmt.Errorf("inspect relay system service before removal: %w", err)
+	}
+	if state == relayServiceRunning {
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "disable", "--now", systemdUnitName); err != nil {
 			return fmt.Errorf("stop and disable relay system service: %w", err)
 		}
-	} else {
-		_ = runCommand(ctx, "/usr/bin/systemctl", "disable", "--now", systemdUnitName)
+	} else if configurationPresent {
+		if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "disable", "--now", systemdUnitName); err != nil {
+			return fmt.Errorf("disable relay system service: %w", err)
+		}
 	}
-	running, err = platformServiceRunning(ctx)
+	state, err = platform.serviceState(ctx)
 	if err != nil {
 		return err
 	}
-	if running {
+	if state != relayServiceStopped {
 		return fmt.Errorf("relay system service %s is still active", systemdUnitName)
 	}
 	if err := removeExactFile(systemdUnitPath); err != nil {
@@ -94,11 +173,13 @@ func uninstallPlatform(ctx context.Context, _ bool) error {
 	if err := removeExactFile(systemdResolver); err != nil {
 		return fmt.Errorf("remove %s: %w", systemdResolver, err)
 	}
-	if err := runCommand(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "daemon-reload"); err != nil {
 		return fmt.Errorf("reload systemd after relay removal: %w", err)
 	}
-	_ = runCommand(ctx, "/usr/bin/systemctl", "restart", "systemd-resolved.service")
-	_ = runCommand(ctx, "/usr/bin/systemctl", "reset-failed", systemdUnitName)
+	if err := runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "restart", "systemd-resolved.service"); err != nil {
+		return fmt.Errorf("reload system resolver after relay removal: %w", err)
+	}
+	_ = runHostCommand(ctx, platform.commands, "/usr/bin/systemctl", "reset-failed", systemdUnitName)
 	for _, path := range []string{systemdHelperPath, systemdReceipt} {
 		if err := removeExactFile(path); err != nil {
 			return fmt.Errorf("remove %s: %w", path, err)
@@ -109,62 +190,37 @@ func uninstallPlatform(ctx context.Context, _ bool) error {
 	return nil
 }
 
-func platformServiceRunning(ctx context.Context) (bool, error) {
-	command := exec.CommandContext(ctx, "/usr/bin/systemctl", "is-active", "--quiet", systemdUnitName)
-	if err := command.Run(); err == nil {
+func (platform linuxPlatform) serviceState(ctx context.Context) (relayServiceState, error) {
+	output, err := platform.commands.combinedOutput(ctx, "/usr/bin/systemctl", "is-active", "--quiet", systemdUnitName)
+	if err == nil {
+		return relayServiceRunning, nil
+	}
+	if exitCode, ok := commandExitCode(err); ok && (exitCode == 3 || exitCode == 4) {
+		return relayServiceStopped, nil
+	}
+	detail := strings.TrimSpace(string(output))
+	if detail != "" {
+		return relayServiceUnknown, fmt.Errorf("inspect relay system service: %w: %s", err, detail)
+	}
+	return relayServiceUnknown, fmt.Errorf("inspect relay system service: %w", err)
+}
+
+func (platform linuxPlatform) unitEnabled(ctx context.Context) (bool, error) {
+	output, err := platform.commands.combinedOutput(ctx, "/usr/bin/systemctl", "is-enabled", "--quiet", systemdUnitName)
+	if err == nil {
 		return true, nil
-	} else if _, ok := err.(*exec.ExitError); ok {
+	}
+	if exitCode, ok := commandExitCode(err); ok && (exitCode == 1 || exitCode == 4) {
 		return false, nil
-	} else {
-		return false, fmt.Errorf("inspect relay system service: %w", err)
 	}
-}
-
-func platformConfigurationOwner(path string) (int, int, string, string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, 0, "", "", err
+	detail := strings.TrimSpace(string(output))
+	if detail != "" {
+		return false, fmt.Errorf("inspect relay system service enablement: %w: %s", err, detail)
 	}
-	defer file.Close()
-	content, err := io.ReadAll(io.LimitReader(file, 256<<10))
-	if err != nil {
-		return 0, 0, "", "", err
-	}
-	for _, line := range strings.Split(string(content), "\n") {
-		if strings.HasPrefix(line, "ExecStart=") {
-			return parseSystemdRelayArguments(strings.TrimPrefix(line, "ExecStart="))
-		}
-	}
-	return 0, 0, "", "", fmt.Errorf("%s has no ExecStart", path)
-}
-
-func parseSystemdRelayArguments(value string) (int, int, string, string, error) {
-	socketMarker, dnsMarker, uidMarker, gidMarker := " --socket ", " --dns-socket ", " --uid ", " --gid "
-	socketIndex := strings.Index(value, socketMarker)
-	dnsIndex := strings.Index(value, dnsMarker)
-	uidIndex := strings.Index(value, uidMarker)
-	gidIndex := strings.Index(value, gidMarker)
-	if socketIndex < 0 || dnsIndex <= socketIndex || uidIndex <= dnsIndex || gidIndex <= uidIndex {
-		return 0, 0, "", "", fmt.Errorf("invalid relay ExecStart")
-	}
-	socket := strings.TrimSpace(value[socketIndex+len(socketMarker) : dnsIndex])
-	if unquoted, err := strconv.Unquote(socket); err == nil {
-		socket = unquoted
-	}
-	dnsSocket := strings.TrimSpace(value[dnsIndex+len(dnsMarker) : uidIndex])
-	if unquoted, err := strconv.Unquote(dnsSocket); err == nil {
-		dnsSocket = unquoted
-	}
-	uid := strings.TrimSpace(value[uidIndex+len(uidMarker) : gidIndex])
-	gidFields := strings.Fields(value[gidIndex+len(gidMarker):])
-	if len(gidFields) == 0 {
-		return 0, 0, "", "", fmt.Errorf("invalid relay ExecStart group")
-	}
-	return relayArgumentValues([]string{"--socket", socket, "--dns-socket", dnsSocket, "--uid", uid, "--gid", gidFields[0]})
+	return false, fmt.Errorf("inspect relay system service enablement: %w", err)
 }
 
 func renderSystemdUnit(request SetupRequest) []byte {
-	quotedSocket := strconv.Quote(request.TargetSocket)
 	return []byte(strings.Join([]string{
 		"[Unit]",
 		"Description=Portless localhost relay",
@@ -172,9 +228,24 @@ func renderSystemdUnit(request SetupRequest) []byte {
 		"",
 		"[Service]",
 		"Type=simple",
-		fmt.Sprintf("ExecStart=%s __relay --socket %s --dns-socket %s --uid %d --gid %d", systemdHelperPath, quotedSocket, strconv.Quote(request.DNSTargetSocket), request.UID, request.GID),
+		fmt.Sprintf("ExecStart=%s __relay --socket %s --dns-socket %s --uid %d --gid %d", systemdHelperPath, systemdQuoteArgument(request.TargetSocket), systemdQuoteArgument(request.DNSTargetSocket), request.UID, request.GID),
 		"Restart=on-failure",
 		"RestartSec=2",
+		"NoNewPrivileges=true",
+		"PrivateDevices=true",
+		"PrivateTmp=true",
+		"ProtectClock=true",
+		"ProtectControlGroups=true",
+		"ProtectKernelLogs=true",
+		"ProtectKernelModules=true",
+		"ProtectKernelTunables=true",
+		"ProtectSystem=strict",
+		"RestrictAddressFamilies=AF_UNIX AF_INET",
+		"RestrictRealtime=true",
+		"RestrictSUIDSGID=true",
+		"LockPersonality=true",
+		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID",
+		"UMask=0077",
 		"",
 		"[Install]",
 		"WantedBy=multi-user.target",
@@ -182,12 +253,16 @@ func renderSystemdUnit(request SetupRequest) []byte {
 	}, "\n"))
 }
 
+func systemdQuoteArgument(value string) string {
+	return strconv.Quote(strings.ReplaceAll(value, "%", "%%"))
+}
+
 func renderResolvedConfiguration() []byte {
 	return []byte("[Resolve]\nDNS=" + DefaultDNSAddress + "\nDomains=~portless.test\n")
 }
 
-func prepareRelayLoopbackPool(context.Context, bool) error { return nil }
+func (linuxPlatform) prepareRuntime(context.Context) error { return nil }
 
-func relayLoopbackPoolStatus() (bool, string, error) {
+func (linuxPlatform) loopbackPoolStatus() (bool, string, error) {
 	return true, "IPv4 127/8 is routed by the Linux loopback interface", nil
 }

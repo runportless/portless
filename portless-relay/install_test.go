@@ -28,6 +28,26 @@ func TestDNSAddressAvailabilityChecksUDPAndTCP(t *testing.T) {
 	}
 }
 
+func TestArtifactDirectoryMustBeOwnedAndNotWritableByOtherUsers(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "artifacts")
+	if err := ensureArtifactDirectory(directory, os.Geteuid(), os.Getegid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureArtifactDirectory(directory, os.Geteuid(), os.Getegid()); err == nil || !strings.Contains(err.Error(), "writable by group or other") {
+		t.Fatalf("unsafe artifact directory was accepted: %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "artifacts-link")
+	if err := os.Symlink(directory, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureArtifactDirectory(link, os.Geteuid(), os.Getegid()); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("artifact directory symlink was accepted: %v", err)
+	}
+}
+
 func TestValidateSetupRequestRequiresPrivateIngressSocket(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -40,6 +60,10 @@ func TestValidateSetupRequestRequiresPrivateIngressSocket(t *testing.T) {
 	request.TargetSocket = filepath.Join(t.TempDir(), "somewhere-else.sock")
 	if err := validateSetupRequest(request); err == nil || !strings.Contains(err.Error(), "ingress.sock") {
 		t.Fatalf("unexpected validation error: %v", err)
+	}
+	request.TargetSocket = filepath.Join(t.TempDir(), "line\nbreak", "ingress.sock")
+	if err := validateSetupRequest(request); err == nil || !strings.Contains(err.Error(), "control character") {
+		t.Fatalf("service path control character was accepted: %v", err)
 	}
 }
 
@@ -90,26 +114,11 @@ func TestValidateOwnershipRejectsUnknownAndOtherUsers(t *testing.T) {
 	}
 }
 
-func TestRelayArgumentValues(t *testing.T) {
-	uid, gid, socket, dnsSocket, err := relayArgumentValues([]string{
-		"/helper", "__relay", "--socket", "/Users/dev/.portless/ingress.sock", "--dns-socket", "/Users/dev/.portless/dns.sock", "--uid", "501", "--gid", "20",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if uid != 501 || gid != 20 || socket != "/Users/dev/.portless/ingress.sock" || dnsSocket != "/Users/dev/.portless/dns.sock" {
-		t.Fatalf("unexpected relay arguments: uid=%d gid=%d socket=%q dns=%q", uid, gid, socket, dnsSocket)
-	}
-	if _, _, _, _, err := relayArgumentValues([]string{"--socket", "/tmp/not-portless.sock", "--dns-socket", "/tmp/dns.sock", "--uid", "501", "--gid", "20"}); err == nil {
-		t.Fatal("invalid socket was accepted")
-	}
-}
-
 func TestReadInstallationReceiptValidatesFixedPlatformMetadata(t *testing.T) {
 	root := t.TempDir()
 	details := platformInstallation{
 		Name: "test", Service: "portless-test", HelperPath: "/fixed/helper",
-		ConfigurationPath: "/fixed/config", ReceiptPath: filepath.Join(root, "relay.json"),
+		ConfigurationPath: "/fixed/config", ReceiptPath: filepath.Join(root, "relay.json"), ArtifactUID: os.Geteuid(), ArtifactGID: os.Getegid(),
 	}
 	receipt := installationReceipt{
 		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
@@ -122,7 +131,7 @@ func TestReadInstallationReceiptValidatesFixedPlatformMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(details.ReceiptPath, content, 0o600); err != nil {
+	if err := os.WriteFile(details.ReceiptPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	actual, err := readInstallationReceipt(details)
@@ -134,7 +143,7 @@ func TestReadInstallationReceiptValidatesFixedPlatformMetadata(t *testing.T) {
 	}
 	receipt.HelperPath = "/different/helper"
 	content, _ = json.Marshal(receipt)
-	if err := os.WriteFile(details.ReceiptPath, content, 0o600); err != nil {
+	if err := os.WriteFile(details.ReceiptPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "does not match") {
@@ -142,11 +151,11 @@ func TestReadInstallationReceiptValidatesFixedPlatformMetadata(t *testing.T) {
 	}
 }
 
-func TestInstallationReceiptOnlyClaimsLoopbackPoolInSchemaThree(t *testing.T) {
+func TestInstallationReceiptRequiresCurrentSchemaAndSafeLoopbackManifest(t *testing.T) {
 	root := t.TempDir()
 	details := platformInstallation{
 		Name: "test", Service: "portless-test", HelperPath: "/fixed/helper",
-		ConfigurationPath: "/fixed/config", ReceiptPath: filepath.Join(root, "relay.json"),
+		ConfigurationPath: "/fixed/config", ReceiptPath: filepath.Join(root, "relay.json"), ArtifactUID: os.Geteuid(), ArtifactGID: os.Getegid(),
 	}
 	receipt := installationReceipt{
 		SchemaVersion: 3, Platform: details.Name, Service: details.Service,
@@ -159,7 +168,7 @@ func TestInstallationReceiptOnlyClaimsLoopbackPoolInSchemaThree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(details.ReceiptPath, content, 0o600); err != nil {
+		if err := os.WriteFile(details.ReceiptPath, content, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -169,7 +178,44 @@ func TestInstallationReceiptOnlyClaimsLoopbackPoolInSchemaThree(t *testing.T) {
 	}
 	receipt.SchemaVersion = 2
 	write()
-	if _, err := readInstallationReceipt(details); err != nil {
-		t.Fatalf("legacy receipt should remain readable without claiming the address pool: %v", err)
+	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("legacy receipt was accepted: %v", err)
+	}
+	receipt.SchemaVersion = installationReceiptSchema
+	receipt.LoopbackAddresses = []string{"127.77.0.1", "127.77.0.200"}
+	write()
+	actual, err := readInstallationReceipt(details)
+	if err != nil {
+		t.Fatalf("safe stale manifest was rejected: %v", err)
+	}
+	if receiptUsesCurrentLoopbackPool(actual) {
+		t.Fatal("stale loopback manifest was reported as current")
+	}
+	receipt.LoopbackAddresses = []string{"127.77.0.1", "127.0.0.1"}
+	write()
+	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "loopback address pool") {
+		t.Fatalf("unsafe loopback manifest was accepted: %v", err)
+	}
+	receipt.LoopbackAddresses = []string{"127.77.0.1"}
+	write()
+	file, err := os.OpenFile(details.ReceiptPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("\n{}"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("receipt with trailing data was accepted: %v", err)
+	}
+	if err := os.WriteFile(details.ReceiptPath, []byte(strings.Repeat("x", (64<<10)+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "larger than 64 KiB") {
+		t.Fatalf("oversized receipt was accepted: %v", err)
 	}
 }

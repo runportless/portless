@@ -23,9 +23,7 @@ const (
 	defaultConnections = 256
 )
 
-// Config defines the public listeners, private daemon sockets, privilege
-// target, and concurrency limit for a relay process.
-type Config struct {
+type runtimeConfig struct {
 	ListenAddress    string
 	TargetSocket     string
 	DNSListenAddress string
@@ -36,9 +34,19 @@ type Config struct {
 	MaxConnections   int
 }
 
-// Run starts the HTTP and DNS relay listeners, optionally drops privileges,
-// and serves until a listener fails or ctx is canceled.
-func Run(ctx context.Context, config Config) error {
+type runtimeLimits struct {
+	httpConnections   int
+	dnsTCPConnections int
+	dnsUDPQueries     int
+}
+
+func defaultRuntimeLimits() runtimeLimits {
+	return runtimeLimits{
+		httpConnections: defaultConnections, dnsTCPConnections: defaultConnections, dnsUDPQueries: defaultConnections,
+	}
+}
+
+func run(ctx context.Context, config runtimeConfig) error {
 	if config.ListenAddress == "" {
 		config.ListenAddress = DefaultListenAddress
 	}
@@ -72,55 +80,95 @@ func Run(ctx context.Context, config Config) error {
 		}
 	}
 	relayContext, cancel := context.WithCancel(ctx)
-	defer cancel()
+	limits := defaultRuntimeLimits()
+	if config.MaxConnections > 0 {
+		limits = runtimeLimits{
+			httpConnections: config.MaxConnections, dnsTCPConnections: config.MaxConnections, dnsUDPQueries: config.MaxConnections,
+		}
+	}
 	errChannel := make(chan error, 3)
-	go func() { errChannel <- ServeRelay(relayContext, listener, config.TargetSocket, config.MaxConnections) }()
 	go func() {
-		errChannel <- ServeDNSStreamRelay(relayContext, dnsTCP, config.DNSTargetSocket, config.MaxConnections)
+		errChannel <- serveHTTPRelay(relayContext, listener, config.TargetSocket, limits.httpConnections)
 	}()
 	go func() {
-		errChannel <- ServeDNSPacketRelay(relayContext, dnsUDP, config.DNSTargetSocket, config.MaxConnections)
+		errChannel <- serveDNSStreamRelay(relayContext, dnsTCP, config.DNSTargetSocket, limits.dnsTCPConnections)
 	}()
-	err = <-errChannel
+	go func() {
+		errChannel <- serveDNSPacketRelay(relayContext, dnsUDP, config.DNSTargetSocket, limits.dnsUDPQueries)
+	}()
+	firstErr := <-errChannel
 	cancel()
 	_ = listener.Close()
 	_ = dnsTCP.Close()
 	_ = dnsUDP.Close()
-	return err
+	return errors.Join(firstErr, <-errChannel, <-errChannel)
 }
 
-// ServeRelay forwards HTTP connections from listener to the daemon's private
-// ingress socket with a bounded number of concurrent connections.
-func ServeRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {
+func serveHTTPRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {
 	if !filepath.IsAbs(targetSocket) {
 		return errors.New("ingress target socket must be an absolute path")
 	}
 	if maxConnections <= 0 {
 		maxConnections = defaultConnections
 	}
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-	}()
+	stopClosing := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	defer stopClosing()
+	connections := newActiveConnections()
+	defer connections.closeAndWait()
 	semaphore := make(chan struct{}, maxConnections)
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			if ctx.Err() != nil {
 				return nil
 			}
 			return fmt.Errorf("accept localhost relay connection: %w", err)
 		}
 		select {
 		case semaphore <- struct{}{}:
+			connections.add(connection)
 			go func() {
 				defer func() { <-semaphore }()
-				relayConnection(connection, targetSocket)
+				defer connections.done(connection)
+				relayConnection(ctx, connection, targetSocket)
 			}()
 		default:
 			writeUnavailable(connection, "The Portless relay is busy; retry the request.")
 		}
 	}
+}
+
+type activeConnections struct {
+	mutex       sync.Mutex
+	connections map[net.Conn]struct{}
+	wait        sync.WaitGroup
+}
+
+func newActiveConnections() *activeConnections {
+	return &activeConnections{connections: map[net.Conn]struct{}{}}
+}
+
+func (active *activeConnections) add(connection net.Conn) {
+	active.mutex.Lock()
+	active.connections[connection] = struct{}{}
+	active.wait.Add(1)
+	active.mutex.Unlock()
+}
+
+func (active *activeConnections) done(connection net.Conn) {
+	active.mutex.Lock()
+	delete(active.connections, connection)
+	active.mutex.Unlock()
+	active.wait.Done()
+}
+
+func (active *activeConnections) closeAndWait() {
+	active.mutex.Lock()
+	for connection := range active.connections {
+		_ = connection.Close()
+	}
+	active.mutex.Unlock()
+	active.wait.Wait()
 }
 
 func dropPrivileges(uid, gid int) error {
@@ -145,14 +193,20 @@ func dropPrivileges(uid, gid int) error {
 	return nil
 }
 
-func relayConnection(client net.Conn, targetSocket string) {
+func relayConnection(ctx context.Context, client net.Conn, targetSocket string) {
 	defer client.Close()
-	upstream, err := net.DialTimeout("unix", targetSocket, 2*time.Second)
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	upstream, err := dialer.DialContext(ctx, "unix", targetSocket)
 	if err != nil {
 		writeUnavailable(client, "Portless is not running; run `portless up` and retry.")
 		return
 	}
 	defer upstream.Close()
+	stopClosing := context.AfterFunc(ctx, func() {
+		_ = client.Close()
+		_ = upstream.Close()
+	})
+	defer stopClosing()
 
 	var copies sync.WaitGroup
 	copies.Add(2)

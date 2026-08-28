@@ -6,34 +6,37 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 )
 
 const (
-	// CommandInstall identifies the private privileged installation action.
-	CommandInstall = "install"
-	// CommandRestart identifies the private privileged restart action.
-	CommandRestart = "restart"
-	// CommandUninstall identifies the private privileged removal action.
-	CommandUninstall = "uninstall"
+	commandInstall   = "install"
+	commandRestart   = "restart"
+	commandUninstall = "uninstall"
 )
 
-// PrivilegedCommand runs one of the private privileged installation modes.
-func PrivilegedCommand(action string, args []string, stderr io.Writer) int {
+func privilegedCommand(action string, args []string, stderr io.Writer) int {
+	signalContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancel := context.WithTimeout(signalContext, 2*time.Minute)
+	defer cancel()
 	switch action {
-	case CommandInstall:
-		return installCommand(args, stderr)
-	case CommandRestart:
-		return restartCommand(args, stderr)
-	case CommandUninstall:
-		return uninstallCommand(args, stderr)
+	case commandInstall:
+		return installCommand(ctx, args, stderr)
+	case commandRestart:
+		return restartCommand(ctx, args, stderr)
+	case commandUninstall:
+		return uninstallCommand(ctx, args, stderr)
 	default:
 		fmt.Fprintln(stderr, "portless relay: unknown privileged command")
 		return 2
 	}
 }
 
-func installCommand(args []string, stderr io.Writer) int {
+func installCommand(ctx context.Context, args []string, stderr io.Writer) int {
 	set := flag.NewFlagSet("__install-relay", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	targetSocket := set.String("socket", "", "private daemon socket")
@@ -48,7 +51,7 @@ func installCommand(args []string, stderr io.Writer) int {
 		executable, err = filepath.EvalSymlinks(executable)
 	}
 	if err == nil {
-		err = InstallPrivileged(context.Background(), executable, *targetSocket, *dnsTargetSocket, *uid, *gid)
+		err = installPrivileged(ctx, newHostPlatform(), executable, *targetSocket, *dnsTargetSocket, *uid, *gid)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "portless relay install:", err)
@@ -57,21 +60,21 @@ func installCommand(args []string, stderr io.Writer) int {
 	return 0
 }
 
-func restartCommand(args []string, stderr io.Writer) int {
+func restartCommand(ctx context.Context, args []string, stderr io.Writer) int {
 	set := flag.NewFlagSet("__restart-relay", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	uid := set.Int("uid", 0, "requesting user ID")
 	if err := set.Parse(args); err != nil || set.NArg() != 0 {
 		return 2
 	}
-	if err := RestartPrivileged(context.Background(), *uid); err != nil {
+	if err := restartPrivileged(ctx, newHostPlatform(), *uid); err != nil {
 		fmt.Fprintln(stderr, "portless relay restart:", err)
 		return 1
 	}
 	return 0
 }
 
-func uninstallCommand(args []string, stderr io.Writer) int {
+func uninstallCommand(ctx context.Context, args []string, stderr io.Writer) int {
 	set := flag.NewFlagSet("__uninstall-relay", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	uid := set.Int("uid", 0, "requesting user ID")
@@ -79,7 +82,7 @@ func uninstallCommand(args []string, stderr io.Writer) int {
 	if err := set.Parse(args); err != nil || set.NArg() != 0 {
 		return 2
 	}
-	if err := UninstallPrivileged(context.Background(), *uid, *force); err != nil {
+	if err := uninstallPrivileged(ctx, newHostPlatform(), *uid, *force); err != nil {
 		fmt.Fprintln(stderr, "portless relay uninstall:", err)
 		return 1
 	}

@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -29,7 +30,7 @@ func TestDNSPacketRelayForwardsToPrivateDaemonSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer packet.Close()
-	go func() { _ = ServeDNSPacketRelay(ctx, packet, socket, 4) }()
+	go func() { _ = serveDNSPacketRelay(ctx, packet, socket, 4) }()
 
 	query, _ := portlessdns.Query("postgres.local.store.portless.test", portlessdns.TypeA, 31)
 	connection, err := net.DialTimeout("udp", packet.LocalAddr().String(), time.Second)
@@ -58,7 +59,7 @@ func TestDNSPacketRelaySynthesizesLocalhostWithoutDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer packet.Close()
-	go func() { _ = ServeDNSPacketRelay(ctx, packet, filepath.Join(t.TempDir(), "missing.sock"), 4) }()
+	go func() { _ = serveDNSPacketRelay(ctx, packet, filepath.Join(t.TempDir(), "missing.sock"), 4) }()
 
 	query, _ := portlessdns.Query("checkout.local.store.localhost", portlessdns.TypeA, 34)
 	connection, err := net.DialTimeout("udp", packet.LocalAddr().String(), time.Second)
@@ -88,7 +89,7 @@ func TestDNSStreamRelayPreservesTCPFraming(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	go func() { _ = ServeDNSStreamRelay(ctx, listener, socket, 4) }()
+	go func() { _ = serveDNSStreamRelay(ctx, listener, socket, 4) }()
 
 	connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
 	if err != nil {
@@ -121,7 +122,7 @@ func TestDNSStreamRelaySynthesizesLocalhostWithoutDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	go func() { _ = ServeDNSStreamRelay(ctx, listener, filepath.Join(t.TempDir(), "missing.sock"), 4) }()
+	go func() { _ = serveDNSStreamRelay(ctx, listener, filepath.Join(t.TempDir(), "missing.sock"), 4) }()
 
 	connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
 	if err != nil {
@@ -154,7 +155,7 @@ func TestDNSPacketRelayReturnsServerFailureWithoutDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer packet.Close()
-	go func() { _ = ServeDNSPacketRelay(ctx, packet, filepath.Join(t.TempDir(), "missing.sock"), 1) }()
+	go func() { _ = serveDNSPacketRelay(ctx, packet, filepath.Join(t.TempDir(), "missing.sock"), 1) }()
 	query, _ := portlessdns.Query("postgres.local.store.portless.test", portlessdns.TypeA, 33)
 	connection, _ := net.DialTimeout("udp", packet.LocalAddr().String(), time.Second)
 	defer connection.Close()
@@ -167,6 +168,39 @@ func TestDNSPacketRelayReturnsServerFailureWithoutDaemon(t *testing.T) {
 	}
 	if code, _ := portlessdns.ResponseCode(buffer[:count]); code != portlessdns.ResponseServerFailure {
 		t.Fatalf("expected SERVFAIL, got %d", code)
+	}
+}
+
+func TestPrivateDNSCheckHonorsContextCancellation(t *testing.T) {
+	directory, err := os.MkdirTemp("/tmp", "portless-dns-cancel-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	socketPath := filepath.Join(directory, "dns.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- connection
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = CheckDNSSocket(ctx, socketPath)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 250*time.Millisecond {
+		t.Fatalf("private DNS cancellation err=%v duration=%s", err, time.Since(started))
+	}
+	select {
+	case connection := <-accepted:
+		_ = connection.Close()
+	default:
 	}
 }
 

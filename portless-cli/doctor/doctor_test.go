@@ -216,6 +216,20 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 	if check := checkByCode(t, report, "relay.port_80"); check.Status != StatusFail || check.Summary != "Port 80 is occupied by an unrecognized listener" {
 		t.Fatalf("unexpected port conflict check: %#v", check)
 	}
+
+	partial := dependencies
+	partial.inspectRelay = func(context.Context) (relay.InstallationStatus, error) {
+		return relay.InstallationStatus{
+			Platform: "launchd", Service: "dev.portless.relay", Installed: true,
+			HelperPresent: true, HelperCurrent: true, ConfigurationPresent: true,
+			HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt",
+		}, nil
+	}
+	report = run(context.Background(), paths, ScopeRelay, os.Getuid(), partial)
+	receiptCheck := checkByCode(t, report, "relay.receipt")
+	if receiptCheck.Status != StatusFail || receiptCheck.Remediation != "Run `portless relay uninstall --force`, then `portless relay install`." {
+		t.Fatalf("missing ownership receipt was not treated as a fail-closed installation: %#v", receiptCheck)
+	}
 }
 
 func TestRuntimeUnavailableIsWarningBecauseContainersAreOptional(t *testing.T) {

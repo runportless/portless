@@ -34,7 +34,7 @@ func TestRelayForwardsHTTPToPrivateUnixSocket(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = ServeRelay(ctx, listener, targetPath, 4) }()
+	go func() { _ = serveHTTPRelay(ctx, listener, targetPath, 4) }()
 
 	request, _ := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/checkout", nil)
 	request.Host = "checkout.store.localhost"
@@ -58,7 +58,7 @@ func TestRelayReturnsServiceUnavailableWhenDaemonSocketIsAbsent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	missingPath := filepath.Join(t.TempDir(), "missing.sock")
-	go func() { _ = ServeRelay(ctx, listener, missingPath, 4) }()
+	go func() { _ = serveHTTPRelay(ctx, listener, missingPath, 4) }()
 
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 2 * time.Second}
 	response, err := client.Get("http://" + listener.Addr().String())
@@ -85,6 +85,113 @@ func TestUnavailablePageEscapesMessage(t *testing.T) {
 	if strings.Contains(page, `<script>`) || !strings.Contains(page, `&lt;script&gt;`) {
 		t.Fatalf("unavailable page did not escape its message: %s", page)
 	}
+}
+
+func TestHTTPRelayCancellationClosesActiveConnections(t *testing.T) {
+	directory, err := os.MkdirTemp("/tmp", "portless-relay-cancel-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	targetPath := filepath.Join(directory, "ingress.sock")
+	target, err := net.Listen("unix", targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, acceptErr := target.Accept()
+		if acceptErr == nil {
+			accepted <- connection
+		}
+	}()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan error, 1)
+	go func() { finished <- serveHTTPRelay(ctx, listener, targetPath, 1) }()
+	client, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var upstream net.Conn
+	select {
+	case upstream = <-accepted:
+		defer upstream.Close()
+	case <-time.After(time.Second):
+		t.Fatal("relay did not establish its upstream connection")
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay did not stop after cancellation")
+	}
+}
+
+func TestHTTPRelayReportsUnexpectedListenerClosure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(t.TempDir(), "ingress.sock")
+	finished := make(chan error, 1)
+	go func() {
+		finished <- serveHTTPRelay(context.Background(), listener, targetPath, 1)
+	}()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-finished:
+		if err == nil || !strings.Contains(err.Error(), "accept localhost relay connection") {
+			t.Fatalf("unexpected listener closure error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay did not report the unexpected listener closure")
+	}
+}
+
+func TestRunShutsDownAllProtocolListenersWhenCanceled(t *testing.T) {
+	dnsAddress := availableTCPAndUDPAddress(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := run(ctx, runtimeConfig{
+		ListenAddress: "127.0.0.1:0", TargetSocket: filepath.Join(t.TempDir(), "ingress.sock"),
+		DNSListenAddress: dnsAddress, DNSTargetSocket: filepath.Join(t.TempDir(), "dns.sock"),
+	})
+	if err != nil {
+		t.Fatalf("canceled relay runtime returned an error: %v", err)
+	}
+}
+
+func availableTCPAndUDPAddress(t *testing.T) string {
+	t.Helper()
+	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := tcpListener.Addr().String()
+	packetListener, err := net.ListenPacket("udp", address)
+	if err != nil {
+		tcpListener.Close()
+		t.Fatal(err)
+	}
+	if err := packetListener.Close(); err != nil {
+		tcpListener.Close()
+		t.Fatal(err)
+	}
+	if err := tcpListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return address
 }
 
 func serveOneHTTPResponse(listener net.Listener, body string) {

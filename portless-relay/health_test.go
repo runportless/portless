@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	portlessdns "github.com/runportless/portless/portless-daemon/dns"
+	"github.com/runportless/portless/portless-daemon/networking"
 )
 
 func TestCheckAtRecognizesPortlessHealth(t *testing.T) {
@@ -88,6 +90,33 @@ func TestCheckAtRejectsUnrelatedPort80Service(t *testing.T) {
 	}
 }
 
+func TestDNSHealthCheckHonorsContextCancellation(t *testing.T) {
+	server, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	queryReceived := make(chan struct{}, 1)
+	go func() {
+		buffer := make([]byte, portlessdns.MaxMessage)
+		if _, _, readErr := server.ReadFrom(buffer); readErr == nil {
+			queryReceived <- struct{}{}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = checkDNSRecordAt(ctx, server.LocalAddr().String(), networking.DNSZone, portlessdns.HealthAddress)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 250*time.Millisecond {
+		t.Fatalf("DNS health cancellation err=%v duration=%s", err, time.Since(started))
+	}
+	select {
+	case <-queryReceived:
+	case <-time.After(time.Second):
+		t.Fatal("DNS health check did not send its probe query")
+	}
+}
+
 func TestCheckSocketRecognizesPrivateDaemonIngress(t *testing.T) {
 	root, err := os.MkdirTemp("/tmp", "portless-relay-")
 	if err != nil {
@@ -112,5 +141,60 @@ func TestCheckSocketRecognizesPrivateDaemonIngress(t *testing.T) {
 
 	if err := CheckSocket(context.Background(), socketPath); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRelayHealthInspectionRunsIndependentProbesConcurrently(t *testing.T) {
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	probe := func(context.Context) error {
+		entered <- struct{}{}
+		<-release
+		return nil
+	}
+	finished := make(chan relayHealthInspection, 1)
+	go func() {
+		finished <- inspectRelayHealth(context.Background(), inspectionProbes{http: probe, dns: probe, resolver: probe})
+	}()
+	for range 3 {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("health probes did not all start concurrently")
+		}
+	}
+	close(release)
+	result := <-finished
+	if result.httpErr != nil || result.dnsErr != nil || result.resolverErr != nil {
+		t.Fatalf("unexpected health result: %#v", result)
+	}
+}
+
+func TestWaitUntilReadyHonorsOverallTimeout(t *testing.T) {
+	probe := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	started := time.Now()
+	err := waitUntilReady(context.Background(), 40*time.Millisecond, inspectionProbes{http: probe, dns: probe, resolver: probe})
+	if err == nil || time.Since(started) > 250*time.Millisecond {
+		t.Fatalf("readiness timeout err=%v duration=%s", err, time.Since(started))
+	}
+}
+
+func TestRelayHealthInspectionReturnsWhenAProbeDoesNotCooperate(t *testing.T) {
+	release := make(chan struct{})
+	blockedProbe := func(context.Context) error {
+		<-release
+		return nil
+	}
+	quickProbe := func(context.Context) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	result := inspectRelayHealth(ctx, inspectionProbes{http: blockedProbe, dns: quickProbe, resolver: quickProbe})
+	close(release)
+	if !errors.Is(result.httpErr, context.DeadlineExceeded) || time.Since(started) > 250*time.Millisecond {
+		t.Fatalf("uncooperative probe result=%#v duration=%s", result, time.Since(started))
 	}
 }

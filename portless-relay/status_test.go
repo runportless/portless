@@ -31,3 +31,30 @@ func TestInspectHelperBuildComparesInstalledHelperWithCurrentExecutable(t *testi
 		t.Fatalf("stale helper comparison = %q, %q, %v", helperBuildID, currentBuildID, current)
 	}
 }
+
+func TestInspectArtifactRejectsUnsafeModeAndSymlink(t *testing.T) {
+	directory := t.TempDir()
+	artifact := filepath.Join(directory, "artifact")
+	if err := os.WriteFile(artifact, []byte("relay"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	present, err := inspectArtifact(artifact, 0o644, os.Geteuid(), os.Getegid())
+	if !present || err == nil {
+		t.Fatalf("unsafe artifact mode was accepted: present=%v err=%v", present, err)
+	}
+	link := filepath.Join(directory, "artifact-link")
+	if err := os.Symlink(artifact, link); err != nil {
+		t.Fatal(err)
+	}
+	present, err = inspectArtifact(link, 0o600, os.Geteuid(), os.Getegid())
+	if !present || err == nil {
+		t.Fatalf("artifact symlink was accepted: present=%v err=%v", present, err)
+	}
+	if err := os.Chmod(artifact, os.FileMode(0o644)|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	present, err = inspectArtifact(artifact, 0o644, os.Geteuid(), os.Getegid())
+	if !present || err == nil {
+		t.Fatalf("artifact with special permission bits was accepted: present=%v err=%v", present, err)
+	}
+}

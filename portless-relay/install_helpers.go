@@ -9,10 +9,33 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
+
+type commandRunner interface {
+	combinedOutput(context.Context, string, ...string) ([]byte, error)
+}
+
+type execCommandRunner struct{}
+
+func (execCommandRunner) combinedOutput(ctx context.Context, executable string, arguments ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, executable, arguments...).CombinedOutput()
+}
+
+type commandExitCoder interface {
+	ExitCode() int
+}
+
+func commandExitCode(err error) (int, bool) {
+	var exitError commandExitCoder
+	if !errors.As(err, &exitError) {
+		return 0, false
+	}
+	return exitError.ExitCode(), true
+}
 
 func removeExactFile(path string) error {
 	if path == "" {
@@ -31,28 +54,6 @@ func removeDirectoryIfEmpty(path string) {
 	}
 }
 
-func relayArgumentValues(arguments []string) (int, int, string, string, error) {
-	values := map[string]string{}
-	for index := 0; index+1 < len(arguments); index++ {
-		switch arguments[index] {
-		case "--socket", "--dns-socket", "--uid", "--gid":
-			values[arguments[index]] = arguments[index+1]
-			index++
-		}
-	}
-	uid, uidErr := strconv.Atoi(values["--uid"])
-	gid, gidErr := strconv.Atoi(values["--gid"])
-	socket := values["--socket"]
-	dnsSocket := values["--dns-socket"]
-	if uidErr != nil || gidErr != nil || uid <= 0 || gid <= 0 || !filepath.IsAbs(socket) || filepath.Base(filepath.Clean(socket)) != "ingress.sock" {
-		return 0, 0, "", "", errors.New("service configuration does not contain valid relay ownership arguments")
-	}
-	if !filepath.IsAbs(dnsSocket) || filepath.Base(filepath.Clean(dnsSocket)) != "dns.sock" {
-		return 0, 0, "", "", errors.New("service configuration does not contain a valid DNS relay target")
-	}
-	return uid, gid, socket, dnsSocket, nil
-}
-
 func validateSetupRequest(request SetupRequest) error {
 	if request.UID <= 0 || request.GID <= 0 {
 		return errors.New("the localhost relay must run as a non-root user and group")
@@ -67,13 +68,17 @@ func validateSetupRequest(request SetupRequest) error {
 	if cleanSocket == string(filepath.Separator) || filepath.Base(cleanSocket) != "ingress.sock" {
 		return errors.New("ingress target must be a private ingress.sock path")
 	}
-	if strings.ContainsRune(request.TargetSocket, '\x00') {
-		return errors.New("ingress target socket contains an invalid character")
+	if invalidServicePath(request.TargetSocket) {
+		return errors.New("ingress target socket contains an invalid control character or encoding")
 	}
-	if !filepath.IsAbs(request.DNSTargetSocket) || filepath.Base(filepath.Clean(request.DNSTargetSocket)) != "dns.sock" || strings.ContainsRune(request.DNSTargetSocket, '\x00') {
+	if !filepath.IsAbs(request.DNSTargetSocket) || filepath.Base(filepath.Clean(request.DNSTargetSocket)) != "dns.sock" || invalidServicePath(request.DNSTargetSocket) {
 		return errors.New("DNS target must be a private dns.sock path")
 	}
 	return nil
+}
+
+func invalidServicePath(path string) bool {
+	return !utf8.ValidString(path) || strings.IndexFunc(path, unicode.IsControl) >= 0
 }
 
 func validateExecutable(executable string) error {
@@ -106,7 +111,7 @@ func copyExecutableAtomically(source, destination string) error {
 	if info.Size() > 512<<20 {
 		return errors.New("Portless executable is unexpectedly larger than 512 MiB")
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	if err := ensureRootArtifactDirectory(filepath.Dir(destination)); err != nil {
 		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(destination), ".portless-relay-*")
@@ -138,7 +143,7 @@ func copyExecutableAtomically(source, destination string) error {
 }
 
 func writeRootFileAtomically(destination string, content []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	if err := ensureRootArtifactDirectory(filepath.Dir(destination)); err != nil {
 		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(destination), ".portless-config-*")
@@ -169,9 +174,36 @@ func writeRootFileAtomically(destination string, content []byte, mode os.FileMod
 	return os.Rename(temporaryPath, destination)
 }
 
-func runCommand(ctx context.Context, executable string, arguments ...string) error {
-	command := exec.CommandContext(ctx, executable, arguments...)
-	output, err := command.CombinedOutput()
+func ensureRootArtifactDirectory(path string) error {
+	return ensureArtifactDirectory(path, 0, 0)
+}
+
+func ensureArtifactDirectory(path string, expectedUID, expectedGID int) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("relay artifact directory %s must be a real directory", path)
+	}
+	uid, gid, ok := artifactOwner(info)
+	if !ok {
+		return fmt.Errorf("relay artifact directory ownership is unavailable for %s", path)
+	}
+	if uid != expectedUID || gid != expectedGID {
+		return fmt.Errorf("relay artifact directory %s belongs to UID %d and GID %d, expected UID %d and GID %d", path, uid, gid, expectedUID, expectedGID)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("relay artifact directory %s is writable by group or other users", path)
+	}
+	return nil
+}
+
+func runHostCommand(ctx context.Context, runner commandRunner, executable string, arguments ...string) error {
+	output, err := runner.combinedOutput(ctx, executable, arguments...)
 	if err == nil {
 		return nil
 	}

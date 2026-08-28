@@ -9,38 +9,39 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"sync"
 	"time"
 
 	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 )
 
-// ServeDNSStreamRelay forwards length-prefixed TCP DNS connections from
-// listener to the daemon's private Unix socket until ctx is canceled.
-func ServeDNSStreamRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {
+func serveDNSStreamRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {
 	if !filepath.IsAbs(targetSocket) {
 		return errors.New("DNS target socket must be an absolute path")
 	}
 	if maxConnections <= 0 {
 		maxConnections = defaultConnections
 	}
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-	}()
+	stopClosing := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	defer stopClosing()
+	connections := newActiveConnections()
+	defer connections.closeAndWait()
 	semaphore := make(chan struct{}, maxConnections)
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			if ctx.Err() != nil {
 				return nil
 			}
 			return fmt.Errorf("accept TCP DNS query: %w", err)
 		}
 		select {
 		case semaphore <- struct{}{}:
+			connections.add(connection)
 			go func() {
 				defer func() { <-semaphore }()
-				relayDNSStream(connection, targetSocket)
+				defer connections.done(connection)
+				relayDNSStream(ctx, connection, targetSocket)
 			}()
 		default:
 			_ = connection.Close()
@@ -48,25 +49,23 @@ func ServeDNSStreamRelay(ctx context.Context, listener net.Listener, targetSocke
 	}
 }
 
-// ServeDNSPacketRelay forwards UDP DNS packets to the daemon's private Unix
-// socket until ctx is canceled.
-func ServeDNSPacketRelay(ctx context.Context, connection net.PacketConn, targetSocket string, maxConnections int) error {
+func serveDNSPacketRelay(ctx context.Context, connection net.PacketConn, targetSocket string, maxConnections int) error {
 	if !filepath.IsAbs(targetSocket) {
 		return errors.New("DNS target socket must be an absolute path")
 	}
 	if maxConnections <= 0 {
 		maxConnections = defaultConnections
 	}
-	go func() {
-		<-ctx.Done()
-		_ = connection.Close()
-	}()
+	stopClosing := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopClosing()
 	semaphore := make(chan struct{}, maxConnections)
+	var workers sync.WaitGroup
+	defer workers.Wait()
 	for {
 		buffer := make([]byte, portlessdns.MaxMessage)
 		count, peer, err := connection.ReadFrom(buffer)
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			if ctx.Err() != nil {
 				return nil
 			}
 			return fmt.Errorf("read UDP DNS query: %w", err)
@@ -74,22 +73,24 @@ func ServeDNSPacketRelay(ctx context.Context, connection net.PacketConn, targetS
 		query := append([]byte(nil), buffer[:count]...)
 		select {
 		case semaphore <- struct{}{}:
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				defer func() { <-semaphore }()
-				response := relayDNSQuery(targetSocket, query)
-				_ = connection.SetWriteDeadline(time.Now().Add(time.Second))
+				response := relayDNSQuery(ctx, targetSocket, query)
 				_, _ = connection.WriteTo(response, peer)
 			}()
 		default:
 			response := portlessdns.ServerFailure(query)
-			_ = connection.SetWriteDeadline(time.Now().Add(time.Second))
 			_, _ = connection.WriteTo(response, peer)
 		}
 	}
 }
 
-func relayDNSStream(client net.Conn, targetSocket string) {
+func relayDNSStream(ctx context.Context, client net.Conn, targetSocket string) {
 	defer client.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopClosing()
 	reader := bufio.NewReaderSize(client, portlessdns.MaxMessage+2)
 	for {
 		_ = client.SetDeadline(time.Now().Add(3 * time.Second))
@@ -97,35 +98,53 @@ func relayDNSStream(client net.Conn, targetSocket string) {
 		if err != nil {
 			return
 		}
-		if err := writeDNSFrame(client, relayDNSQuery(targetSocket, query)); err != nil {
+		if err := writeDNSFrame(client, relayDNSQuery(ctx, targetSocket, query)); err != nil {
 			return
 		}
 	}
 }
 
-func relayDNSQuery(targetSocket string, query []byte) []byte {
+func relayDNSQuery(ctx context.Context, targetSocket string, query []byte) []byte {
 	if response, handled := portlessdns.LocalhostResponse(query); handled {
 		return response
 	}
-	response, err := queryPrivateDNS(targetSocket, query)
+	response, err := queryPrivateDNS(ctx, targetSocket, query)
 	if err != nil {
 		return portlessdns.ServerFailure(query)
 	}
 	return response
 }
 
-func queryPrivateDNS(targetSocket string, query []byte) ([]byte, error) {
-	connection, err := net.DialTimeout("unix", targetSocket, time.Second)
+func queryPrivateDNS(ctx context.Context, targetSocket string, query []byte) ([]byte, error) {
+	dialer := net.Dialer{Timeout: time.Second}
+	connection, err := dialer.DialContext(ctx, "unix", targetSocket)
 	if err != nil {
 		return nil, err
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	stopClosing := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopClosing()
+	deadline := time.Now().Add(2 * time.Second)
+	contextDeadline, hasContextDeadline := ctx.Deadline()
+	if hasContextDeadline && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	_ = connection.SetDeadline(deadline)
 	if err := writeDNSFrame(connection, query); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	reader := bufio.NewReaderSize(connection, portlessdns.MaxMessage+2)
-	return readDNSFrame(reader)
+	response, err := readDNSFrame(reader)
+	if err != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil && hasContextDeadline && !time.Now().Before(contextDeadline) {
+		return nil, context.DeadlineExceeded
+	}
+	return response, err
 }
 
 func readDNSFrame(reader io.Reader) ([]byte, error) {
@@ -171,29 +190,16 @@ func CheckDNSSocket(ctx context.Context, targetSocket string) error {
 	if err != nil {
 		return err
 	}
-	type result struct {
-		response []byte
-		err      error
+	response, err := queryPrivateDNS(ctx, targetSocket, query)
+	if err != nil {
+		return err
 	}
-	finished := make(chan result, 1)
-	go func() {
-		response, queryErr := queryPrivateDNS(targetSocket, query)
-		finished <- result{response: response, err: queryErr}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case outcome := <-finished:
-		if outcome.err != nil {
-			return outcome.err
-		}
-		address, code, parseErr := portlessdns.ParseAResponse(outcome.response, 0x5054)
-		if parseErr != nil {
-			return parseErr
-		}
-		if code != 0 || address != portlessdns.HealthAddress {
-			return fmt.Errorf("private DNS returned code %d and address %s", code, address)
-		}
-		return nil
+	address, code, parseErr := portlessdns.ParseAResponse(response, 0x5054)
+	if parseErr != nil {
+		return parseErr
 	}
+	if code != 0 || address != portlessdns.HealthAddress {
+		return fmt.Errorf("private DNS returned code %d and address %s", code, address)
+	}
+	return nil
 }

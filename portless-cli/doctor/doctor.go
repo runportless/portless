@@ -324,7 +324,11 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 		missing = append(missing, status.ConfigurationPath)
 	}
 	if len(missing) > 0 {
-		checks = append(checks, failed("relay.installation", "relay", "Relay installation is incomplete", "missing: "+strings.Join(missing, ", "), "Run `portless relay install` to repair the relay."))
+		remediation := "Run `portless relay install` to repair the relay."
+		if status.OwnerUID <= 0 {
+			remediation = "Run `portless relay uninstall --force`, then `portless relay install`."
+		}
+		checks = append(checks, failed("relay.installation", "relay", "Relay installation is incomplete", "missing: "+strings.Join(missing, ", "), remediation))
 	} else {
 		checks = append(checks, passed("relay.installation", "relay", "Relay helper and service configuration are installed", status.Service))
 	}
@@ -342,7 +346,7 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 
 	switch {
 	case !status.ReceiptPresent:
-		checks = append(checks, warned("relay.receipt", "relay", "Relay ownership receipt is missing", "This is a legacy or partially completed installation.", "Run `portless relay install` to create a current receipt."))
+		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is missing", "The installation is partial and its owner cannot be verified.", "Run `portless relay uninstall --force`, then `portless relay install`."))
 	case status.OwnerUID <= 0:
 		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is invalid", status.Problem, "Run `portless relay uninstall --force`, then `portless relay install`."))
 	default:

@@ -192,7 +192,7 @@ func Run(ctx context.Context, config Config) error {
 		SystemVersion: build.Version,
 		InspectRelay: func(ctx context.Context) (contract.RelayStatus, error) {
 			status, err := relay.Inspect(ctx)
-			return contract.RelayStatus(status), err
+			return relayStatusContract(status), err
 		},
 		SelectDirectory: directorypicker.Select,
 	})
@@ -280,6 +280,23 @@ func Run(ctx context.Context, config Config) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func relayStatusContract(status relay.InstallationStatus) contract.RelayStatus {
+	return contract.RelayStatus{
+		Platform: status.Platform, Service: status.Service, Installed: status.Installed, Running: status.Running,
+		Healthy: status.Healthy, HTTPHealthy: status.HTTPHealthy, HelperPresent: status.HelperPresent,
+		HelperCurrent: status.HelperCurrent, HelperBuildID: status.HelperBuildID, CurrentBuildID: status.CurrentBuildID,
+		ConfigurationPresent: status.ConfigurationPresent, ReceiptPresent: status.ReceiptPresent,
+		ResolverPresent: status.ResolverPresent, ResolverHealthy: status.ResolverHealthy,
+		OwnerUID: status.OwnerUID, OwnerGID: status.OwnerGID, TargetSocket: status.TargetSocket,
+		DNSTargetSocket: status.DNSTargetSocket, DNSListenAddress: status.DNSListenAddress,
+		HelperPath: status.HelperPath, ConfigurationPath: status.ConfigurationPath, ReceiptPath: status.ReceiptPath,
+		ResolverPath: status.ResolverPath, LocalhostResolverPath: status.LocalhostResolverPath, InstalledAt: status.InstalledAt,
+		HealthError: status.HealthError, DNSHealthy: status.DNSHealthy, DNSHealthError: status.DNSHealthError,
+		ResolverHealthError: status.ResolverHealthError, EndpointPoolReady: status.EndpointPoolReady,
+		EndpointPoolDetail: status.EndpointPoolDetail, Problem: status.Problem,
 	}
 }
 

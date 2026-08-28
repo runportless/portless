@@ -42,25 +42,75 @@ func CheckSocket(ctx context.Context, socketPath string) error {
 // WaitUntilReady polls HTTP, DNS, and resolver health until every relay path is
 // ready, the timeout elapses, or ctx is canceled.
 func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	return waitUntilReady(ctx, timeout, defaultInspectionProbes())
+}
+
+func waitUntilReady(ctx context.Context, timeout time.Duration, probes inspectionProbes) error {
+	readyContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var lastError error
 	for {
-		httpErr := Check(ctx)
-		dnsErr := CheckDNS(ctx)
-		resolverErr := CheckResolver(ctx)
-		if httpErr == nil && dnsErr == nil && resolverErr == nil {
+		attemptContext, cancelAttempt := context.WithTimeout(readyContext, 1500*time.Millisecond)
+		result := inspectRelayHealth(attemptContext, probes)
+		cancelAttempt()
+		if result.httpErr == nil && result.dnsErr == nil && result.resolverErr == nil {
 			return nil
 		}
-		lastError = errors.Join(httpErr, dnsErr, resolverErr)
-		if time.Now().After(deadline) {
-			return fmt.Errorf("localhost relay did not become ready: %w", lastError)
-		}
+		lastError = errors.Join(result.httpErr, result.dnsErr, result.resolverErr)
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-readyContext.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("localhost relay did not become ready within %s: %w", timeout, lastError)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+type relayHealthInspection struct {
+	httpErr     error
+	dnsErr      error
+	resolverErr error
+}
+
+func inspectRelayHealth(ctx context.Context, probes inspectionProbes) relayHealthInspection {
+	type probeResult struct {
+		name string
+		err  error
+	}
+	results := make(chan probeResult, 3)
+	go func() { results <- probeResult{name: "http", err: probes.http(ctx)} }()
+	go func() { results <- probeResult{name: "dns", err: probes.dns(ctx)} }()
+	go func() { results <- probeResult{name: "resolver", err: probes.resolver(ctx)} }()
+	inspection := relayHealthInspection{}
+	completed := make(map[string]bool, 3)
+	for len(completed) < 3 {
+		select {
+		case result := <-results:
+			completed[result.name] = true
+			switch result.name {
+			case "http":
+				inspection.httpErr = result.err
+			case "dns":
+				inspection.dnsErr = result.err
+			case "resolver":
+				inspection.resolverErr = result.err
+			}
+		case <-ctx.Done():
+			if !completed["http"] {
+				inspection.httpErr = ctx.Err()
+			}
+			if !completed["dns"] {
+				inspection.dnsErr = ctx.Err()
+			}
+			if !completed["resolver"] {
+				inspection.resolverErr = ctx.Err()
+			}
+			return inspection
+		}
+	}
+	return inspection
 }
 
 // CheckDNS verifies the privileged UDP DNS listener using the dynamic endpoint
@@ -73,24 +123,46 @@ func CheckDNS(ctx context.Context) error {
 }
 
 func checkDNSRecord(ctx context.Context, name string, expected netip.Addr) error {
+	return checkDNSRecordAt(ctx, DefaultDNSAddress, name, expected)
+}
+
+func checkDNSRecordAt(ctx context.Context, listenAddress, name string, expected netip.Addr) error {
 	queryID := uint16(rand.Uint32())
 	query, err := portlessdns.Query(name, portlessdns.TypeA, queryID)
 	if err != nil {
 		return err
 	}
 	dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-	connection, err := dialer.DialContext(ctx, "udp", DefaultDNSAddress)
+	connection, err := dialer.DialContext(ctx, "udp", listenAddress)
 	if err != nil {
-		return fmt.Errorf("connect to Portless DNS at %s: %w", DefaultDNSAddress, err)
+		return fmt.Errorf("connect to Portless DNS at %s: %w", listenAddress, err)
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	stopClosing := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopClosing()
+	deadline := time.Now().Add(time.Second)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	_ = connection.SetDeadline(deadline)
 	if _, err := connection.Write(query); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if contextDeadline, ok := ctx.Deadline(); ok && !time.Now().Before(contextDeadline) {
+			return context.DeadlineExceeded
+		}
 		return err
 	}
 	response := make([]byte, portlessdns.MaxMessage)
 	count, err := connection.Read(response)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if contextDeadline, ok := ctx.Deadline(); ok && !time.Now().Before(contextDeadline) {
+			return context.DeadlineExceeded
+		}
 		return fmt.Errorf("read Portless DNS response: %w", err)
 	}
 	address, rcode, err := portlessdns.ParseAResponse(response[:count], queryID)

@@ -1444,7 +1444,7 @@ components:
         path: { type: string, description: Existing absolute directory selected by the user. }
     RelayStatus:
       type: object
-      required: [platform, service, installed, running, healthy, httpHealthy, helperPresent, helperCurrent, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress]
+      required: [platform, service, installed, running, healthy, httpHealthy, helperPresent, helperCurrent, configurationPresent, receiptPresent, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress, helperPath, configurationPath, receiptPath]
       properties:
         platform: { type: string, enum: [launchd, systemd, unsupported] }
         service: { type: string }
@@ -1456,16 +1456,24 @@ components:
         helperCurrent: { type: boolean, description: Whether the installed relay helper matches the current Portless executable. }
         helperBuildId: { type: string, description: SHA-256 identity of the installed relay helper. }
         currentBuildId: { type: string, description: SHA-256 identity of the current Portless executable. }
+        configurationPresent: { type: boolean }
+        receiptPresent: { type: boolean }
         dnsHealthy: { type: boolean }
         resolverPresent: { type: boolean }
         resolverHealthy: { type: boolean }
         endpointPoolReady: { type: boolean }
         endpointPoolDetail: { type: string }
+        ownerUid: { type: integer, minimum: 1 }
+        ownerGid: { type: integer, minimum: 1 }
         targetSocket: { type: string }
         dnsTargetSocket: { type: string }
         dnsListenAddress: { type: string, example: '127.77.0.1:1053' }
+        helperPath: { type: string }
+        configurationPath: { type: string }
+        receiptPath: { type: string }
         resolverPath: { type: string, description: Platform configuration that routes the Portless TCP endpoint zone. }
         localhostResolverPath: { type: string, description: Platform compatibility resolver for descendant localhost names when required. }
+        installedAt: { type: string, format: date-time }
         healthError: { type: string }
         dnsHealthError: { type: string }
         resolverHealthError: { type: string }
