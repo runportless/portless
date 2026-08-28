@@ -133,7 +133,7 @@ test('supports keyboard topology inspection and command palette navigation', asy
   await expect(page.getByRole('radiogroup', { name: 'Theme' })).toBeVisible()
   await page.getByRole('tab', { name: 'RUNTIME' }).click()
   await expect(page.getByText('CONTAINER RUNTIME')).toBeVisible()
-  expect(await page.locator('.runtime-candidate').count()).toBeGreaterThan(0)
+  await expect(page.locator('.runtime-candidate')).toHaveCount(2)
 
   await page.keyboard.press('Control+K')
   await palette.getByPlaceholder('jump to a project or environment').fill('nothing-matches-this-command')
@@ -158,4 +158,3 @@ test('shows useful not-found routes and returns to projects', async ({ page }) =
   await page.getByRole('button', { name: 'ALL PROJECTS' }).click()
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
 })
-
