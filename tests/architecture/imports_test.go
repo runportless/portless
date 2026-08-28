@@ -254,7 +254,56 @@ func TestRetiredRelayIdentifiersStayRemoved(t *testing.T) {
 	}
 }
 
-func TestRelayPrivilegedRuntimeInternalsStayPrivate(t *testing.T) {
+func TestRelayRootIsOnlyPrivateCommandComposition(t *testing.T) {
+	root := repositoryRoot(t)
+	relayDirectory := filepath.Join(root, "portless-relay")
+	for _, name := range []string{"health", "installation", "runtime"} {
+		info, err := os.Stat(filepath.Join(relayDirectory, name))
+		if err != nil || !info.IsDir() {
+			t.Errorf("relay ownership package %s is missing or is not a directory", name)
+		}
+	}
+	entries, err := os.ReadDir(relayDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"command.go": true, "command_test.go": true}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		if !allowed[entry.Name()] {
+			t.Errorf("portless-relay/%s bypasses the runtime, health, or installation ownership packages", entry.Name())
+		}
+	}
+}
+
+func TestRelayPackageDependencyDirection(t *testing.T) {
+	root := repositoryRoot(t)
+	runtimePackage := relayRoot + "/runtime"
+	healthPackage := relayRoot + "/health"
+	installationPackage := relayRoot + "/installation"
+	walkGoFiles(t, filepath.Join(root, "portless-relay"), func(path, source string, parsed *ast.File) {
+		for _, spec := range parsed.Imports {
+			target, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case source == relayRoot && strings.HasPrefix(target, modulePath+"/") && target != runtimePackage && target != installationPackage:
+				t.Errorf("%s imports %s; the relay root composes only runtime and installation", relativePath(root, path), target)
+			case source == runtimePackage && matchesAny(target, relayRoot):
+				t.Errorf("%s imports %s; relay runtime must not depend on lifecycle or health", relativePath(root, path), target)
+			case source == healthPackage && matchesAny(target, relayRoot) && target != runtimePackage:
+				t.Errorf("%s imports %s; relay health may depend only on runtime constants", relativePath(root, path), target)
+			case source == installationPackage && matchesAny(target, relayRoot) && target != runtimePackage && target != healthPackage:
+				t.Errorf("%s imports %s; relay installation may depend only on runtime and health", relativePath(root, path), target)
+			}
+		}
+	})
+}
+
+func TestRelayUnscopedPrivilegedEntrypointsStayPrivate(t *testing.T) {
 	root := repositoryRoot(t)
 	private := map[string]bool{
 		"Config": true, "Run": true, "ServeRelay": true, "ServeDNSStreamRelay": true, "ServeDNSPacketRelay": true,
@@ -304,6 +353,9 @@ func forbiddenProductImport(source, target string) string {
 	database := daemonRoot + "/database"
 	installation := daemonRoot + "/system/installation"
 	mcpSDK := "github.com/modelcontextprotocol/go-sdk"
+	if target == relayRoot && source != cliRoot+"/cmd/portless" {
+		return "the relay root is private-command composition; import its owning installation, health, or runtime package"
+	}
 
 	if matchesAny(target, mcpRoot) && source != cliRoot+"/administration" && !matchesAny(source, mcpRoot) {
 		return "the MCP product is consumed only by the CLI administration adapter"

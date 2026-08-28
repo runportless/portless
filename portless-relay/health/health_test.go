@@ -1,4 +1,4 @@
-package relay
+package health
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 	"github.com/runportless/portless/portless-daemon/networking"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 func TestCheckAtRecognizesPortlessHealth(t *testing.T) {
@@ -32,7 +33,7 @@ func TestCheckAtRecognizesPortlessHealth(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := checkAt(ctx, listener.Addr().String(), ControlOrigin); err != nil {
+	if err := checkAt(ctx, listener.Addr().String(), relayruntime.ControlOrigin); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -85,7 +86,7 @@ func TestCheckAtRejectsUnrelatedPort80Service(t *testing.T) {
 	defer server.Close()
 	go func() { _ = server.Serve(listener) }()
 
-	if err := checkAt(context.Background(), listener.Addr().String(), ControlOrigin); err == nil {
+	if err := checkAt(context.Background(), listener.Addr().String(), relayruntime.ControlOrigin); err == nil {
 		t.Fatal("unrelated HTTP service was accepted as Portless ingress")
 	}
 }
@@ -152,9 +153,9 @@ func TestRelayHealthInspectionRunsIndependentProbesConcurrently(t *testing.T) {
 		<-release
 		return nil
 	}
-	finished := make(chan relayHealthInspection, 1)
+	finished := make(chan Inspection, 1)
 	go func() {
-		finished <- inspectRelayHealth(context.Background(), inspectionProbes{http: probe, dns: probe, resolver: probe})
+		finished <- Inspect(context.Background(), Probes{HTTP: probe, DNS: probe, Resolver: probe})
 	}()
 	for range 3 {
 		select {
@@ -165,7 +166,7 @@ func TestRelayHealthInspectionRunsIndependentProbesConcurrently(t *testing.T) {
 	}
 	close(release)
 	result := <-finished
-	if result.httpErr != nil || result.dnsErr != nil || result.resolverErr != nil {
+	if result.HTTPError != nil || result.DNSError != nil || result.ResolverError != nil {
 		t.Fatalf("unexpected health result: %#v", result)
 	}
 }
@@ -176,7 +177,7 @@ func TestWaitUntilReadyHonorsOverallTimeout(t *testing.T) {
 		return ctx.Err()
 	}
 	started := time.Now()
-	err := waitUntilReady(context.Background(), 40*time.Millisecond, inspectionProbes{http: probe, dns: probe, resolver: probe})
+	err := waitUntilReady(context.Background(), 40*time.Millisecond, Probes{HTTP: probe, DNS: probe, Resolver: probe})
 	if err == nil || time.Since(started) > 250*time.Millisecond {
 		t.Fatalf("readiness timeout err=%v duration=%s", err, time.Since(started))
 	}
@@ -192,9 +193,9 @@ func TestRelayHealthInspectionReturnsWhenAProbeDoesNotCooperate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	result := inspectRelayHealth(ctx, inspectionProbes{http: blockedProbe, dns: quickProbe, resolver: quickProbe})
+	result := Inspect(ctx, Probes{HTTP: blockedProbe, DNS: quickProbe, Resolver: quickProbe})
 	close(release)
-	if !errors.Is(result.httpErr, context.DeadlineExceeded) || time.Since(started) > 250*time.Millisecond {
+	if !errors.Is(result.HTTPError, context.DeadlineExceeded) || time.Since(started) > 250*time.Millisecond {
 		t.Fatalf("uncooperative probe result=%#v duration=%s", result, time.Since(started))
 	}
 }

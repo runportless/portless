@@ -154,11 +154,15 @@ export interface RelayStatus {
   helperCurrent: boolean
   helperBuildId?: string
   currentBuildId?: string
+  configurationError?: string
   dnsHealthy: boolean
   resolverPresent: boolean
   resolverHealthy: boolean
   endpointPoolReady: boolean
+  endpointPoolManaged: boolean
+  endpointPoolResidual?: boolean
   endpointPoolDetail?: string
+  endpointPoolError?: string
   targetSocket?: string
   dnsTargetSocket?: string
   dnsListenAddress: string

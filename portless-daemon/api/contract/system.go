@@ -195,6 +195,7 @@ type RelayStatus struct {
 	HelperBuildID         string     `json:"helperBuildId,omitempty"`
 	CurrentBuildID        string     `json:"currentBuildId,omitempty"`
 	ConfigurationPresent  bool       `json:"configurationPresent"`
+	ConfigurationError    string     `json:"configurationError,omitempty"`
 	ReceiptPresent        bool       `json:"receiptPresent"`
 	ResolverPresent       bool       `json:"resolverPresent"`
 	ResolverHealthy       bool       `json:"resolverHealthy"`
@@ -214,6 +215,9 @@ type RelayStatus struct {
 	DNSHealthError        string     `json:"dnsHealthError,omitempty"`
 	ResolverHealthError   string     `json:"resolverHealthError,omitempty"`
 	EndpointPoolReady     bool       `json:"endpointPoolReady"`
+	EndpointPoolManaged   bool       `json:"endpointPoolManaged"`
+	EndpointPoolResidual  bool       `json:"endpointPoolResidual,omitempty"`
 	EndpointPoolDetail    string     `json:"endpointPoolDetail,omitempty"`
+	EndpointPoolError     string     `json:"endpointPoolError,omitempty"`
 	Problem               string     `json:"problem,omitempty"`
 }

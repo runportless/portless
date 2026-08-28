@@ -1,4 +1,6 @@
-package relay
+// Package installation owns relay installation, inspection, ownership,
+// platform service integration, restart, and removal.
+package installation
 
 import (
 	"context"
@@ -44,6 +46,15 @@ type RestartRequest struct {
 	Stderr     io.Writer
 }
 
+type privilegedLifecycleDependencies struct {
+	effectiveUID func() int
+	withLock     func(context.Context, platformInstallation, func() error) error
+}
+
+func defaultPrivilegedLifecycleDependencies() privilegedLifecycleDependencies {
+	return privilegedLifecycleDependencies{effectiveUID: os.Geteuid, withLock: withRelayLifecycleLock}
+}
+
 // Install validates request and installs the relay, elevating through sudo when
 // the current process is not already privileged.
 func Install(ctx context.Context, request SetupRequest) error {
@@ -78,17 +89,23 @@ func Install(ctx context.Context, request SetupRequest) error {
 }
 
 func installPrivileged(ctx context.Context, platform hostPlatform, sourceExecutable, targetSocket, dnsTargetSocket string, uid, gid int) error {
-	if os.Geteuid() != 0 {
+	return installPrivilegedWithDependencies(ctx, platform, sourceExecutable, targetSocket, dnsTargetSocket, uid, gid, defaultPrivilegedLifecycleDependencies())
+}
+
+func installPrivilegedWithDependencies(ctx context.Context, platform hostPlatform, sourceExecutable, targetSocket, dnsTargetSocket string, uid, gid int, dependencies privilegedLifecycleDependencies) error {
+	if dependencies.effectiveUID() != 0 {
 		return errors.New("the internal relay installer must run as root")
 	}
 	request := SetupRequest{Executable: sourceExecutable, TargetSocket: targetSocket, DNSTargetSocket: dnsTargetSocket, UID: uid, GID: gid}
 	if err := validateSetupRequest(request); err != nil {
 		return err
 	}
-	if err := validateInstallOwnership(ctx, platform, request.UID); err != nil {
-		return err
-	}
-	return platform.install(ctx, request)
+	return dependencies.withLock(ctx, platform.installation(), func() error {
+		if err := validateInstallOwnership(ctx, platform, request.UID); err != nil {
+			return err
+		}
+		return platform.install(ctx, request)
+	})
 }
 
 // Restart verifies relay ownership and restarts the installed service,
@@ -133,20 +150,26 @@ func Restart(ctx context.Context, request RestartRequest) error {
 }
 
 func restartPrivileged(ctx context.Context, platform hostPlatform, requestingUID int) error {
-	if os.Geteuid() != 0 {
+	return restartPrivilegedWithDependencies(ctx, platform, requestingUID, defaultPrivilegedLifecycleDependencies())
+}
+
+func restartPrivilegedWithDependencies(ctx context.Context, platform hostPlatform, requestingUID int, dependencies privilegedLifecycleDependencies) error {
+	if dependencies.effectiveUID() != 0 {
 		return errors.New("the internal relay restarter must run as root")
 	}
-	status, err := inspectInstallation(ctx, platform)
-	if err != nil {
-		return err
-	}
-	if !status.Installed {
-		return errors.New("the Portless clean-URL relay is not installed")
-	}
-	if err := validateOwnership(status, requestingUID); err != nil {
-		return err
-	}
-	return platform.restart(ctx)
+	return dependencies.withLock(ctx, platform.installation(), func() error {
+		status, err := inspectInstallation(ctx, platform)
+		if err != nil {
+			return err
+		}
+		if !status.Installed {
+			return errors.New("the Portless clean-URL relay is not installed")
+		}
+		if err := validateOwnership(status, requestingUID); err != nil {
+			return err
+		}
+		return platform.restart(ctx)
+	})
 }
 
 // Uninstall verifies relay ownership and removes the installed service. The
@@ -164,6 +187,9 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 		return false, err
 	}
 	if !status.Installed {
+		if status.EndpointPoolResidual {
+			return false, errors.New("the relay is not installed, but unverified reserved loopback aliases remain; run `portless relay status` for safe recovery guidance")
+		}
 		return false, nil
 	}
 	if err := validateUninstallOwnership(status, request.UID, request.Force); err != nil {
@@ -191,34 +217,53 @@ func Uninstall(ctx context.Context, request UninstallRequest) (bool, error) {
 }
 
 func uninstallPrivileged(ctx context.Context, platform hostPlatform, requestingUID int, force bool) error {
-	if os.Geteuid() != 0 {
+	return uninstallPrivilegedWithDependencies(ctx, platform, requestingUID, force, defaultPrivilegedLifecycleDependencies())
+}
+
+func uninstallPrivilegedWithDependencies(ctx context.Context, platform hostPlatform, requestingUID int, force bool, dependencies privilegedLifecycleDependencies) error {
+	if dependencies.effectiveUID() != 0 {
 		return errors.New("the internal relay uninstaller must run as root")
 	}
-	status, err := inspectInstallation(ctx, platform)
-	if err != nil {
-		return err
-	}
-	if !status.Installed {
+	return dependencies.withLock(ctx, platform.installation(), func() error {
+		status, err := inspectInstallation(ctx, platform)
+		if err != nil {
+			return err
+		}
+		if !status.Installed {
+			if status.EndpointPoolResidual {
+				return errors.New("the relay is not installed, but unverified reserved loopback aliases remain; run `portless relay status` for safe recovery guidance")
+			}
+			return nil
+		}
+		if err := validateUninstallOwnership(status, requestingUID, force); err != nil {
+			return err
+		}
+		spec := uninstallSpec{}
+		receipt, receiptErr := readInstallationReceipt(platform.installation())
+		if receiptErr == nil {
+			spec.loopbackAddresses = append([]string(nil), receipt.LoopbackAddresses...)
+		}
+		if err := platform.uninstall(ctx, spec); err != nil {
+			return err
+		}
+		remaining, err := inspectInstallation(ctx, platform)
+		if err != nil {
+			return err
+		}
+		if remaining.Installed {
+			return errors.New("localhost relay removal was incomplete; run `portless relay status` for details")
+		}
+		if remaining.EndpointPoolResidual {
+			if receiptErr != nil {
+				return fmt.Errorf("relay artifacts were removed, but reserved loopback aliases remain because the ownership receipt could not be verified: %w; run `portless relay status` for safe manual recovery guidance", receiptErr)
+			}
+			return errors.New("relay artifacts were removed, but reserved loopback aliases remain after verified removal; run `portless relay status` before reinstalling")
+		}
+		if receiptErr != nil && remaining.EndpointPoolManaged && remaining.EndpointPoolError != "" {
+			return fmt.Errorf("relay artifacts were removed, but reserved loopback aliases could not be inspected after the ownership receipt failed validation: %w; inspect the relay status before reinstalling", receiptErr)
+		}
 		return nil
-	}
-	if err := validateUninstallOwnership(status, requestingUID, force); err != nil {
-		return err
-	}
-	spec := uninstallSpec{}
-	if receipt, receiptErr := readInstallationReceipt(platform.installation()); receiptErr == nil {
-		spec.loopbackAddresses = append([]string(nil), receipt.LoopbackAddresses...)
-	}
-	if err := platform.uninstall(ctx, spec); err != nil {
-		return err
-	}
-	remaining, err := inspectInstallation(ctx, platform)
-	if err != nil {
-		return err
-	}
-	if remaining.Installed {
-		return errors.New("localhost relay removal was incomplete; run `portless relay status` for details")
-	}
-	return nil
+	})
 }
 
 func validateInstallOwnership(ctx context.Context, platform hostPlatform, requestingUID int) error {
@@ -227,6 +272,9 @@ func validateInstallOwnership(ctx context.Context, platform hostPlatform, reques
 		return err
 	}
 	if !status.Installed {
+		if status.EndpointPoolResidual {
+			return errors.New("refuse to install over unverified reserved loopback aliases; run `portless relay status` for safe recovery guidance")
+		}
 		return nil
 	}
 	if err := validateOwnership(status, requestingUID); err != nil {

@@ -9,7 +9,7 @@ import (
 
 	apiclient "github.com/runportless/portless/portless-daemon/api/client"
 	"github.com/runportless/portless/portless-daemon/model"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 // PrintStatus writes the human-readable status table for an environment.
@@ -179,7 +179,7 @@ func WriteErrorOutput(writer io.Writer, code, message string) error {
 
 // WriteRelayStatusJSON emits relay installation details together with their
 // computed aggregate state.
-func WriteRelayStatusJSON(writer io.Writer, status relay.InstallationStatus) error {
+func WriteRelayStatusJSON(writer io.Writer, status relayinstallation.InstallationStatus) error {
 	return WriteJSON(writer, relayStatusOutput{State: status.State(), InstallationStatus: status})
 }
 

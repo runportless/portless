@@ -1,4 +1,4 @@
-package relay
+package installation
 
 import (
 	"context"
@@ -18,7 +18,8 @@ const (
 	commandUninstall = "uninstall"
 )
 
-func privilegedCommand(action string, args []string, stderr io.Writer) int {
+// Command executes one fixed privileged relay lifecycle action.
+func Command(action string, args []string, stderr io.Writer) int {
 	signalContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	ctx, cancel := context.WithTimeout(signalContext, 2*time.Minute)

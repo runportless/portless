@@ -292,8 +292,11 @@ inventory, permission boundaries, limits, and troubleshooting.
 - Private directories, authentication records, and sessions are
   ownership-checked and protected before use.
 - The machine-wide relay binds only the documented loopback HTTP and DNS
-  listeners, verifies its ownership receipt, and drops to the installing user
-  before serving traffic.
+  listeners, verifies that its runtime user and private sockets exactly match
+  its ownership receipt, and drops to the installing user before serving
+  traffic. Privileged install, repair, restart, and removal are serialized by
+  a fixed root-owned lifecycle lock; activation commits only after HTTP, DNS,
+  and system-resolver readiness succeeds.
 - Discovery is static, bounded, read-only, and confined to the supplied
   checkout. It does not run project code or fetch network resources.
 - Secret-bearing provider values remain separate from redacted configuration

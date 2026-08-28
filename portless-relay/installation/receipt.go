@@ -1,4 +1,4 @@
-package relay
+package installation
 
 import (
 	"encoding/json"
@@ -8,10 +8,10 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/networking"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 type installationReceipt struct {
@@ -118,18 +118,27 @@ func readInstallationReceipt(details platformInstallation) (installationReceipt,
 	if receipt.Platform != details.Name || receipt.Service != details.Service || receipt.HelperPath != details.HelperPath || receipt.ConfigurationPath != details.ConfigurationPath {
 		return installationReceipt{}, errors.New("relay installation receipt does not match this platform")
 	}
-	validTarget := filepath.IsAbs(receipt.TargetSocket) && filepath.Base(filepath.Clean(receipt.TargetSocket)) == "ingress.sock" && !invalidServicePath(receipt.TargetSocket)
-	if receipt.OwnerUID <= 0 || receipt.OwnerGID <= 0 || receipt.InstalledAt.IsZero() || !validTarget {
+	runtimeErr := relayruntime.ValidateIdentity(relayruntime.Identity{
+		TargetSocket: receipt.TargetSocket, DNSTargetSocket: receipt.DNSTargetSocket,
+		UID: receipt.OwnerUID, GID: receipt.OwnerGID,
+	})
+	if receipt.InstalledAt.IsZero() || runtimeErr != nil {
 		return installationReceipt{}, errors.New("relay installation receipt contains invalid ownership or socket information")
-	}
-	validDNSTarget := filepath.IsAbs(receipt.DNSTargetSocket) && filepath.Base(filepath.Clean(receipt.DNSTargetSocket)) == "dns.sock" && !invalidServicePath(receipt.DNSTargetSocket)
-	if !validDNSTarget {
-		return installationReceipt{}, errors.New("relay installation receipt contains invalid DNS socket information")
 	}
 	if err := validateLoopbackManifest(receipt.LoopbackAddresses); err != nil {
 		return installationReceipt{}, err
 	}
 	return receipt, nil
+}
+
+func validateRuntimeReceipt(receipt installationReceipt, config relayruntime.Identity) error {
+	if !receiptUsesCurrentLoopbackPool(receipt) {
+		return errors.New("relay ownership receipt uses a stale loopback address manifest; run `portless relay install` to repair it")
+	}
+	if receipt.OwnerUID != config.UID || receipt.OwnerGID != config.GID || receipt.TargetSocket != config.TargetSocket || receipt.DNSTargetSocket != config.DNSTargetSocket {
+		return errors.New("relay runtime identity does not match its ownership receipt; run `portless relay install` to repair the service configuration")
+	}
+	return nil
 }
 
 func validateLoopbackManifest(addresses []string) error {
@@ -178,6 +187,6 @@ func receiptUsesCurrentLoopbackPool(receipt installationReceipt) bool {
 }
 
 func managedRelayLoopbackAddresses() []string {
-	dnsHost, _, _ := net.SplitHostPort(DefaultDNSAddress)
+	dnsHost, _, _ := net.SplitHostPort(relayruntime.DefaultDNSAddress)
 	return append([]string{dnsHost}, networking.EndpointLoopbackAddresses()...)
 }

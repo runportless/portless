@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 func TestLocalDependenciesIsolateRootAndRelayInspection(t *testing.T) {
@@ -22,9 +22,9 @@ func TestLocalDependenciesIsolateRootAndRelayInspection(t *testing.T) {
 			}
 			return root, nil
 		},
-		inspectRelay: func(context.Context) (relay.InstallationStatus, error) {
+		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
 			relayInspections++
-			return relay.InstallationStatus{Platform: "fixture"}, nil
+			return relayinstallation.InstallationStatus{Platform: "fixture"}, nil
 		},
 	})
 	if err != nil {

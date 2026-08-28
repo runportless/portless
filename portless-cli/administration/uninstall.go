@@ -13,7 +13,7 @@ import (
 	apiclient "github.com/runportless/portless/portless-daemon/api/client"
 	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 var uninstallRemovalCategories = []string{
@@ -238,11 +238,11 @@ func (c *Commands) inspectUninstall(ctx context.Context) (uninstallOutput, error
 	return result, nil
 }
 
-func relayUninstallBlockers(status relay.InstallationStatus, paths installation.Layout, uid int) []string {
-	return relayUninstallBlockersWithValidator(status, paths, uid, relay.ValidateOwnership)
+func relayUninstallBlockers(status relayinstallation.InstallationStatus, paths installation.Layout, uid int) []string {
+	return relayUninstallBlockersWithValidator(status, paths, uid, relayinstallation.ValidateOwnership)
 }
 
-func relayUninstallBlockersWithValidator(status relay.InstallationStatus, paths installation.Layout, uid int, validateOwner func(relay.InstallationStatus, int) error) []string {
+func relayUninstallBlockersWithValidator(status relayinstallation.InstallationStatus, paths installation.Layout, uid int, validateOwner func(relayinstallation.InstallationStatus, int) error) []string {
 	if !status.Installed {
 		return nil
 	}
@@ -313,7 +313,7 @@ func (c *Commands) removeRelayForUninstall(ctx context.Context, relayStatus unin
 		output = c.Err
 	}
 	uid, _ := c.Local.UserIDs()
-	return c.Local.UninstallRelay(ctx, relay.UninstallRequest{
+	return c.Local.UninstallRelay(ctx, relayinstallation.UninstallRequest{
 		Executable: executable, UID: uid, Force: false, Stdin: os.Stdin, Stdout: output, Stderr: c.Err,
 	})
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/identity"
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 // DaemonController is the CLI's narrow out-of-process daemon lifecycle
@@ -65,12 +65,12 @@ type LauncherPlan struct {
 // daemon API. Tests can replace individual functions without starting local
 // processes, prompting for privileges, or opening a browser.
 type Dependencies struct {
-	InspectRelay           func(context.Context) (relay.InstallationStatus, error)
-	InstallRelay           func(context.Context, relay.SetupRequest) error
-	RestartRelay           func(context.Context, relay.RestartRequest) error
-	UninstallRelay         func(context.Context, relay.UninstallRequest) (bool, error)
-	ValidateRelayOwner     func(relay.InstallationStatus, int) error
-	ValidateRelayUninstall func(relay.InstallationStatus, int, bool) error
+	InspectRelay           func(context.Context) (relayinstallation.InstallationStatus, error)
+	InstallRelay           func(context.Context, relayinstallation.SetupRequest) error
+	RestartRelay           func(context.Context, relayinstallation.RestartRequest) error
+	UninstallRelay         func(context.Context, relayinstallation.UninstallRequest) (bool, error)
+	ValidateRelayOwner     func(relayinstallation.InstallationStatus, int) error
+	ValidateRelayUninstall func(relayinstallation.InstallationStatus, int, bool) error
 	WaitRelay              func(context.Context, time.Duration) error
 	CheckRelaySocket       func(context.Context, string) error
 	Diagnose               func(context.Context, installation.Layout, doctor.Scope, int) (doctor.Report, error)
@@ -123,7 +123,7 @@ type BrowserOutput struct {
 
 type relayStatusOutput struct {
 	State string `json:"state"`
-	relay.InstallationStatus
+	relayinstallation.InstallationStatus
 }
 
 // EnvironmentContextOutput explains which environment was selected for a

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.5.0
+  version: 12.6.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.5.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.6.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -1310,7 +1310,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.5.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.6.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1444,7 +1444,7 @@ components:
         path: { type: string, description: Existing absolute directory selected by the user. }
     RelayStatus:
       type: object
-      required: [platform, service, installed, running, healthy, httpHealthy, helperPresent, helperCurrent, configurationPresent, receiptPresent, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, dnsListenAddress, helperPath, configurationPath, receiptPath]
+      required: [platform, service, installed, running, healthy, httpHealthy, helperPresent, helperCurrent, configurationPresent, receiptPresent, dnsHealthy, resolverPresent, resolverHealthy, endpointPoolReady, endpointPoolManaged, dnsListenAddress, helperPath, configurationPath, receiptPath]
       properties:
         platform: { type: string, enum: [launchd, systemd, unsupported] }
         service: { type: string }
@@ -1457,12 +1457,16 @@ components:
         helperBuildId: { type: string, description: SHA-256 identity of the installed relay helper. }
         currentBuildId: { type: string, description: SHA-256 identity of the current Portless executable. }
         configurationPresent: { type: boolean }
+        configurationError: { type: string, description: Service or resolver content and metadata drift from the receipt-bound installation. }
         receiptPresent: { type: boolean }
         dnsHealthy: { type: boolean }
         resolverPresent: { type: boolean }
         resolverHealthy: { type: boolean }
         endpointPoolReady: { type: boolean }
+        endpointPoolManaged: { type: boolean, description: Whether this platform provisions an explicit Portless loopback alias pool. }
+        endpointPoolResidual: { type: boolean, description: Reserved Portless aliases are configured without a valid ownership receipt. }
         endpointPoolDetail: { type: string }
+        endpointPoolError: { type: string, description: Failure inspecting the platform loopback alias pool. }
         ownerUid: { type: integer, minimum: 1 }
         ownerGid: { type: integer, minimum: 1 }
         targetSocket: { type: string }

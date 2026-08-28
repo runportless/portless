@@ -1,4 +1,4 @@
-package relay
+package installation
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
+
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 type commandRunner interface {
@@ -42,16 +42,31 @@ func removeExactFile(path string) error {
 		return nil
 	}
 	err := os.Remove(path)
-	if err == nil || errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
 }
 
 func removeDirectoryIfEmpty(path string) {
-	if path != "" {
-		_ = os.Remove(path)
+	if path == "" {
+		return
 	}
+	if err := os.Remove(path); err == nil {
+		_ = syncDirectory(filepath.Dir(path))
+	}
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func validateSetupRequest(request SetupRequest) error {
@@ -61,24 +76,10 @@ func validateSetupRequest(request SetupRequest) error {
 	if err := validateExecutable(request.Executable); err != nil {
 		return err
 	}
-	if !filepath.IsAbs(request.TargetSocket) {
-		return errors.New("ingress target socket must be an absolute path")
-	}
-	cleanSocket := filepath.Clean(request.TargetSocket)
-	if cleanSocket == string(filepath.Separator) || filepath.Base(cleanSocket) != "ingress.sock" {
-		return errors.New("ingress target must be a private ingress.sock path")
-	}
-	if invalidServicePath(request.TargetSocket) {
-		return errors.New("ingress target socket contains an invalid control character or encoding")
-	}
-	if !filepath.IsAbs(request.DNSTargetSocket) || filepath.Base(filepath.Clean(request.DNSTargetSocket)) != "dns.sock" || invalidServicePath(request.DNSTargetSocket) {
-		return errors.New("DNS target must be a private dns.sock path")
-	}
-	return nil
-}
-
-func invalidServicePath(path string) bool {
-	return !utf8.ValidString(path) || strings.IndexFunc(path, unicode.IsControl) >= 0
+	return relayruntime.ValidateIdentity(relayruntime.Identity{
+		TargetSocket: request.TargetSocket, DNSTargetSocket: request.DNSTargetSocket,
+		UID: request.UID, GID: request.GID,
+	})
 }
 
 func validateExecutable(executable string) error {
@@ -124,10 +125,6 @@ func copyExecutableAtomically(source, destination string) error {
 		temporary.Close()
 		return err
 	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
 	if err := temporary.Chmod(0o755); err != nil {
 		temporary.Close()
 		return err
@@ -136,10 +133,17 @@ func copyExecutableAtomically(source, destination string) error {
 		temporary.Close()
 		return err
 	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, destination)
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(destination))
 }
 
 func writeRootFileAtomically(destination string, content []byte, mode os.FileMode) error {
@@ -156,10 +160,6 @@ func writeRootFileAtomically(destination string, content []byte, mode os.FileMod
 		temporary.Close()
 		return err
 	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
 	if err := temporary.Chmod(mode); err != nil {
 		temporary.Close()
 		return err
@@ -168,10 +168,17 @@ func writeRootFileAtomically(destination string, content []byte, mode os.FileMod
 		temporary.Close()
 		return err
 	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, destination)
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(destination))
 }
 
 func ensureRootArtifactDirectory(path string) error {
@@ -215,7 +222,7 @@ func runHostCommand(ctx context.Context, runner commandRunner, executable string
 }
 
 func portAvailable() error {
-	return addressAvailable(DefaultListenAddress, "port 80 on 127.0.0.1")
+	return addressAvailable(relayruntime.DefaultListenAddress, "port 80 on 127.0.0.1")
 }
 
 func addressAvailable(address, label string) error {
@@ -266,7 +273,7 @@ func waitForRelayAddressesAvailable(ctx context.Context, timeout time.Duration) 
 	deadline := time.Now().Add(timeout)
 	var lastError error
 	for {
-		if err := dnsAddressAvailable(DefaultDNSAddress); err == nil {
+		if err := dnsAddressAvailable(relayruntime.DefaultDNSAddress); err == nil {
 			return nil
 		} else {
 			lastError = err

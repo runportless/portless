@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/runportless/portless/portless-daemon/model"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 func TestPrintStatusShowsHTTPAndPublishedContainerEndpoints(t *testing.T) {
@@ -65,7 +65,7 @@ func TestWriteJSONLineEmitsOneCompactDocument(t *testing.T) {
 
 func TestRelayStatusJSONIncludesComputedState(t *testing.T) {
 	var output bytes.Buffer
-	if err := WriteRelayStatusJSON(&output, relay.InstallationStatus{Installed: true, Running: true, Healthy: true}); err != nil {
+	if err := WriteRelayStatusJSON(&output, relayinstallation.InstallationStatus{Installed: true, Running: true, Healthy: true}); err != nil {
 		t.Fatal(err)
 	}
 	var result map[string]any

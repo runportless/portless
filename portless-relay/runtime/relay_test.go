@@ -1,4 +1,4 @@
-package relay
+package runtime
 
 import (
 	"bufio"
@@ -163,9 +163,9 @@ func TestRunShutsDownAllProtocolListenersWhenCanceled(t *testing.T) {
 	dnsAddress := availableTCPAndUDPAddress(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := run(ctx, runtimeConfig{
-		ListenAddress: "127.0.0.1:0", TargetSocket: filepath.Join(t.TempDir(), "ingress.sock"),
-		DNSListenAddress: dnsAddress, DNSTargetSocket: filepath.Join(t.TempDir(), "dns.sock"),
+	err := run(ctx, config{
+		ListenAddress: "127.0.0.1:0", DNSListenAddress: dnsAddress,
+		identity: Identity{TargetSocket: filepath.Join(t.TempDir(), "ingress.sock"), DNSTargetSocket: filepath.Join(t.TempDir(), "dns.sock"), UID: 501, GID: 20},
 	})
 	if err != nil {
 		t.Fatalf("canceled relay runtime returned an error: %v", err)

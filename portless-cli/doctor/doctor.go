@@ -21,7 +21,9 @@ import (
 	"github.com/runportless/portless/portless-daemon/runtime/container/docker"
 	"github.com/runportless/portless/portless-daemon/runtime/container/podman"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayhealth "github.com/runportless/portless/portless-relay/health"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 // Scope identifies the Portless subsystem or collection of subsystems that a
@@ -84,7 +86,7 @@ type Report struct {
 
 type dependencies struct {
 	checkDaemon        func(context.Context) (identity.Record, error)
-	inspectRelay       func(context.Context) (relay.InstallationStatus, error)
+	inspectRelay       func(context.Context) (relayinstallation.InstallationStatus, error)
 	checkIngressSocket func(context.Context, string) error
 	checkDNSSocket     func(context.Context, string) error
 	processAlive       func(int) error
@@ -307,7 +309,12 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 		return checks
 	}
 	if !status.Installed {
-		checks = append(checks, failed("relay.installation", "relay", "Clean-URL relay is not installed", status.ConfigurationPath, "Run `portless relay install` or `portless setup`."))
+		if status.EndpointPoolResidual {
+			detail := joinDetails(status.EndpointPoolDetail, status.Problem)
+			checks = append(checks, failed("relay.installation", "relay", "Relay artifacts are absent but reserved loopback aliases remain", detail, "Review `ifconfig lo0`; remove only aliases independently verified as Portless, then run `portless relay install`."))
+		} else {
+			checks = append(checks, failed("relay.installation", "relay", "Clean-URL relay is not installed", status.ConfigurationPath, "Run `portless relay install` or `portless setup`."))
+		}
 		checks = append(checks, relaySkippedChecks()...)
 		checks = append(checks, portCheck(ctx, false, dependencies))
 		checks = append(checks, dnsPortCheck(ctx, false, dependencies))
@@ -317,6 +324,7 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 	}
 
 	missing := make([]string, 0, 2)
+	unknownOwnershipRemediation := "Run `portless relay uninstall --force` to remove fixed relay artifacts. If status then reports residual aliases, review `ifconfig lo0` and remove only aliases independently verified as Portless before reinstalling."
 	if !status.HelperPresent {
 		missing = append(missing, status.HelperPath)
 	}
@@ -326,9 +334,11 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 	if len(missing) > 0 {
 		remediation := "Run `portless relay install` to repair the relay."
 		if status.OwnerUID <= 0 {
-			remediation = "Run `portless relay uninstall --force`, then `portless relay install`."
+			remediation = unknownOwnershipRemediation
 		}
 		checks = append(checks, failed("relay.installation", "relay", "Relay installation is incomplete", "missing: "+strings.Join(missing, ", "), remediation))
+	} else if status.ConfigurationError != "" {
+		checks = append(checks, failed("relay.installation", "relay", "Relay service or resolver configuration has drifted", status.ConfigurationError, "Run `portless relay install` to restore the receipt-bound configuration."))
 	} else {
 		checks = append(checks, passed("relay.installation", "relay", "Relay helper and service configuration are installed", status.Service))
 	}
@@ -346,16 +356,16 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 
 	switch {
 	case !status.ReceiptPresent:
-		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is missing", "The installation is partial and its owner cannot be verified.", "Run `portless relay uninstall --force`, then `portless relay install`."))
+		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is missing", "The installation is partial and its owner cannot be verified.", unknownOwnershipRemediation))
 	case status.OwnerUID <= 0:
-		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is invalid", status.Problem, "Run `portless relay uninstall --force`, then `portless relay install`."))
+		checks = append(checks, failed("relay.receipt", "relay", "Relay ownership receipt is invalid", status.Problem, unknownOwnershipRemediation))
 	default:
 		checks = append(checks, passed("relay.receipt", "relay", "Relay ownership receipt is valid", status.ReceiptPath))
 	}
 
 	switch {
 	case status.OwnerUID <= 0:
-		checks = append(checks, failed("relay.ownership", "relay", "Relay owner could not be determined", status.Problem, "Run `portless relay uninstall --force`, then `portless relay install`."))
+		checks = append(checks, failed("relay.ownership", "relay", "Relay owner could not be determined", status.Problem, unknownOwnershipRemediation))
 	case status.OwnerUID != uid:
 		checks = append(checks, failed("relay.ownership", "relay", "Relay belongs to a different local user", fmt.Sprintf("configured UID %d; current UID %d", status.OwnerUID, uid), "Run `portless relay uninstall --force` before installing it for this user."))
 	default:
@@ -398,12 +408,12 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 	checks = append(checks, portCheck(ctx, true, dependencies))
 	checks = append(checks, dnsPortCheck(ctx, true, dependencies))
 	if status.HTTPHealthy {
-		checks = append(checks, passed("relay.end_to_end", "relay", "Clean URL reaches the Portless daemon", relay.ControlOrigin))
+		checks = append(checks, passed("relay.end_to_end", "relay", "Clean URL reaches the Portless daemon", relayruntime.ControlOrigin))
 	} else {
 		checks = append(checks, failed("relay.end_to_end", "relay", "Clean URL cannot reach the Portless daemon", status.HealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
 	}
 	if status.DNSHealthy {
-		checks = append(checks, passed("relay.dns_end_to_end", "relay", "Portless DNS answers authoritative endpoint queries", relay.DefaultDNSAddress))
+		checks = append(checks, passed("relay.dns_end_to_end", "relay", "Portless DNS answers authoritative endpoint queries", relayruntime.DefaultDNSAddress))
 	} else {
 		checks = append(checks, failed("relay.dns_end_to_end", "relay", "Portless DNS cannot answer endpoint queries", status.DNSHealthError, "Run `portless doctor daemon`, then `portless relay restart` once the daemon is healthy."))
 	}
@@ -456,18 +466,18 @@ func dnsPortCheck(ctx context.Context, installed bool, dependencies dependencies
 	defer cancel()
 	listening, err := dependencies.dnsListening(probeContext)
 	if err != nil {
-		return failed("relay.dns_listener", "relay", "Could not inspect "+relay.DefaultDNSAddress, err.Error(), "Inspect local listeners on the Portless DNS address and retry.")
+		return failed("relay.dns_listener", "relay", "Could not inspect "+relayruntime.DefaultDNSAddress, err.Error(), "Inspect local listeners on the Portless DNS address and retry.")
 	}
 	if installed && listening {
-		return passed("relay.dns_listener", "relay", "A listener is accepting DNS connections on "+relay.DefaultDNSAddress, "UDP and TCP are owned by the relay")
+		return passed("relay.dns_listener", "relay", "A listener is accepting DNS connections on "+relayruntime.DefaultDNSAddress, "UDP and TCP are owned by the relay")
 	}
 	if installed {
-		return failed("relay.dns_listener", "relay", "Nothing is listening on "+relay.DefaultDNSAddress, "The relay is installed but DNS is unavailable.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
+		return failed("relay.dns_listener", "relay", "Nothing is listening on "+relayruntime.DefaultDNSAddress, "The relay is installed but DNS is unavailable.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
 	}
 	if listening {
-		return failed("relay.dns_listener", "relay", "The Portless DNS address is occupied by an unrecognized listener", relay.DefaultDNSAddress, "Stop the conflicting listener, then run `portless relay install`.")
+		return failed("relay.dns_listener", "relay", "The Portless DNS address is occupied by an unrecognized listener", relayruntime.DefaultDNSAddress, "Stop the conflicting listener, then run `portless relay install`.")
 	}
-	return passed("relay.dns_listener", "relay", "The Portless DNS address appears available", relay.DefaultDNSAddress)
+	return passed("relay.dns_listener", "relay", "The Portless DNS address appears available", relayruntime.DefaultDNSAddress)
 }
 
 func checkPortlessDNS(ctx context.Context, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {
@@ -499,15 +509,15 @@ func portCheck(ctx context.Context, installed bool, dependencies dependencies) C
 		return failed("relay.port_80", "relay", "Could not inspect 127.0.0.1:80", err.Error(), "Inspect local listeners on port 80 and retry.")
 	}
 	if installed && listening {
-		return passed("relay.port_80", "relay", "A listener is accepting connections on 127.0.0.1:80", relay.DefaultListenAddress)
+		return passed("relay.port_80", "relay", "A listener is accepting connections on 127.0.0.1:80", relayruntime.DefaultListenAddress)
 	}
 	if installed {
 		return failed("relay.port_80", "relay", "Nothing is listening on 127.0.0.1:80", "The relay is installed but is not accepting connections.", "Run `portless relay restart`; use `portless relay install` if restart fails.")
 	}
 	if listening {
-		return failed("relay.port_80", "relay", "Port 80 is occupied by an unrecognized listener", relay.DefaultListenAddress, "Stop the process using 127.0.0.1:80, then run `portless relay restart`.")
+		return failed("relay.port_80", "relay", "Port 80 is occupied by an unrecognized listener", relayruntime.DefaultListenAddress, "Stop the process using 127.0.0.1:80, then run `portless relay restart`.")
 	}
-	return passed("relay.port_80", "relay", "Port 80 appears available for Portless", relay.DefaultListenAddress)
+	return passed("relay.port_80", "relay", "Port 80 appears available for Portless", relayruntime.DefaultListenAddress)
 }
 
 func checkLocalhostDNS(ctx context.Context, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {
@@ -587,7 +597,7 @@ func processAlive(pid int) error {
 
 func portListening(ctx context.Context) (bool, error) {
 	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	connection, err := dialer.DialContext(ctx, "tcp", relay.DefaultListenAddress)
+	connection, err := dialer.DialContext(ctx, "tcp", relayruntime.DefaultListenAddress)
 	if err == nil {
 		_ = connection.Close()
 		return true, nil
@@ -600,7 +610,7 @@ func portListening(ctx context.Context) (bool, error) {
 
 func dnsListening(ctx context.Context) (bool, error) {
 	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	connection, err := dialer.DialContext(ctx, "tcp", relay.DefaultDNSAddress)
+	connection, err := dialer.DialContext(ctx, "tcp", relayruntime.DefaultDNSAddress)
 	if err == nil {
 		_ = connection.Close()
 		return true, nil
@@ -624,8 +634,8 @@ func probeRuntimes(ctx context.Context) []container.ProbeResult {
 
 func defaultDependencies(manager *control.Manager) dependencies {
 	return dependencies{
-		checkDaemon: manager.Check, inspectRelay: relay.Inspect,
-		checkIngressSocket: relay.CheckSocket, checkDNSSocket: relay.CheckDNSSocket, processAlive: processAlive,
+		checkDaemon: manager.Check, inspectRelay: relayinstallation.Inspect,
+		checkIngressSocket: relayhealth.CheckSocket, checkDNSSocket: relayruntime.CheckDNSSocket, processAlive: processAlive,
 		lookupIP: net.DefaultResolver.LookupIPAddr, portListening: portListening, dnsListening: dnsListening,
 		probeRuntimes: probeRuntimes,
 	}

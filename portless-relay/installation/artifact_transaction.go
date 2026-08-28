@@ -1,4 +1,4 @@
-package relay
+package installation
 
 import (
 	"errors"
@@ -15,7 +15,9 @@ type artifactBackup struct {
 }
 
 type artifactTransaction struct {
-	backups []artifactBackup
+	backups      []artifactBackup
+	rollbackFunc func() error
+	commitFunc   func() error
 }
 
 func beginArtifactTransaction(paths ...string) (*artifactTransaction, error) {
@@ -57,6 +59,10 @@ func backupArtifact(path string) (artifactBackup, error) {
 	if err := os.Link(path, backup.backupPath); err != nil {
 		return artifactBackup{}, fmt.Errorf("snapshot relay artifact %s: %w", path, err)
 	}
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		_ = os.Remove(backup.backupPath)
+		return artifactBackup{}, fmt.Errorf("sync relay artifact backup for %s: %w", path, err)
+	}
 	backup.existed = true
 	return backup, nil
 }
@@ -64,6 +70,9 @@ func backupArtifact(path string) (artifactBackup, error) {
 func (transaction *artifactTransaction) rollback() error {
 	if transaction == nil {
 		return nil
+	}
+	if transaction.rollbackFunc != nil {
+		return transaction.rollbackFunc()
 	}
 	var rollbackErr error
 	for index := len(transaction.backups) - 1; index >= 0; index-- {
@@ -76,6 +85,10 @@ func (transaction *artifactTransaction) rollback() error {
 			}
 			backup.backupPath = ""
 			backup.preserve = false
+			if err := syncDirectory(filepath.Dir(backup.path)); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("sync restored relay artifact %s: %w", backup.path, err))
+				continue
+			}
 			continue
 		}
 		if err := removeExactFile(backup.path); err != nil {
@@ -90,6 +103,9 @@ func (transaction *artifactTransaction) commit() error {
 	if transaction == nil {
 		return nil
 	}
+	if transaction.commitFunc != nil {
+		return transaction.commitFunc()
+	}
 	return transaction.discard()
 }
 
@@ -100,7 +116,7 @@ func (transaction *artifactTransaction) discard() error {
 		if backup.backupPath == "" || backup.preserve {
 			continue
 		}
-		if err := os.Remove(backup.backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeExactFile(backup.backupPath); err != nil {
 			discardErr = errors.Join(discardErr, fmt.Errorf("remove relay artifact backup %s: %w", backup.backupPath, err))
 			continue
 		}

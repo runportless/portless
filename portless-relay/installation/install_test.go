@@ -1,4 +1,4 @@
-package relay
+package installation
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 func TestDNSAddressAvailabilityChecksUDPAndTCP(t *testing.T) {
@@ -217,5 +219,43 @@ func TestInstallationReceiptRequiresCurrentSchemaAndSafeLoopbackManifest(t *test
 	}
 	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "larger than 64 KiB") {
 		t.Fatalf("oversized receipt was accepted: %v", err)
+	}
+}
+
+func TestValidateRuntimeReceiptRequiresExactInstalledIdentity(t *testing.T) {
+	receipt := installationReceipt{
+		OwnerUID: 501, OwnerGID: 20,
+		TargetSocket:      "/Users/dev/.portless/ingress.sock",
+		DNSTargetSocket:   "/Users/dev/.portless/dns.sock",
+		LoopbackAddresses: managedRelayLoopbackAddresses(),
+	}
+	config := relayruntime.Identity{
+		TargetSocket: receipt.TargetSocket, DNSTargetSocket: receipt.DNSTargetSocket,
+		UID: receipt.OwnerUID, GID: receipt.OwnerGID,
+	}
+	if err := validateRuntimeReceipt(receipt, config); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*relayruntime.Identity)
+	}{
+		{name: "uid", mutate: func(config *relayruntime.Identity) { config.UID++ }},
+		{name: "gid", mutate: func(config *relayruntime.Identity) { config.GID++ }},
+		{name: "http socket", mutate: func(config *relayruntime.Identity) { config.TargetSocket = "/tmp/other/ingress.sock" }},
+		{name: "dns socket", mutate: func(config *relayruntime.Identity) { config.DNSTargetSocket = "/tmp/other/dns.sock" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mismatched := config
+			test.mutate(&mismatched)
+			if err := validateRuntimeReceipt(receipt, mismatched); err == nil || !strings.Contains(err.Error(), "does not match") {
+				t.Fatalf("mismatched runtime identity was accepted: %v", err)
+			}
+		})
+	}
+	receipt.LoopbackAddresses = []string{"127.77.0.1"}
+	if err := validateRuntimeReceipt(receipt, config); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("stale runtime receipt was accepted: %v", err)
 	}
 }

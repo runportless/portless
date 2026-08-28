@@ -25,7 +25,9 @@ import (
 	"github.com/runportless/portless/portless-cli/doctor"
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/networking"
-	"github.com/runportless/portless/portless-relay"
+	relayhealth "github.com/runportless/portless/portless-relay/health"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 	"golang.org/x/sys/unix"
 )
 
@@ -126,10 +128,10 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 
 	dnsContext, cancelDNS := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancelDNS()
-	if err := relay.CheckDNS(dnsContext); err != nil {
+	if err := relayhealth.CheckDNS(dnsContext); err != nil {
 		t.Fatalf("direct relay DNS check failed: %v", err)
 	}
-	if err := relay.CheckResolver(dnsContext); err != nil {
+	if err := relayhealth.CheckResolver(dnsContext); err != nil {
 		t.Fatalf("system resolver did not use the installed Portless route: %v", err)
 	}
 	if os.Getenv(destructiveRelayResourceOptIn) == "1" {
@@ -143,7 +145,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 	var restarted struct {
 		Action string `json:"action"`
 		State  string `json:"state"`
-		relay.InstallationStatus
+		relayinstallation.InstallationStatus
 	}
 	decodeJSON(t, restartResult.Stdout, &restarted)
 	if restarted.Action != "restart" || restarted.State != "ready" || !restarted.Healthy {
@@ -230,8 +232,8 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 		t.Fatalf("full uninstall retained test installation data: %v", err)
 	}
 	assertRelayAbsent(t, mustRelayStatus(t, harness.runTest("--json", "relay", "status")))
-	waitForNoTCPListener(t, relay.DefaultListenAddress)
-	waitForNoTCPListener(t, relay.DefaultDNSAddress)
+	waitForNoTCPListener(t, relayruntime.DefaultListenAddress)
+	waitForNoTCPListener(t, relayruntime.DefaultDNSAddress)
 	if err := waitForResolverRemoval(); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +257,7 @@ func TestDestructiveRelayLifecycle(t *testing.T) {
 
 type relayStatus struct {
 	State string `json:"state"`
-	relay.InstallationStatus
+	relayinstallation.InstallationStatus
 }
 
 type daemonStatus struct {
@@ -404,11 +406,11 @@ func (harness *machineHarness) takeMachineOwnership() error {
 	if status.Installed {
 		return fmt.Errorf("machine-wide relay remains installed after pre-test removal: %#v", status)
 	}
-	if listenerAccepting(relay.DefaultListenAddress) {
-		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", relay.DefaultListenAddress)
+	if listenerAccepting(relayruntime.DefaultListenAddress) {
+		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", relayruntime.DefaultListenAddress)
 	}
-	if listenerAccepting(relay.DefaultDNSAddress) {
-		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", relay.DefaultDNSAddress)
+	if listenerAccepting(relayruntime.DefaultDNSAddress) {
+		return fmt.Errorf("%s is occupied after relay removal; refusing to install the test relay", relayruntime.DefaultDNSAddress)
 	}
 	return nil
 }
@@ -604,7 +606,7 @@ func assertDarwinLoopbackPoolAbsent(t *testing.T) {
 		}
 	}
 	managed := append([]string{}, networking.EndpointLoopbackAddresses()...)
-	dnsHost, _, _ := net.SplitHostPort(relay.DefaultDNSAddress)
+	dnsHost, _, _ := net.SplitHostPort(relayruntime.DefaultDNSAddress)
 	managed = append(managed, dnsHost)
 	for _, address := range managed {
 		if configured[address] {
@@ -645,7 +647,7 @@ func relayRequest(t *testing.T, host, path string) *http.Response {
 	transport := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", relay.DefaultListenAddress)
+			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", relayruntime.DefaultListenAddress)
 		},
 		DisableKeepAlives: true,
 	}
@@ -670,7 +672,7 @@ func newRelayClient(t *testing.T) *http.Client {
 	transport := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", relay.DefaultListenAddress)
+			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", relayruntime.DefaultListenAddress)
 		},
 		DisableKeepAlives: true,
 	}
@@ -840,7 +842,7 @@ func waitForResolverRemoval() error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		err := relay.CheckResolver(ctx)
+		err := relayhealth.CheckResolver(ctx)
 		cancel()
 		if err != nil {
 			return nil
@@ -850,7 +852,7 @@ func waitForResolverRemoval() error {
 	return errors.New("system resolver still routes portless.test after relay uninstall")
 }
 
-func installationRoot(status relay.InstallationStatus) (string, error) {
+func installationRoot(status relayinstallation.InstallationStatus) (string, error) {
 	if !filepath.IsAbs(status.TargetSocket) || !filepath.IsAbs(status.DNSTargetSocket) {
 		return "", errors.New("existing relay has non-absolute daemon socket targets")
 	}

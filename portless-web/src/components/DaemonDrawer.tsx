@@ -300,7 +300,7 @@ function RuntimePanel({ status, diagnostics, runtime, relay, active, handoff, ha
         <NetworkDetail label="HTTP INGRESS" value="127.0.0.1:80" healthy={relay?.httpHealthy === true} />
         <NetworkDetail label="ENDPOINT DNS" value={relay?.dnsListenAddress || '127.77.0.1:1053'} healthy={relay?.dnsHealthy === true} />
         <NetworkDetail label="DNS ZONES" value="localhost · portless.test" healthy={relay?.resolverHealthy === true} />
-        <NetworkDetail label="TCP ADDRESS POOL" value={relay?.endpointPoolDetail || 'not provisioned'} healthy={relay?.endpointPoolReady === true} />
+        <NetworkDetail label="TCP ADDRESS POOL" value={relay?.endpointPoolResidual ? `unverified residual · ${relay.endpointPoolDetail || 'reserved aliases configured'}` : relay?.endpointPoolDetail || 'not provisioned'} healthy={relay?.endpointPoolReady === true && relay?.endpointPoolResidual !== true} />
       </div>
       <RelayRuntime relay={relay} />
       {!relay?.healthy && <p>{relay?.problem || relay?.resolverHealthError || relay?.dnsHealthError || relay?.healthError || 'Run portless doctor relay to inspect clean HTTP URLs and TCP endpoint DNS.'}</p>}
@@ -454,6 +454,7 @@ function runtimePreference(value: RuntimeStatus['preference']) {
 
 function relayCurrency(relay: RelayStatus | null) {
   if (!relay) return { value: 'Unavailable', detail: 'Relay status unavailable' }
+  if (!relay.installed && relay.endpointPoolResidual) return { value: 'Residual aliases', detail: 'Ownership receipt unavailable' }
   if (!relay.installed) return { value: 'Not installed', detail: 'Run portless setup' }
   if (relay.helperCurrent) return {
     value: 'Matches daemon build',
@@ -516,7 +517,7 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
     `HTTP ingress: ${relay?.httpHealthy ? 'ready' : 'not ready'} (127.0.0.1:80)`,
     `Endpoint DNS: ${relay?.dnsHealthy ? 'ready' : 'not ready'} (${relay?.dnsListenAddress || '127.77.0.1:1053'})`,
     `DNS resolver: ${relay?.resolverHealthy ? 'ready' : 'not ready'} (localhost, portless.test)`,
-    `TCP endpoint pool: ${relay?.endpointPoolReady ? 'ready' : 'not ready'}${relay?.endpointPoolDetail ? ` (${relay.endpointPoolDetail})` : ''}`,
+    `TCP endpoint pool: ${relay?.endpointPoolResidual ? 'residual; ownership unverified' : relay?.endpointPoolReady ? 'ready' : 'not ready'}${relay?.endpointPoolDetail ? ` (${relay.endpointPoolDetail})` : ''}`,
     `Relay service: ${relay?.service || 'not installed'} (${relay?.platform || 'unknown platform'}, ${relay?.running ? 'running' : 'stopped'})`,
     `Relay helper: ${helper.value} (${helper.detail})`,
     `State database: ${storage ? formatBytes(storage.databaseBytes) : 'not inspected'}`,

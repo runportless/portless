@@ -13,7 +13,7 @@ import (
 	"github.com/runportless/portless/portless-cli/command"
 	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 func TestUninstallPreviewExplainsExactScopeAndConfirmation(t *testing.T) {
@@ -304,7 +304,7 @@ func TestFullUninstallNeverOverridesRelayOwnershipOrAnotherDataDirectory(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned := relay.InstallationStatus{Installed: true, OwnerUID: 501, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket}
+	owned := relayinstallation.InstallationStatus{Installed: true, OwnerUID: 501, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket}
 	if blockers := relayUninstallBlockers(owned, paths, 501); len(blockers) != 0 {
 		t.Fatalf("current installation was blocked: %#v", blockers)
 	}

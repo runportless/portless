@@ -98,6 +98,11 @@ Important dependency rules are enforced by `tests/architecture`:
 - Daemon feature packages do not import the CLI, relay implementation, API
   server, or daemon composition root.
 - The relay does not import CLI or daemon control-plane implementations.
+- The `portless-relay` root only dispatches fixed private executable modes.
+  `runtime` owns the HTTP/DNS data plane and has no relay-package dependency;
+  `health` may depend on `runtime`; `installation` may depend on `health` and
+  `runtime`. Callers import the package that owns the behavior rather than the
+  relay composition root.
 - `portless-daemon/system/installation` uses only the Go standard library.
 
 Run `go test ./tests/architecture` after moving packages, adding imports, or

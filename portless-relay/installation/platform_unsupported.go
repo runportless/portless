@@ -1,10 +1,12 @@
 //go:build !darwin && !linux
 
-package relay
+package installation
 
 import (
 	"context"
 	"errors"
+
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 type unsupportedPlatform struct{}
@@ -23,12 +25,16 @@ func (unsupportedPlatform) uninstall(context.Context, uninstallSpec) error {
 	return errors.New("localhost relay uninstall is currently supported on macOS and systemd Linux")
 }
 
-func (unsupportedPlatform) prepareRuntime(context.Context) error {
+func (unsupportedPlatform) prepareRuntime(context.Context, relayruntime.Identity) error {
 	return errors.New("Portless loopback endpoint pools are unsupported on this platform")
 }
 
-func (unsupportedPlatform) loopbackPoolStatus() (bool, string, error) {
-	return false, "unsupported platform", nil
+func (unsupportedPlatform) expectedArtifacts(installationReceipt) ([]expectedArtifact, error) {
+	return nil, nil
+}
+
+func (unsupportedPlatform) loopbackPoolStatus() (endpointPoolStatus, error) {
+	return endpointPoolStatus{detail: "unsupported platform"}, nil
 }
 
 func (unsupportedPlatform) installation() platformInstallation {

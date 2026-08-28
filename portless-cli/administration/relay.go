@@ -8,12 +8,13 @@ import (
 	"time"
 
 	"github.com/runportless/portless/portless-cli/command"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 type relayStatusOutput struct {
 	State string `json:"state"`
-	relay.InstallationStatus
+	relayinstallation.InstallationStatus
 }
 
 type relayActionOutput struct {
@@ -30,8 +31,11 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 	if err != nil {
 		return err
 	}
+	if !status.Installed && status.EndpointPoolResidual {
+		return errors.New("unverified reserved Portless loopback aliases remain from an incomplete installation; run `portless relay status` for safe manual recovery guidance")
+	}
 	if status.Installed && status.OwnerUID <= 0 {
-		return errors.New("the existing clean-URL relay owner could not be determined; inspect `portless relay status`, then remove it with `portless relay uninstall --force`")
+		return errors.New("the existing clean-URL relay owner could not be determined; inspect `portless relay status`, then use `portless relay uninstall --force` to remove fixed artifacts; unverified loopback aliases require separate manual verification")
 	}
 	if status.Installed && status.OwnerUID != uid {
 		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless relay uninstall --force` before installing it for this user", status.OwnerUID)
@@ -41,7 +45,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 			return command.WriteRelayStatusJSON(c.Out, status)
 		}
 		fmt.Fprintln(c.Out, "Clean local endpoints are already configured.")
-		fmt.Fprintln(c.Out, c.Accent(c.Out, relay.ControlOrigin))
+		fmt.Fprintln(c.Out, c.Accent(c.Out, relayruntime.ControlOrigin))
 		fmt.Fprintln(c.Out, c.Accent(c.Out, "*.localhost"))
 		fmt.Fprintln(c.Out, c.Accent(c.Out, "*.portless.test"))
 		return nil
@@ -61,7 +65,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 	if jsonOutput {
 		installOutput = c.Err
 	}
-	if err := c.Local.InstallRelay(ctx, relay.SetupRequest{
+	if err := c.Local.InstallRelay(ctx, relayinstallation.SetupRequest{
 		Executable: executable, TargetSocket: c.Paths.IngressSocket, DNSTargetSocket: c.Paths.DNSSocket,
 		UID: uid, GID: gid, Stdin: os.Stdin, Stdout: installOutput, Stderr: c.Err,
 	}); err != nil {
@@ -78,7 +82,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 		return command.WriteRelayStatusJSON(c.Out, ready)
 	}
 	fmt.Fprintln(c.Out, "Clean local endpoints are", c.Success(c.Out, "ready")+".")
-	fmt.Fprintln(c.Out, c.Accent(c.Out, relay.ControlOrigin))
+	fmt.Fprintln(c.Out, c.Accent(c.Out, relayruntime.ControlOrigin))
 	fmt.Fprintln(c.Out, c.Accent(c.Out, "*.localhost"))
 	fmt.Fprintln(c.Out, c.Accent(c.Out, "*.portless.test"))
 	return nil
@@ -94,11 +98,22 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 	}
 	fmt.Fprintln(c.Out, c.Heading(c.Out, "Portless relay:"), c.State(c.Out, status.State()))
 	fmt.Fprintln(c.Out, "Platform:", status.Platform)
-	fmt.Fprintln(c.Out, "HTTP listener:", relay.DefaultListenAddress)
-	fmt.Fprintln(c.Out, "Control URL:", relay.ControlOrigin)
+	fmt.Fprintln(c.Out, "HTTP listener:", relayruntime.DefaultListenAddress)
+	fmt.Fprintln(c.Out, "Control URL:", relayruntime.ControlOrigin)
 	fmt.Fprintln(c.Out, "DNS domains:", "localhost, portless.test")
-	fmt.Fprintln(c.Out, "DNS listener:", relay.DefaultDNSAddress, "(UDP and TCP)")
+	fmt.Fprintln(c.Out, "DNS listener:", relayruntime.DefaultDNSAddress, "(UDP and TCP)")
 	if !status.Installed {
+		if status.EndpointPoolResidual {
+			fmt.Fprintln(c.Out, c.Failure(c.Out, "Reserved endpoint pool:"), "present without a valid ownership receipt")
+			if status.EndpointPoolDetail != "" {
+				fmt.Fprintln(c.Out, "  "+status.EndpointPoolDetail)
+			}
+			if status.Problem != "" {
+				fmt.Fprintln(c.Out, c.Failure(c.Out, "Problem:"), status.Problem)
+			}
+			fmt.Fprintln(c.Out, "Review `ifconfig lo0`; remove only aliases you can independently verify as Portless, then rerun `portless relay install`.")
+			return nil
+		}
 		fmt.Fprintln(c.Out, "Run `portless relay install` or `portless setup` to install it.")
 		return nil
 	}
@@ -133,13 +148,19 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 	}
 	fmt.Fprintln(c.Out, "Helper:", status.HelperPath)
 	helperBuildState := "unknown"
+	helperOutdated := false
 	if status.HelperCurrent {
 		helperBuildState = "current"
 	} else if status.HelperBuildID != "" && status.CurrentBuildID != "" {
-		helperBuildState = "outdated; run `portless setup` to refresh it"
+		helperOutdated = true
+		helperBuildState = fmt.Sprintf("outdated (installed %s, current %s)", shortFingerprint(status.HelperBuildID), shortFingerprint(status.CurrentBuildID))
 	}
 	fmt.Fprintln(c.Out, "Helper build:", helperBuildState)
-	fmt.Fprintln(c.Out, "Configuration:", status.ConfigurationPath)
+	configurationState := status.ConfigurationPath
+	if status.ConfigurationError != "" {
+		configurationState += " (drifted)"
+	}
+	fmt.Fprintln(c.Out, "Configuration:", configurationState)
 	fmt.Fprintln(c.Out, "Receipt:", status.ReceiptPath)
 	if status.HealthError != "" {
 		fmt.Fprintln(c.Out, c.Failure(c.Out, "HTTP check:"), status.HealthError)
@@ -150,10 +171,38 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 	if status.ResolverHealthError != "" {
 		fmt.Fprintln(c.Out, c.Failure(c.Out, "Resolver check:"), status.ResolverHealthError)
 	}
+	currentUID, _ := c.Local.UserIDs()
+	repairGuidance := relayRepairGuidance(status, currentUID, helperOutdated)
+	if repairGuidance != "" {
+		fmt.Fprintln(c.Out, c.Failure(c.Out, "Action required:"), repairGuidance)
+		fmt.Fprintln(c.Out, "Run `portless relay install` to update the privileged helper and repair the system service and DNS configuration.")
+		fmt.Fprintln(c.Out, "The repair may request administrator approval and does not stop running environments.")
+	}
 	if status.Problem != "" {
-		fmt.Fprintln(c.Out, c.Failure(c.Out, "Problem:"), status.Problem)
+		label := "Problem:"
+		if repairGuidance != "" {
+			label = "Details:"
+		}
+		fmt.Fprintln(c.Out, c.Failure(c.Out, label), status.Problem)
 	}
 	return nil
+}
+
+func relayRepairGuidance(status relayinstallation.InstallationStatus, currentUID int, helperOutdated bool) string {
+	if !status.ReceiptPresent || status.OwnerUID <= 0 || status.OwnerUID != currentUID {
+		return ""
+	}
+	configurationDrifted := status.ConfigurationError != ""
+	switch {
+	case helperOutdated && configurationDrifted:
+		return "The installed privileged helper is from an older Portless build, and its system configuration no longer matches the current Portless installation."
+	case helperOutdated:
+		return "The installed privileged helper is from an older Portless build."
+	case configurationDrifted:
+		return "The relay service or DNS configuration no longer matches the current Portless installation."
+	default:
+		return ""
+	}
 }
 
 func (c *Commands) restartRelay(ctx context.Context, jsonOutput bool) error {
@@ -188,7 +237,7 @@ func (c *Commands) restartRelay(ctx context.Context, jsonOutput bool) error {
 	if jsonOutput {
 		restartOutput = c.Err
 	}
-	if err := c.Local.RestartRelay(ctx, relay.RestartRequest{
+	if err := c.Local.RestartRelay(ctx, relayinstallation.RestartRequest{
 		Executable: executable, UID: uid, Stdin: os.Stdin, Stdout: restartOutput, Stderr: c.Err,
 	}); err != nil {
 		return err
@@ -207,7 +256,7 @@ func (c *Commands) restartRelay(ctx context.Context, jsonOutput bool) error {
 		})
 	}
 	fmt.Fprintln(c.Out, "Clean-URL relay restarted and", c.Success(c.Out, "ready")+".")
-	fmt.Fprintln(c.Out, c.Accent(c.Out, relay.ControlOrigin))
+	fmt.Fprintln(c.Out, c.Accent(c.Out, relayruntime.ControlOrigin))
 	return nil
 }
 
@@ -217,6 +266,9 @@ func (c *Commands) uninstallRelay(ctx context.Context, force, jsonOutput bool) e
 		return err
 	}
 	if !status.Installed {
+		if status.EndpointPoolResidual {
+			return errors.New("the relay is not installed, but unverified reserved loopback aliases remain; run `portless relay status` for safe manual recovery guidance")
+		}
 		if jsonOutput {
 			return command.WriteJSON(c.Out, command.ActionOutput{Action: "uninstall", Status: "not-installed"})
 		}
@@ -248,7 +300,7 @@ func (c *Commands) uninstallRelay(ctx context.Context, force, jsonOutput bool) e
 	if jsonOutput {
 		uninstallOutput = c.Err
 	}
-	removed, err := c.Local.UninstallRelay(ctx, relay.UninstallRequest{
+	removed, err := c.Local.UninstallRelay(ctx, relayinstallation.UninstallRequest{
 		Executable: executable, UID: uid, Force: force, Stdin: os.Stdin, Stdout: uninstallOutput, Stderr: c.Err,
 	})
 	if err != nil {
@@ -264,7 +316,7 @@ func (c *Commands) uninstallRelay(ctx context.Context, force, jsonOutput bool) e
 	if jsonOutput {
 		return command.WriteJSON(c.Out, command.ActionOutput{Action: "uninstall", Name: status.Service, Status: "removed"})
 	}
-	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80, "+relay.DefaultDNSAddress+", its reserved loopback endpoint pool, or its scoped resolver entries.")
+	fmt.Fprintln(c.Out, "Clean-URL relay removed. Portless no longer owns 127.0.0.1:80, "+relayruntime.DefaultDNSAddress+", its reserved loopback endpoint pool, or its scoped resolver entries.")
 	fmt.Fprintln(c.Out, "Running environments were not stopped, but their clean localhost URLs are unavailable until `portless relay install` or `portless setup` is run.")
 	return nil
 }

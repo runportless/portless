@@ -16,7 +16,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/lifecycle"
 	"github.com/runportless/portless/portless-daemon/runtime/container"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 func TestDaemonChecksHealthyExistingDaemonWithoutStartingIt(t *testing.T) {
@@ -104,7 +104,7 @@ func TestRelayChecksHealthyInstallation(t *testing.T) {
 	uid := 501
 	dependencies := dependencies{
 		lookupIP: loopbackLookup,
-		inspectRelay: func(context.Context) (relay.InstallationStatus, error) {
+		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
 			return healthyRelayStatus(paths, uid), nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
@@ -124,7 +124,7 @@ func TestRelayChecksWarnWhenInstalledHelperIsOutdated(t *testing.T) {
 	uid := 501
 	dependencies := dependencies{
 		lookupIP: loopbackLookup,
-		inspectRelay: func(context.Context) (relay.InstallationStatus, error) {
+		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
 			status := healthyRelayStatus(paths, uid)
 			status.HelperCurrent = false
 			status.HelperBuildID = "old-helper-build"
@@ -141,6 +141,28 @@ func TestRelayChecksWarnWhenInstalledHelperIsOutdated(t *testing.T) {
 	}
 }
 
+func TestRelayChecksFailWhenReceiptBoundConfigurationDrifts(t *testing.T) {
+	paths, err := installation.ResolveLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := 501
+	status := healthyRelayStatus(paths, uid)
+	status.Healthy = false
+	status.ConfigurationError = "relay artifact /fixed/config content does not match the ownership receipt"
+	dependencies := dependencies{
+		lookupIP:      loopbackLookup,
+		inspectRelay:  func(context.Context) (relayinstallation.InstallationStatus, error) { return status, nil },
+		portListening: func(context.Context) (bool, error) { return true, nil },
+		dnsListening:  func(context.Context) (bool, error) { return true, nil },
+	}
+	report := run(context.Background(), paths, ScopeRelay, uid, dependencies)
+	check := checkByCode(t, report, "relay.installation")
+	if check.Status != StatusFail || !strings.Contains(check.Summary, "configuration has drifted") || !strings.Contains(check.Remediation, "receipt-bound") {
+		t.Fatalf("configuration drift was not diagnosed: %#v", check)
+	}
+}
+
 func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testing.T) {
 	paths, err := installation.ResolveLayout(t.TempDir())
 	if err != nil {
@@ -148,7 +170,7 @@ func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testi
 	}
 	uid := 501
 	base := dependencies{
-		inspectRelay: func(context.Context) (relay.InstallationStatus, error) {
+		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
 			return healthyRelayStatus(paths, uid), nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
@@ -171,8 +193,8 @@ func TestRelayResolverUnavailableIsInformationalOnlyWhenEndToEndHealthy(t *testi
 	}
 
 	unhealthy := unavailable
-	unhealthy.inspectRelay = func(context.Context) (relay.InstallationStatus, error) {
-		return relay.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
+	unhealthy.inspectRelay = func(context.Context) (relayinstallation.InstallationStatus, error) {
+		return relayinstallation.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
 	}
 	unhealthy.portListening = func(context.Context) (bool, error) { return false, nil }
 	report = run(context.Background(), paths, ScopeRelay, uid, unhealthy)
@@ -200,8 +222,8 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 	}
 	dependencies := dependencies{
 		lookupIP: loopbackLookup,
-		inspectRelay: func(context.Context) (relay.InstallationStatus, error) {
-			return relay.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
+		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
+			return relayinstallation.InstallationStatus{Platform: "launchd", ConfigurationPath: "/fixed/config"}, nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
 		dnsListening:  func(context.Context) (bool, error) { return false, nil },
@@ -218,8 +240,8 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 	}
 
 	partial := dependencies
-	partial.inspectRelay = func(context.Context) (relay.InstallationStatus, error) {
-		return relay.InstallationStatus{
+	partial.inspectRelay = func(context.Context) (relayinstallation.InstallationStatus, error) {
+		return relayinstallation.InstallationStatus{
 			Platform: "launchd", Service: "dev.portless.relay", Installed: true,
 			HelperPresent: true, HelperCurrent: true, ConfigurationPresent: true,
 			HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt",
@@ -227,8 +249,31 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 	}
 	report = run(context.Background(), paths, ScopeRelay, os.Getuid(), partial)
 	receiptCheck := checkByCode(t, report, "relay.receipt")
-	if receiptCheck.Status != StatusFail || receiptCheck.Remediation != "Run `portless relay uninstall --force`, then `portless relay install`." {
+	if receiptCheck.Status != StatusFail || !strings.Contains(receiptCheck.Remediation, "uninstall --force") || !strings.Contains(receiptCheck.Remediation, "independently verified") {
 		t.Fatalf("missing ownership receipt was not treated as a fail-closed installation: %#v", receiptCheck)
+	}
+}
+
+func TestRelayChecksDoNotRecommendAutomaticRemovalForResidualAliases(t *testing.T) {
+	paths, err := installation.ResolveLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependencies := dependencies{
+		lookupIP: loopbackLookup,
+		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
+			return relayinstallation.InstallationStatus{
+				Platform: "launchd", EndpointPoolReady: true, EndpointPoolResidual: true,
+				EndpointPoolDetail: "reserved aliases configured", Problem: "ownership receipt is missing",
+			}, nil
+		},
+		portListening: func(context.Context) (bool, error) { return false, nil },
+		dnsListening:  func(context.Context) (bool, error) { return false, nil },
+	}
+	report := run(context.Background(), paths, ScopeRelay, os.Getuid(), dependencies)
+	check := checkByCode(t, report, "relay.installation")
+	if check.Status != StatusFail || !strings.Contains(check.Summary, "reserved loopback aliases remain") || !strings.Contains(check.Remediation, "independently verified") || strings.Contains(check.Remediation, "uninstall --force") {
+		t.Fatalf("doctor gave unsafe residual-alias guidance: %#v", check)
 	}
 }
 
@@ -255,8 +300,8 @@ func loopbackLookup(context.Context, string) ([]net.IPAddr, error) {
 	return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}, {IP: net.ParseIP("::1")}}, nil
 }
 
-func healthyRelayStatus(paths installation.Layout, uid int) relay.InstallationStatus {
-	return relay.InstallationStatus{
+func healthyRelayStatus(paths installation.Layout, uid int) relayinstallation.InstallationStatus {
+	return relayinstallation.InstallationStatus{
 		Platform: "launchd", Service: "dev.portless.relay", Installed: true,
 		Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, HelperPresent: true, ConfigurationPresent: true,
 		HelperCurrent: true, HelperBuildID: "current-build", CurrentBuildID: "current-build",

@@ -1,5 +1,5 @@
-// Package relay owns the privileged HTTP and DNS forwarding data plane.
-package relay
+// Package runtime owns the privileged HTTP and DNS forwarding data plane.
+package runtime
 
 import (
 	"context"
@@ -9,13 +9,18 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
 
 const (
+	// ControlOrigin is the clean control-plane origin served through the relay.
+	ControlOrigin = "http://portless.localhost"
 	// DefaultListenAddress is the privileged loopback HTTP listener.
 	DefaultListenAddress = "127.0.0.1:80"
 	// DefaultDNSAddress is the loopback TCP and UDP DNS listener.
@@ -23,13 +28,19 @@ const (
 	defaultConnections = 256
 )
 
-type runtimeConfig struct {
+// Identity describes the private daemon targets and non-root user identity
+// authorized to run the privileged relay.
+type Identity struct {
+	TargetSocket    string
+	DNSTargetSocket string
+	UID             int
+	GID             int
+}
+
+type config struct {
 	ListenAddress    string
-	TargetSocket     string
 	DNSListenAddress string
-	DNSTargetSocket  string
-	UID              int
-	GID              int
+	identity         Identity
 	DropPrivileges   bool
 	MaxConnections   int
 }
@@ -46,18 +57,15 @@ func defaultRuntimeLimits() runtimeLimits {
 	}
 }
 
-func run(ctx context.Context, config runtimeConfig) error {
+func run(ctx context.Context, config config) error {
+	if err := ValidateIdentity(config.identity); err != nil {
+		return err
+	}
 	if config.ListenAddress == "" {
 		config.ListenAddress = DefaultListenAddress
 	}
-	if !filepath.IsAbs(config.TargetSocket) {
-		return errors.New("ingress target socket must be an absolute path")
-	}
 	if config.DNSListenAddress == "" {
 		config.DNSListenAddress = DefaultDNSAddress
-	}
-	if !filepath.IsAbs(config.DNSTargetSocket) {
-		return errors.New("DNS target socket must be an absolute path")
 	}
 	listener, err := net.Listen("tcp", config.ListenAddress)
 	if err != nil {
@@ -75,7 +83,7 @@ func run(ctx context.Context, config runtimeConfig) error {
 	}
 	defer dnsUDP.Close()
 	if config.DropPrivileges {
-		if err := dropPrivileges(config.UID, config.GID); err != nil {
+		if err := dropPrivileges(config.identity.UID, config.identity.GID); err != nil {
 			return err
 		}
 	}
@@ -88,13 +96,13 @@ func run(ctx context.Context, config runtimeConfig) error {
 	}
 	errChannel := make(chan error, 3)
 	go func() {
-		errChannel <- serveHTTPRelay(relayContext, listener, config.TargetSocket, limits.httpConnections)
+		errChannel <- serveHTTPRelay(relayContext, listener, config.identity.TargetSocket, limits.httpConnections)
 	}()
 	go func() {
-		errChannel <- serveDNSStreamRelay(relayContext, dnsTCP, config.DNSTargetSocket, limits.dnsTCPConnections)
+		errChannel <- serveDNSStreamRelay(relayContext, dnsTCP, config.identity.DNSTargetSocket, limits.dnsTCPConnections)
 	}()
 	go func() {
-		errChannel <- serveDNSPacketRelay(relayContext, dnsUDP, config.DNSTargetSocket, limits.dnsUDPQueries)
+		errChannel <- serveDNSPacketRelay(relayContext, dnsUDP, config.identity.DNSTargetSocket, limits.dnsUDPQueries)
 	}()
 	firstErr := <-errChannel
 	cancel()
@@ -102,6 +110,31 @@ func run(ctx context.Context, config runtimeConfig) error {
 	_ = dnsTCP.Close()
 	_ = dnsUDP.Close()
 	return errors.Join(firstErr, <-errChannel, <-errChannel)
+}
+
+// ValidateIdentity verifies that a relay runtime identity contains only the
+// fixed private socket targets and non-root user accepted by the helper.
+func ValidateIdentity(identity Identity) error {
+	if !filepath.IsAbs(identity.TargetSocket) || filepath.Base(filepath.Clean(identity.TargetSocket)) != "ingress.sock" {
+		return errors.New("ingress target must be a private ingress.sock path")
+	}
+	if invalidServicePath(identity.TargetSocket) {
+		return errors.New("ingress target socket contains an invalid control character or encoding")
+	}
+	if !filepath.IsAbs(identity.DNSTargetSocket) || filepath.Base(filepath.Clean(identity.DNSTargetSocket)) != "dns.sock" {
+		return errors.New("DNS target must be a private dns.sock path")
+	}
+	if invalidServicePath(identity.DNSTargetSocket) {
+		return errors.New("DNS target socket contains an invalid control character or encoding")
+	}
+	if identity.UID <= 0 || identity.GID <= 0 {
+		return errors.New("relay helper requires a non-root user and group")
+	}
+	return nil
+}
+
+func invalidServicePath(path string) bool {
+	return !utf8.ValidString(path) || strings.IndexFunc(path, unicode.IsControl) >= 0
 }
 
 func serveHTTPRelay(ctx context.Context, listener net.Listener, targetSocket string, maxConnections int) error {

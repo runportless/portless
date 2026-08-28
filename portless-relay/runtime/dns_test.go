@@ -1,6 +1,7 @@
-package relay
+package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -19,6 +20,68 @@ type relayResolver struct{}
 
 func (relayResolver) ResolveNetworkName(context.Context, string) (netip.Addr, bool, error) {
 	return netip.MustParseAddr("127.77.2.3"), true, nil
+}
+
+func FuzzDNSFrameRoundTrip(f *testing.F) {
+	query, _ := portlessdns.Query("postgres.local.store.portless.test", portlessdns.TypeA, 41)
+	f.Add(query)
+	f.Add(make([]byte, 12))
+	f.Add([]byte("short"))
+	f.Fuzz(func(t *testing.T, message []byte) {
+		var framed bytes.Buffer
+		err := writeDNSFrame(&framed, message)
+		if len(message) < 12 || len(message) > portlessdns.MaxMessage {
+			if err == nil {
+				t.Fatalf("invalid DNS message length %d was framed", len(message))
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := readDNSFrame(&framed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(actual, message) {
+			t.Fatalf("DNS frame round trip changed %d-byte message", len(message))
+		}
+	})
+}
+
+func FuzzReadDNSFrameRejectsMalformedInputWithoutPanicking(f *testing.F) {
+	query, _ := portlessdns.Query("checkout.local.store.localhost", portlessdns.TypeA, 42)
+	var valid bytes.Buffer
+	if err := writeDNSFrame(&valid, query); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid.Bytes())
+	f.Add([]byte{0, 12})
+	f.Add([]byte{0xff, 0xff})
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		message, err := readDNSFrame(bytes.NewReader(frame))
+		if err == nil && (len(message) < 12 || len(message) > portlessdns.MaxMessage) {
+			t.Fatalf("malformed frame produced %d-byte DNS message", len(message))
+		}
+	})
+}
+
+func FuzzRelayDNSFailureAndLocalhostResponsesStayBounded(f *testing.F) {
+	localhost, _ := portlessdns.Query("checkout.local.store.localhost", portlessdns.TypeA, 43)
+	dynamic, _ := portlessdns.Query("postgres.local.store.portless.test", portlessdns.TypeA, 44)
+	f.Add(localhost)
+	f.Add(dynamic)
+	f.Add([]byte("malformed"))
+	f.Fuzz(func(t *testing.T, query []byte) {
+		response, handled := portlessdns.LocalhostResponse(query)
+		if handled && len(response) > portlessdns.MaxMessage {
+			t.Fatalf("localhost response exceeded DNS limit: %d", len(response))
+		}
+		failure := portlessdns.ServerFailure(query)
+		if len(failure) > portlessdns.MaxMessage {
+			t.Fatalf("failure response exceeded DNS limit: %d", len(failure))
+		}
+	})
 }
 
 func TestDNSPacketRelayForwardsToPrivateDaemonSocket(t *testing.T) {

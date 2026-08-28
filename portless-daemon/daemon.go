@@ -28,7 +28,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/lifecycle"
 	"github.com/runportless/portless/portless-daemon/system/directorypicker"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 	portlessweb "github.com/runportless/portless/portless-web"
 )
 
@@ -191,7 +191,7 @@ func Run(ctx context.Context, config Config) error {
 		},
 		SystemVersion: build.Version,
 		InspectRelay: func(ctx context.Context) (contract.RelayStatus, error) {
-			status, err := relay.Inspect(ctx)
+			status, err := relayinstallation.Inspect(ctx)
 			return relayStatusContract(status), err
 		},
 		SelectDirectory: directorypicker.Select,
@@ -283,12 +283,12 @@ func Run(ctx context.Context, config Config) error {
 	}
 }
 
-func relayStatusContract(status relay.InstallationStatus) contract.RelayStatus {
+func relayStatusContract(status relayinstallation.InstallationStatus) contract.RelayStatus {
 	return contract.RelayStatus{
 		Platform: status.Platform, Service: status.Service, Installed: status.Installed, Running: status.Running,
 		Healthy: status.Healthy, HTTPHealthy: status.HTTPHealthy, HelperPresent: status.HelperPresent,
 		HelperCurrent: status.HelperCurrent, HelperBuildID: status.HelperBuildID, CurrentBuildID: status.CurrentBuildID,
-		ConfigurationPresent: status.ConfigurationPresent, ReceiptPresent: status.ReceiptPresent,
+		ConfigurationPresent: status.ConfigurationPresent, ConfigurationError: status.ConfigurationError, ReceiptPresent: status.ReceiptPresent,
 		ResolverPresent: status.ResolverPresent, ResolverHealthy: status.ResolverHealthy,
 		OwnerUID: status.OwnerUID, OwnerGID: status.OwnerGID, TargetSocket: status.TargetSocket,
 		DNSTargetSocket: status.DNSTargetSocket, DNSListenAddress: status.DNSListenAddress,
@@ -296,7 +296,8 @@ func relayStatusContract(status relay.InstallationStatus) contract.RelayStatus {
 		ResolverPath: status.ResolverPath, LocalhostResolverPath: status.LocalhostResolverPath, InstalledAt: status.InstalledAt,
 		HealthError: status.HealthError, DNSHealthy: status.DNSHealthy, DNSHealthError: status.DNSHealthError,
 		ResolverHealthError: status.ResolverHealthError, EndpointPoolReady: status.EndpointPoolReady,
-		EndpointPoolDetail: status.EndpointPoolDetail, Problem: status.Problem,
+		EndpointPoolManaged: status.EndpointPoolManaged, EndpointPoolResidual: status.EndpointPoolResidual,
+		EndpointPoolDetail: status.EndpointPoolDetail, EndpointPoolError: status.EndpointPoolError, Problem: status.Problem,
 	}
 }
 

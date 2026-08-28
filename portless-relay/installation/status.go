@@ -1,14 +1,18 @@
-package relay
+package installation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"syscall"
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/system/installation"
+	relayhealth "github.com/runportless/portless/portless-relay/health"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
 // InstallationStatus is the complete inspectable state of the platform relay,
@@ -25,6 +29,7 @@ type InstallationStatus struct {
 	HelperBuildID         string     `json:"helperBuildId,omitempty"`
 	CurrentBuildID        string     `json:"currentBuildId,omitempty"`
 	ConfigurationPresent  bool       `json:"configurationPresent"`
+	ConfigurationError    string     `json:"configurationError,omitempty"`
 	ReceiptPresent        bool       `json:"receiptPresent"`
 	ResolverPresent       bool       `json:"resolverPresent"`
 	ResolverHealthy       bool       `json:"resolverHealthy"`
@@ -44,13 +49,18 @@ type InstallationStatus struct {
 	DNSHealthError        string     `json:"dnsHealthError,omitempty"`
 	ResolverHealthError   string     `json:"resolverHealthError,omitempty"`
 	EndpointPoolReady     bool       `json:"endpointPoolReady"`
+	EndpointPoolManaged   bool       `json:"endpointPoolManaged"`
+	EndpointPoolResidual  bool       `json:"endpointPoolResidual,omitempty"`
 	EndpointPoolDetail    string     `json:"endpointPoolDetail,omitempty"`
+	EndpointPoolError     string     `json:"endpointPoolError,omitempty"`
 	Problem               string     `json:"problem,omitempty"`
 }
 
 // State returns the aggregate human-readable relay installation state.
 func (status InstallationStatus) State() string {
 	switch {
+	case !status.Installed && status.EndpointPoolResidual:
+		return "not installed; residual endpoint pool"
 	case !status.Installed:
 		return "not installed"
 	case status.Healthy:
@@ -70,6 +80,7 @@ type platformInstallation struct {
 	ReceiptPath           string
 	ResolverPath          string
 	LocalhostResolverPath string
+	LifecycleLockPath     string
 	ArtifactUID           int
 	ArtifactGID           int
 }
@@ -81,7 +92,7 @@ type inspectionProbes struct {
 }
 
 func defaultInspectionProbes() inspectionProbes {
-	return inspectionProbes{http: Check, dns: CheckDNS, resolver: CheckResolver}
+	return inspectionProbes{http: relayhealth.Check, dns: relayhealth.CheckDNS, resolver: relayhealth.CheckResolver}
 }
 
 // Inspect discovers installed relay artifacts, ownership, service state,
@@ -100,7 +111,7 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 		Platform: details.Name, Service: details.Service, HelperPath: details.HelperPath,
 		ConfigurationPath: details.ConfigurationPath, ReceiptPath: details.ReceiptPath,
 		ResolverPath: details.ResolverPath, LocalhostResolverPath: details.LocalhostResolverPath,
-		DNSListenAddress: DefaultDNSAddress,
+		DNSListenAddress: relayruntime.DefaultDNSAddress,
 	}
 	helperPresent, helperErr := inspectArtifact(details.HelperPath, 0o755, details.ArtifactUID, details.ArtifactGID)
 	configurationPresent, configurationErr := inspectArtifact(details.ConfigurationPath, 0o644, details.ArtifactUID, details.ArtifactGID)
@@ -113,9 +124,11 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 	resolverPaths := details.resolverPaths()
 	resolverPresent := len(resolverPaths) > 0
 	resolverArtifactPresent := false
+	var resolverArtifactErr error
 	for _, resolverPath := range resolverPaths {
 		present, resolverErr := inspectArtifact(resolverPath, 0o644, details.ArtifactUID, details.ArtifactGID)
 		if resolverErr != nil {
+			resolverArtifactErr = errors.Join(resolverArtifactErr, resolverErr)
 			status.Problem = appendProblem(status.Problem, resolverErr.Error())
 		}
 		resolverPresent = resolverPresent && present
@@ -132,20 +145,33 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 		}
 	}
 	status.ConfigurationPresent = configurationPresent
+	if configurationErr != nil || resolverArtifactErr != nil {
+		status.ConfigurationError = errors.Join(configurationErr, resolverArtifactErr).Error()
+	}
 	status.ReceiptPresent = receiptPresent
 	status.ResolverPresent = resolverPresent
 	status.Installed = helperPresent || configurationPresent || receiptPresent || resolverArtifactPresent
+	receiptValid := false
 	if receiptPresent && receiptArtifactErr == nil {
 		receipt, receiptErr := readInstallationReceipt(details)
 		if receiptErr != nil {
 			status.Problem = appendProblem(status.Problem, receiptErr.Error())
 		} else {
+			receiptValid = true
 			status.OwnerUID, status.OwnerGID = receipt.OwnerUID, receipt.OwnerGID
 			status.TargetSocket, status.DNSTargetSocket = receipt.TargetSocket, receipt.DNSTargetSocket
 			installedAt := receipt.InstalledAt
 			status.InstalledAt = &installedAt
 			if !receiptUsesCurrentLoopbackPool(receipt) {
 				status.Problem = appendProblem(status.Problem, "installation receipt uses an outdated loopback address pool; run `portless setup` to repair it")
+			}
+			expected, expectedErr := platform.expectedArtifacts(receipt)
+			if expectedErr != nil {
+				status.ConfigurationError = appendProblem(status.ConfigurationError, expectedErr.Error())
+				status.Problem = appendProblem(status.Problem, expectedErr.Error())
+			} else if contentErr := verifyExpectedArtifacts(expected); contentErr != nil {
+				status.ConfigurationError = appendProblem(status.ConfigurationError, contentErr.Error())
+				status.Problem = appendProblem(status.Problem, contentErr.Error())
 			}
 		}
 	}
@@ -161,17 +187,23 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 	if status.Installed && !receiptPresent {
 		status.Problem = appendProblem(status.Problem, "installation receipt is missing; relay ownership cannot be verified")
 	}
-	poolReady, poolDetail, poolErr := platform.loopbackPoolStatus()
-	status.EndpointPoolReady = poolReady
-	status.EndpointPoolDetail = poolDetail
+	pool, poolErr := platform.loopbackPoolStatus()
+	status.EndpointPoolReady = pool.ready
+	status.EndpointPoolDetail = pool.detail
+	status.EndpointPoolManaged = pool.managed
 	if poolErr != nil {
+		status.EndpointPoolError = poolErr.Error()
 		status.Problem = appendProblem(status.Problem, "inspect TCP endpoint address pool: "+poolErr.Error())
+	}
+	status.EndpointPoolResidual = pool.managed && pool.configured && !receiptValid
+	if status.EndpointPoolResidual {
+		status.Problem = appendProblem(status.Problem, "reserved Portless loopback addresses remain without a valid ownership receipt; Portless will not remove unverified aliases")
 	}
 	if status.Installed && probes.http != nil && probes.dns != nil && probes.resolver != nil {
 		healthContext, cancelHealth := context.WithTimeout(ctx, 1500*time.Millisecond)
-		health := inspectRelayHealth(healthContext, probes)
+		health := relayhealth.Inspect(healthContext, relayhealth.Probes{HTTP: probes.http, DNS: probes.dns, Resolver: probes.resolver})
 		cancelHealth()
-		httpErr, dnsErr, resolverErr := health.httpErr, health.dnsErr, health.resolverErr
+		httpErr, dnsErr, resolverErr := health.HTTPError, health.DNSError, health.ResolverError
 		if httpErr != nil {
 			status.HealthError = httpErr.Error()
 		} else {
@@ -188,10 +220,49 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 			status.ResolverHealthError = resolverErr.Error()
 		}
 		artifactsHealthy := helperPresent && configurationPresent && receiptPresent && status.OwnerUID > 0 && resolverPresent && status.Problem == ""
-		pathsHealthy := httpErr == nil && dnsErr == nil && resolverErr == nil && poolReady && poolErr == nil
+		pathsHealthy := httpErr == nil && dnsErr == nil && resolverErr == nil && pool.ready && poolErr == nil
 		status.Healthy = status.Running && artifactsHealthy && pathsHealthy
 	}
 	return status, nil
+}
+
+func verifyExpectedArtifacts(artifacts []expectedArtifact) error {
+	var resultErr error
+	for _, artifact := range artifacts {
+		if artifact.path == "" {
+			continue
+		}
+		info, err := os.Lstat(artifact.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("inspect relay artifact content %s: %w", artifact.path, err))
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		if info.Size() > 1<<20 {
+			resultErr = errors.Join(resultErr, fmt.Errorf("relay artifact %s is unexpectedly larger than 1 MiB", artifact.path))
+			continue
+		}
+		file, err := os.Open(artifact.path)
+		if err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("read relay artifact content %s: %w", artifact.path, err))
+			continue
+		}
+		content, readErr := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("read relay artifact content %s: %w", artifact.path, errors.Join(readErr, closeErr)))
+			continue
+		}
+		if !bytes.Equal(content, artifact.content) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("relay artifact %s content does not match the ownership receipt", artifact.path))
+		}
+	}
+	return resultErr
 }
 
 func inspectArtifact(path string, expectedMode os.FileMode, expectedUID, expectedGID int) (bool, error) {

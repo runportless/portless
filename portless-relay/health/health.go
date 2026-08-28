@@ -1,4 +1,6 @@
-package relay
+// Package health probes the relay's HTTP, DNS, private-socket, and host
+// resolver paths and defines bounded end-to-end readiness.
+package health
 
 import (
 	"context"
@@ -15,16 +17,34 @@ import (
 
 	portlessdns "github.com/runportless/portless/portless-daemon/dns"
 	"github.com/runportless/portless/portless-daemon/networking"
+	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
-
-// ControlOrigin is the clean control-plane origin used for relay health checks.
-const ControlOrigin = "http://portless.localhost"
 
 const localhostResolverProbe = "resolver.portless.localhost"
 
+// Probes contains the independent end-to-end checks that make up relay
+// readiness inspection.
+type Probes struct {
+	HTTP     func(context.Context) error
+	DNS      func(context.Context) error
+	Resolver func(context.Context) error
+}
+
+// Inspection records the result of each independent relay health path.
+type Inspection struct {
+	HTTPError     error
+	DNSError      error
+	ResolverError error
+}
+
+// DefaultProbes returns the production HTTP, DNS, and system-resolver checks.
+func DefaultProbes() Probes {
+	return Probes{HTTP: Check, DNS: CheckDNS, Resolver: CheckResolver}
+}
+
 // Check verifies end-to-end HTTP access through the default privileged relay.
 func Check(ctx context.Context) error {
-	return checkAt(ctx, DefaultListenAddress, ControlOrigin)
+	return checkAt(ctx, relayruntime.DefaultListenAddress, relayruntime.ControlOrigin)
 }
 
 // CheckSocket verifies the daemon's private ingress listener without using the
@@ -34,7 +54,7 @@ func CheckSocket(ctx context.Context, socketPath string) error {
 		return errors.New("daemon ingress socket path must be absolute")
 	}
 	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	return checkWithDial(ctx, ControlOrigin, func(ctx context.Context, network, _ string) (net.Conn, error) {
+	return checkWithDial(ctx, relayruntime.ControlOrigin, func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "unix", socketPath)
 	})
 }
@@ -42,21 +62,21 @@ func CheckSocket(ctx context.Context, socketPath string) error {
 // WaitUntilReady polls HTTP, DNS, and resolver health until every relay path is
 // ready, the timeout elapses, or ctx is canceled.
 func WaitUntilReady(ctx context.Context, timeout time.Duration) error {
-	return waitUntilReady(ctx, timeout, defaultInspectionProbes())
+	return waitUntilReady(ctx, timeout, DefaultProbes())
 }
 
-func waitUntilReady(ctx context.Context, timeout time.Duration, probes inspectionProbes) error {
+func waitUntilReady(ctx context.Context, timeout time.Duration, probes Probes) error {
 	readyContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var lastError error
 	for {
 		attemptContext, cancelAttempt := context.WithTimeout(readyContext, 1500*time.Millisecond)
-		result := inspectRelayHealth(attemptContext, probes)
+		result := Inspect(attemptContext, probes)
 		cancelAttempt()
-		if result.httpErr == nil && result.dnsErr == nil && result.resolverErr == nil {
+		if result.HTTPError == nil && result.DNSError == nil && result.ResolverError == nil {
 			return nil
 		}
-		lastError = errors.Join(result.httpErr, result.dnsErr, result.resolverErr)
+		lastError = errors.Join(result.HTTPError, result.DNSError, result.ResolverError)
 		select {
 		case <-readyContext.Done():
 			if ctx.Err() != nil {
@@ -68,22 +88,18 @@ func waitUntilReady(ctx context.Context, timeout time.Duration, probes inspectio
 	}
 }
 
-type relayHealthInspection struct {
-	httpErr     error
-	dnsErr      error
-	resolverErr error
-}
-
-func inspectRelayHealth(ctx context.Context, probes inspectionProbes) relayHealthInspection {
+// Inspect runs the supplied relay health probes concurrently and returns when
+// every probe completes or ctx is canceled.
+func Inspect(ctx context.Context, probes Probes) Inspection {
 	type probeResult struct {
 		name string
 		err  error
 	}
 	results := make(chan probeResult, 3)
-	go func() { results <- probeResult{name: "http", err: probes.http(ctx)} }()
-	go func() { results <- probeResult{name: "dns", err: probes.dns(ctx)} }()
-	go func() { results <- probeResult{name: "resolver", err: probes.resolver(ctx)} }()
-	inspection := relayHealthInspection{}
+	go func() { results <- probeResult{name: "http", err: probes.HTTP(ctx)} }()
+	go func() { results <- probeResult{name: "dns", err: probes.DNS(ctx)} }()
+	go func() { results <- probeResult{name: "resolver", err: probes.Resolver(ctx)} }()
+	inspection := Inspection{}
 	completed := make(map[string]bool, 3)
 	for len(completed) < 3 {
 		select {
@@ -91,21 +107,21 @@ func inspectRelayHealth(ctx context.Context, probes inspectionProbes) relayHealt
 			completed[result.name] = true
 			switch result.name {
 			case "http":
-				inspection.httpErr = result.err
+				inspection.HTTPError = result.err
 			case "dns":
-				inspection.dnsErr = result.err
+				inspection.DNSError = result.err
 			case "resolver":
-				inspection.resolverErr = result.err
+				inspection.ResolverError = result.err
 			}
 		case <-ctx.Done():
 			if !completed["http"] {
-				inspection.httpErr = ctx.Err()
+				inspection.HTTPError = ctx.Err()
 			}
 			if !completed["dns"] {
-				inspection.dnsErr = ctx.Err()
+				inspection.DNSError = ctx.Err()
 			}
 			if !completed["resolver"] {
-				inspection.resolverErr = ctx.Err()
+				inspection.ResolverError = ctx.Err()
 			}
 			return inspection
 		}
@@ -123,7 +139,7 @@ func CheckDNS(ctx context.Context) error {
 }
 
 func checkDNSRecord(ctx context.Context, name string, expected netip.Addr) error {
-	return checkDNSRecordAt(ctx, DefaultDNSAddress, name, expected)
+	return checkDNSRecordAt(ctx, relayruntime.DefaultDNSAddress, name, expected)
 }
 
 func checkDNSRecordAt(ctx context.Context, listenAddress, name string, expected netip.Addr) error {

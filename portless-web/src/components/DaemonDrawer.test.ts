@@ -15,7 +15,7 @@ const runtime: RuntimeStatus = {
 const relay = {
   platform: 'launchd', service: 'dev.portless.relay', installed: true, running: true, healthy: true,
   httpHealthy: true, helperCurrent: true, helperBuildId: 'build-current', currentBuildId: 'build-current',
-  dnsHealthy: true, resolverPresent: true, resolverHealthy: true, endpointPoolReady: true,
+  dnsHealthy: true, resolverPresent: true, resolverHealthy: true, endpointPoolReady: true, endpointPoolManaged: true,
   dnsListenAddress: '127.77.0.1:1053', targetSocket: '/private/ingress.sock', dnsTargetSocket: '/private/dns.sock',
 } as RelayStatus
 
@@ -65,6 +65,20 @@ describe('daemon diagnostics', () => {
     expect(output).toContain('Last restart: restart-browser')
     expect(output).toContain('Last restart duration: 731 ms')
     expect(output).toContain('Last restart SLA: met')
+  })
+
+  it('labels an unverified residual endpoint pool as degraded', () => {
+    const status: DaemonStatus = {
+      state: 'ready', pid: 33083, startedAt: '2026-08-25T12:00:00Z', instanceId: 'instance', buildId: 'build',
+      protocolVersion: '4.0.0', apiVersion: '12.6.0', recoveryProblems: [], activeEnvironments: [],
+    }
+    const residualRelay: RelayStatus = {
+      ...relay, installed: false, running: false, healthy: false, endpointPoolResidual: true,
+      endpointPoolDetail: '1 reserved Portless address configured', problem: 'ownership receipt is missing',
+    }
+    const output = daemonDiagnostics(status, runtime, residualRelay)
+    expect(output).toContain('TCP endpoint pool: residual; ownership unverified')
+    expect(output).toContain('Relay helper: Residual aliases (Ownership receipt unavailable)')
   })
 
   it('opens on a status summary with ordered operational sections and accessible tabs', () => {

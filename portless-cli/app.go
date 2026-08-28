@@ -18,7 +18,8 @@ import (
 	"github.com/runportless/portless/portless-daemon/control"
 	"github.com/runportless/portless/portless-daemon/projects/discovery"
 	"github.com/runportless/portless/portless-daemon/system/installation"
-	"github.com/runportless/portless/portless-relay"
+	relayhealth "github.com/runportless/portless/portless-relay/health"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 // Version is the Portless CLI version reported by the root command.
@@ -53,12 +54,12 @@ type CLI struct {
 // a browser.
 type localDependencies struct {
 	daemon                 command.DaemonController
-	inspectRelay           func(context.Context) (relay.InstallationStatus, error)
-	installRelay           func(context.Context, relay.SetupRequest) error
-	restartRelay           func(context.Context, relay.RestartRequest) error
-	uninstallRelay         func(context.Context, relay.UninstallRequest) (bool, error)
-	validateRelayOwner     func(relay.InstallationStatus, int) error
-	validateRelayUninstall func(relay.InstallationStatus, int, bool) error
+	inspectRelay           func(context.Context) (relayinstallation.InstallationStatus, error)
+	installRelay           func(context.Context, relayinstallation.SetupRequest) error
+	restartRelay           func(context.Context, relayinstallation.RestartRequest) error
+	uninstallRelay         func(context.Context, relayinstallation.UninstallRequest) (bool, error)
+	validateRelayOwner     func(relayinstallation.InstallationStatus, int) error
+	validateRelayUninstall func(relayinstallation.InstallationStatus, int, bool) error
 	waitRelay              func(context.Context, time.Duration) error
 	checkRelaySocket       func(context.Context, string) error
 	diagnose               func(context.Context, installation.Layout, doctor.Scope, int) (doctor.Report, error)
@@ -110,10 +111,10 @@ func newWithDependencies(out, errOut io.Writer, dataDirectory string, overrides 
 
 func defaultLocalDependencies(paths installation.Layout) localDependencies {
 	return localDependencies{
-		daemon: control.New(paths), inspectRelay: relay.Inspect, installRelay: relay.Install,
-		restartRelay: relay.Restart, uninstallRelay: relay.Uninstall, validateRelayOwner: relay.ValidateOwnership,
-		validateRelayUninstall: relay.ValidateUninstallOwnership, waitRelay: relay.WaitUntilReady,
-		checkRelaySocket: relay.CheckSocket, diagnose: doctor.Run, inspectState: installation.InspectState,
+		daemon: control.New(paths), inspectRelay: relayinstallation.Inspect, installRelay: relayinstallation.Install,
+		restartRelay: relayinstallation.Restart, uninstallRelay: relayinstallation.Uninstall, validateRelayOwner: relayinstallation.ValidateOwnership,
+		validateRelayUninstall: relayinstallation.ValidateUninstallOwnership, waitRelay: relayhealth.WaitUntilReady,
+		checkRelaySocket: relayhealth.CheckSocket, diagnose: doctor.Run, inspectState: installation.InspectState,
 		findProjectRoot: discovery.FindRoot, workingDirectory: command.WorkingDirectory,
 		userIDs: command.RequestingUserIDs, effectiveUID: os.Geteuid, resolvedExecutable: command.ResolvedExecutable,
 		launchBrowser: command.LaunchBrowser,

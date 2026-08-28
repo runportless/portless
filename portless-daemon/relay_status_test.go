@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/api/contract"
-	"github.com/runportless/portless/portless-relay"
+	relayinstallation "github.com/runportless/portless/portless-relay/installation"
 )
 
 func TestRelayStatusContractMapsEveryRelayField(t *testing.T) {
 	installedAt := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC)
-	status := relay.InstallationStatus{}
+	status := relayinstallation.InstallationStatus{}
 	statusValue := reflect.ValueOf(&status).Elem()
 	for index := range statusValue.NumField() {
 		field := statusValue.Field(index)
