@@ -55,6 +55,7 @@ test('toggles settings back to the exact environment view', async ({ page }) => 
 
 test('keeps scrollable pages within the standard bottom gutter', async ({ page }) => {
   const state = readE2EState()
+  await page.setViewportSize({ width: 1280, height: 400 })
   await authenticate(page)
 
   const expectBottomGutter = async (lastContent: string) => {
@@ -1422,7 +1423,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await storageTab.press('ArrowRight')
   await expect(logsTab).toBeFocused()
   await expect(logsTab).toHaveAttribute('aria-selected', 'true')
-  const daemonLogs = drawer.getByLabel('Daemon logs')
+  const daemonLogs = drawer.getByLabel('Daemon logs', { exact: true })
   await expect(daemonLogs).toContainText('Portless daemon ready')
   await expect(drawer.getByRole('button', { name: 'Open raw daemon logs in new tab' })).toBeEnabled()
   await expect(drawer.getByRole('button', { name: 'Pause daemon log tail' })).toHaveAttribute('aria-pressed', 'true')
