@@ -11,6 +11,7 @@
     "build": "astro check && astro build",
     "check": "astro check",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:coverage": "node --experimental-strip-types --experimental-test-coverage --test --test-coverage-include='src/**/*.ts' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=../coverage/site/lcov.info tests/*.test.ts",
     "preview": "astro preview"
   },
   "devDependencies": {

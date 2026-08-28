@@ -214,6 +214,7 @@ The root Makefile is the supported build interface:
 ```bash
 make                 # install locked web dependencies as needed, build web, build bin/portless
 make test            # web typecheck/unit/build, then all Go tests
+make coverage        # full non-destructive validation plus local coverage reports
 make test-go         # all Go tests only
 make test-web        # web typecheck, Vitest, and production build
 make site-dev        # run the marketing site development server

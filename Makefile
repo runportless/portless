@@ -19,12 +19,17 @@ COMMIT ?= $(shell git rev-parse --verify HEAD 2>/dev/null || printf unknown)
 PORTLESS_LDFLAGS := -X github.com/runportless/portless/portless-cli.Version=$(VERSION) -X github.com/runportless/portless/portless-cli.Distribution=$(DISTRIBUTION) -X github.com/runportless/portless/portless-cli.Commit=$(COMMIT)
 WEB_DEPENDENCIES := $(WEB_PROJECT)/node_modules/.package-lock.json
 WEB_MANIFESTS := $(WEB_PROJECT)/package.json $(WEB_PROJECT)/package-lock.json
+WEB_NPM_CACHE := $(abspath $(WEB_PROJECT)/.npm-cache)
 SITE_DEPENDENCIES := $(SITE_PROJECT)/node_modules/.package-lock.json
 SITE_MANIFESTS := $(SITE_PROJECT)/package.json $(SITE_PROJECT)/package-lock.json
 SITE_NPM_CACHE := $(abspath $(SITE_PROJECT)/.npm-cache)
+COVERAGE_DIR := coverage
+GO_COVERAGE_DIR := $(COVERAGE_DIR)/go
+WEB_COVERAGE_DIR := $(COVERAGE_DIR)/web
+SITE_COVERAGE_DIR := $(COVERAGE_DIR)/site
 
 # Declare command-style targets phony so matching files never suppress their recipes.
-.PHONY: build web site site-dev test test-go test-web test-site example-store-dependencies test-example-store example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-store test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
+.PHONY: build web site site-dev test test-go test-web test-site coverage coverage-clean coverage-go coverage-web coverage-site coverage-summary example-store-dependencies test-example-store example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-store test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
 
 # Build the web control plane and the Portless executable.
 build: web
@@ -33,7 +38,7 @@ build: web
 
 # Install locked web development dependencies when their manifests change.
 $(WEB_DEPENDENCIES): $(WEB_MANIFESTS)
-	$(NPM) --prefix $(WEB_PROJECT) ci --include=dev
+	NPM_CONFIG_CACHE="$(WEB_NPM_CACHE)" $(NPM) --prefix $(WEB_PROJECT) ci --include=dev
 
 # Build the production web control-plane assets embedded in Portless.
 web: $(WEB_DEPENDENCIES)
@@ -70,6 +75,40 @@ test-site: $(SITE_DEPENDENCIES)
 	$(NPM) --prefix $(SITE_PROJECT) run check
 	$(NPM) --prefix $(SITE_PROJECT) test
 	$(NPM) --prefix $(SITE_PROJECT) run build
+
+# Run the complete non-destructive suite and write coverage reports under coverage/.
+coverage: coverage-summary
+
+# Start every coverage run with an empty report directory.
+coverage-clean:
+	rm -rf coverage
+	mkdir -p "$(GO_COVERAGE_DIR)" "$(WEB_COVERAGE_DIR)" "$(SITE_COVERAGE_DIR)"
+
+# Run Go tests with statement coverage and render text and HTML reports.
+coverage-go: | coverage-clean
+	@set -e; \
+	coverage_cache="$$(mktemp -d)"; \
+	trap 'rm -rf "$$coverage_cache"' EXIT; \
+	export GOCACHE="$$coverage_cache"; \
+	$(GO) test -covermode=atomic -coverprofile="$(GO_COVERAGE_DIR)/coverage.out" ./...; \
+	$(GO) tool cover -func="$(GO_COVERAGE_DIR)/coverage.out" > "$(GO_COVERAGE_DIR)/coverage.txt"; \
+	$(GO) tool cover -html="$(GO_COVERAGE_DIR)/coverage.out" -o "$(GO_COVERAGE_DIR)/index.html"
+
+# Type-check, cover, and build the embedded web control plane.
+coverage-web: $(WEB_DEPENDENCIES) | coverage-clean
+	$(NPM) --prefix $(WEB_PROJECT) run typecheck
+	$(NPM) --prefix $(WEB_PROJECT) run test:coverage
+	$(NPM) --prefix $(WEB_PROJECT) run build
+
+# Check, cover, and build the public marketing site.
+coverage-site: $(SITE_DEPENDENCIES) | coverage-clean
+	$(NPM) --prefix $(SITE_PROJECT) run check
+	$(NPM) --prefix $(SITE_PROJECT) run test:coverage
+	$(NPM) --prefix $(SITE_PROJECT) run build
+
+# Produce the concise local and GitHub Actions coverage summary.
+coverage-summary: coverage-go coverage-web coverage-site
+	node scripts/coverage-summary.mjs "$(COVERAGE_DIR)"
 
 # Materialize the Dispatch example as three independent Git checkouts.
 example-dispatch-bootstrap:
@@ -170,12 +209,12 @@ release-snapshot: web release-check
 
 # Reinstall the locked web dependencies even when the dependency stamp is current.
 reinstall-web-dependencies:
-	$(NPM) --prefix $(WEB_PROJECT) ci --include=dev
+	NPM_CONFIG_CACHE="$(WEB_NPM_CACHE)" $(NPM) --prefix $(WEB_PROJECT) ci --include=dev
 
 # Reinstall the locked marketing-site dependencies even when the stamp is current.
 reinstall-site-dependencies:
 	NPM_CONFIG_CACHE="$(SITE_NPM_CACHE)" $(NPM) --prefix $(SITE_PROJECT) ci --include=dev
 
-# Remove generated binaries, web coverage, and marketing-site build output.
+# Remove generated binaries, coverage reports, and marketing-site build output.
 clean:
-	rm -rf bin $(WEB_PROJECT)/coverage $(SITE_PROJECT)/dist
+	rm -rf bin coverage $(WEB_PROJECT)/coverage $(SITE_PROJECT)/dist

@@ -38,8 +38,19 @@ jobs:
             portless-web/package-lock.json
             portless-site/package-lock.json
 
-      - name: Run tests
-        run: make test
+      - name: Run tests with coverage
+        run: make coverage
+
+      - name: Publish coverage summary
+        run: cat coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-reports
+          path: coverage
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run isolated CLI end-to-end tests
         run: make test-e2e-cli

@@ -11,6 +11,7 @@ portless-web/vite.config.js
 portless-web/vite.config.d.ts
 portless-web/playwright-report/
 portless-web/test-results/
+portless-web/.npm-cache/
 !portless-web/dist/
 !portless-web/dist/**
 *.log

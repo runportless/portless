@@ -1,9 +1,14 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficActivity, TrafficExchange } from '../types'
-import { paginateItems } from '../components/PanelPagination'
-import { buildTopology, defaultProviderBinding, displayLaunchMode, EnvironmentPage, mergeTopologySignal, overviewServiceEndpoint, providerBindingMatches, providerDisplayName, serviceEndpoints, summarizeEnvironmentBindings, summarizeTopologyTraffic, TimelinePanel, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './ProjectPage'
+import type { ComponentBinding, Environment, Project, Service, TimelineEvent, TrafficActivity, TrafficExchange } from '../../types'
+import { paginateItems } from '../../components/PanelPagination'
+import { defaultProviderBinding, providerBindingMatches, providerDisplayName } from './bindings/bindingPresentation'
+import { EnvironmentPage } from './EnvironmentPage'
+import { summarizeEnvironmentBindings } from './OverviewPanel'
+import { displayLaunchMode, overviewServiceEndpoint, serviceEndpoints } from './service/servicePresentation'
+import { TimelinePanel } from './timeline/TimelinePanel'
+import { buildTopology, mergeTopologySignal, summarizeTopologyTraffic, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './topology/topologyModel'
 
 const service = (name: string): Service => ({ name } as Service)
 

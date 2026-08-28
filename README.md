@@ -338,13 +338,16 @@ From the repository root:
 ```bash
 make
 make test
+make coverage
 ```
 
 `make` installs locked frontend dependencies when needed, builds the embedded
 React control plane, and writes `bin/portless`. `make test` type-checks and
 tests both web projects, builds their production assets, and runs all Go tests.
-Use `make test-go`, `make test-web`, or `make test-site` for a narrower
-non-destructive suite.
+`make coverage` runs the same non-destructive validation while writing a
+summary, raw profiles, and browsable HTML reports under `coverage/`. CI adds
+the summary to the workflow run and retains the complete report as an artifact.
+Use `make test-go`, `make test-web`, or `make test-site` for a narrower suite.
 
 The ordinary CLI and browser E2E suites use compiled binaries and isolated
 Portless homes:
