@@ -1,7 +1,14 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import { applicationRequest, authenticate, environmentPath } from './helpers'
 
 test.describe.configure({ mode: 'serial' })
+
+async function selectFirstTraceSpan(navigation: Locator) {
+  await expect(navigation).toHaveAttribute('aria-busy', 'false')
+  const firstSpan = navigation.getByRole('button', { name: 'First visible span in trace' })
+  if (await firstSpan.isEnabled()) await firstSpan.click()
+  await expect(navigation.locator('output')).toHaveAttribute('aria-label', /Span 1 of \d+/)
+}
 
 test('inspects captured request and response details in the exchange workbench', async ({ page }) => {
   await authenticate(page)
@@ -159,13 +166,15 @@ test('keeps short trace payloads pinned and preserves compare while navigating',
   await page.getByRole('region', { name: 'Trace waterfall' }).getByRole('button', { name: /Inspect external to checkout GET \/checkout/ }).click()
 
   const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
-  const tracePosition = detail.getByRole('navigation', { name: 'Trace span navigation' }).locator('output')
+  const traceNavigation = detail.getByRole('navigation', { name: 'Trace span navigation' })
+  const tracePosition = traceNavigation.locator('output')
   const payloadBottomGap = () => detail.evaluate((element) => {
     const payload = element.querySelector('.traffic-payload, .traffic-semantic-card')
     if (!(payload instanceof HTMLElement)) return null
     return Math.round(element.getBoundingClientRect().bottom - payload.getBoundingClientRect().bottom)
   })
 
+  await selectFirstTraceSpan(traceNavigation)
   const initialPayloadBottomGap = await payloadBottomGap()
   expect(initialPayloadBottomGap).toBeGreaterThanOrEqual(15)
   expect(initialPayloadBottomGap).toBeLessThanOrEqual(18)
@@ -243,12 +252,9 @@ test('resets trace navigation to the first span when changing scope', async ({ p
   const navigation = detail.getByRole('navigation', { name: 'Trace span navigation' })
   const httpScope = navigation.getByRole('button', { name: 'HTTP' })
   const allScope = navigation.getByRole('button', { name: 'ALL' })
-  const firstSpan = navigation.getByRole('button', { name: 'First visible span in trace' })
   const position = navigation.locator('output')
-  await expect(navigation).toHaveAttribute('aria-busy', 'false')
   await expect(httpScope).toHaveAttribute('aria-pressed', 'true')
-  if (await firstSpan.isEnabled()) await firstSpan.click()
-  await expect(position).toHaveAttribute('aria-label', /Span 1 of \d+/)
+  await selectFirstTraceSpan(navigation)
   await navigation.getByRole('button', { name: 'Next visible span in trace' }).click()
   await expect(position).toHaveAttribute('aria-label', /Span 2 of \d+/)
 
