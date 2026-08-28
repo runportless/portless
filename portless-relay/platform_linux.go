@@ -188,8 +188,6 @@ func renderResolvedConfiguration() []byte {
 
 func prepareRelayLoopbackPool(context.Context, bool) error { return nil }
 
-func removeRelayLoopbackPool(context.Context) error { return nil }
-
 func relayLoopbackPoolStatus() (bool, string, error) {
 	return true, "IPv4 127/8 is routed by the Linux loopback interface", nil
 }

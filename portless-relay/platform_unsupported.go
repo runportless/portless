@@ -23,8 +23,6 @@ func prepareRelayLoopbackPool(context.Context, bool) error {
 	return errors.New("Portless loopback endpoint pools are unsupported on this platform")
 }
 
-func removeRelayLoopbackPool(context.Context) error { return nil }
-
 func relayLoopbackPoolStatus() (bool, string, error) {
 	return false, "unsupported platform", nil
 }
