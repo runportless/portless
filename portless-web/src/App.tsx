@@ -3,7 +3,8 @@ import { api, APIError, environmentPath, eventStreamHealth, jsonBody, setCSRF, s
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { DAEMON_RESTART_SLA_MS } from './daemonRestart'
 import { EnvironmentPage } from './features/environment/EnvironmentPage'
-import { ProjectsPage } from './features/ProjectsPage'
+import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
+import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, Environment, Operation, Project, RelayStatus, RuntimeStatus } from './types'
@@ -210,10 +211,12 @@ export function App() {
     content = activeEnvironment
       ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} tab={parsed.tab} mockProfile={parsed.mockProfile} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="environment" name={`${parsed.project}/${parsed.environment}`} onNavigate={navigate} />
-  } else if (parsed.project && !activeProject) {
-    content = <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
+  } else if (parsed.project) {
+    content = activeProject
+      ? <ProjectOverviewPage key={activeProject.name} project={activeProject} environments={environments} onNavigate={navigate} onChanged={refresh} />
+      : <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
   } else {
-    content = <ProjectsPage projects={projects} environments={environments} selectedProject={activeProject} onNavigate={navigate} onChanged={refresh} />
+    content = <ProjectsIndexPage projects={projects} environments={environments} onNavigate={navigate} />
   }
   return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }

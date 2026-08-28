@@ -30,11 +30,15 @@ test('keeps projects, environments, and breadcrumbs navigable', async ({ page })
   await expect(page).toHaveURL(new RegExp(`/projects/${state.project}$`))
   await expect(page.getByRole('heading', { name: state.project, exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*healthy`) })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toBeVisible()
 
   await breadcrumbs.getByRole('link', { name: 'projects' }).click()
   await expect(page).toHaveURL(/\/projects$/)
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
   await expect(page.locator('.project-nav__project-link').filter({ hasText: state.project })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toHaveCount(0)
 })
 
 test('toggles settings back to the exact environment view', async ({ page }) => {

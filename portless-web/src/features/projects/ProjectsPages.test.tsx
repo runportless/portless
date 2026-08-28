@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { Environment, Project } from '../types'
-import { ProjectsPage } from './ProjectsPage'
+import type { Environment, Project } from '../../types'
+import { CreateEnvironmentDialog } from './CreateEnvironmentDialog'
+import { ProjectOverviewPage } from './ProjectOverviewPage'
+import { ProjectsIndexPage } from './ProjectsIndexPage'
 
 const project = { name: 'store', sources: [{ name: 'store', services: ['checkout', 'inventory', 'orders'] }] } as Project
 const environment = {
@@ -30,18 +32,20 @@ const environment = {
 const qaEnvironment = { ...environment, name: 'qa-local', revision: 2, sources: [{ ...environment.sources[0] }] } satisfies Environment
 const stoppedEnvironment = { ...qaEnvironment, name: 'demo', status: 'stopped' } satisfies Environment
 
-describe('projects page', () => {
-  it('uses the concise Projects title without control-plane copy or runtime controls', () => {
-    const markup = renderProjects()
+describe('projects index page', () => {
+  it('uses the concise Projects title without initializing project management UI', () => {
+    const markup = renderProjectIndex()
 
     expect(markup).toContain('<h1>Projects</h1>')
     expect(markup).not.toContain('LOCAL CONTROL PLANE')
     expect(markup).not.toContain('Projects &amp; environments')
     expect(markup).not.toContain('CONTAINER RUNTIME')
+    expect(markup).not.toContain('CREATE ENVIRONMENT')
+    expect(markup).not.toContain('ADD SOURCE')
   })
 
   it('lists each project once instead of rendering one row per environment', () => {
-    const markup = renderProjects(undefined, [environment, qaEnvironment])
+    const markup = renderProjectIndex([environment, qaEnvironment])
 
     expect(markup).toContain('<div class="panel-title"><span>PROJECTS</span></div>')
     expect(markup.match(/class="table-row project-index-row"/g)).toHaveLength(1)
@@ -53,14 +57,25 @@ describe('projects page', () => {
   })
 
   it('does not degrade a project because an intentionally stopped environment exists', () => {
-    const markup = renderProjects(undefined, [environment, stoppedEnvironment])
+    const markup = renderProjectIndex([environment, stoppedEnvironment])
 
     expect(markup).toContain('<span class="status status--success" title="healthy">')
     expect(markup).not.toContain('title="degraded"')
   })
 
+  it('keeps the empty state focused on setup instructions', () => {
+    const markup = renderToStaticMarkup(<ProjectsIndexPage projects={[]} environments={[]} onNavigate={() => undefined} />)
+
+    expect(markup).toContain('No projects yet')
+    expect(markup).toContain('Start one repository or assemble several.')
+    expect(markup).not.toContain('repository—or')
+    expect(markup).not.toContain('empty-environment__graphic')
+  })
+})
+
+describe('project overview page', () => {
   it('offers to start a stopped environment from its project row', () => {
-    const markup = renderProjects(project, [stoppedEnvironment])
+    const markup = renderProjectOverview([stoppedEnvironment])
 
     expect(markup).toContain('aria-label="Start demo"')
     expect(markup).toContain('>START</button>')
@@ -68,7 +83,7 @@ describe('projects page', () => {
   })
 
   it('keeps the project detail heading and environment listing', () => {
-    const markup = renderProjects(project)
+    const markup = renderProjectOverview()
 
     expect(markup).toContain('<div class="eyebrow">PROJECT</div>')
     expect(markup).toContain('<h1>store</h1>')
@@ -103,7 +118,7 @@ describe('projects page', () => {
   })
 
   it('deduplicates checkout paths without repeating environment names in source rows', () => {
-    const markup = renderProjects(project, [environment, qaEnvironment])
+    const markup = renderProjectOverview([environment, qaEnvironment])
 
     expect(markup).toContain('<span>SOURCES</span><button')
     expect(markup).not.toContain('<small>local, qa-local</small>')
@@ -125,7 +140,7 @@ describe('projects page', () => {
     }))
     const paginatedProject = { ...project, sources } as Project
 
-    const markup = renderProjects(paginatedProject, environments)
+    const markup = renderProjectOverview(environments, paginatedProject)
 
     expect(markup).toContain('aria-label="environments pagination"')
     expect(markup).toContain('aria-label="sources pagination"')
@@ -148,7 +163,7 @@ describe('projects page', () => {
     } satisfies Environment
     const remote = { ...qaEnvironment, name: 'remote', sources: [], issues: [] } satisfies Environment
 
-    const markup = renderProjects(inventoryProject, [local, needsConfiguration, remote])
+    const markup = renderProjectOverview([local, needsConfiguration, remote], inventoryProject)
 
     expect(markup).toContain('configuration required')
     expect(markup).toContain('not bound locally')
@@ -157,16 +172,21 @@ describe('projects page', () => {
     expect(markup).toContain('component has no provider binding')
   })
 
-  it('keeps the empty project state focused on setup instructions', () => {
-    const markup = renderToStaticMarkup(<ProjectsPage projects={[]} environments={[]} onNavigate={() => undefined} onChanged={async () => undefined} />)
+  it('keeps environment creation in its own project-scoped dialog', () => {
+    const markup = renderToStaticMarkup(<CreateEnvironmentDialog project={project} environments={[qaEnvironment, environment]} onClose={() => undefined} onNavigate={() => undefined} onChanged={async () => undefined} />)
 
-    expect(markup).toContain('No projects yet')
-    expect(markup).toContain('Start one repository or assemble several.')
-    expect(markup).not.toContain('repository—or')
-    expect(markup).not.toContain('empty-environment__graphic')
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('<h2 id="create-environment-title">Create environment</h2>')
+    expect(markup).toContain('name="portless-environment-name"')
+    expect(markup).toContain('<option>qa-local</option><option selected="">local</option>')
+    expect(markup).toContain('>CREATE ENVIRONMENT</button>')
   })
 })
 
-function renderProjects(selectedProject?: Project, renderedEnvironments: Environment[] = [environment]) {
-  return renderToStaticMarkup(<ProjectsPage projects={[project]} environments={renderedEnvironments} selectedProject={selectedProject} onNavigate={() => undefined} onChanged={async () => undefined} />)
+function renderProjectIndex(renderedEnvironments: Environment[] = [environment]) {
+  return renderToStaticMarkup(<ProjectsIndexPage projects={[project]} environments={renderedEnvironments} onNavigate={() => undefined} />)
+}
+
+function renderProjectOverview(renderedEnvironments: Environment[] = [environment], renderedProject: Project = project) {
+  return renderToStaticMarkup(<ProjectOverviewPage project={renderedProject} environments={renderedEnvironments} onNavigate={() => undefined} onChanged={async () => undefined} />)
 }
