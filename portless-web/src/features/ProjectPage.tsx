@@ -3,7 +3,8 @@ import { api, connectEvents, jsonBody, environmentPath } from '../api'
 import type { ComponentBinding, FaultRule, MockProfile, Operation, Environment, Project, ProjectSource, Protocol, ProviderKind, Recording, RemoteClassification, Service, SourceBinding, TimelineEvent, TrafficActivity, TrafficExchange, WritePolicy } from '../types'
 import { duration, relativeTime, StatePanel, StatusMark } from '../components/Status'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
-import { DrawerSizeButton } from '../components/DrawerSizeButton'
+import { DrawerShell } from '../components/overlays/DrawerShell'
+import { FormDialog } from '../components/overlays/FormDialog'
 import { paginateItems, PanelPagination } from '../components/PanelPagination'
 import { experimentScopes, preferredFaultScope, recordingScopeLabel } from './experimentScopes'
 import { TrafficPanel } from './traffic'
@@ -594,20 +595,10 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
   const [busy, setBusy] = useState<ServiceAction | ''>('')
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const actionInFlight = useRef(false)
-  const [fullScreen, setFullScreen] = useState(false)
   const base = environmentPath(environment, `/services/${encodeURIComponent(service.name)}`)
   useEffect(() => {
     api<typeof configuration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
   }, [base, environment.name, service.name])
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (fullScreen) setFullScreen(false)
-      else onClose()
-    }
-    window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
-  }, [fullScreen, onClose])
   const action = async (name: ServiceAction) => {
     if (actionInFlight.current) return
     actionInFlight.current = true
@@ -630,13 +621,16 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
   const endpoints = serviceEndpoints(service, bindingFor(environment, service.name))
   const httpEndpoint = publicEndpoint(service, 'http')
   const localProcess = service.kind === 'process' && bindingFor(environment, service.name)?.provider === 'local'
-  return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-    <aside className={`drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${service.name} service`} onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div><div className="drawer-header-actions"><DrawerSizeButton fullScreen={fullScreen} subject={`${service.name} service`} onToggle={() => setFullScreen((value) => !value)} /><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
-      <div className="drawer-actions" aria-busy={!!busy}>{localProcess && service.debug && <button className="button button--primary" type="button" onClick={() => void action(service.launchMode === 'debug' ? 'manage' : 'debug')} disabled={!!busy}>{busy === 'debug' || busy === 'manage' ? serviceActionProgressLabel(busy) : service.launchMode === 'debug' ? 'RUN NORMALLY' : 'DEBUG'}</button>}<button className={`button${!localProcess || !service.debug ? ' button--primary' : ''}`} type="button" onClick={() => void action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy === 'restart' || busy === 'start' ? serviceActionProgressLabel(busy) : service.status === 'ready' ? 'RESTART' : 'START'}</button><button className="button" type="button" onClick={() => void action('stop')} disabled={!!busy || service.status === 'stopped'}>{busy === 'stop' ? serviceActionProgressLabel(busy) : 'STOP'}</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</div>
-      {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
-      <nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>
-      <div className="drawer-content">
+  return <DrawerShell
+    label={`${service.name} service`}
+    subject={`${service.name} service`}
+    header={<div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div>}
+    actions={<>{localProcess && service.debug && <button className="button button--primary" type="button" onClick={() => void action(service.launchMode === 'debug' ? 'manage' : 'debug')} disabled={!!busy}>{busy === 'debug' || busy === 'manage' ? serviceActionProgressLabel(busy) : service.launchMode === 'debug' ? 'RUN NORMALLY' : 'DEBUG'}</button>}<button className={`button${!localProcess || !service.debug ? ' button--primary' : ''}`} type="button" onClick={() => void action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy === 'restart' || busy === 'start' ? serviceActionProgressLabel(busy) : service.status === 'ready' ? 'RESTART' : 'START'}</button><button className="button" type="button" onClick={() => void action('stop')} disabled={!!busy || service.status === 'stopped'}>{busy === 'stop' ? serviceActionProgressLabel(busy) : 'STOP'}</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</>}
+    actionProps={{ 'aria-busy': !!busy }}
+    notice={error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
+    tabs={<nav className="drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>}
+    onClose={onClose}
+  >
         {drawerTab === 'details' && <>
           <div className="detail-grid"><Detail label="KIND" value={service.framework || service.resource?.type || service.kind} /><Detail label="MODE" value={displayLaunchMode(environment, service)} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div>
           {service.debugger && <section className="drawer-section"><div className="eyebrow">DEBUGGER</div><pre>{service.debugger.adapter} · {service.debugger.host}:{service.debugger.port}</pre><small>{service.debugger.state}. Use your IDE's Attach to Process action and choose the matching Node or JVM process.</small></section>}
@@ -646,9 +640,7 @@ function ServiceDrawer({ environment, service, onClose, onChanged }: { environme
         </>}
         {drawerTab === 'logs' && <ServiceLogs environment={environment} service={service.name} />}
         {drawerTab === 'configuration' && <div className="config-table"><div className="config-row config-row--head"><span>KEY</span><span>EFFECTIVE VALUE</span><span>SOURCE</span></div>{configuration?.environment?.map((item) => <div className="config-row" key={item.key}><code>{item.key}</code><span className={item.classification === 'masked' ? 'masked-value' : ''}>{item.value}</span><small>{item.source} · {item.classification}</small></div>)}{!configuration?.environment?.length && <div className="empty-row">No static environment values were discovered. Connection bindings are generated at runtime.</div>}</div>}
-      </div>
-    </aside>
-  </div>
+  </DrawerShell>
 }
 
 type ServiceAction = 'restart' | 'stop' | 'start' | 'debug' | 'manage'
@@ -822,9 +814,6 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
   const [checkoutNotice, setCheckoutNotice] = useState('')
   const [serviceLocked, setServiceLocked] = useState(false)
   const [saveError, setSaveError] = useState<ActionErrorDetails | null>(null)
-  const configureButton = useRef<HTMLButtonElement>(null)
-  const sourceActionFocus = useRef<HTMLButtonElement | null>(null)
-  const returnFocus = useRef<HTMLButtonElement | null>(null)
   const serviceSelect = useRef<HTMLSelectElement>(null)
   const providerSelect = useRef<HTMLSelectElement>(null)
   const selected = environment.services.find((item) => item.name === service)
@@ -865,28 +854,9 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
     setCheckoutPage(0)
   }, [environment.project, environment.name])
 
-  useEffect(() => {
-    if (!configureOpen) return
-    requestAnimationFrame(() => (serviceLocked ? providerSelect.current : serviceSelect.current)?.focus())
-  }, [configureOpen, serviceLocked])
-
-  useEffect(() => {
-    if (!configureOpen) return
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !busy) {
-        setConfigureOpen(false)
-        setSaveError(null)
-        requestAnimationFrame(() => returnFocus.current?.focus())
-      }
-    }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [busy, configureOpen])
-
-  const openConfigure = (serviceName: string | undefined, trigger: HTMLButtonElement) => {
+  const openConfigure = (serviceName?: string) => {
     initializeProviderForm(serviceName || environment.services[0]?.name || '')
     setServiceLocked(!!serviceName)
-    returnFocus.current = trigger
     setSaveError(null)
     setConfigureOpen(true)
   }
@@ -895,11 +865,9 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
     if (busy) return
     setConfigureOpen(false)
     setSaveError(null)
-    requestAnimationFrame(() => returnFocus.current?.focus())
   }
 
-  const openCheckoutEdit = (item: { source: ProjectSource; checkout?: SourceBinding }, trigger: HTMLButtonElement) => {
-    sourceActionFocus.current = trigger
+  const openCheckoutEdit = (item: { source: ProjectSource; checkout?: SourceBinding }) => {
     setCheckoutMutationError(null)
     setCheckoutEdit(item)
   }
@@ -909,7 +877,6 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
     setCheckoutEdit(null)
     setCheckoutRemove(null)
     setCheckoutMutationError(null)
-    requestAnimationFrame(() => sourceActionFocus.current?.focus())
   }
 
   const saveCheckout = async (path: string) => {
@@ -923,7 +890,6 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
       await onChanged()
       setCheckoutNotice((result.warnings || []).join(' ') || `${checkoutEdit.source.name} now uses ${path}.`)
       setCheckoutEdit(null)
-      requestAnimationFrame(() => sourceActionFocus.current?.focus())
     } catch (reason) {
       setCheckoutMutationError(actionError("Checkout wasn't updated", reason))
     } finally {
@@ -940,7 +906,6 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
       await onChanged()
       setCheckoutNotice(`${checkoutRemove.source.name} is no longer checked out in ${environment.project}/${environment.name}.`)
       setCheckoutRemove(null)
-      requestAnimationFrame(() => sourceActionFocus.current?.focus())
     } catch (reason) {
       setCheckoutMutationError(actionError("Checkout wasn't removed", reason))
     } finally {
@@ -963,7 +928,6 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
       if (completed.state !== 'succeeded') throw new Error(completed.error || `Provider change ${completed.state}`)
       await onChanged()
       setConfigureOpen(false)
-      requestAnimationFrame(() => returnFocus.current?.focus())
     } catch (reason) {
       setSaveError(actionError("Provider wasn't updated", reason))
     } finally {
@@ -983,7 +947,6 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
       if (completed.state !== 'succeeded') throw new Error(completed.error || `Provider reset ${completed.state}`)
       await onChanged()
       setConfigureOpen(false)
-      requestAnimationFrame(() => returnFocus.current?.focus())
     } catch (reason) {
       setSaveError(actionError("Provider wasn't reset", reason))
     } finally {
@@ -995,7 +958,7 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
     <div className="experiment-layout bindings-layout">
       {checkoutNotice && <div className="mock-warning source-add-notice"><strong>CHECKOUT CHANGE</strong><span>{checkoutNotice}</span><button type="button" onClick={() => setCheckoutNotice('')}>DISMISS</button></div>}
       <section className="panel experiment-list configured-providers-panel">
-        <div className="panel-title"><span>PROVIDERS</span><button ref={configureButton} className="button button--primary button--small panel-create-button configure-provider-button" type="button" aria-haspopup="dialog" disabled={!environment.services.length} onClick={(event) => openConfigure(undefined, event.currentTarget)}>CONFIGURE PROVIDER</button></div>
+        <div className="panel-title"><span>PROVIDERS</span><button className="button button--primary button--small panel-create-button configure-provider-button" type="button" aria-haspopup="dialog" disabled={!environment.services.length} onClick={() => openConfigure()}>CONFIGURE PROVIDER</button></div>
         <div className="provider-table" role="table" aria-label="Configured providers">
           <div className="provider-row provider-row--header" role="row"><span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader" aria-label="Row actions" /></div>
           {providers.items.map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>
@@ -1003,7 +966,7 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
             <div className="provider-kind" role="cell">{providerDisplayName(binding.provider)}</div>
             <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <code>{binding.remote?.url}</code> : binding.provider === 'local' ? <code>{binding.source}</code> : binding.provider === 'mock' ? <code>{binding.mock?.profile}</code> : <span>Portless managed</span>}</div>
             {binding.modifiedAt ? <time role="cell" dateTime={binding.modifiedAt} title={new Date(binding.modifiedAt).toLocaleString()}>{formatTimestamp(binding.modifiedAt)}</time> : <time role="cell">—</time>}
-            <div className="provider-actions table-row-actions" role="cell"><button type="button" disabled={busy} onClick={(event) => openConfigure(binding.service, event.currentTarget)}>EDIT</button></div>
+            <div className="provider-actions table-row-actions" role="cell"><button type="button" disabled={busy} onClick={() => openConfigure(binding.service)}>EDIT</button></div>
           </div>)}
           {!environment.bindings?.length && <div className="empty-row">No providers have been compiled for this environment.</div>}
         </div>
@@ -1013,14 +976,21 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
         <div className="panel-title"><span>CHECKOUTS</span><button type="button" onClick={() => onNavigate(`/projects/${encodeURIComponent(environment.project)}`)}>MANAGE SOURCES</button></div>
         {checkouts.total > 0 ? <table className="source-table" aria-label="Environment checkouts">
           <thead><tr><th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col" aria-label="Row actions" /></tr></thead>
-          <tbody>{checkouts.items.map((item) => <tr key={item.source.name}><td><div className="checkout-source"><StatusMark status={item.checkout ? item.checkout.status : item.required ? 'degraded' : 'stopped'} label={false} /><strong>{item.source.name}</strong></div></td><td>{item.checkout ? <code title={item.checkout.path}>{item.checkout.path}</code> : <span className={item.required ? 'warning-text' : 'muted'}>{item.required ? 'Configuration required' : 'Not configured'}</span>}</td><td>{item.checkout ? <time dateTime={item.checkout.createdAt} title={new Date(item.checkout.createdAt).toLocaleString()}>{formatTimestamp(item.checkout.createdAt)}</time> : <span>—</span>}</td><td><div className="table-row-actions">{item.checkout ? <><button type="button" disabled={checkoutMutationBusy} onClick={(event) => openCheckoutEdit(item, event.currentTarget)}>EDIT</button><button type="button" disabled={checkoutMutationBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setCheckoutMutationError(null); setCheckoutRemove({ source: item.source, checkout: item.checkout!, usedBy: item.usedBy }) }}>REMOVE</button></> : <button type="button" disabled={checkoutMutationBusy} onClick={(event) => openCheckoutEdit(item, event.currentTarget)}>CONFIGURE</button>}</div></td></tr>)}</tbody>
+          <tbody>{checkouts.items.map((item) => <tr key={item.source.name}><td><div className="checkout-source"><StatusMark status={item.checkout ? item.checkout.status : item.required ? 'degraded' : 'stopped'} label={false} /><strong>{item.source.name}</strong></div></td><td>{item.checkout ? <code title={item.checkout.path}>{item.checkout.path}</code> : <span className={item.required ? 'warning-text' : 'muted'}>{item.required ? 'Configuration required' : 'Not configured'}</span>}</td><td>{item.checkout ? <time dateTime={item.checkout.createdAt} title={new Date(item.checkout.createdAt).toLocaleString()}>{formatTimestamp(item.checkout.createdAt)}</time> : <span>—</span>}</td><td><div className="table-row-actions">{item.checkout ? <><button type="button" disabled={checkoutMutationBusy} onClick={() => openCheckoutEdit(item)}>EDIT</button><button type="button" disabled={checkoutMutationBusy} onClick={() => { setCheckoutMutationError(null); setCheckoutRemove({ source: item.source, checkout: item.checkout!, usedBy: item.usedBy }) }}>REMOVE</button></> : <button type="button" disabled={checkoutMutationBusy} onClick={() => openCheckoutEdit(item)}>CONFIGURE</button>}</div></td></tr>)}</tbody>
         </table> : <div className="empty-row">This project has no sources to configure.</div>}
         <PanelPagination label="checkouts" pagination={checkouts} onPage={setCheckoutPage} />
       </section>
     </div>
-    {configureOpen && <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={closeConfigure}>
-      <section className="form-modal configure-provider-modal" role="dialog" aria-modal="true" aria-labelledby="configure-provider-title" aria-describedby="configure-provider-description" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><div className="eyebrow">PROVIDER BINDING</div><h2 id="configure-provider-title">Configure Provider</h2></div><button className="icon-button" type="button" aria-label="Close configure provider" disabled={busy} onClick={closeConfigure}>×</button></header>
+    {configureOpen && <FormDialog
+      className="configure-provider-modal"
+      titleID="configure-provider-title"
+      descriptionID="configure-provider-description"
+      closeLabel="Close configure provider"
+      closeBlocked={busy}
+      initialFocusRef={serviceLocked ? providerSelect : serviceSelect}
+      header={<div><div className="eyebrow">PROVIDER BINDING</div><h2 id="configure-provider-title">Configure Provider</h2></div>}
+      onClose={closeConfigure}
+    >
         <form onSubmit={(event) => { event.preventDefault(); void bind() }}>
           <p id="configure-provider-description">Choose how Portless should run or route this service in this environment.</p>
           <div className="form-modal__fields configure-provider-form__fields">
@@ -1043,8 +1013,7 @@ function BindingsPanel({ environment, project, onNavigate, onChanged }: { enviro
           {saveError && <ActionErrorNotice error={saveError} onDismiss={() => setSaveError(null)} />}
           <footer>{resetAvailable && <button className="button button--quiet provider-reset-button" type="button" disabled={busy || transitionBlocked} onClick={() => void reset()}>{busyAction === 'reset' ? 'RESETTING…' : 'RESET TO DEFAULT'}</button>}<button className="button button--quiet" type="button" disabled={busy} onClick={closeConfigure}>CANCEL</button><button className={provider === 'remote' ? 'button button--warning' : 'button button--primary'} type="submit" disabled={busy || transitionBlocked || providerUnchanged || !service || (provider === 'remote' && !remoteURL) || (provider === 'local' && !source) || (provider === 'mock' && !mockProfile)}>{busyAction === 'save' ? 'SWITCHING…' : environment.status === 'stopped' ? 'SAVE CHANGES' : 'SWITCH PROVIDER'}</button></footer>
         </form>
-      </section>
-    </div>}
+    </FormDialog>}
     {checkoutEdit && <ConfigureCheckoutModal environment={environment} source={checkoutEdit.source} checkout={checkoutEdit.checkout} busy={checkoutMutationBusy} error={checkoutMutationError} onDismissError={() => setCheckoutMutationError(null)} onClose={closeCheckoutMutation} onSave={saveCheckout} />}
     {checkoutRemove && <RemoveCheckoutModal environment={environment} source={checkoutRemove.source} usedBy={checkoutRemove.usedBy} busy={checkoutMutationBusy} error={checkoutMutationError} onDismissError={() => setCheckoutMutationError(null)} onClose={closeCheckoutMutation} onRemove={removeCheckout} />}
   </>

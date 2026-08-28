@@ -3,7 +3,7 @@ import { APIError } from '../api'
 import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from '../daemonRestart'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../types'
 import { DaemonLogs } from './DaemonLogs'
-import { DrawerSizeButton } from './DrawerSizeButton'
+import { DrawerShell } from './overlays/DrawerShell'
 import { relativeTime, StatusMark } from './Status'
 
 type RestartPhase = 'idle' | 'confirm' | 'restarting' | 'reconnected' | 'failed'
@@ -35,7 +35,6 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
   const [phase, setPhase] = useState<RestartPhase>('idle')
   const [error, setError] = useState('')
   const [copyState, setCopyState] = useState('COPY DIAGNOSTICS')
-  const [fullScreen, setFullScreen] = useState(false)
   const [tab, setTab] = useState<DaemonDrawerTab>('status')
   const [handoff, setHandoff] = useState<DaemonHandoffStatus | null>(null)
   const [handoffPhase, setHandoffPhase] = useState<HandoffPhase>('idle')
@@ -90,16 +89,6 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
       setStoragePhase('failed')
     })
   }, [diagnostics?.storage, live, onRefreshDiagnostics, storagePhase, tab])
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (fullScreen) setFullScreen(false)
-      else onClose()
-    }
-    window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
-  }, [fullScreen, onClose])
-
   const selectTab = (next: DaemonDrawerTab) => {
     setTab(next)
     if (drawerContent.current) drawerContent.current.scrollTop = 0
@@ -190,17 +179,22 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
 
   const tabAlert = (candidate: DaemonDrawerTab) => daemonTabAlert(candidate, live, diagnostics, controlPlaneHealth, runtime, relay, handoffPhase)
 
-  return <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-    <aside className={`drawer daemon-drawer ${fullScreen ? 'drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label="Portless Daemon" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div><div className="drawer-header-actions"><DrawerSizeButton fullScreen={fullScreen} subject="Portless Daemon" onToggle={() => setFullScreen((value) => !value)} /><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div></header>
-      <div className="drawer-actions">
+  return <DrawerShell
+    label="Portless Daemon"
+    subject="Portless Daemon"
+    className="daemon-drawer"
+    header={<div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div>}
+    actions={<>
         <button className="button button--warning" onClick={() => void prepareRestart()} disabled={!status || !live || !restartSafe || restarting || (active.length > 0 && handoffPhase === 'checking')}>RESTART DAEMON</button>
         <button className="button" onClick={() => void copyDiagnostics()} disabled={!status}>{copyState}</button>
-      </div>
-      <div className="drawer-tabs daemon-drawer-tabs" role="tablist" aria-label="Daemon details">
+      </>}
+    tabs={<div className="drawer-tabs daemon-drawer-tabs" role="tablist" aria-label="Daemon details">
         {daemonTabs.map((item, index) => <button ref={(button) => { tabButtons.current[index] = button }} id={`daemon-tab-${item.id}`} aria-controls={`daemon-panel-${item.id}`} className={tab === item.id ? 'is-active' : ''} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onKeyDown={(event) => tabKeyDown(event, index)} onClick={() => selectTab(item.id)} key={item.id}>{item.label}{tabAlert(item.id) && <i className="daemon-tab-alert" aria-hidden="true" />}</button>)}
-      </div>
-      <div ref={drawerContent} className="drawer-content" id={`daemon-panel-${tab}`} role="tabpanel" aria-labelledby={`daemon-tab-${tab}`} tabIndex={0}>
+      </div>}
+    contentRef={drawerContent}
+    contentProps={{ id: `daemon-panel-${tab}`, role: 'tabpanel', 'aria-labelledby': `daemon-tab-${tab}`, tabIndex: 0 }}
+    onClose={onClose}
+  >
         {tab === 'status' && <StatusPanel status={status} diagnostics={diagnostics} health={controlPlaneHealth} live={live} />}
         {tab === 'runtime' && <RuntimePanel status={status} diagnostics={diagnostics} runtime={runtime} relay={relay} active={active} handoff={handoff} handoffPhase={handoffPhase} handoffError={handoffError} handoffBlocked={handoffBlocked} handoffReady={handoffReady} />}
         {tab === 'storage' && <StoragePanel storage={diagnostics?.storage ?? null} phase={storagePhase} error={storageError} />}
@@ -217,9 +211,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
         </section>}
 
         {tab === 'runtime' && (phase === 'failed' || (!live && phase !== 'restarting')) && <Unavailable title={phase === 'failed' ? 'RESTART FAILED' : 'DAEMON UNREACHABLE'} message={error || 'The UI is waiting for the local daemon to become reachable.'} />}
-      </div>
-    </aside>
-  </div>
+  </DrawerShell>
 }
 
 export function daemonTabIndexForKey(index: number, key: string) {

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { api, jsonBody } from '../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
+import { FormDialog } from '../components/overlays/FormDialog'
 import type { Environment, Project, ProjectSource, SourceBinding } from '../types'
 
 type DirectorySelection = { path: string }
@@ -44,16 +45,17 @@ export function AddProjectSourceModal({ project, environments, busy, error, onDi
       requestAnimationFrame(() => pathInput.current?.focus())
     }
   }
-  useEffect(() => { nameInput.current?.focus() }, [])
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modalBusy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [modalBusy, onClose])
   const visibleError = pickerError || error
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !modalBusy && onClose()}>
-    <section className="form-modal add-source-modal" role="dialog" aria-modal="true" aria-labelledby="add-source-title" aria-describedby="add-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">PROJECT SOURCE</div><h2 id="add-source-title">Add source</h2></div><button className="icon-button" type="button" aria-label="Close add source" disabled={modalBusy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="add-source-modal"
+    titleID="add-source-title"
+    descriptionID="add-source-description"
+    closeLabel="Close add source"
+    closeBlocked={modalBusy}
+    initialFocusRef={nameInput}
+    header={<div><div className="eyebrow">PROJECT SOURCE</div><h2 id="add-source-title">Add source</h2></div>}
+    onClose={onClose}
+  >
       <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); if (!modalBusy && !blocked) void onAdd(name.trim(), path.trim(), environment) }}>
         <p id="add-source-description">Discover this repository and add its services to {project.name}. The checkout path will only be configured for the selected environment.</p>
         <div className="form-modal__fields">
@@ -71,8 +73,7 @@ export function AddProjectSourceModal({ project, environments, busy, error, onDi
         {visibleError && <ActionErrorNotice error={visibleError} onDismiss={dismissErrors} />}
         <footer><button className="button button--quiet" type="button" disabled={modalBusy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={modalBusy || blocked || !name.trim() || !path.trim()}>{busy ? 'ADDING…' : 'ADD SOURCE'}</button></footer>
       </form>
-    </section>
-  </div>
+  </FormDialog>
 }
 
 export function ConfigureCheckoutModal({ environment, source, checkout, busy, error, onDismissError, onClose, onSave }: {
@@ -104,18 +105,24 @@ export function ConfigureCheckoutModal({ environment, source, checkout, busy, er
       requestAnimationFrame(() => pathInput.current?.focus())
     }
   }
-  useEffect(() => { pathInput.current?.focus(); if (checkout) pathInput.current?.select() }, [checkout])
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modalBusy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [modalBusy, onClose])
+    if (!checkout) return
+    const frame = window.requestAnimationFrame(() => pathInput.current?.select())
+    return () => window.cancelAnimationFrame(frame)
+  }, [checkout])
   const stopped = environment.status === 'stopped'
   const visibleError = pickerError || error
   const editing = !!checkout
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !modalBusy && onClose()}>
-    <section className="form-modal edit-source-modal" role="dialog" aria-modal="true" aria-labelledby="edit-checkout-title" aria-describedby="edit-checkout-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">ENVIRONMENT CHECKOUT</div><h2 id="edit-checkout-title">{editing ? 'Edit' : 'Configure'} {source.name}</h2></div><button className="icon-button" type="button" aria-label="Close checkout configuration" disabled={modalBusy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="edit-source-modal"
+    titleID="edit-checkout-title"
+    descriptionID="edit-checkout-description"
+    closeLabel="Close checkout configuration"
+    closeBlocked={modalBusy}
+    initialFocusRef={pathInput}
+    header={<div><div className="eyebrow">ENVIRONMENT CHECKOUT</div><h2 id="edit-checkout-title">{editing ? 'Edit' : 'Configure'} {source.name}</h2></div>}
+    onClose={onClose}
+  >
       <form autoComplete="off" onSubmit={(event) => { event.preventDefault(); if (!modalBusy && stopped) void onSave(path.trim()) }}>
         <p id="edit-checkout-description">Choose the directory {environment.project}/{environment.name} should use for {source.name}. The project source and every other environment stay unchanged.</p>
         <div className="form-modal__fields source-path-fields">
@@ -131,36 +138,39 @@ export function ConfigureCheckoutModal({ environment, source, checkout, busy, er
         {visibleError && <ActionErrorNotice error={visibleError} onDismiss={dismissErrors} />}
         <footer><button className="button button--quiet" type="button" disabled={modalBusy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={modalBusy || !stopped || !path.trim() || path.trim() === checkout?.path}>{busy ? 'SAVING…' : editing ? 'SAVE CHANGES' : 'SAVE CHECKOUT'}</button></footer>
       </form>
-    </section>
-  </div>
+  </FormDialog>
 }
 
-export function DeleteProjectSourceModal({ project, source, environments, busy, error, onDismissError, onClose, onDelete }: {
+export function DeleteProjectSourceModal({ project, source, environments, busy, error, restoreFocusRef, onDismissError, onClose, onDelete }: {
   project: Project
   source: ProjectSource
   environments: Environment[]
   busy: boolean
   error: ActionErrorDetails | null
+  restoreFocusRef?: RefObject<HTMLElement | null>
   onDismissError: () => void
   onClose: () => void
   onDelete: () => Promise<void>
 }) {
   const cancelButton = useRef<HTMLButtonElement>(null)
-  useEffect(() => { cancelButton.current?.focus() }, [])
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [busy, onClose])
   const ownedServices = source.services || []
   const ownedServiceNames = new Set(ownedServices.map((name) => name.toLowerCase()))
   const affectedConnections = project.connections?.filter((connection) => ownedServiceNames.has(connection.source.toLowerCase()) || ownedServiceNames.has(connection.target.toLowerCase())) || []
   const activeEnvironments = environments.filter((item) => item.status !== 'stopped')
   const lastSource = (project.sources?.length || 0) <= 1
   const blocked = lastSource || activeEnvironments.length > 0
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
-    <section className="form-modal delete-source-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-source-title" aria-describedby="delete-source-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">PROJECT TOPOLOGY</div><h2 id="delete-source-title">Delete {source.name}?</h2></div><button className="icon-button" type="button" aria-label="Close delete source" disabled={busy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="delete-source-modal"
+    role="alertdialog"
+    titleID="delete-source-title"
+    descriptionID="delete-source-description"
+    closeLabel="Close delete source"
+    closeBlocked={busy}
+    initialFocusRef={cancelButton}
+    restoreFocusRef={restoreFocusRef}
+    header={<div><div className="eyebrow">PROJECT TOPOLOGY</div><h2 id="delete-source-title">Delete {source.name}?</h2></div>}
+    onClose={onClose}
+  >
       <div className="source-delete-content">
         <p id="delete-source-description">This removes the source from every environment in {project.name}. Services owned by it and resources used only by those services are also removed.</p>
         <div className="source-delete-impact"><div><span className="eyebrow">SERVICES REMOVED</span><strong>{ownedServices.length ? ownedServices.join(', ') : 'No services were discovered for this source'}</strong></div>{affectedConnections.length > 0 && <div><span className="eyebrow">CONNECTIONS REMOVED</span><strong>{affectedConnections.map((connection) => `${connection.source} → ${connection.target}`).join(', ')}</strong></div>}</div>
@@ -169,8 +179,7 @@ export function DeleteProjectSourceModal({ project, source, environments, busy, 
       </div>
       {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
       <footer><button ref={cancelButton} className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--danger" type="button" disabled={busy || blocked} onClick={() => void onDelete()}>{busy ? 'DELETING…' : 'DELETE SOURCE'}</button></footer>
-    </section>
-  </div>
+  </FormDialog>
 }
 
 export function RemoveCheckoutModal({ environment, source, usedBy, busy, error, onDismissError, onClose, onRemove }: {
@@ -186,15 +195,17 @@ export function RemoveCheckoutModal({ environment, source, usedBy, busy, error, 
   const cancelButton = useRef<HTMLButtonElement>(null)
   const stopped = environment.status === 'stopped'
   const blocked = !stopped || usedBy.length > 0
-  useEffect(() => { cancelButton.current?.focus() }, [])
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [busy, onClose])
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
-    <section className="form-modal delete-source-modal" role="alertdialog" aria-modal="true" aria-labelledby="remove-checkout-title" aria-describedby="remove-checkout-description" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><div className="eyebrow">ENVIRONMENT CHECKOUT</div><h2 id="remove-checkout-title">Remove {source.name} checkout?</h2></div><button className="icon-button" type="button" aria-label="Close remove checkout" disabled={busy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="delete-source-modal"
+    role="alertdialog"
+    titleID="remove-checkout-title"
+    descriptionID="remove-checkout-description"
+    closeLabel="Close remove checkout"
+    closeBlocked={busy}
+    initialFocusRef={cancelButton}
+    header={<div><div className="eyebrow">ENVIRONMENT CHECKOUT</div><h2 id="remove-checkout-title">Remove {source.name} checkout?</h2></div>}
+    onClose={onClose}
+  >
       <div className="source-delete-content">
         <p id="remove-checkout-description">Remove the local checkout from {environment.project}/{environment.name}. The project source, its services, and every other environment stay unchanged.</p>
         {usedBy.length > 0 && <p className="source-modal-note source-modal-note--danger">Switch these services away from the Checkout provider first: {usedBy.join(', ')}.</p>}
@@ -202,6 +213,5 @@ export function RemoveCheckoutModal({ environment, source, usedBy, busy, error, 
       </div>
       {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
       <footer><button ref={cancelButton} className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--danger" type="button" disabled={busy || blocked} onClick={() => void onRemove()}>{busy ? 'REMOVING…' : 'REMOVE CHECKOUT'}</button></footer>
-    </section>
-  </div>
+  </FormDialog>
 }

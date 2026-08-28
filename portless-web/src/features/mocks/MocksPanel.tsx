@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath, jsonBody } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
-import { DrawerSizeButton } from '../../components/DrawerSizeButton'
+import { DrawerShell } from '../../components/overlays/DrawerShell'
+import { FormDialog } from '../../components/overlays/FormDialog'
 import { StatusMark } from '../../components/Status'
 import type { Environment, MockPreview, MockProfile, MockRoute, Recording } from '../../types'
 
@@ -162,7 +163,6 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
       busy={busy}
       deleteName={deleteName}
       error={!createOpen && !routeDraft ? error : null}
-      modalOpen={!!routeDraft || previewOpen}
       onDismissError={() => setError(null)}
       onClose={() => { setDeleteName(''); onSelectProfile() }}
       onPreview={() => setPreviewOpen(true)}
@@ -184,14 +184,13 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
   </div>
 }
 
-export function MockProfileDrawer({ environment, profile, active, busy, deleteName, error, modalOpen, onDismissError, onClose, onPreview, onAddRoute, onEditRoute, onDeleteRoute }: {
+export function MockProfileDrawer({ environment, profile, active, busy, deleteName, error, onDismissError, onClose, onPreview, onAddRoute, onEditRoute, onDeleteRoute }: {
   environment: Environment
   profile: MockProfile
   active: boolean
   busy: string
   deleteName: string
   error: ActionErrorDetails | null
-  modalOpen: boolean
   onDismissError: () => void
   onClose: () => void
   onPreview: () => void
@@ -199,25 +198,18 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
   onEditRoute: (route: MockRoute) => void
   onDeleteRoute: (route: MockRoute) => void
 }) {
-  const [fullScreen, setFullScreen] = useState(false)
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || modalOpen || busy) return
-      if (fullScreen) setFullScreen(false)
-      else onClose()
-    }
-    window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
-  }, [busy, fullScreen, modalOpen, onClose])
-  return <div className="drawer-backdrop" role="presentation" onMouseDown={() => { if (!busy && !modalOpen) onClose() }}>
-    <aside className={`drawer mock-profile-drawer${fullScreen ? ' drawer--fullscreen' : ''}`} role="dialog" aria-modal="true" aria-label={`${profile.name} mock profile`} onMouseDown={(event) => event.stopPropagation()}>
-      <header>
-        <div><span className="eyebrow">{environment.project} / {environment.name} / mock profile</span><div className="mock-profile-drawer__title"><h2>{profile.name}</h2><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><small>{active ? 'bound' : 'available'}</small></div></div>
-        <div className="drawer-header-actions"><DrawerSizeButton fullScreen={fullScreen} subject={`${profile.name} mock profile`} onToggle={() => setFullScreen((value) => !value)} /><button className="icon-button" type="button" disabled={!!busy} onClick={onClose} aria-label="Close mock profile">×</button></div>
-      </header>
-      <div className="drawer-actions" aria-busy={!!busy}><button className="button" type="button" disabled={!!busy} onClick={onPreview}>PREVIEW REQUEST</button><button className="button button--primary" type="button" disabled={!!busy} onClick={onAddRoute}>ADD ROUTE</button></div>
-      {error && <div className="mock-profile-drawer__error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
-      <div className="drawer-content">
+  return <DrawerShell
+    label={`${profile.name} mock profile`}
+    subject={`${profile.name} mock profile`}
+    className="mock-profile-drawer"
+    closeLabel="Close mock profile"
+    closeBlocked={!!busy}
+    header={<div><span className="eyebrow">{environment.project} / {environment.name} / mock profile</span><div className="mock-profile-drawer__title"><h2>{profile.name}</h2><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><small>{active ? 'bound' : 'available'}</small></div></div>}
+    actions={<><button className="button" type="button" disabled={!!busy} onClick={onPreview}>PREVIEW REQUEST</button><button className="button button--primary" type="button" disabled={!!busy} onClick={onAddRoute}>ADD ROUTE</button></>}
+    actionProps={{ 'aria-busy': !!busy }}
+    notice={error && <div className="mock-profile-drawer__error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
+    onClose={onClose}
+  >
         <div className="mock-profile-summary"><div><span>SERVICE</span><strong>{profile.service}</strong></div><div><span>DESCRIPTION</span><strong>{profile.description || '—'}</strong></div><div><span>FALLBACK</span><strong>501 · no route matched</strong></div><div><span>MODIFIED</span><strong>{formatTimestamp(profile.modifiedAt)}</strong></div></div>
         <section className="mock-route-table" aria-label={`${profile.name} routes`}>
           <div className="mock-route-table__title"><span>ROUTES</span><small>{profile.routes.length}</small></div>
@@ -228,9 +220,7 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
           </div>)}
           {profile.routes.length === 0 && <div className="empty-row">This profile has no routes. Unmatched requests return 501 so missing behavior is visible.</div>}
         </section>
-      </div>
-    </aside>
-  </div>
+  </DrawerShell>
 }
 
 function CreateProfileModal({ environment, recordings, busy, error, onDismissError, onClose, onCreate }: {
@@ -250,10 +240,15 @@ function CreateProfileModal({ environment, recordings, busy, error, onDismissErr
   const [recording, setRecording] = useState('')
   const [document, setDocument] = useState('')
   const nameInput = useRef<HTMLInputElement>(null)
-  useModalEscape(busy, onClose)
-  useEffect(() => { nameInput.current?.focus() }, [])
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}><section className="form-modal mock-form-modal" role="dialog" aria-modal="true" aria-labelledby="create-mock-title" onMouseDown={(event) => event.stopPropagation()}>
-    <header><div><div className="eyebrow">HTTP MOCK</div><h2 id="create-mock-title">Create mock profile</h2></div><button className="icon-button" type="button" aria-label="Close create mock" disabled={busy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="mock-form-modal"
+    titleID="create-mock-title"
+    closeLabel="Close create mock"
+    closeBlocked={busy}
+    initialFocusRef={nameInput}
+    header={<div><div className="eyebrow">HTTP MOCK</div><h2 id="create-mock-title">Create mock profile</h2></div>}
+    onClose={onClose}
+  >
     <form onSubmit={(event) => { event.preventDefault(); void onCreate({ name: name.trim(), service, description: description.trim(), ...(source === 'recording' ? { fromRecording: recording } : {}), ...(source === 'openapi' ? { openapiDocument: document } : {}) }) }}>
       <p>A profile belongs to one service and can be selected as that service's provider in this environment.</p>
       <div className="form-modal__fields">
@@ -267,17 +262,24 @@ function CreateProfileModal({ environment, recordings, busy, error, onDismissErr
       {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
       <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !name.trim() || !service || (source === 'recording' && !recording) || (source === 'openapi' && !document)}>{busy ? 'CREATING…' : 'CREATE PROFILE'}</button></footer>
     </form>
-  </section></div>
+  </FormDialog>
 }
 
 function RouteModal({ draft, editing, busy, error, onDismissError, onChange, onClose, onSave }: { draft: RouteDraft; editing: boolean; busy: boolean; error: ActionErrorDetails | null; onDismissError: () => void; onChange: (draft: RouteDraft) => void; onClose: () => void; onSave: () => Promise<void> }) {
-  useModalEscape(busy, onClose)
+  const nameInput = useRef<HTMLInputElement>(null)
   const change = <K extends keyof RouteDraft>(key: K, value: RouteDraft[K]) => onChange({ ...draft, [key]: value })
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}><section className="form-modal mock-form-modal" role="dialog" aria-modal="true" aria-labelledby="mock-route-title" onMouseDown={(event) => event.stopPropagation()}>
-    <header><div><div className="eyebrow">CONFIGURE MOCK</div><h2 id="mock-route-title">{editing ? 'Edit mock route' : 'Add mock route'}</h2></div><button className="icon-button" type="button" aria-label="Close route editor" disabled={busy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="mock-form-modal"
+    titleID="mock-route-title"
+    closeLabel="Close route editor"
+    closeBlocked={busy}
+    initialFocusRef={nameInput}
+    header={<div><div className="eyebrow">CONFIGURE MOCK</div><h2 id="mock-route-title">{editing ? 'Edit mock route' : 'Add mock route'}</h2></div>}
+    onClose={onClose}
+  >
     <form onSubmit={(event) => { event.preventDefault(); void onSave() }}>
       <div className="form-modal__fields">
-        <label><span>NAME</span><input value={draft.name} disabled={busy || editing} placeholder="get-product" onChange={(event) => change('name', event.target.value)} /></label>
+        <label><span>NAME</span><input ref={nameInput} value={draft.name} disabled={busy || editing} placeholder="get-product" onChange={(event) => change('name', event.target.value)} /></label>
         <label><span>METHOD</span><select value={draft.method} disabled={busy} onChange={(event) => change('method', event.target.value)}>{['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((method) => <option key={method}>{method}</option>)}</select></label>
         <label className="provider-field--wide"><span>PATH</span><input value={draft.path} disabled={busy} placeholder="/inventory/{sku}" onChange={(event) => change('path', event.target.value)} /></label>
         <label className="provider-field--wide"><span>REQUIRED QUERY · ONE NAME=VALUE PER LINE</span><textarea value={draft.queryText} disabled={busy} placeholder={'warehouse=central\ninclude=availability'} onChange={(event) => change('queryText', event.target.value)} /></label>
@@ -290,7 +292,7 @@ function RouteModal({ draft, editing, busy, error, onDismissError, onChange, onC
       {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
       <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !draft.name.trim() || !draft.path.startsWith('/')}>{busy ? 'SAVING…' : 'SAVE ROUTE'}</button></footer>
     </form>
-  </section></div>
+  </FormDialog>
 }
 
 function PreviewModal({ environment, profile, onClose }: { environment: Environment; profile: MockProfile; onClose: () => void }) {
@@ -301,8 +303,8 @@ function PreviewModal({ environment, profile, onClose }: { environment: Environm
   const [result, setResult] = useState<MockPreview | null>(null)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [busy, setBusy] = useState(false)
+  const targetInput = useRef<HTMLInputElement>(null)
   const supportsBody = mockRequestSupportsBody(method)
-  useModalEscape(busy, onClose)
   const preview = async () => {
     setBusy(true); setError(null)
     try {
@@ -314,13 +316,20 @@ function PreviewModal({ environment, profile, onClose }: { environment: Environm
     } catch (reason) { setError(actionError("Request couldn't be previewed", reason)) }
     finally { setBusy(false) }
   }
-  return <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}><section className="form-modal mock-form-modal" role="dialog" aria-modal="true" aria-labelledby="mock-preview-title" onMouseDown={(event) => event.stopPropagation()}>
-    <header><div><div className="eyebrow">{profile.name}</div><h2 id="mock-preview-title">Preview request</h2></div><button className="icon-button" type="button" aria-label="Close request preview" disabled={busy} onClick={onClose}>×</button></header>
+  return <FormDialog
+    className="mock-form-modal"
+    titleID="mock-preview-title"
+    closeLabel="Close request preview"
+    closeBlocked={busy}
+    initialFocusRef={targetInput}
+    header={<div><div className="eyebrow">{profile.name}</div><h2 id="mock-preview-title">Preview request</h2></div>}
+    onClose={onClose}
+  >
     <form onSubmit={(event) => { event.preventDefault(); void preview() }}>
       <p>Evaluate the matcher without sending traffic or changing trace history.</p>
       <div className="form-modal__fields">
         <label><span>METHOD</span><select value={method} disabled={busy} onChange={(event) => { setMethod(event.target.value); setResult(null) }}>{['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label><span>PATH AND QUERY</span><input value={target} disabled={busy} onChange={(event) => { setTarget(event.target.value); setResult(null) }} /></label>
+        <label><span>PATH AND QUERY</span><input ref={targetInput} value={target} disabled={busy} onChange={(event) => { setTarget(event.target.value); setResult(null) }} /></label>
         <label className="provider-field--wide"><span>REQUEST HEADERS · ONE NAME: VALUE PER LINE</span><textarea value={headersText} disabled={busy} placeholder={'Content-Type: application/json\nX-Request-ID: preview-123'} onChange={(event) => { setHeadersText(event.target.value); setResult(null) }} /></label>
         {supportsBody && <label className="provider-field--wide"><span>REQUEST BODY</span><textarea className="mock-body-editor" value={body} maxLength={262144} disabled={busy} placeholder={'{"sku":"coffee-mug"}'} onChange={(event) => { setBody(event.target.value); setResult(null) }} /></label>}
       </div>
@@ -328,15 +337,7 @@ function PreviewModal({ environment, profile, onClose }: { environment: Environm
       {result && <div className={`mock-preview-result${result.matched ? '' : ' is-unmatched'}`}><span>{result.matched ? `MATCHED · ${result.route}` : 'NO MATCH'}</span><strong>{result.status}</strong><pre>{result.body || '(empty response body)'}</pre></div>}
       <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CLOSE</button><button className="button button--primary" type="submit" disabled={busy || !target.startsWith('/')}>{busy ? 'MATCHING…' : 'PREVIEW'}</button></footer>
     </form>
-  </section></div>
-}
-
-function useModalEscape(busy: boolean, close: () => void) {
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) close() }
-    document.addEventListener('keydown', listener)
-    return () => document.removeEventListener('keydown', listener)
-  }, [busy, close])
+  </FormDialog>
 }
 
 export function parseMockPairs(value: string, separator: ':' | '=') {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, environmentPath, jsonBody, projectPath } from '../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../components/ActionError'
+import { FormDialog } from '../components/overlays/FormDialog'
 import { paginateItems, PanelPagination } from '../components/PanelPagination'
 import type { Environment, EnvironmentStatus, Operation, Project, ProjectSource } from '../types'
 import { StatusMark } from '../components/Status'
@@ -31,9 +32,7 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
   const [environmentActionError, setEnvironmentActionError] = useState<ActionErrorDetails | null>(null)
   const [environmentPage, setEnvironmentPage] = useState(0)
   const [sourcePage, setSourcePage] = useState(0)
-  const createButton = useRef<HTMLButtonElement>(null)
   const sourceCreateButton = useRef<HTMLButtonElement>(null)
-  const sourceActionFocus = useRef<HTMLButtonElement | null>(null)
   const environmentActionsInFlight = useRef(new Set<string>())
   const stopAllInFlight = useRef(false)
   const nameInput = useRef<HTMLInputElement>(null)
@@ -52,21 +51,6 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
     setEnvironmentPage(0)
     setSourcePage(0)
   }, [selectedProject?.name])
-  useEffect(() => {
-    if (createOpen) nameInput.current?.focus()
-  }, [createOpen])
-  useEffect(() => {
-    if (!createOpen) return
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !creating) {
-        setCreateOpen(false)
-        setCloneError(null)
-        requestAnimationFrame(() => createButton.current?.focus())
-      }
-    }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [createOpen, creating])
   const openCreate = () => {
     if (!shown.some((environment) => environment.name === cloneFrom)) setCloneFrom(shown[0]?.name ?? '')
     setCloneName('')
@@ -77,7 +61,6 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
     if (creating) return
     setCreateOpen(false)
     setCloneError(null)
-    requestAnimationFrame(() => createButton.current?.focus())
   }
   const clone = async () => {
     if (!selectedProject) return
@@ -105,7 +88,6 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
     setSourceCreateOpen(false)
     setSourceDelete(null)
     setSourceError(null)
-    requestAnimationFrame(() => (sourceActionFocus.current || sourceCreateButton.current)?.focus())
   }
   const addProjectSource = async (name: string, path: string, environment: string) => {
     if (!selectedProject) return
@@ -120,7 +102,6 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
       if (result.configurationRequired?.length) notes.push(`Configure ${name} in ${result.configurationRequired.join(', ')}.`)
       setSourceNotice(notes.join(' ') || `${name} was added to ${selectedProject.name} and its checkout was configured for ${environment}.`)
       setSourceCreateOpen(false)
-      requestAnimationFrame(() => sourceCreateButton.current?.focus())
     } catch (reason) {
       setSourceError(actionError("Source wasn't added", reason))
     } finally {
@@ -136,7 +117,6 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
       await onChanged()
       setSourceNotice(`${sourceDelete.name} was deleted from ${selectedProject.name}.`)
       setSourceDelete(null)
-      requestAnimationFrame(() => sourceCreateButton.current?.focus())
     } catch (reason) {
       setSourceError(actionError("Source wasn't deleted", reason))
     } finally {
@@ -218,7 +198,7 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
     </div>
     {environmentActionError && selectedProject && <ActionErrorNotice error={environmentActionError} onDismiss={() => setEnvironmentActionError(null)} />}
     {selectedProject ? shown.length > 0 ? <section className="panel environments-table">
-      <div className="panel-title"><span>ENVIRONMENTS</span><button ref={createButton} className="button button--primary button--small panel-create-button create-environment-button" type="button" aria-haspopup="dialog" onClick={openCreate}>CREATE ENVIRONMENT</button></div>
+      <div className="panel-title"><span>ENVIRONMENTS</span><button className="button button--primary button--small panel-create-button create-environment-button" type="button" aria-haspopup="dialog" onClick={openCreate}>CREATE ENVIRONMENT</button></div>
       <div className="environment-row-shell environment-row-shell--header"><div className="table-row table-row--header environment-row"><span>Status</span><span>Environment</span><span>Ready</span><span>Remote</span><span>Modified</span><span>Why</span></div><span aria-hidden="true" /></div>
       {paginatedEnvironments.items.map((environment) => {
         const ready = environment.services.filter((service) => service.status === 'ready').length
@@ -257,14 +237,21 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
           <span className={environment.configurationRequired ? 'warning-text truncate' : 'muted truncate'}>{environment.configurationRequired ? 'configuration required' : 'not bound locally'}</span>
         </div>)}</div>
         <span className="muted truncate" title={source.services?.join(', ')}>{source.services?.join(', ') || '—'}</span>
-        <div className="table-row-actions"><button type="button" disabled={sourceBusy} onClick={(event) => { sourceActionFocus.current = event.currentTarget; setSourceError(null); setSourceDelete(source) }}>DELETE</button></div>
+        <div className="table-row-actions"><button type="button" disabled={sourceBusy} onClick={() => { setSourceError(null); setSourceDelete(source) }}>DELETE</button></div>
       </div>)}
       {sourceRows.length === 0 && <div className="empty-row">No sources are registered with this project.</div>}
       <PanelPagination label="sources" pagination={paginatedSources} onPage={setSourcePage} />
     </section>}
-    {createOpen && selectedProject && <div className="modal-backdrop form-modal-backdrop" role="presentation" onMouseDown={closeCreate}>
-      <section className="form-modal create-environment-modal" role="dialog" aria-modal="true" aria-labelledby="create-environment-title" aria-describedby="create-environment-description" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><div className="eyebrow">NEW ENVIRONMENT</div><h2 id="create-environment-title">Create environment</h2></div><button className="icon-button" type="button" aria-label="Close create environment" disabled={creating} onClick={closeCreate}>×</button></header>
+    {createOpen && selectedProject && <FormDialog
+      className="create-environment-modal"
+      titleID="create-environment-title"
+      descriptionID="create-environment-description"
+      closeLabel="Close create environment"
+      closeBlocked={creating}
+      initialFocusRef={nameInput}
+      header={<div><div className="eyebrow">NEW ENVIRONMENT</div><h2 id="create-environment-title">Create environment</h2></div>}
+      onClose={closeCreate}
+    >
         <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void clone() }}>
           <p id="create-environment-description">Clone providers and source bindings, then customize the result.</p>
           <div className="form-modal__fields create-environment-form__fields">
@@ -274,10 +261,9 @@ export function ProjectsPage({ projects, environments, selectedProject, onNaviga
           {cloneError && <ActionErrorNotice error={cloneError} onDismiss={() => setCloneError(null)} />}
           <footer><button className="button button--quiet" type="button" disabled={creating} onClick={closeCreate}>CANCEL</button><button className="button button--primary" type="submit" disabled={creating || !cloneName.trim()}>{creating ? 'CREATING…' : 'CREATE ENVIRONMENT'}</button></footer>
         </form>
-      </section>
-    </div>}
+    </FormDialog>}
     {sourceCreateOpen && selectedProject && <AddProjectSourceModal project={selectedProject} environments={shown} busy={sourceBusy} error={sourceError} onDismissError={() => setSourceError(null)} onClose={closeSourceMutation} onAdd={addProjectSource} />}
-    {sourceDelete && selectedProject && <DeleteProjectSourceModal project={selectedProject} source={sourceDelete} environments={shown} busy={sourceBusy} error={sourceError} onDismissError={() => setSourceError(null)} onClose={closeSourceMutation} onDelete={deleteProjectSource} />}
+    {sourceDelete && selectedProject && <DeleteProjectSourceModal project={selectedProject} source={sourceDelete} environments={shown} busy={sourceBusy} error={sourceError} restoreFocusRef={sourceCreateButton} onDismissError={() => setSourceError(null)} onClose={closeSourceMutation} onDelete={deleteProjectSource} />}
   </div>
 }
 
