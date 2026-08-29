@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
-import { RecordingsPanel } from './RecordingsPanel'
+import { createRecordingDefaults, RecordingsPanel } from './RecordingsPanel'
 
 const environment: Environment = {
   project: 'store',
@@ -81,8 +81,30 @@ describe('RecordingsPanel', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[completedRecording]} refresh={async () => undefined} />)
 
     expect(html).toContain('completed-checkout')
+    expect(html).toContain('aria-label="Record completed-checkout again"')
+    expect(html).toContain('>RECORD AGAIN</button>')
     expect(html).toContain('aria-label="Delete completed-checkout"')
     expect(html).toContain('>DELETE</button>')
     expect(html).not.toContain('Confirm delete completed-checkout')
+  })
+
+  it('disables repeat actions while another recording is active', () => {
+    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording, completedRecording]} refresh={async () => undefined} />)
+
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Record completed-checkout again"[^>]*>RECORD AGAIN<\/button>/)
+  })
+
+  it('prepares a new recording with the prior capture settings and an available name', () => {
+    const previous = { ...completedRecording, capturePayloads: true, maxEvents: 5000, maxPayloadBytes: 100000 }
+    const existingRepeat = { ...previous, name: 'completed-checkout-2' }
+
+    expect(createRecordingDefaults([previous, existingRepeat], previous)).toEqual({
+      name: 'completed-checkout-3',
+      source: 'checkout',
+      target: 'orders',
+      capturePayloads: true,
+      maxEvents: 5000,
+      maxPayloadBytes: 100000,
+    })
   })
 })

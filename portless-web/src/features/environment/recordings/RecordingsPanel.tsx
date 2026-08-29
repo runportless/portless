@@ -5,9 +5,9 @@ import type { Recording } from '../../../api/contracts/experiments'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
 import { FormDialog } from '../../../components/overlays/FormDialog'
 import { relativeTime, StatusMark } from '../../../components/Status'
-import { experimentScopes, recordingScopeLabel } from '../../experimentScopes'
+import { experimentScopeID, experimentScopes, recordingScopeLabel } from '../../experimentScopes'
 
-interface CreateRecordingInput {
+export interface CreateRecordingInput {
   name: string
   source: string
   target: string
@@ -16,8 +16,31 @@ interface CreateRecordingInput {
   maxPayloadBytes: number
 }
 
+export function createRecordingDefaults(recordings: Recording[], previous?: Recording): CreateRecordingInput {
+  const existingNames = new Set(recordings.map((recording) => recording.name.toLowerCase()))
+  const originalName = previous?.name || 'checkout-debug'
+  const numberedName = originalName.match(/^(.*)-(\d+)$/)
+  const stem = numberedName?.[1] || originalName
+  let sequence = numberedName ? Number(numberedName[2]) + 1 : 2
+  let name = originalName
+  while (existingNames.has(name.toLowerCase())) {
+    const suffix = `-${sequence}`
+    const availableStem = stem.slice(0, 64 - suffix.length).replace(/[._-]+$/, '')
+    name = `${availableStem}${suffix}`
+    sequence++
+  }
+  return {
+    name,
+    source: previous?.source || '',
+    target: previous?.target || '',
+    capturePayloads: previous?.capturePayloads ?? false,
+    maxEvents: previous?.maxEvents ?? 10000,
+    maxPayloadBytes: previous?.maxPayloadBytes ?? 65536,
+  }
+}
+
 export function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
-  const [createOpen, setCreateOpen] = useState(false)
+  const [createDefaults, setCreateDefaults] = useState<CreateRecordingInput | null>(null)
   const [busy, setBusy] = useState('')
   const [deleteName, setDeleteName] = useState('')
   const [error, setError] = useState<ActionErrorDetails | null>(null)
@@ -27,13 +50,13 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     : recordings
 
   useEffect(() => {
-    setCreateOpen(false)
+    setCreateDefaults(null)
     setDeleteName('')
     setError(null)
   }, [environment.project, environment.name])
 
   useEffect(() => {
-    if (activeRecording) setCreateOpen(false)
+    if (activeRecording) setCreateDefaults(null)
   }, [activeRecording])
 
   const start = async (input: CreateRecordingInput) => {
@@ -42,7 +65,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     try {
       await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody(input) })
       await refresh()
-      setCreateOpen(false)
+      setCreateDefaults(null)
     } catch (value) {
       setError(actionError("Recording wasn't started", value))
     } finally {
@@ -83,7 +106,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   }
 
   return <div className="recordings-page">
-    {!createOpen && error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
+    {!createDefaults && error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
     <section className="panel experiment-list">
       <div className="panel-title recordings-panel-title">
         <span>RECORDINGS</span>
@@ -94,7 +117,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
             type="button"
             disabled={!!busy || !!activeRecording}
             aria-describedby={activeRecording ? 'recording-create-unavailable' : undefined}
-            onClick={() => { setCreateOpen(true); setDeleteName(''); setError(null) }}
+            onClick={() => { setCreateDefaults(createRecordingDefaults(recordings)); setDeleteName(''); setError(null) }}
           >CREATE RECORDING</button>
         </div>
       </div>
@@ -112,6 +135,13 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
           {recording.status === 'active'
             ? <button type="button" disabled={!!busy} onClick={() => { setDeleteName(''); void stop(recording) }}>{busy === `stop:${recording.name}` ? 'STOPPING…' : 'STOP RECORDING'}</button>
             : <>
+                <button
+                  type="button"
+                  disabled={!!busy || !!activeRecording}
+                  aria-label={`Record ${recording.name} again`}
+                  aria-describedby={activeRecording ? 'recording-create-unavailable' : undefined}
+                  onClick={() => { setCreateDefaults(createRecordingDefaults(recordings, recording)); setDeleteName(''); setError(null) }}
+                >RECORD AGAIN</button>
                 <a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`} onClick={() => setDeleteName('')}>EXPORT</a>
                 <button
                   className={deleteName === recording.name ? 'is-confirming' : ''}
@@ -126,31 +156,39 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
       {recordings.length === 0 && <div className="empty-row">No recordings. Create one before reproducing a local issue.</div>}
     </section>
 
-    {createOpen && !activeRecording && <CreateRecordingModal
+    {createDefaults && !activeRecording && <CreateRecordingModal
       environment={environment}
+      defaults={createDefaults}
       busy={busy === 'create'}
       error={error}
       onDismissError={() => setError(null)}
-      onClose={() => { setCreateOpen(false); setError(null) }}
+      onClose={() => { setCreateDefaults(null); setError(null) }}
       onCreate={start}
     />}
   </div>
 }
 
-function CreateRecordingModal({ environment, busy, error, onDismissError, onClose, onCreate }: {
+function CreateRecordingModal({ environment, defaults, busy, error, onDismissError, onClose, onCreate }: {
   environment: Environment
+  defaults: CreateRecordingInput
   busy: boolean
   error: ActionErrorDetails | null
   onDismissError: () => void
   onClose: () => void
   onCreate: (input: CreateRecordingInput) => Promise<void>
 }) {
-  const [name, setName] = useState('checkout-debug')
-  const [scopeID, setScopeID] = useState('')
-  const [capturePayloads, setCapturePayloads] = useState(false)
-  const [maxPayloadBytes, setMaxPayloadBytes] = useState(65536)
+  const scopes = useMemo(() => {
+    const available = experimentScopes(environment)
+    if (!defaults.source && !defaults.target) return available
+    const id = experimentScopeID(defaults.source, defaults.target)
+    if (available.some((scope) => scope.id === id)) return available
+    return [{ id, source: defaults.source, target: defaults.target, label: recordingScopeLabel(defaults) }, ...available]
+  }, [defaults, environment])
+  const [name, setName] = useState(defaults.name)
+  const [scopeID, setScopeID] = useState(defaults.source || defaults.target ? experimentScopeID(defaults.source, defaults.target) : '')
+  const [capturePayloads, setCapturePayloads] = useState(defaults.capturePayloads)
+  const [maxPayloadBytes, setMaxPayloadBytes] = useState(defaults.maxPayloadBytes)
   const nameInput = useRef<HTMLInputElement>(null)
-  const scopes = useMemo(() => experimentScopes(environment), [environment])
   const selectedScope = scopes.find((scope) => scope.id === scopeID)
 
   return <FormDialog
@@ -170,7 +208,7 @@ function CreateRecordingModal({ environment, busy, error, onDismissError, onClos
         source: selectedScope?.source || '',
         target: selectedScope?.target || '',
         capturePayloads,
-        maxEvents: 10000,
+        maxEvents: defaults.maxEvents,
         maxPayloadBytes,
       })
     }}>
@@ -180,7 +218,7 @@ function CreateRecordingModal({ environment, busy, error, onDismissError, onClos
         <label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} disabled={busy} onChange={(event) => { setScopeID(event.target.value); onDismissError() }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>
         <label className="recording-body-toggle provider-field--wide"><input type="checkbox" checked={capturePayloads} disabled={busy} onChange={(event) => { setCapturePayloads(event.target.checked); onDismissError() }} /><span><strong>CAPTURE PAYLOADS</strong><small>Retains HTTP bodies and decoded database or messaging content.</small></span></label>
         {capturePayloads && <>
-          <label className="provider-field--wide"><span>MAXIMUM PAYLOAD SIZE</span><select value={maxPayloadBytes} disabled={busy} onChange={(event) => setMaxPayloadBytes(Number(event.target.value))}><option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label>
+          <label className="provider-field--wide"><span>MAXIMUM PAYLOAD SIZE</span><select value={maxPayloadBytes} disabled={busy} onChange={(event) => setMaxPayloadBytes(Number(event.target.value))}>{![16384, 65536, 262144, 1048576].includes(maxPayloadBytes) && <option value={maxPayloadBytes}>{maxPayloadBytes.toLocaleString()} bytes</option>}<option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label>
           <div className="recording-body-warning provider-field--wide"><strong>APPLICATION DATA</strong><span>Captured payloads are retained locally and can contain application data.</span></div>
         </>}
       </div>
