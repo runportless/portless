@@ -6,9 +6,13 @@ test.describe.configure({ mode: 'serial' })
 
 test('creates, captures, exports, and deletes a recording', async ({ page }) => {
   await authenticate(page, environmentPath('recordings'))
-  await page.getByLabel('NAME').fill('ui-recording')
-  await page.getByLabel('Recording traffic scope').selectOption('checkout:orders')
-  await page.getByRole('button', { name: /START RECORDING/ }).click()
+  await page.getByRole('button', { name: 'CREATE RECORDING', exact: true }).click()
+  const recordingDialog = page.getByRole('dialog', { name: 'Create recording' })
+  await expect(recordingDialog.getByLabel('NAME')).toBeFocused()
+  await recordingDialog.getByLabel('NAME').fill('ui-recording')
+  await recordingDialog.getByLabel('Recording traffic scope').selectOption('checkout:orders')
+  await recordingDialog.getByRole('button', { name: /START RECORDING/ }).click()
+  await expect(recordingDialog).toHaveCount(0)
 
   let row = page.locator('.experiment-row').filter({ hasText: 'ui-recording' })
   await expect(row).toContainText('checkout → orders')
@@ -174,4 +178,3 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
   await row.getByRole('button', { name: 'DELETE' }).click()
   await expect(page.locator('.experiment-row').filter({ hasText: 'ui-orders-fault' })).toHaveCount(0)
 })
-
