@@ -242,7 +242,8 @@ trace timeline.
 
 The trace drawer's previous and next controls follow the waterfall's visible
 span model: a transaction is always one command/result summary, and successful
-housekeeping spans are excluded.
+housekeeping spans are excluded. Its overview keeps environment, target binding,
+start time, and duration visible in both the standard and maximized layouts.
 Drawers opened from the raw Exchanges table instead provide only previous and
 next exchange controls, following the table's active filters across pages.
 

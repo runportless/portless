@@ -83,7 +83,7 @@ export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, 
     </header>
 
     <div className="traffic-detail__content">
-      {!maximized && <TrafficOverview exchange={detailExchange} targetBinding={targetBinding} />}
+      <TrafficOverview exchange={detailExchange} targetBinding={targetBinding} />
       {http && <HttpTrafficDetail exchange={detailExchange} maximized={maximized} view={view} onView={setView} />}
       {semanticTCP && <TcpTrafficDetail exchange={detailExchange} exchanges={tcpCommandExchanges} maximized={maximized} view={view} onView={setView} />}
     </div>

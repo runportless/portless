@@ -28,11 +28,14 @@ export function TrafficOverview({ exchange, targetBinding }: { exchange: Traffic
   const tcp = exchange.tcp
   const showTCPNotice = exchange.protocol !== 'http' && (!tcp || tcp.kind === 'session' || (tcp.inspection !== 'decoded' && tcp.inspection !== 'limited'))
   return <section className="traffic-overview" aria-label="Exchange overview">
-    <div className="traffic-overview__context">
-      <OverviewDetail label="ENVIRONMENT" value={exchange.environment} />
-      <OverviewDetail label="TARGET BINDING" value={trafficTargetBinding(exchange, targetBinding)} />
-      <OverviewDetail label="STARTED" value={trafficStartedTime(exchange.startedAt)} />
-      <OverviewDetail label="COMPLETED" value={duration(exchange.durationMs)} />
+    <div className="traffic-overview__panel">
+      <div className="traffic-overview__heading">OVERVIEW</div>
+      <div className="traffic-overview__context">
+        <OverviewDetail label="ENVIRONMENT" value={exchange.environment} />
+        <OverviewDetail label="TARGET BINDING" value={trafficTargetBinding(exchange, targetBinding)} />
+        <OverviewDetail label="STARTED" value={trafficStartedTime(exchange.startedAt)} />
+        <OverviewDetail label="COMPLETED" value={duration(exchange.durationMs)} />
+      </div>
     </div>
     {exchange.error && <div className="traffic-detail__error"><span>{exchange.protocol === 'http' ? 'REQUEST ERROR' : 'OPERATION ERROR'}</span><strong>{exchange.error}</strong></div>}
     {showTCPNotice && <section className="traffic-tcp-summary"><span>{tcp?.inspection?.toUpperCase() || 'TCP SESSION'}</span><strong>{tcp?.inspectionReason || 'Application protocol details are not available for this connection.'}</strong><small>{formatTrafficBytes(Math.max(0, exchange.requestBytes))} sent · {formatTrafficBytes(Math.max(0, exchange.responseBytes))} received</small></section>}
