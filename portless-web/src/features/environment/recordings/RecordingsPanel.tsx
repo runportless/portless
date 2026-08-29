@@ -3,9 +3,11 @@ import { api, environmentPath, jsonBody } from '../../../api'
 import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
-import { FormDialog } from '../../../components/overlays/FormDialog'
-import { relativeTime, StatusMark } from '../../../components/Status'
+import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
+import { relativeTime } from '../../../components/Status'
 import { experimentScopeID, experimentScopes, recordingScopeLabel } from '../../experimentScopes'
+
+const recordingHistoryPageSize = 5
 
 export interface CreateRecordingInput {
   name: string
@@ -40,32 +42,33 @@ export function createRecordingDefaults(recordings: Recording[], previous?: Reco
 }
 
 export function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
-  const [createDefaults, setCreateDefaults] = useState<CreateRecordingInput | null>(null)
+  const [repeatFrom, setRepeatFrom] = useState<Recording>()
+  const [controlRequest, setControlRequest] = useState(0)
   const [busy, setBusy] = useState('')
   const [deleteName, setDeleteName] = useState('')
   const [error, setError] = useState<ActionErrorDetails | null>(null)
+  const [historyPage, setHistoryPage] = useState(0)
   const activeRecording = recordings.find((recording) => recording.status === 'active')
-  const orderedRecordings = activeRecording
-    ? [activeRecording, ...recordings.filter((recording) => recording !== activeRecording)]
-    : recordings
+  const historyRecordings = recordings.filter((recording) => recording.status !== 'active')
+  const historyPagination = paginateItems(historyRecordings, historyPage, recordingHistoryPageSize)
+  const controlDefaults = createRecordingDefaults(recordings, repeatFrom)
 
   useEffect(() => {
-    setCreateDefaults(null)
+    setRepeatFrom(undefined)
+    setControlRequest(0)
     setDeleteName('')
     setError(null)
+    setHistoryPage(0)
   }, [environment.project, environment.name])
-
-  useEffect(() => {
-    if (activeRecording) setCreateDefaults(null)
-  }, [activeRecording])
 
   const start = async (input: CreateRecordingInput) => {
     setBusy('create')
+    setDeleteName('')
     setError(null)
     try {
       await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody(input) })
       await refresh()
-      setCreateDefaults(null)
+      setRepeatFrom(undefined)
     } catch (value) {
       setError(actionError("Recording wasn't started", value))
     } finally {
@@ -75,6 +78,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const stop = async (recording: Recording) => {
     setBusy(`stop:${recording.name}`)
+    setDeleteName('')
     setError(null)
     try {
       await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/stop`), { method: 'POST' })
@@ -105,44 +109,60 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     }
   }
 
+  const prepareRepeat = (recording: Recording) => {
+    setRepeatFrom(recording)
+    setControlRequest((value) => value + 1)
+    setDeleteName('')
+    setError(null)
+  }
+
   return <div className="recordings-page">
-    {!createDefaults && error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
-    <section className="panel experiment-list">
-      <div className="panel-title recordings-panel-title">
-        <span>RECORDINGS</span>
-        <div className="recordings-title-actions">
-          {activeRecording && <small id="recording-create-unavailable">Stop {activeRecording.name} before creating another recording.</small>}
-          <button
-            className="button button--primary button--small panel-create-button"
-            type="button"
-            disabled={!!busy || !!activeRecording}
-            aria-describedby={activeRecording ? 'recording-create-unavailable' : undefined}
-            onClick={() => { setCreateDefaults(createRecordingDefaults(recordings)); setDeleteName(''); setError(null) }}
-          >CREATE RECORDING</button>
-        </div>
+    {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
+    <section className="panel recording-control-panel">
+      <div className="panel-title"><span>RECORDING CONTROL</span><small>{activeRecording ? 'CAPTURE IN PROGRESS' : 'READY'}</small></div>
+      {activeRecording
+        ? <ActiveRecordingControl recording={activeRecording} busy={busy === `stop:${activeRecording.name}`} onStop={() => void stop(activeRecording)} />
+        : <RecordingControlForm
+            key={`${environment.project}/${environment.name}:${controlRequest}`}
+            environment={environment}
+            defaults={controlDefaults}
+            busy={busy === 'create'}
+            focusNameRequest={controlRequest}
+            onDismissError={() => setError(null)}
+            onCreate={start}
+          />}
+    </section>
+
+    <section className="panel recording-history-panel">
+      <div className="panel-title recording-history-title">
+        <span>HISTORY</span>
       </div>
-      {orderedRecordings.map((recording) => <div className={`experiment-row recording-row${recording.status === 'active' ? ' recording-row--active' : ''}`} key={recording.name}>
-        <StatusMark status={recording.status === 'active' ? 'active' : 'stopped'} label={false} />
-        <div>
-          <div className="recording-row__name">
-            <strong>{recording.name}</strong>
-            {recording.status === 'active' && <span>RECORDING</span>}
-          </div>
-          <small>{recordingScopeLabel(recording)} · {recording.eventCount} {recording.eventCount === 1 ? 'event' : 'events'}{recording.capturePayloads ? ' · payloads captured' : ''}</small>
-        </div>
-        <span>{relativeTime(recording.startedAt)} ago</span>
-        <div>
-          {recording.status === 'active'
-            ? <button type="button" disabled={!!busy} onClick={() => { setDeleteName(''); void stop(recording) }}>{busy === `stop:${recording.name}` ? 'STOPPING…' : 'STOP RECORDING'}</button>
-            : <>
+      <div className="recording-history-scroll">
+        <table className="recording-history-table">
+          <thead><tr><th>Recording</th><th>Events</th><th>Created at</th><th>Completed</th><th>Actions</th></tr></thead>
+          <tbody>
+            {historyPagination.items.map((recording) => <tr key={recording.name}>
+              <td>
+                <strong>{recording.name}</strong>
+                <small className="recording-history__details" title={`${recordingScopeLabel(recording)}; payloads ${recording.capturePayloads ? 'captured' : 'not captured'}`}>
+                  {recordingScopeLabel(recording)} · Payloads {recording.capturePayloads ? 'captured' : 'not captured'}
+                </small>
+              </td>
+              <td>{recording.eventCount.toLocaleString()}</td>
+              <td className="recording-history__created"><time dateTime={recording.startedAt} title={new Date(recording.startedAt).toLocaleString()}>{formatRecordingTimestamp(recording.startedAt)}</time></td>
+              <td className="recording-history__time"><time dateTime={recording.completedAt || recording.startedAt}>{relativeTime(recording.completedAt || recording.startedAt)} ago</time></td>
+              <td><div className="table-row-actions recording-history__actions">
                 <button
                   type="button"
                   disabled={!!busy || !!activeRecording}
                   aria-label={`Record ${recording.name} again`}
-                  aria-describedby={activeRecording ? 'recording-create-unavailable' : undefined}
-                  onClick={() => { setCreateDefaults(createRecordingDefaults(recordings, recording)); setDeleteName(''); setError(null) }}
+                  onClick={() => prepareRepeat(recording)}
                 >RECORD AGAIN</button>
-                <a href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`} onClick={() => setDeleteName('')}>EXPORT</a>
+                <a
+                  className="recording-history__export"
+                  href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}
+                  onClick={() => setDeleteName('')}
+                >EXPORT</a>
                 <button
                   className={deleteName === recording.name ? 'is-confirming' : ''}
                   type="button"
@@ -150,31 +170,45 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
                   aria-label={deleteName === recording.name ? `Confirm delete ${recording.name}` : `Delete ${recording.name}`}
                   onClick={() => void remove(recording)}
                 >{busy === `delete:${recording.name}` ? 'DELETING…' : deleteName === recording.name ? 'CONFIRM' : 'DELETE'}</button>
-              </>}
-        </div>
-      </div>)}
-      {recordings.length === 0 && <div className="empty-row">No recordings. Create one before reproducing a local issue.</div>}
+              </div></td>
+            </tr>)}
+            {historyRecordings.length === 0 && <tr><td className="recording-history__empty" colSpan={5}>No recording history yet. Completed recordings will appear here.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <PanelPagination label="recordings" pagination={historyPagination} onPage={(page) => { setHistoryPage(page); setDeleteName('') }} />
     </section>
-
-    {createDefaults && !activeRecording && <CreateRecordingModal
-      environment={environment}
-      defaults={createDefaults}
-      busy={busy === 'create'}
-      error={error}
-      onDismissError={() => setError(null)}
-      onClose={() => { setCreateDefaults(null); setError(null) }}
-      onCreate={start}
-    />}
   </div>
 }
 
-function CreateRecordingModal({ environment, defaults, busy, error, onDismissError, onClose, onCreate }: {
+function formatRecordingTimestamp(value: string) {
+  return new Date(value).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+}
+
+function ActiveRecordingControl({ recording, busy, onStop }: { recording: Recording; busy: boolean; onStop: () => void }) {
+  return <div className="recording-active-control">
+    <div className="recording-active-control__lead">
+      <div className="recording-active-control__identity">
+        <span className="recording-active-control__pulse" aria-hidden="true" />
+        <div><div><strong>{recording.name}</strong><span className="recording-active-control__badge">RECORDING</span></div></div>
+      </div>
+      <button className="button button--danger" type="button" disabled={busy} onClick={onStop}>{busy ? 'STOPPING…' : 'STOP RECORDING'}</button>
+    </div>
+    <div className="recording-active-control__details">
+      <div><span>TRAFFIC SCOPE</span><strong>{recordingScopeLabel(recording)}</strong></div>
+      <div><span>CAPTURED EVENTS</span><strong>{recording.eventCount.toLocaleString()}</strong></div>
+      <div><span>STARTED</span><strong>{relativeTime(recording.startedAt)} ago</strong></div>
+      <div><span>PAYLOADS</span><strong>{recording.capturePayloads ? 'Captured' : 'Not captured'}</strong></div>
+    </div>
+  </div>
+}
+
+function RecordingControlForm({ environment, defaults, busy, focusNameRequest, onDismissError, onCreate }: {
   environment: Environment
   defaults: CreateRecordingInput
   busy: boolean
-  error: ActionErrorDetails | null
+  focusNameRequest: number
   onDismissError: () => void
-  onClose: () => void
   onCreate: (input: CreateRecordingInput) => Promise<void>
 }) {
   const scopes = useMemo(() => {
@@ -188,19 +222,30 @@ function CreateRecordingModal({ environment, defaults, busy, error, onDismissErr
   const [scopeID, setScopeID] = useState(defaults.source || defaults.target ? experimentScopeID(defaults.source, defaults.target) : '')
   const [capturePayloads, setCapturePayloads] = useState(defaults.capturePayloads)
   const [maxPayloadBytes, setMaxPayloadBytes] = useState(defaults.maxPayloadBytes)
+  const [dirty, setDirty] = useState(false)
   const nameInput = useRef<HTMLInputElement>(null)
   const selectedScope = scopes.find((scope) => scope.id === scopeID)
 
-  return <FormDialog
-    titleID="create-recording-title"
-    descriptionID="create-recording-description"
-    closeLabel="Close create recording"
-    closeBlocked={busy}
-    initialFocusRef={nameInput}
-    header={<div><div className="eyebrow">TRAFFIC RECORDING</div><h2 id="create-recording-title">Create Recording</h2></div>}
-    onClose={onClose}
-  >
-    <form onSubmit={(event) => {
+  useEffect(() => {
+    if (dirty) return
+    setName(defaults.name)
+    setScopeID(defaults.source || defaults.target ? experimentScopeID(defaults.source, defaults.target) : '')
+    setCapturePayloads(defaults.capturePayloads)
+    setMaxPayloadBytes(defaults.maxPayloadBytes)
+  }, [defaults.capturePayloads, defaults.maxPayloadBytes, defaults.name, defaults.source, defaults.target, dirty])
+
+  useEffect(() => {
+    if (!focusNameRequest) return
+    nameInput.current?.focus()
+    nameInput.current?.select()
+  }, [focusNameRequest])
+
+  const change = () => {
+    setDirty(true)
+    onDismissError()
+  }
+
+  return <form className="recording-control-form" autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => {
       event.preventDefault()
       if (busy || !name.trim()) return
       void onCreate({
@@ -212,18 +257,16 @@ function CreateRecordingModal({ environment, defaults, busy, error, onDismissErr
         maxPayloadBytes,
       })
     }}>
-      <p id="create-recording-description">Capture traffic while you reproduce an issue.</p>
-      <div className="form-modal__fields">
-        <label><span>NAME</span><input ref={nameInput} name="recording-name" required autoComplete="off" value={name} disabled={busy} onChange={(event) => { setName(event.target.value); onDismissError() }} /></label>
-        <label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} disabled={busy} onChange={(event) => { setScopeID(event.target.value); onDismissError() }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>
-        <label className="recording-body-toggle provider-field--wide"><input type="checkbox" checked={capturePayloads} disabled={busy} onChange={(event) => { setCapturePayloads(event.target.checked); onDismissError() }} /><span><strong>CAPTURE PAYLOADS</strong><small>Retains HTTP bodies and decoded database or messaging content.</small></span></label>
+      <p>Capture traffic while you reproduce an issue.</p>
+      <div className="recording-control__fields">
+        <label><span>NAME</span><input ref={nameInput} name="portless-recording-name" required autoComplete="off" spellCheck="false" value={name} disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); change() }} /></label>
+        <label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} disabled={busy} onChange={(event) => { setScopeID(event.target.value); change() }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>
+        <label className="recording-body-toggle provider-field--wide"><input type="checkbox" checked={capturePayloads} disabled={busy} onChange={(event) => { setCapturePayloads(event.target.checked); change() }} /><span><strong>CAPTURE PAYLOADS</strong><small>Retains HTTP bodies and decoded database or messaging content.</small></span></label>
         {capturePayloads && <>
-          <label className="provider-field--wide"><span>MAXIMUM PAYLOAD SIZE</span><select value={maxPayloadBytes} disabled={busy} onChange={(event) => setMaxPayloadBytes(Number(event.target.value))}>{![16384, 65536, 262144, 1048576].includes(maxPayloadBytes) && <option value={maxPayloadBytes}>{maxPayloadBytes.toLocaleString()} bytes</option>}<option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label>
-          <div className="recording-body-warning provider-field--wide"><strong>APPLICATION DATA</strong><span>Captured payloads are retained locally and can contain application data.</span></div>
+          <label><span>MAXIMUM PAYLOAD SIZE</span><select value={maxPayloadBytes} disabled={busy} onChange={(event) => { setMaxPayloadBytes(Number(event.target.value)); change() }}>{![16384, 65536, 262144, 1048576].includes(maxPayloadBytes) && <option value={maxPayloadBytes}>{maxPayloadBytes.toLocaleString()} bytes</option>}<option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label>
+          <div className="recording-body-warning"><strong>APPLICATION DATA</strong><span>Captured payloads are retained locally and can contain application data.</span></div>
         </>}
       </div>
-      {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-      <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !name.trim()}>{busy ? 'STARTING…' : '● START RECORDING'}</button></footer>
+      <footer><button className="button button--primary" type="submit" disabled={busy || !name.trim()}>{busy ? 'STARTING…' : '● START RECORDING'}</button></footer>
     </form>
-  </FormDialog>
 }

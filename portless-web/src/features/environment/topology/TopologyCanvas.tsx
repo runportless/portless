@@ -17,10 +17,12 @@ import {
   topologyEdgeLabel,
   topologyEdgeTone,
   topologyEdgeVisualState,
+  topologyErrorEdgeVisual,
   topologyInactiveArrowSize,
   topologyInactiveEdgeVisual,
   topologyPanPosition,
   topologyParticleMotion,
+  topologyWarningEdgeVisual,
   type TopologyEdge,
   type TopologyEdgeMetric,
   type TopologySignal,
@@ -172,8 +174,10 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
   ><div className="topology__pan-surface"><div className="topology__canvas" style={{ width, height }}>
     <svg className="topology__edges" width={width} height={height} aria-hidden="true">
       <defs>
-        <marker id={topologyInactiveEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyInactiveArrowSize} markerHeight={topologyInactiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
-        <marker id={topologyActiveEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyActiveArrowSize} markerHeight={topologyActiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
+        <marker className="topology-marker--inactive" id={topologyInactiveEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyInactiveArrowSize} markerHeight={topologyInactiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
+        <marker className="topology-marker--active" id={topologyActiveEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyActiveArrowSize} markerHeight={topologyActiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
+        <marker className="topology-marker--warning" id={topologyWarningEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyActiveArrowSize} markerHeight={topologyActiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
+        <marker className="topology-marker--error" id={topologyErrorEdgeVisual.markerID} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth={topologyActiveArrowSize} markerHeight={topologyActiveArrowSize} orient="auto"><path d="M0 0 L8 4 L0 8 Z" /></marker>
       </defs>
       {edges.map((edge) => {
         const from = positions.get(edge.source)

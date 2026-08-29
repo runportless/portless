@@ -61,6 +61,29 @@ test('keeps scrollable pages within the standard bottom gutter', async ({ page }
   await expectBottomGutter('.timeline-panel')
 })
 
+test('keeps environment panel title bars at one height across tabs', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+
+  const titles = [
+    ['overview', '.services-panel > .panel-title'],
+    ['topology', '.topology-panel--page > .panel-title'],
+    ['traffic', '.traffic-header'],
+    ['mocks', '.mock-profiles-panel > .panel-title'],
+    ['recordings', '.recordings-panel-title'],
+    ['faults', '.faults-panel-title'],
+    ['bindings', '.configured-providers-panel > .panel-title'],
+    ['timeline', '.timeline-panel > .panel-title'],
+  ] as const
+
+  for (const [tab, selector] of titles) {
+    if (tab !== 'overview') await page.goto(`${state.baseURL}${environmentPath(tab)}`)
+    const title = page.locator(selector)
+    await expect(title).toBeVisible()
+    expect(await title.evaluate((element) => Math.round(element.getBoundingClientRect().height)), `${tab} title bar height`).toBe(48)
+  }
+})
+
 test('collapses the sidebar into a persistent icon navigation rail', async ({ page }) => {
   const state = readE2EState()
   await authenticate(page)

@@ -41,40 +41,49 @@ const completedRecording: Recording = {
 }
 
 describe('RecordingsPanel', () => {
-  it('makes the active recording primary and explains why another cannot be created', () => {
-    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording]} refresh={async () => undefined} />)
+  it('separates the active recording control from recording history', () => {
+    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording, completedRecording]} refresh={async () => undefined} />)
+    const history = html.slice(html.indexOf('<table class="recording-history-table"'))
 
     expect(html).toContain('class="recordings-page"')
-    expect(html).toContain('class="panel experiment-list"')
-    expect(html).toContain('CREATE RECORDING')
-    expect(html).toContain('id="recording-create-unavailable"')
-    expect(html).toContain('Stop checkout-debug before creating another recording.')
-    expect(html).toContain('aria-describedby="recording-create-unavailable"')
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="recording-create-unavailable"[^>]*>CREATE RECORDING<\/button>/)
-    expect(html).toContain('class="experiment-row recording-row recording-row--active"')
+    expect(html).toContain('class="panel recording-control-panel"')
+    expect(html).toContain('<span>RECORDING CONTROL</span><small>CAPTURE IN PROGRESS</small>')
+    expect(html).toContain('class="recording-active-control"')
+    expect(html).toContain('class="recording-active-control__pulse"')
+    expect(html).not.toContain('status__mark')
     expect(html).toContain('>RECORDING</span>')
-    expect(html).not.toContain('RECORDING NOW')
+    expect(html).not.toContain('Stop this recording before starting another.')
     expect(html).toContain('STOP RECORDING')
-    expect(html).toContain('checkout-debug')
-    expect(html).toContain('checkout → orders · 3 events')
-    expect(html).not.toContain('class="panel experiment-form"')
+    expect(html).toContain('<span>CAPTURED EVENTS</span><strong>3</strong>')
+    expect(html).toContain('<span>HISTORY</span>')
+    expect(html).not.toContain('<small>1 RECORDING</small>')
+    expect(history).toContain('<th>Recording</th>')
+    expect(history).toContain('<th>Created at</th>')
+    expect(history).toContain('<time dateTime="2026-08-28T12:00:00Z"')
+    expect(history).toContain('completed-checkout')
+    expect(history).not.toContain('checkout-debug')
+    expect(html).not.toContain('class="recording-control-form"')
     expect(html).not.toContain('class="form-modal"')
   })
 
-  it('keeps an actionable empty list', () => {
+  it('keeps recording controls inline when no recording is active', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[]} refresh={async () => undefined} />)
 
-    expect(html).toContain('No recordings. Create one before reproducing a local issue.')
-    expect(html).toContain('CREATE RECORDING')
-    expect(html).not.toContain('recording-create-unavailable')
-    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>CREATE RECORDING<\/button>/)
+    expect(html).toContain('<span>RECORDING CONTROL</span><small>READY</small>')
+    expect(html).toContain('class="recording-control-form"')
+    expect(html).toContain('name="portless-recording-name"')
+    expect(html).toContain('data-1p-ignore="true"')
+    expect(html).not.toContain('One recording can be active at a time.')
+    expect(html).toContain('● START RECORDING')
+    expect(html).toContain('No recording history yet. Completed recordings will appear here.')
+    expect(html).not.toContain('CREATE RECORDING')
+    expect(html).not.toContain('class="form-modal"')
   })
 
-  it('uses a singular event label for the first captured exchange', () => {
+  it('shows the live captured-event counter in the active control', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[{ ...recording, eventCount: 1 }]} refresh={async () => undefined} />)
 
-    expect(html).toContain('checkout → orders · 1 event')
-    expect(html).not.toContain('1 events')
+    expect(html).toContain('<span>CAPTURED EVENTS</span><strong>1</strong>')
   })
 
   it('presents deletion as a named row action before confirmation', () => {
@@ -83,6 +92,8 @@ describe('RecordingsPanel', () => {
     expect(html).toContain('completed-checkout')
     expect(html).toContain('aria-label="Record completed-checkout again"')
     expect(html).toContain('>RECORD AGAIN</button>')
+    expect(html).toContain('/recordings/completed-checkout/export')
+    expect(html).toContain('>EXPORT</a>')
     expect(html).toContain('aria-label="Delete completed-checkout"')
     expect(html).toContain('>DELETE</button>')
     expect(html).not.toContain('Confirm delete completed-checkout')
@@ -92,6 +103,21 @@ describe('RecordingsPanel', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording, completedRecording]} refresh={async () => undefined} />)
 
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Record completed-checkout again"[^>]*>RECORD AGAIN<\/button>/)
+  })
+
+  it('paginates recording history after five recordings', () => {
+    const recordings = Array.from({ length: 6 }, (_, index) => ({
+      ...completedRecording,
+      name: `recording-${String(index + 1).padStart(2, '0')}`,
+    }))
+    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={recordings} refresh={async () => undefined} />)
+
+    expect(html).toContain('>recording-01</strong>')
+    expect(html).toContain('>recording-05</strong>')
+    expect(html).not.toContain('>recording-06</strong>')
+    expect(html).toContain('aria-label="recordings pagination"')
+    expect(html).toContain('<span>1–5 of 6</span>')
+    expect(html).toContain('<small>1 / 2</small>')
   })
 
   it('prepares a new recording with the prior capture settings and an available name', () => {

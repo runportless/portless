@@ -57,7 +57,9 @@ describe('environment topology', () => {
     expect(markup).toContain('class="topology__pan-surface"')
     expect(markup).toContain('id="topology-arrow-inactive"')
     expect(markup).toContain('id="topology-arrow-active"')
-    expect(markup.match(/markerUnits="userSpaceOnUse"/g)).toHaveLength(2)
+    expect(markup).toContain('id="topology-arrow-warning"')
+    expect(markup).toContain('id="topology-arrow-error"')
+    expect(markup.match(/markerUnits="userSpaceOnUse"/g)).toHaveLength(4)
     expect(markup).toContain('markerWidth="6" markerHeight="6"')
     expect(markup).toContain('markerWidth="10.62" markerHeight="10.62"')
     expect(markup).not.toContain('>MAXIMIZE<')
@@ -399,11 +401,11 @@ describe('environment topology', () => {
 
   it('bolds an active edge once while particles communicate higher traffic', () => {
     const now = Date.parse('2026-08-12T12:00:30Z')
-    const metricFor = (count: number) => summarizeTopologyTraffic(Array.from({ length: count }, (_, index) => ({
+    const metricFor = (count: number, durationMs = 10, status = 200) => summarizeTopologyTraffic(Array.from({ length: count }, (_, index) => ({
       protocol: 'http', source: 'checkout', target: 'orders',
       startedAt: new Date(now-index*100-10).toISOString(),
       completedAt: new Date(now-index*100).toISOString(),
-      durationMs: 10, status: 200, sequence: index+1, requestBytes: 10, responseBytes: 20,
+      durationMs, status, sequence: index+1, requestBytes: 10, responseBytes: 20,
     })) as TrafficExchange[], now).get(topologyEdgeKey('checkout', 'orders'))
     const firstRequest = metricFor(1)
     const heavyTraffic = metricFor(180)
@@ -414,7 +416,9 @@ describe('environment topology', () => {
     expect(active.strokeWidth).toBeCloseTo(1.77)
     expect(active.markerID).toBe('topology-arrow-active')
     expect(topologyEdgeVisualState(heavyTraffic, now, false)).toBe(active)
-    expect(topologyEdgeVisualState(undefined, now, true)).toBe(active)
+    expect(topologyEdgeVisualState(undefined, now, true)).toEqual({ strokeWidth: 1.77, markerID: 'topology-arrow-warning' })
+    expect(topologyEdgeVisualState(metricFor(1, 800), now, false).markerID).toBe('topology-arrow-warning')
+    expect(topologyEdgeVisualState(metricFor(1, 10, 503), now, false).markerID).toBe('topology-arrow-error')
     expect(topologyParticleMotion(firstRequest, now).count).toBe(1)
     expect(topologyParticleMotion(heavyTraffic, now).count).toBe(4)
   })

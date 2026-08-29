@@ -60,7 +60,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
   const primaryHTTP = primaryService && publicEndpoint(primaryService, 'http')
   const error = actionFailure || activity.error
 
-  return <div className="page project-page">
+  return <div className="page project-page environment-page">
     <div className="project-heading">
       <div><div className="eyebrow">{environment.project} / ENVIRONMENT</div><div className="title-with-status"><h1>{environment.name}</h1><StatusMark status={environment.status} /></div>{(environment.reason || environment.status === 'stopped') && <p>{environment.reason || 'not running'}</p>}</div>
       <div className="project-actions">

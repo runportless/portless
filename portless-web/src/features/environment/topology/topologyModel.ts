@@ -20,6 +20,8 @@ export const topologyInactiveArrowSize = 6
 export const topologyActiveArrowSize = 10.62
 export const topologyInactiveEdgeVisual = { strokeWidth: 1, markerID: 'topology-arrow-inactive' } as const
 export const topologyActiveEdgeVisual = { strokeWidth: 1.77, markerID: 'topology-arrow-active' } as const
+export const topologyWarningEdgeVisual = { strokeWidth: 1.77, markerID: 'topology-arrow-warning' } as const
+export const topologyErrorEdgeVisual = { strokeWidth: 1.77, markerID: 'topology-arrow-error' } as const
 
 export function topologyEdgeKey(source: string, target: string) {
   return `${source}\u0000${target}`
@@ -103,7 +105,10 @@ export function topologyEdgeLabel(edge: TopologyEdge, metric: TopologyEdgeMetric
 }
 
 export function topologyEdgeVisualState(metric: TopologyEdgeMetric | undefined, now: number, hasFault: boolean) {
-  return hasFault || (metric && now - metric.lastSeen <= topologyWindowMilliseconds) ? topologyActiveEdgeVisual : topologyInactiveEdgeVisual
+  const tone = topologyEdgeTone(metric, hasFault, now)
+  if (tone === 'fault' || tone === 'slow') return topologyWarningEdgeVisual
+  if (tone === 'error') return topologyErrorEdgeVisual
+  return tone === 'active' ? topologyActiveEdgeVisual : topologyInactiveEdgeVisual
 }
 
 export function topologyParticleMotion(metric: TopologyEdgeMetric | undefined, now: number) {
