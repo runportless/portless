@@ -193,18 +193,20 @@ Both can inspect services and effective connections, tail structured logs,
 follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
 
-The control plane's daemon drawer groups identity, build provenance,
-control-plane health, recovery, managed runtime inventory, local networking,
-handoff safety, and retained storage into focused Status, Runtime, and Storage
-tabs. Storage inspection is loaded only when requested. A separate Logs tab
-exposes a live, bounded tail of the fixed private daemon log; older output is
-explicitly marked when omitted, and known installation authentication and
-ownership secrets are redacted again at the inspection boundary.
+The control plane's Portless System drawer groups daemon identity and build
+provenance, control-plane health, recovery, managed runtime inventory, local
+networking, handoff safety, and retained storage into focused Status, Runtime,
+and Storage tabs. Storage inspection is loaded only when requested. A separate
+Logs tab exposes a live, bounded tail of the fixed private daemon log; older
+output is explicitly marked when omitted, and known installation
+authentication and ownership secrets are redacted again at the inspection
+boundary.
 
 Normal CLI and browser daemon restarts share a five-second end-to-end readiness
 deadline and ordinarily complete in under two seconds. The accepted restart
 receipt identifies the coalesced handoff, target build, and deadline; the
-daemon drawer reports the last measured duration and whether it met the SLA.
+Portless System drawer reports the last measured duration and whether it met
+the SLA.
 Forced or legacy recovery is deliberately outside that SLA because it may have
 to signal an unresponsive process and can interrupt active environments.
 

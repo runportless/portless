@@ -25,7 +25,7 @@ test('surfaces a failed control-plane refresh and reconnects automatically', asy
   expect((await applicationRequest('/checkout?sku=reconnected&quantity=1')).status).toBe(200)
 })
 
-test('shows semver daemon details and reconnects after restart', async ({ page }) => {
+test('shows Portless system details and reconnects after a daemon restart', async ({ page }) => {
   await authenticate(page)
   const before = await controlAPI<{ instanceId: string; pid: number; protocolVersion: string; apiVersion: string }>('/api/v1/daemon')
   const diagnostics = await controlAPI<{ storage?: unknown; inventory: { activeEnvironments: number }; build: { version: string; distribution: string; current: boolean }; recovery: { result: string } }>('/api/v1/daemon/diagnostics')
@@ -43,7 +43,7 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   expect(storageDiagnostics.storage?.serviceLogGenerationLimit).toBeGreaterThan(0)
 
   await page.locator('.sidebar__footer').click()
-  const drawer = page.getByRole('dialog', { name: 'Portless Daemon' })
+  const drawer = page.getByRole('dialog', { name: 'Portless System' })
   const statusTab = drawer.getByRole('tab', { name: 'STATUS' })
   const runtimeTab = drawer.getByRole('tab', { name: 'RUNTIME' })
   const storageTab = drawer.getByRole('tab', { name: 'STORAGE' })
@@ -93,12 +93,12 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   await expect(statusTab).toBeFocused()
   await expect(statusTab).toHaveAttribute('aria-selected', 'true')
 
-  const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless Daemon' })
+  const fullScreenButton = drawer.getByRole('button', { name: 'Full screen Portless System' })
   await expect(fullScreenButton.locator('svg')).toBeVisible()
   await expect(fullScreenButton).toHaveText('')
   await fullScreenButton.click()
   await expect(drawer).toHaveClass(/drawer--fullscreen/)
-  const restoreButton = drawer.getByRole('button', { name: 'Restore Portless Daemon' })
+  const restoreButton = drawer.getByRole('button', { name: 'Restore Portless System' })
   await expect(restoreButton.locator('svg')).toBeVisible()
   await expect(restoreButton).toHaveText('')
   await restoreButton.click()
@@ -112,4 +112,3 @@ test('shows semver daemon details and reconnects after restart', async ({ page }
   expect(afterEnvironment.services.map(({ name, pid }) => ({ name, pid }))).toEqual(beforeEnvironment.services.map(({ name, pid }) => ({ name, pid })))
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })
-

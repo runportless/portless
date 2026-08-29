@@ -181,15 +181,15 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
   const tabAlert = (candidate: DaemonDrawerTab) => daemonTabAlert(candidate, live, diagnostics, controlPlaneHealth, runtime, relay, handoffPhase)
 
   return <DrawerShell
-    label="Portless Daemon"
-    subject="Portless Daemon"
+    label="Portless System"
+    subject="Portless System"
     className="daemon-drawer"
-    header={<div className="daemon-drawer-heading"><div><h2>Portless Daemon</h2><StatusMark status={effectiveState} /></div></div>}
+    header={<div className="daemon-drawer-heading"><div><h2>Portless System</h2><StatusMark status={effectiveState} /></div></div>}
     actions={<>
         <button className="button button--warning" onClick={() => void prepareRestart()} disabled={!status || !live || !restartSafe || restarting || (active.length > 0 && handoffPhase === 'checking')}>RESTART DAEMON</button>
         <button className="button" onClick={() => void copyDiagnostics()} disabled={!status}>{copyState}</button>
       </>}
-    tabs={<div className="drawer-tabs daemon-drawer-tabs" role="tablist" aria-label="Daemon details">
+    tabs={<div className="drawer-tabs daemon-drawer-tabs" role="tablist" aria-label="System details">
         {daemonTabs.map((item, index) => <button ref={(button) => { tabButtons.current[index] = button }} id={`daemon-tab-${item.id}`} aria-controls={`daemon-panel-${item.id}`} className={tab === item.id ? 'is-active' : ''} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onKeyDown={(event) => tabKeyDown(event, index)} onClick={() => selectTab(item.id)} key={item.id}>{item.label}{tabAlert(item.id) && <i className="daemon-tab-alert" aria-hidden="true" />}</button>)}
       </div>}
     contentRef={drawerContent}
@@ -494,7 +494,7 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
   const lastRestart = diagnostics?.lastRestart
   const storage = diagnostics?.storage
   return [
-    'Portless daemon',
+    'Portless system',
     `State: ${status.state}`,
     `PID: ${status.pid}`,
     `Started: ${status.startedAt}`,

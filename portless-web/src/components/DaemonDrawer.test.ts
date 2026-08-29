@@ -51,6 +51,7 @@ describe('daemon diagnostics', () => {
     }
     const output = daemonDiagnostics(status, runtime, relay, handoff, diagnostics)
 
+    expect(output).toContain('Portless system')
     expect(output).toContain('Protocol Version: 3.0.0')
     expect(output).toContain('API Version: 8.0.0')
     expect(output).toContain('Runtime: docker 29.4.0')
@@ -110,7 +111,9 @@ describe('daemon diagnostics', () => {
       onReconnected: async () => undefined,
     }))
 
-    expect(markup).toContain('role="tablist" aria-label="Daemon details"')
+    expect(markup).toContain('role="dialog" aria-modal="true" aria-label="Portless System"')
+    expect(markup).toContain('<h2>Portless System</h2>')
+    expect(markup).toContain('role="tablist" aria-label="System details"')
     expect(markup).toContain('role="tab" aria-selected="true" tabindex="0">STATUS</button>')
     expect(markup).toContain('role="tab" aria-selected="false" tabindex="-1">RUNTIME</button>')
     expect(markup).toContain('role="tab" aria-selected="false" tabindex="-1">STORAGE</button>')
