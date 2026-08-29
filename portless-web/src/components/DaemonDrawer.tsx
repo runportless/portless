@@ -229,14 +229,17 @@ function StatusPanel({ status, diagnostics, health, live }: { status: DaemonStat
   const recovery = diagnostics?.recovery
   const lastRestart = diagnostics?.lastRestart
   return <>
-    <div className="detail-grid daemon-detail-grid">
-      <Detail label="PID" value={String(status.pid)} />
-      <Detail label="STARTED" value={`${relativeTime(status.startedAt)} ago`} />
-      <Detail label="INSTANCE" value={shortFingerprint(status.instanceId)} title={status.instanceId} detail={activeEnvironmentCount(status.activeEnvironments.length)} />
-      <Detail label="BUILD" value={shortFingerprint(status.buildId)} title={status.buildId} />
-      <Detail label="PROTOCOL" value={status.protocolVersion} />
-      <Detail label="API" value={status.apiVersion} />
-    </div>
+    <section className="drawer-section daemon-identity">
+      <span className="eyebrow">DAEMON IDENTITY</span>
+      <div className="detail-grid daemon-detail-grid">
+        <Detail label="PID" value={String(status.pid)} />
+        <Detail label="STARTED" value={`${relativeTime(status.startedAt)} ago`} />
+        <Detail label="INSTANCE" value={shortFingerprint(status.instanceId)} title={status.instanceId} detail={activeEnvironmentCount(status.activeEnvironments.length)} />
+        <Detail label="BUILD" value={shortFingerprint(status.buildId)} title={status.buildId} />
+        <Detail label="PROTOCOL" value={status.protocolVersion} />
+        <Detail label="API" value={status.apiVersion} />
+      </div>
+    </section>
     <section className={`drawer-section daemon-build ${build && !build.current ? 'daemon-section--warning' : ''}`}>
       <div className="daemon-section-heading"><span className="eyebrow">BUILD PROVENANCE</span><StatusMark status={build ? build.current ? 'ready' : 'degraded' : 'unknown'} /></div>
       {build ? <div className="daemon-build-grid">
@@ -290,7 +293,7 @@ function RuntimePanel({ status, diagnostics, runtime, relay, active, handoff, ha
   handoffReady: boolean
 }) {
   if (!status) return <Unavailable title="RUNTIME STATUS UNAVAILABLE" message="Portless could not load daemon runtime information." />
-  const networkingReady = relay?.healthy === true && relay.helperCurrent === true
+  const networkingReady = relay?.healthy === true && relay.helperVerified === true && relay.helperCompatible === true
   return <>
     <RuntimeEngine runtime={runtime} />
     <ManagedInventory diagnostics={diagnostics} />
@@ -340,6 +343,7 @@ function StoragePanel({ storage, phase, error }: { storage: DaemonDiagnostics['s
     <section className={`drawer-section daemon-storage-summary ${storage.problems.length ? 'daemon-section--warning' : ''}`}>
       <div className="daemon-section-heading"><span className="eyebrow">STORAGE &amp; RETENTION</span><StatusMark status={storage.problems.length ? 'degraded' : 'ready'} /></div>
       <div className="daemon-storage-total"><span>OBSERVED FOOTPRINT</span><strong>{formatBytes(observed)}</strong><small>Disk-backed state and logs plus live traffic memory</small></div>
+      <span className="daemon-subsection-label">FOOTPRINT BREAKDOWN</span>
       <div className="daemon-storage-grid">
         <StorageMetric label="STATE DATABASE" value={formatBytes(storage.databaseBytes)} detail="SQLite + WAL + SHM" />
         <StorageMetric label="RECORDINGS" value={formatBytes(storage.recordedBytes)} detail={`${storage.recordingCount} sessions · ${storage.recordedEventCount} events · inside SQLite`} />
@@ -390,6 +394,7 @@ function RuntimeEngine({ runtime }: { runtime: RuntimeStatus | null }) {
         <div><span>PREFERENCE</span><strong>{runtimePreference(runtime.preference)}</strong></div>
         <div><span>SELECTED</span><strong>{runtime.selected ? runtimeName(runtime.selected) : 'None'}</strong>{runtime.version && <code>v{runtime.version}</code>}</div>
       </div>
+      <span className="daemon-subsection-label">ENGINE CANDIDATES</span>
       <div className="daemon-runtime-candidates">{runtime.candidates.map((candidate) => <div className="daemon-runtime-candidate" key={candidate.name}>
         <StatusMark status={candidate.state} label={false} />
         <div><strong>{runtimeName(candidate.name)}{candidate.version && <code>v{candidate.version}</code>}</strong><small>{candidate.reason || (candidate.state === 'ready' ? 'Engine is available.' : 'Engine is unavailable.')}</small></div>
@@ -407,11 +412,14 @@ function NetworkDetail({ label, value, healthy }: { label: string; value: string
 function RelayRuntime({ relay }: { relay: RelayStatus | null }) {
   const currency = relayCurrency(relay)
   const socketsConnected = Boolean(relay?.targetSocket && relay?.dnsTargetSocket)
-  return <div className="daemon-relay-grid">
-    <RelayDetail label="SYSTEM SERVICE" value={relay?.service || 'Not installed'} detail={relay ? `${relay.platform || 'unknown platform'} · ${relay.running ? 'running' : 'stopped'}` : 'Relay status unavailable'} healthy={relay?.running === true} />
-    <RelayDetail label="RELAY HELPER" value={currency.value} detail={currency.detail} healthy={relay?.helperCurrent === true} />
-    <RelayDetail label="DAEMON SOCKETS" value={socketsConnected ? 'Connected' : 'Unavailable'} detail="HTTP and DNS targets" healthy={socketsConnected} />
-  </div>
+  return <>
+    <span className="daemon-subsection-label">RELAY SERVICE</span>
+    <div className="daemon-relay-grid">
+      <RelayDetail label="SYSTEM SERVICE" value={relay?.service || 'Not installed'} detail={relay ? `${relay.platform || 'unknown platform'} · ${relay.running ? 'running' : 'stopped'}` : 'Relay status unavailable'} healthy={relay?.running === true} />
+      <RelayDetail label="RELAY HELPER" value={currency.value} detail={currency.detail} healthy={relay?.helperVerified === true && relay?.helperCompatible === true} />
+      <RelayDetail label="DAEMON SOCKETS" value={socketsConnected ? 'Connected' : 'Unavailable'} detail="HTTP and DNS targets" healthy={socketsConnected} />
+    </div>
+  </>
 }
 
 function RelayDetail({ label, value, detail, healthy }: { label: string; value: string; detail: string; healthy: boolean }) {
@@ -456,15 +464,19 @@ function relayCurrency(relay: RelayStatus | null) {
   if (!relay) return { value: 'Unavailable', detail: 'Relay status unavailable' }
   if (!relay.installed && relay.endpointPoolResidual) return { value: 'Residual aliases', detail: 'Ownership receipt unavailable' }
   if (!relay.installed) return { value: 'Not installed', detail: 'Run portless setup' }
-  if (relay.helperCurrent) return {
-    value: 'Matches daemon build',
-    detail: relay.helperBuildId ? `Build ${shortFingerprint(relay.helperBuildId)}` : 'Installed helper is current',
+  if (relay.helperVerified && relay.helperCompatible) return {
+    value: 'Verified & compatible',
+    detail: `${relay.helperVersion ? `v${relay.helperVersion}` : 'Compatible version'}${relay.helperBuildId ? ` · build ${shortFingerprint(relay.helperBuildId)}` : ''}`,
   }
-  if (relay.helperBuildId && relay.currentBuildId) return {
+  if (!relay.helperVerified) return {
+    value: 'Repair required',
+    detail: relay.helperError || 'Helper integrity is not verified',
+  }
+  if (!relay.helperCompatible) return {
     value: 'Update required',
-    detail: `${shortFingerprint(relay.helperBuildId)} installed · ${shortFingerprint(relay.currentBuildId)} current`,
+    detail: `${relay.helperVersion ? `v${relay.helperVersion} installed` : 'Installed version unknown'} · v${relay.requiredHelperVersion} required`,
   }
-  return { value: 'Build unknown', detail: 'Unable to compare helper and daemon builds' }
+  return { value: 'Status unknown', detail: 'Unable to verify helper compatibility' }
 }
 
 function runtimeDescription(runtime: RuntimeStatus | null) {
@@ -572,7 +584,7 @@ function recoveryState(value?: DaemonDiagnostics['recovery']['result']) {
 
 function daemonTabAlert(tab: DaemonDrawerTab, live: boolean, diagnostics: DaemonDiagnostics | null, health: ControlPlaneHealth, runtime: RuntimeStatus | null, relay: RelayStatus | null, handoffPhase: HandoffPhase) {
   if (tab === 'status') return !live || health.api.state !== 'ready' || diagnostics?.recovery.result === 'degraded' || diagnostics?.recovery.result === 'failed' || diagnostics?.build.current === false
-  if (tab === 'runtime') return runtime?.state === 'failed' || runtime?.state === 'missing' || relay?.healthy === false || relay?.helperCurrent === false || handoffPhase === 'blocked' || handoffPhase === 'failed'
+  if (tab === 'runtime') return runtime?.state === 'failed' || runtime?.state === 'missing' || relay?.healthy === false || relay?.helperVerified === false || relay?.helperCompatible === false || handoffPhase === 'blocked' || handoffPhase === 'failed'
   if (tab === 'storage') return Boolean(diagnostics?.storage?.problems.length)
   return !live
 }

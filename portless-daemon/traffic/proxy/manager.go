@@ -59,7 +59,8 @@ type Manager struct {
 	mu                      sync.RWMutex
 	targets                 map[string]target
 	edges                   map[string]*edge
-	transport               *http.Transport
+	localProcessTransport   *http.Transport
+	boundedTransport        *http.Transport
 	contexts                injectedTraceContextRegistry
 	protocols               *protocol.Registry
 	activeProtocolSessions  atomic.Int64
@@ -120,14 +121,21 @@ func (r *capturingReadCloser) Read(content []byte) (int, error) {
 // NewManager constructs a proxy manager backed by durable experiment state,
 // traffic retention, and live control-plane notifications.
 func NewManager(controlStore *database.Store, trafficStore *traffic.Store, broker *events.Broker) *Manager {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	transport.ResponseHeaderTimeout = 30 * time.Second
 	return &Manager{
 		database: controlStore, broker: broker, traffic: trafficStore,
-		targets: make(map[string]target), edges: make(map[string]*edge), transport: transport,
-		protocols: protocolbuiltin.Registry(),
+		targets:               make(map[string]target),
+		edges:                 make(map[string]*edge),
+		localProcessTransport: newUpstreamTransport(0),
+		boundedTransport:      newUpstreamTransport(30 * time.Second),
+		protocols:             protocolbuiltin.Registry(),
 	}
+}
+
+func newUpstreamTransport(responseHeaderTimeout time.Duration) *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return transport
 }
 
 // SetTarget registers a local loopback HTTP or TCP target for a service.
@@ -360,7 +368,8 @@ func (m *Manager) Close(ctx context.Context) {
 	for project := range projects {
 		m.CloseEnvironment(ctx, project)
 	}
-	m.transport.CloseIdleConnections()
+	m.localProcessTransport.CloseIdleConnections()
+	m.boundedTransport.CloseIdleConnections()
 }
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
@@ -423,7 +432,7 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		outgoing.URL.Host = upstream.address
 	}
 	removeHopHeaders(outgoing.Header)
-	response, err := m.transport.RoundTrip(outgoing)
+	response, err := m.upstreamTransport(upstream).RoundTrip(outgoing)
 	if err != nil {
 		http.Error(writer, "Portless upstream error: "+err.Error(), http.StatusBadGateway)
 		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil, traceContext)
@@ -1109,6 +1118,13 @@ func (m *Manager) target(scope, service string) (target, bool) {
 	return target, ok
 }
 
+func (m *Manager) upstreamTransport(upstream target) *http.Transport {
+	if upstream.provider == model.ProviderLocal {
+		return m.localProcessTransport
+	}
+	return m.boundedTransport
+}
+
 // CheckRemote probes a configured remote service and rejects server-error responses.
 func (m *Manager) CheckRemote(ctx context.Context, scope, service string) error {
 	configured, ok := m.target(scope, service)
@@ -1137,7 +1153,7 @@ func (m *Manager) checkRemoteTarget(ctx context.Context, configured target) erro
 	if err != nil {
 		return err
 	}
-	response, err := m.transport.RoundTrip(request)
+	response, err := m.boundedTransport.RoundTrip(request)
 	if err != nil {
 		return err
 	}

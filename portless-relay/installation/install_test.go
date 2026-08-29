@@ -69,6 +69,27 @@ func TestValidateSetupRequestRequiresPrivateIngressSocket(t *testing.T) {
 	}
 }
 
+func TestNewInstallationReceiptBindsInstalledHelperIdentity(t *testing.T) {
+	directory := t.TempDir()
+	details := platformInstallation{
+		Name: "test", Service: "portless-test", HelperPath: filepath.Join(directory, "helper"),
+		ConfigurationPath: filepath.Join(directory, "service"), ReceiptPath: filepath.Join(directory, "relay.json"),
+		ArtifactUID: os.Geteuid(), ArtifactGID: os.Getegid(),
+	}
+	helperBuildID := writeTestHelper(t, details.HelperPath, "relay helper payload")
+	request := SetupRequest{
+		TargetSocket: filepath.Join(directory, "ingress.sock"), DNSTargetSocket: filepath.Join(directory, "dns.sock"),
+		UID: 501, GID: 20,
+	}
+	receipt, err := newInstallationReceipt(details, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.SchemaVersion != installationReceiptSchema || receipt.HelperVersion != relayruntime.HelperVersion || receipt.HelperBuildID != helperBuildID {
+		t.Fatalf("receipt did not bind installed helper identity: %#v", receipt)
+	}
+}
+
 func TestInstallationStatusState(t *testing.T) {
 	tests := []struct {
 		status InstallationStatus
@@ -127,7 +148,8 @@ func TestReadInstallationReceiptValidatesFixedPlatformMetadata(t *testing.T) {
 		OwnerUID: 501, OwnerGID: 20, TargetSocket: "/Users/dev/.portless/ingress.sock",
 		DNSTargetSocket:   "/Users/dev/.portless/dns.sock",
 		LoopbackAddresses: managedRelayLoopbackAddresses(),
-		HelperPath:        details.HelperPath, ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
+		HelperPath:        details.HelperPath, HelperVersion: relayruntime.HelperVersion, HelperBuildID: strings.Repeat("a", 64),
+		ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
 	}
 	content, err := json.Marshal(receipt)
 	if err != nil {
@@ -160,9 +182,10 @@ func TestInstallationReceiptRequiresCurrentSchemaAndSafeLoopbackManifest(t *test
 		ConfigurationPath: "/fixed/config", ReceiptPath: filepath.Join(root, "relay.json"), ArtifactUID: os.Geteuid(), ArtifactGID: os.Getegid(),
 	}
 	receipt := installationReceipt{
-		SchemaVersion: 3, Platform: details.Name, Service: details.Service,
+		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
 		OwnerUID: 501, OwnerGID: 20, TargetSocket: "/Users/dev/.portless/ingress.sock",
 		DNSTargetSocket: "/Users/dev/.portless/dns.sock", HelperPath: details.HelperPath,
+		HelperVersion: relayruntime.HelperVersion, HelperBuildID: strings.Repeat("a", 64),
 		ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
 	}
 	write := func() {
@@ -176,14 +199,19 @@ func TestInstallationReceiptRequiresCurrentSchemaAndSafeLoopbackManifest(t *test
 	}
 	write()
 	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "loopback address pool") {
-		t.Fatalf("schema 3 receipt without owned addresses was accepted: %v", err)
+		t.Fatalf("current receipt without owned addresses was accepted: %v", err)
 	}
-	receipt.SchemaVersion = 2
+	receipt.SchemaVersion = 3
+	receipt.HelperVersion = ""
+	receipt.HelperBuildID = ""
+	receipt.LoopbackAddresses = managedRelayLoopbackAddresses()
 	write()
 	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("legacy receipt was accepted: %v", err)
+		t.Fatalf("schema 3 receipt was accepted: %v", err)
 	}
 	receipt.SchemaVersion = installationReceiptSchema
+	receipt.HelperVersion = relayruntime.HelperVersion
+	receipt.HelperBuildID = strings.Repeat("a", 64)
 	receipt.LoopbackAddresses = []string{"127.77.0.1", "127.77.0.200"}
 	write()
 	actual, err := readInstallationReceipt(details)
@@ -193,6 +221,19 @@ func TestInstallationReceiptRequiresCurrentSchemaAndSafeLoopbackManifest(t *test
 	if receiptUsesCurrentLoopbackPool(actual) {
 		t.Fatal("stale loopback manifest was reported as current")
 	}
+	receipt.LoopbackAddresses = managedRelayLoopbackAddresses()
+	receipt.HelperVersion = "01.0.0"
+	write()
+	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "helper version") {
+		t.Fatalf("invalid helper version was accepted: %v", err)
+	}
+	receipt.HelperVersion = relayruntime.HelperVersion
+	receipt.HelperBuildID = "not-a-build-id"
+	write()
+	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "build identity") {
+		t.Fatalf("invalid helper build identity was accepted: %v", err)
+	}
+	receipt.HelperBuildID = strings.Repeat("a", 64)
 	receipt.LoopbackAddresses = []string{"127.77.0.1", "127.0.0.1"}
 	write()
 	if _, err := readInstallationReceipt(details); err == nil || !strings.Contains(err.Error(), "loopback address pool") {
@@ -224,6 +265,7 @@ func TestInstallationReceiptRequiresCurrentSchemaAndSafeLoopbackManifest(t *test
 
 func TestValidateRuntimeReceiptRequiresExactInstalledIdentity(t *testing.T) {
 	receipt := installationReceipt{
+		SchemaVersion: installationReceiptSchema, HelperVersion: relayruntime.HelperVersion, HelperBuildID: strings.Repeat("a", 64),
 		OwnerUID: 501, OwnerGID: 20,
 		TargetSocket:      "/Users/dev/.portless/ingress.sock",
 		DNSTargetSocket:   "/Users/dev/.portless/dns.sock",
@@ -253,6 +295,16 @@ func TestValidateRuntimeReceiptRequiresExactInstalledIdentity(t *testing.T) {
 				t.Fatalf("mismatched runtime identity was accepted: %v", err)
 			}
 		})
+	}
+	unsupported := receipt
+	unsupported.SchemaVersion = 3
+	if err := validateRuntimeReceipt(unsupported, config); err == nil || !strings.Contains(err.Error(), "schema 3") {
+		t.Fatalf("unsupported receipt authorized current helper runtime: %v", err)
+	}
+	incompatible := receipt
+	incompatible.HelperVersion = "0.9.0"
+	if err := validateRuntimeReceipt(incompatible, config); err == nil || !strings.Contains(err.Error(), "does not match required") {
+		t.Fatalf("incompatible helper version authorized runtime: %v", err)
 	}
 	receipt.LoopbackAddresses = []string{"127.77.0.1"}
 	if err := validateRuntimeReceipt(receipt, config); err == nil || !strings.Contains(err.Error(), "stale") {

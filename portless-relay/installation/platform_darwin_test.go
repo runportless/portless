@@ -266,12 +266,16 @@ func TestDarwinInstallRollsBackWhenReadinessFails(t *testing.T) {
 }
 
 func TestDarwinRuntimeValidatesReceiptBeforeProvisioningAliases(t *testing.T) {
+	details := platformInstallation{HelperPath: filepath.Join(t.TempDir(), "relay-helper")}
+	helperBuildID := writeTestHelper(t, details.HelperPath, "darwin relay helper")
 	receipt := installationReceipt{
+		SchemaVersion: installationReceiptSchema, HelperVersion: relayruntime.HelperVersion, HelperBuildID: helperBuildID,
 		OwnerUID: 501, OwnerGID: 20, TargetSocket: "/tmp/portless/ingress.sock", DNSTargetSocket: "/tmp/portless/dns.sock",
 		LoopbackAddresses: managedRelayLoopbackAddresses(),
 	}
 	prepared := false
 	platform := darwinPlatform{
+		details:    &details,
 		operations: platformOperations{readReceiptFunc: func(platformInstallation) (installationReceipt, error) { return receipt, nil }},
 		prepareLoopbackPoolFunc: func(context.Context, commandRunner, []string) ([]string, error) {
 			prepared = true

@@ -345,13 +345,24 @@ func relayChecks(ctx context.Context, paths installation.Layout, uid int, depend
 
 	switch {
 	case !status.HelperPresent:
-		checks = append(checks, skipped("relay.helper_build", "relay", "Relay helper build was not checked"))
-	case status.HelperCurrent:
-		checks = append(checks, passed("relay.helper_build", "relay", "Relay helper matches the current Portless build", shortIdentity(status.HelperBuildID)))
-	case status.HelperBuildID != "" && status.CurrentBuildID != "":
-		checks = append(checks, warned("relay.helper_build", "relay", "Relay helper is from an older Portless build", fmt.Sprintf("helper: %s; current: %s", shortIdentity(status.HelperBuildID), shortIdentity(status.CurrentBuildID)), "Run `portless setup` to refresh the privileged helper after upgrading Portless."))
+		checks = append(checks, skipped("relay.helper_integrity", "relay", "Relay helper integrity was not checked"))
+	case status.HelperVerified:
+		checks = append(checks, passed("relay.helper_integrity", "relay", "Relay helper matches its ownership receipt", shortIdentity(status.HelperBuildID)))
 	default:
-		checks = append(checks, warned("relay.helper_build", "relay", "Relay helper build could not be verified", status.Problem, "Run `portless setup` to repair the privileged helper."))
+		checks = append(checks, failed("relay.helper_integrity", "relay", "Relay helper integrity could not be verified", status.HelperError, "Run `portless setup` to reinstall the receipt-bound privileged helper."))
+	}
+
+	switch {
+	case !status.HelperPresent:
+		checks = append(checks, skipped("relay.helper_compatibility", "relay", "Relay helper compatibility was not checked"))
+	case !status.HelperVerified:
+		checks = append(checks, skipped("relay.helper_compatibility", "relay", "Relay helper compatibility requires verified integrity"))
+	case status.HelperCompatible:
+		checks = append(checks, passed("relay.helper_compatibility", "relay", "Relay helper version is compatible", status.HelperVersion))
+	case status.HelperVersion != "" && status.RequiredHelperVersion != "":
+		checks = append(checks, failed("relay.helper_compatibility", "relay", "Relay helper version requires an update", fmt.Sprintf("installed: %s; required: %s", status.HelperVersion, status.RequiredHelperVersion), "Run `portless setup` to update the privileged helper."))
+	default:
+		checks = append(checks, failed("relay.helper_compatibility", "relay", "Relay helper compatibility could not be verified", status.HelperError, "Run `portless setup` to update the privileged helper."))
 	}
 
 	switch {
@@ -447,7 +458,8 @@ func runtimeChecks(ctx context.Context, dependencies dependencies) []Check {
 
 func relaySkippedChecks() []Check {
 	return []Check{
-		skipped("relay.helper_build", "relay", "Relay helper build was not checked"),
+		skipped("relay.helper_integrity", "relay", "Relay helper integrity was not checked"),
+		skipped("relay.helper_compatibility", "relay", "Relay helper compatibility was not checked"),
 		skipped("relay.receipt", "relay", "Ownership receipt was not checked"),
 		skipped("relay.ownership", "relay", "Relay ownership was not checked"),
 		skipped("relay.target", "relay", "Relay target was not checked"),

@@ -280,11 +280,15 @@ func renderResolvedConfiguration() []byte {
 }
 
 func (platform linuxPlatform) prepareRuntime(_ context.Context, config relayruntime.Identity) error {
-	receipt, err := platform.operations.readReceipt(platform.installation())
+	details := platform.installation()
+	receipt, err := platform.operations.readReceipt(details)
 	if err != nil {
 		return fmt.Errorf("verify relay installation before starting listeners: %w", err)
 	}
-	return validateRuntimeReceipt(receipt, config)
+	if err := validateRuntimeReceipt(receipt, config); err != nil {
+		return err
+	}
+	return validateInstalledHelperReceipt(details.HelperPath, receipt)
 }
 
 func (platform linuxPlatform) expectedArtifacts(receipt installationReceipt) ([]expectedArtifact, error) {

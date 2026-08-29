@@ -61,14 +61,14 @@ func TestRelayStatusExplainsResidualUnverifiedEndpointPool(t *testing.T) {
 	}
 }
 
-func TestRelayStatusExplainsHowToRepairAnOutdatedHelperAndConfigurationDrift(t *testing.T) {
+func TestRelayStatusExplainsHowToUpdateAnIncompatibleHelperAndRepairConfigurationDrift(t *testing.T) {
 	application, output, _ := newTestCommands(t)
 	application.Local.UserIDs = func() (int, int) { return 501, 20 }
 	configurationError := "relay artifact /Library/LaunchDaemons/dev.portless.relay.plist content does not match the ownership receipt"
 	application.Local.InspectRelay = func(context.Context) (relayinstallation.InstallationStatus, error) {
 		return relayinstallation.InstallationStatus{
 			Platform: "launchd", Service: "dev.portless.relay", Installed: true, Running: true,
-			HelperPresent: true, HelperBuildID: "aaaaaaaaaaaaaaaa", CurrentBuildID: "bbbbbbbbbbbbbbbb",
+			HelperPresent: true, HelperVerified: true, HelperBuildID: "aaaaaaaaaaaaaaaa", HelperVersion: "0.9.0", RequiredHelperVersion: "1.0.0",
 			ConfigurationPresent: true, ConfigurationError: configurationError, ReceiptPresent: true,
 			OwnerUID: 501, OwnerGID: 20, HelperPath: "/Library/PrivilegedHelperTools/dev.portless.relay",
 			ConfigurationPath: "/Library/LaunchDaemons/dev.portless.relay.plist", ReceiptPath: "/var/db/portless/relay.json",
@@ -79,9 +79,10 @@ func TestRelayStatusExplainsHowToRepairAnOutdatedHelperAndConfigurationDrift(t *
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"Helper build: outdated (installed aaaaaaaaaaaa, current bbbbbbbbbbbb)",
+		"Helper build: verified (aaaaaaaaaaaa)",
+		"Helper version: update required (installed 0.9.0, required 1.0.0)",
 		"Configuration: /Library/LaunchDaemons/dev.portless.relay.plist (drifted)",
-		"Action required: The installed privileged helper is from an older Portless build, and its system configuration no longer matches the current Portless installation.",
+		"Action required: The installed privileged helper version 0.9.0 does not match required version 1.0.0, and its system configuration has drifted.",
 		"Run `portless relay install` to update the privileged helper and repair the system service and DNS configuration.",
 		"may request administrator approval and does not stop running environments",
 		"Details: " + configurationError,
@@ -95,11 +96,39 @@ func TestRelayStatusExplainsHowToRepairAnOutdatedHelperAndConfigurationDrift(t *
 	}
 }
 
+func TestRelayStatusExplainsReceiptBoundHelperIntegrityFailure(t *testing.T) {
+	application, output, _ := newTestCommands(t)
+	application.Local.UserIDs = func() (int, int) { return 501, 20 }
+	helperError := "installed relay helper content does not match its ownership receipt"
+	application.Local.InspectRelay = func(context.Context) (relayinstallation.InstallationStatus, error) {
+		return relayinstallation.InstallationStatus{
+			Platform: "launchd", Service: "dev.portless.relay", Installed: true, Running: true,
+			HelperPresent: true, HelperCompatible: true, HelperBuildID: "aaaaaaaaaaaaaaaa", HelperVersion: "1.0.0", RequiredHelperVersion: "1.0.0", HelperError: helperError,
+			ConfigurationPresent: true, ReceiptPresent: true, OwnerUID: 501, OwnerGID: 20,
+			HelperPath: "/Library/PrivilegedHelperTools/dev.portless.relay", ConfigurationPath: "/Library/LaunchDaemons/dev.portless.relay.plist",
+			ReceiptPath: "/var/db/portless/relay.json", Problem: helperError,
+		}, nil
+	}
+	if err := application.relayStatus(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"Helper build: not verified (aaaaaaaaaaaa)",
+		"Helper version: compatible (1.0.0)",
+		"Action required: The installed privileged helper must be reinstalled to establish receipt-bound integrity.",
+		"Details: " + helperError,
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("relay integrity status does not contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
 func TestRelayRepairGuidanceRequiresAVerifiedCurrentOwner(t *testing.T) {
 	status := relayinstallation.InstallationStatus{
-		ReceiptPresent: true, OwnerUID: 501, ConfigurationError: "configuration drifted",
+		ReceiptPresent: true, OwnerUID: 501, HelperPresent: true, ConfigurationError: "configuration drifted",
 	}
-	if guidance := relayRepairGuidance(status, 501, true); guidance == "" {
+	if guidance := relayRepairGuidance(status, 501); guidance == "" {
 		t.Fatal("matching verified owner did not receive repair guidance")
 	}
 	for name, mutate := range map[string]func(*relayinstallation.InstallationStatus){
@@ -110,7 +139,7 @@ func TestRelayRepairGuidanceRequiresAVerifiedCurrentOwner(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			candidate := status
 			mutate(&candidate)
-			if guidance := relayRepairGuidance(candidate, 501, true); guidance != "" {
+			if guidance := relayRepairGuidance(candidate, 501); guidance != "" {
 				t.Fatalf("unsafe repair guidance = %q", guidance)
 			}
 		})

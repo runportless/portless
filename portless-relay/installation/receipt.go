@@ -1,6 +1,7 @@
 package installation
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,9 +9,12 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/networking"
+	systeminstallation "github.com/runportless/portless/portless-daemon/system/installation"
 	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
@@ -24,11 +28,13 @@ type installationReceipt struct {
 	DNSTargetSocket   string    `json:"dnsTargetSocket,omitempty"`
 	LoopbackAddresses []string  `json:"loopbackAddresses,omitempty"`
 	HelperPath        string    `json:"helperPath"`
+	HelperVersion     string    `json:"helperVersion,omitempty"`
+	HelperBuildID     string    `json:"helperBuildId,omitempty"`
 	ConfigurationPath string    `json:"configurationPath"`
 	InstalledAt       time.Time `json:"installedAt"`
 }
 
-const installationReceiptSchema = 3
+const installationReceiptSchema = 4
 
 func validateOwnership(status InstallationStatus, requestingUID int) error {
 	if requestingUID <= 0 {
@@ -66,11 +72,9 @@ func ValidateUninstallOwnership(status InstallationStatus, requestingUID int, fo
 }
 
 func writeInstallationReceipt(details platformInstallation, request SetupRequest) error {
-	receipt := installationReceipt{
-		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
-		OwnerUID: request.UID, OwnerGID: request.GID, TargetSocket: request.TargetSocket, DNSTargetSocket: request.DNSTargetSocket,
-		LoopbackAddresses: managedRelayLoopbackAddresses(),
-		HelperPath:        details.HelperPath, ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
+	receipt, err := newInstallationReceipt(details, request)
+	if err != nil {
+		return err
 	}
 	content, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
@@ -81,6 +85,21 @@ func writeInstallationReceipt(details platformInstallation, request SetupRequest
 		return fmt.Errorf("write relay installation receipt: %w", err)
 	}
 	return nil
+}
+
+func newInstallationReceipt(details platformInstallation, request SetupRequest) (installationReceipt, error) {
+	helperBuildID, err := systeminstallation.BuildIDForPath(details.HelperPath)
+	if err != nil {
+		return installationReceipt{}, fmt.Errorf("fingerprint installed relay helper for its ownership receipt: %w", err)
+	}
+	receipt := installationReceipt{
+		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
+		OwnerUID: request.UID, OwnerGID: request.GID, TargetSocket: request.TargetSocket, DNSTargetSocket: request.DNSTargetSocket,
+		LoopbackAddresses: managedRelayLoopbackAddresses(),
+		HelperPath:        details.HelperPath, HelperVersion: relayruntime.HelperVersion, HelperBuildID: helperBuildID,
+		ConfigurationPath: details.ConfigurationPath, InstalledAt: time.Now().UTC(),
+	}
+	return receipt, nil
 }
 
 func readInstallationReceipt(details platformInstallation) (installationReceipt, error) {
@@ -125,6 +144,12 @@ func readInstallationReceipt(details platformInstallation) (installationReceipt,
 	if receipt.InstalledAt.IsZero() || runtimeErr != nil {
 		return installationReceipt{}, errors.New("relay installation receipt contains invalid ownership or socket information")
 	}
+	if !validHelperVersion(receipt.HelperVersion) {
+		return installationReceipt{}, errors.New("relay installation receipt contains an invalid helper version")
+	}
+	if !validHelperBuildID(receipt.HelperBuildID) {
+		return installationReceipt{}, errors.New("relay installation receipt contains an invalid helper build identity")
+	}
 	if err := validateLoopbackManifest(receipt.LoopbackAddresses); err != nil {
 		return installationReceipt{}, err
 	}
@@ -132,6 +157,12 @@ func readInstallationReceipt(details platformInstallation) (installationReceipt,
 }
 
 func validateRuntimeReceipt(receipt installationReceipt, config relayruntime.Identity) error {
+	if receipt.SchemaVersion != installationReceiptSchema {
+		return fmt.Errorf("relay ownership receipt schema %d does not match required schema %d", receipt.SchemaVersion, installationReceiptSchema)
+	}
+	if receipt.HelperVersion != relayruntime.HelperVersion {
+		return fmt.Errorf("relay helper version %s does not match required version %s; run `portless relay install` to update it", receipt.HelperVersion, relayruntime.HelperVersion)
+	}
 	if !receiptUsesCurrentLoopbackPool(receipt) {
 		return errors.New("relay ownership receipt uses a stale loopback address manifest; run `portless relay install` to repair it")
 	}
@@ -139,6 +170,41 @@ func validateRuntimeReceipt(receipt installationReceipt, config relayruntime.Ide
 		return errors.New("relay runtime identity does not match its ownership receipt; run `portless relay install` to repair the service configuration")
 	}
 	return nil
+}
+
+func validateInstalledHelperReceipt(helperPath string, receipt installationReceipt) error {
+	helperBuildID, err := systeminstallation.BuildIDForPath(helperPath)
+	if err != nil {
+		return fmt.Errorf("fingerprint installed relay helper: %w", err)
+	}
+	if helperBuildID != receipt.HelperBuildID {
+		return errors.New("installed relay helper content does not match its ownership receipt")
+	}
+	return nil
+}
+
+func validHelperVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return false
+		}
+		if _, err := strconv.ParseUint(part, 10, 32); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func validHelperBuildID(buildID string) bool {
+	if len(buildID) != 64 || buildID != strings.ToLower(buildID) {
+		return false
+	}
+	_, err := hex.DecodeString(buildID)
+	return err == nil
 }
 
 func validateLoopbackManifest(addresses []string) error {

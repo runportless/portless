@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	systeminstallation "github.com/runportless/portless/portless-daemon/system/installation"
 	relayruntime "github.com/runportless/portless/portless-relay/runtime"
 )
 
@@ -256,37 +257,70 @@ func TestInspectReportsUnverifiedResidualEndpointPool(t *testing.T) {
 	}
 }
 
+func TestInspectHelperIdentityIgnoresUnrelatedCurrentExecutableBuild(t *testing.T) {
+	platform, _, receipt := helperInspectionFixture(t, relayruntime.HelperVersion)
+	status, err := inspect(context.Background(), platform, successfulInspectionProbes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Healthy || !status.HelperVerified || !status.HelperCompatible || status.HelperBuildID != receipt.HelperBuildID || status.HelperVersion != relayruntime.HelperVersion || status.RequiredHelperVersion != relayruntime.HelperVersion {
+		t.Fatalf("receipt-bound helper was not healthy independently of the current executable: %#v", status)
+	}
+}
+
+func TestInspectReportsHelperVersionDriftSeparatelyFromIntegrity(t *testing.T) {
+	platform, _, _ := helperInspectionFixture(t, "0.9.0")
+	status, err := inspect(context.Background(), platform, successfulInspectionProbes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Healthy || !status.HelperVerified || status.HelperCompatible || status.HelperVersion != "0.9.0" || !strings.Contains(status.HelperError, "does not match required version") {
+		t.Fatalf("helper version drift was not classified independently: %#v", status)
+	}
+}
+
+func TestInspectReportsHelperContentTamperingSeparatelyFromCompatibility(t *testing.T) {
+	platform, details, receipt := helperInspectionFixture(t, relayruntime.HelperVersion)
+	if err := os.WriteFile(details.HelperPath, []byte("replaced helper content"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status, err := inspect(context.Background(), platform, successfulInspectionProbes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Healthy || status.HelperVerified || !status.HelperCompatible || status.HelperBuildID == receipt.HelperBuildID || !strings.Contains(status.HelperError, "does not match its ownership receipt") {
+		t.Fatalf("helper content replacement was not classified as an integrity failure: %#v", status)
+	}
+}
+
+func TestInspectRejectsUnsupportedReceiptSchema(t *testing.T) {
+	platform, details, receipt := helperInspectionFixture(t, relayruntime.HelperVersion)
+	receipt.SchemaVersion = 3
+	receipt.HelperVersion = ""
+	receipt.HelperBuildID = ""
+	writeTestReceipt(t, details, receipt)
+	status, err := inspectInstallation(context.Background(), platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.OwnerUID != 0 || status.HelperVerified || status.HelperCompatible || !status.EndpointPoolResidual || !strings.Contains(status.Problem, "unsupported relay installation receipt schema 3") {
+		t.Fatalf("unsupported receipt was not rejected fail-closed: %#v", status)
+	}
+	if err := validateInstallOwnership(context.Background(), platform, 501); err == nil || !strings.Contains(err.Error(), "owner could not be determined") {
+		t.Fatalf("unsupported receipt authorized reinstall: %v", err)
+	}
+}
+
 func TestInspectReportsServiceConfigurationDriftFromReceipt(t *testing.T) {
-	directory := t.TempDir()
-	configuration := filepath.Join(directory, "relay.service")
-	resolver := filepath.Join(directory, "resolver.conf")
-	receiptPath := filepath.Join(directory, "relay.json")
-	if err := os.WriteFile(configuration, []byte("stale service configuration"), 0o644); err != nil {
+	platform, details, _ := helperInspectionFixture(t, relayruntime.HelperVersion)
+	if err := os.WriteFile(details.ConfigurationPath, []byte("stale service configuration"), 0o644); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.WriteFile(resolver, []byte("expected resolver"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	details := platformInstallation{
-		Name: "fixture", Service: "relay", HelperPath: filepath.Join(directory, "helper"),
-		ConfigurationPath: configuration, ReceiptPath: receiptPath, ResolverPath: resolver,
-		ArtifactUID: os.Geteuid(), ArtifactGID: os.Getegid(),
-	}
-	writeTestReceipt(t, details, installationReceipt{
-		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
-		OwnerUID: 501, OwnerGID: 20, TargetSocket: "/tmp/portless/ingress.sock", DNSTargetSocket: "/tmp/portless/dns.sock",
-		LoopbackAddresses: managedRelayLoopbackAddresses(), HelperPath: details.HelperPath, ConfigurationPath: details.ConfigurationPath,
-		InstalledAt: time.Now().UTC(),
-	})
-	platform := &fakeHostPlatform{
-		details: details, state: relayServiceStopped, pool: endpointPoolStatus{ready: true},
-		expected: []expectedArtifact{{path: configuration, content: []byte("expected service configuration")}, {path: resolver, content: []byte("expected resolver")}},
 	}
 	status, err := inspectInstallation(context.Background(), platform)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.OwnerUID != 501 || !strings.Contains(status.ConfigurationError, "content does not match the ownership receipt") || !strings.Contains(status.Problem, "content does not match the ownership receipt") {
+	if status.OwnerUID != 501 || !status.HelperVerified || !status.HelperCompatible || !strings.Contains(status.ConfigurationError, "content does not match the ownership receipt") || !strings.Contains(status.Problem, "content does not match the ownership receipt") {
 		t.Fatalf("service configuration drift was not reported: %#v", status)
 	}
 }
@@ -384,6 +418,18 @@ func TestPrivilegedUninstallReportsAliasesLeftWithoutReceipt(t *testing.T) {
 
 func writeTestReceipt(t *testing.T, details platformInstallation, receipt installationReceipt) {
 	t.Helper()
+	if receipt.SchemaVersion == installationReceiptSchema {
+		if receipt.HelperVersion == "" {
+			receipt.HelperVersion = relayruntime.HelperVersion
+		}
+		if receipt.HelperBuildID == "" {
+			if buildID, err := systeminstallation.BuildIDForPath(details.HelperPath); err == nil {
+				receipt.HelperBuildID = buildID
+			} else {
+				receipt.HelperBuildID = strings.Repeat("0", 64)
+			}
+		}
+	}
 	content, err := json.Marshal(receipt)
 	if err != nil {
 		t.Fatal(err)
@@ -391,6 +437,57 @@ func writeTestReceipt(t *testing.T, details platformInstallation, receipt instal
 	if err := os.WriteFile(details.ReceiptPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func helperInspectionFixture(t *testing.T, helperVersion string) (*fakeHostPlatform, platformInstallation, installationReceipt) {
+	t.Helper()
+	directory := t.TempDir()
+	details := platformInstallation{
+		Name: "fixture", Service: "relay", HelperPath: filepath.Join(directory, "helper"),
+		ConfigurationPath: filepath.Join(directory, "relay.service"), ReceiptPath: filepath.Join(directory, "relay.json"),
+		ResolverPath: filepath.Join(directory, "resolver.conf"), ArtifactUID: os.Geteuid(), ArtifactGID: os.Getegid(),
+	}
+	helperBuildID := writeTestHelper(t, details.HelperPath, "fixture relay helper independent of the current test executable")
+	for path, content := range map[string]string{
+		details.ConfigurationPath: "expected service configuration",
+		details.ResolverPath:      "expected resolver",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	receipt := installationReceipt{
+		SchemaVersion: installationReceiptSchema, Platform: details.Name, Service: details.Service,
+		OwnerUID: 501, OwnerGID: 20, TargetSocket: "/tmp/portless/ingress.sock", DNSTargetSocket: "/tmp/portless/dns.sock",
+		LoopbackAddresses: managedRelayLoopbackAddresses(), HelperPath: details.HelperPath,
+		HelperVersion: helperVersion, HelperBuildID: helperBuildID, ConfigurationPath: details.ConfigurationPath,
+		InstalledAt: time.Now().UTC(),
+	}
+	writeTestReceipt(t, details, receipt)
+	platform := &fakeHostPlatform{
+		details: details, state: relayServiceRunning,
+		pool: endpointPoolStatus{ready: true, configured: true, managed: true},
+		expected: []expectedArtifact{
+			{path: details.ConfigurationPath, content: []byte("expected service configuration")},
+			{path: details.ResolverPath, content: []byte("expected resolver")},
+		},
+	}
+	return platform, details, receipt
+}
+
+func writeTestHelper(t *testing.T, path, content string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	buildID, err := systeminstallation.BuildIDForPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buildID
 }
 
 func TestArtifactTransactionRestoresExistingAndRemovesNewFiles(t *testing.T) {

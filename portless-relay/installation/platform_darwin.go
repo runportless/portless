@@ -335,11 +335,15 @@ func flushDarwinResolver(ctx context.Context, runner commandRunner) error {
 }
 
 func (platform darwinPlatform) prepareRuntime(ctx context.Context, config relayruntime.Identity) error {
-	receipt, err := platform.operations.readReceipt(platform.installation())
+	details := platform.installation()
+	receipt, err := platform.operations.readReceipt(details)
 	if err != nil {
 		return fmt.Errorf("verify relay installation before provisioning loopback addresses: %w", err)
 	}
 	if err := validateRuntimeReceipt(receipt, config); err != nil {
+		return err
+	}
+	if err := validateInstalledHelperReceipt(details.HelperPath, receipt); err != nil {
 		return err
 	}
 	added, err := platform.prepareLoopbackPool(ctx, receipt.LoopbackAddresses)

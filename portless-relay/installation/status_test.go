@@ -3,32 +3,30 @@ package installation
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	systeminstallation "github.com/runportless/portless/portless-daemon/system/installation"
 )
 
-func TestInspectHelperBuildComparesInstalledHelperWithCurrentExecutable(t *testing.T) {
-	executable, err := os.Executable()
+func TestValidateInstalledHelperReceiptDetectsContentReplacement(t *testing.T) {
+	helper := filepath.Join(t.TempDir(), "portless-relay")
+	if err := os.WriteFile(helper, []byte("installed Portless helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	helperBuildID, err := systeminstallation.BuildIDForPath(helper)
 	if err != nil {
 		t.Fatal(err)
 	}
-	helperBuildID, currentBuildID, current, err := inspectHelperBuild(executable)
-	if err != nil {
+	receipt := installationReceipt{HelperBuildID: helperBuildID}
+	if err := validateInstalledHelperReceipt(helper, receipt); err != nil {
 		t.Fatal(err)
 	}
-	if !current || helperBuildID == "" || helperBuildID != currentBuildID {
-		t.Fatalf("current executable comparison = %q, %q, %v", helperBuildID, currentBuildID, current)
-	}
-
-	staleHelper := filepath.Join(t.TempDir(), "portless-relay")
-	if err := os.WriteFile(staleHelper, []byte("older Portless helper"), 0o755); err != nil {
+	if err := os.WriteFile(helper, []byte("replaced Portless helper"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	helperBuildID, currentBuildID, current, err = inspectHelperBuild(staleHelper)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current || helperBuildID == "" || currentBuildID == "" || helperBuildID == currentBuildID {
-		t.Fatalf("stale helper comparison = %q, %q, %v", helperBuildID, currentBuildID, current)
+	if err := validateInstalledHelperReceipt(helper, receipt); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("replaced helper passed receipt validation: %v", err)
 	}
 }
 

@@ -287,7 +287,8 @@ func relayStatusContract(status relayinstallation.InstallationStatus) contract.R
 	return contract.RelayStatus{
 		Platform: status.Platform, Service: status.Service, Installed: status.Installed, Running: status.Running,
 		Healthy: status.Healthy, HTTPHealthy: status.HTTPHealthy, HelperPresent: status.HelperPresent,
-		HelperCurrent: status.HelperCurrent, HelperBuildID: status.HelperBuildID, CurrentBuildID: status.CurrentBuildID,
+		HelperVerified: status.HelperVerified, HelperCompatible: status.HelperCompatible, HelperBuildID: status.HelperBuildID,
+		HelperVersion: status.HelperVersion, RequiredHelperVersion: status.RequiredHelperVersion, HelperError: status.HelperError,
 		ConfigurationPresent: status.ConfigurationPresent, ConfigurationError: status.ConfigurationError, ReceiptPresent: status.ReceiptPresent,
 		ResolverPresent: status.ResolverPresent, ResolverHealthy: status.ResolverHealthy,
 		OwnerUID: status.OwnerUID, OwnerGID: status.OwnerGID, TargetSocket: status.TargetSocket,

@@ -105,11 +105,14 @@ func TestLinuxInstallRollsBackWhenReadinessFails(t *testing.T) {
 }
 
 func TestLinuxRuntimeRequiresMatchingOwnershipReceipt(t *testing.T) {
+	details := platformInstallation{HelperPath: filepath.Join(t.TempDir(), "relay-helper")}
+	helperBuildID := writeTestHelper(t, details.HelperPath, "linux relay helper")
 	receipt := installationReceipt{
+		SchemaVersion: installationReceiptSchema, HelperVersion: relayruntime.HelperVersion, HelperBuildID: helperBuildID,
 		OwnerUID: 1000, OwnerGID: 1000, TargetSocket: "/tmp/portless/ingress.sock", DNSTargetSocket: "/tmp/portless/dns.sock",
 		LoopbackAddresses: managedRelayLoopbackAddresses(),
 	}
-	platform := linuxPlatform{operations: platformOperations{readReceiptFunc: func(platformInstallation) (installationReceipt, error) { return receipt, nil }}}
+	platform := linuxPlatform{details: &details, operations: platformOperations{readReceiptFunc: func(platformInstallation) (installationReceipt, error) { return receipt, nil }}}
 	config := relayruntime.Identity{TargetSocket: receipt.TargetSocket, DNSTargetSocket: receipt.DNSTargetSocket, UID: receipt.OwnerUID, GID: receipt.OwnerGID}
 	if err := platform.prepareRuntime(context.Background(), config); err != nil {
 		t.Fatal(err)

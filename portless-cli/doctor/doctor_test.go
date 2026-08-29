@@ -111,12 +111,12 @@ func TestRelayChecksHealthyInstallation(t *testing.T) {
 		dnsListening:  func(context.Context) (bool, error) { return true, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, uid, dependencies)
-	if !report.Healthy || report.Summary.Passed != 14 || report.Summary.Failed != 0 {
+	if !report.Healthy || report.Summary.Passed != 15 || report.Summary.Failed != 0 {
 		t.Fatalf("unexpected healthy relay report: %#v", report)
 	}
 }
 
-func TestRelayChecksWarnWhenInstalledHelperIsOutdated(t *testing.T) {
+func TestRelayChecksFailWhenInstalledHelperVersionIsIncompatible(t *testing.T) {
 	paths, err := installation.ResolveLayout(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -126,17 +126,16 @@ func TestRelayChecksWarnWhenInstalledHelperIsOutdated(t *testing.T) {
 		lookupIP: loopbackLookup,
 		inspectRelay: func(context.Context) (relayinstallation.InstallationStatus, error) {
 			status := healthyRelayStatus(paths, uid)
-			status.HelperCurrent = false
-			status.HelperBuildID = "old-helper-build"
-			status.CurrentBuildID = "current-build"
+			status.HelperCompatible = false
+			status.HelperVersion = "0.9.0"
 			return status, nil
 		},
 		portListening: func(context.Context) (bool, error) { return true, nil },
 		dnsListening:  func(context.Context) (bool, error) { return true, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, uid, dependencies)
-	check := checkByCode(t, report, "relay.helper_build")
-	if !report.Healthy || report.Summary.Warnings != 1 || check.Status != StatusWarn || !strings.Contains(check.Remediation, "portless setup") {
+	check := checkByCode(t, report, "relay.helper_compatibility")
+	if report.Healthy || report.Summary.Failed != 1 || check.Status != StatusFail || !strings.Contains(check.Remediation, "portless setup") {
 		t.Fatalf("unexpected stale helper report: %#v", report)
 	}
 }
@@ -229,7 +228,7 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 		dnsListening:  func(context.Context) (bool, error) { return false, nil },
 	}
 	report := run(context.Background(), paths, ScopeRelay, os.Getuid(), dependencies)
-	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 10 {
+	if report.Healthy || report.Summary.Failed != 2 || report.Summary.Skipped != 11 {
 		t.Fatalf("unexpected missing relay report: %#v", report)
 	}
 	if checkByCode(t, report, "relay.installation").Remediation != "Run `portless relay install` or `portless setup`." {
@@ -243,7 +242,7 @@ func TestRelayChecksExplainMissingInstallationAndPortConflict(t *testing.T) {
 	partial.inspectRelay = func(context.Context) (relayinstallation.InstallationStatus, error) {
 		return relayinstallation.InstallationStatus{
 			Platform: "launchd", Service: "dev.portless.relay", Installed: true,
-			HelperPresent: true, HelperCurrent: true, ConfigurationPresent: true,
+			HelperPresent: true, HelperVerified: true, HelperCompatible: true, ConfigurationPresent: true,
 			HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt",
 		}, nil
 	}
@@ -304,7 +303,7 @@ func healthyRelayStatus(paths installation.Layout, uid int) relayinstallation.In
 	return relayinstallation.InstallationStatus{
 		Platform: "launchd", Service: "dev.portless.relay", Installed: true,
 		Running: true, Healthy: true, HTTPHealthy: true, DNSHealthy: true, HelperPresent: true, ConfigurationPresent: true,
-		HelperCurrent: true, HelperBuildID: "current-build", CurrentBuildID: "current-build",
+		HelperVerified: true, HelperCompatible: true, HelperBuildID: "current-build", HelperVersion: "1.0.0", RequiredHelperVersion: "1.0.0",
 		ReceiptPresent: true, ResolverPresent: true, ResolverHealthy: true, OwnerUID: uid, OwnerGID: 20, TargetSocket: paths.IngressSocket, DNSTargetSocket: paths.DNSSocket,
 		EndpointPoolReady: true, EndpointPoolDetail: "64/64 addresses configured on lo0",
 		HelperPath: "/fixed/helper", ConfigurationPath: "/fixed/config", ReceiptPath: "/fixed/receipt", ResolverPath: "/fixed/resolver", LocalhostResolverPath: "/fixed/localhost-resolver",

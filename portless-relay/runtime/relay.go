@@ -19,6 +19,9 @@ import (
 )
 
 const (
+	// HelperVersion is the semantic compatibility version of the privileged
+	// relay runtime. Bump it whenever an installed helper must be refreshed.
+	HelperVersion = "1.0.0"
 	// ControlOrigin is the clean control-plane origin served through the relay.
 	ControlOrigin = "http://portless.localhost"
 	// DefaultListenAddress is the privileged loopback HTTP listener.

@@ -101,9 +101,12 @@ operational target is under two seconds. Forced and legacy recovery remains on
 the slower stop/start path and is outside this SLA.
 
 The privileged relay remains deliberately narrow. It binds the documented
-machine-wide loopback listeners, verifies its ownership receipt, drops to the
-installing user, and forwards bytes to the daemon. All application-aware
-behavior remains here in the unprivileged daemon.
+machine-wide loopback listeners, verifies the installed helper against its
+root-owned receipt, drops to the installing user, and forwards bytes to the
+daemon. The receipt records the helper's SHA-256 identity for integrity and a
+relay-owned semantic version for compatibility; the current daemon executable
+hash is intentionally irrelevant. All application-aware behavior remains here
+in the unprivileged daemon.
 
 ## API and event contracts
 

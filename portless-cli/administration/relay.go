@@ -40,7 +40,7 @@ func (c *Commands) installRelay(ctx context.Context, jsonOutput bool) error {
 	if status.Installed && status.OwnerUID != uid {
 		return fmt.Errorf("the clean-URL relay belongs to user ID %d; remove it with `portless relay uninstall --force` before installing it for this user", status.OwnerUID)
 	}
-	if status.Healthy && status.HelperCurrent && status.TargetSocket == c.Paths.IngressSocket && status.DNSTargetSocket == c.Paths.DNSSocket && status.ReceiptPresent && status.ResolverPresent {
+	if status.Healthy && status.HelperVerified && status.HelperCompatible && status.TargetSocket == c.Paths.IngressSocket && status.DNSTargetSocket == c.Paths.DNSSocket && status.ReceiptPresent && status.ResolverPresent {
 		if jsonOutput {
 			return command.WriteRelayStatusJSON(c.Out, status)
 		}
@@ -147,15 +147,23 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 		fmt.Fprintln(c.Out, "Installed:", status.InstalledAt.Local().Format(time.RFC3339))
 	}
 	fmt.Fprintln(c.Out, "Helper:", status.HelperPath)
-	helperBuildState := "unknown"
-	helperOutdated := false
-	if status.HelperCurrent {
-		helperBuildState = "current"
-	} else if status.HelperBuildID != "" && status.CurrentBuildID != "" {
-		helperOutdated = true
-		helperBuildState = fmt.Sprintf("outdated (installed %s, current %s)", shortFingerprint(status.HelperBuildID), shortFingerprint(status.CurrentBuildID))
+	helperBuildState := "not verified"
+	if status.HelperVerified {
+		helperBuildState = "verified"
+	}
+	if status.HelperBuildID != "" {
+		helperBuildState += " (" + shortFingerprint(status.HelperBuildID) + ")"
 	}
 	fmt.Fprintln(c.Out, "Helper build:", helperBuildState)
+	helperVersionState := "unknown"
+	if status.HelperCompatible {
+		helperVersionState = "compatible (" + status.HelperVersion + ")"
+	} else if status.HelperVersion != "" {
+		helperVersionState = fmt.Sprintf("update required (installed %s, required %s)", status.HelperVersion, status.RequiredHelperVersion)
+	} else if status.RequiredHelperVersion != "" {
+		helperVersionState = "unavailable (required " + status.RequiredHelperVersion + ")"
+	}
+	fmt.Fprintln(c.Out, "Helper version:", helperVersionState)
 	configurationState := status.ConfigurationPath
 	if status.ConfigurationError != "" {
 		configurationState += " (drifted)"
@@ -172,7 +180,7 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 		fmt.Fprintln(c.Out, c.Failure(c.Out, "Resolver check:"), status.ResolverHealthError)
 	}
 	currentUID, _ := c.Local.UserIDs()
-	repairGuidance := relayRepairGuidance(status, currentUID, helperOutdated)
+	repairGuidance := relayRepairGuidance(status, currentUID)
 	if repairGuidance != "" {
 		fmt.Fprintln(c.Out, c.Failure(c.Out, "Action required:"), repairGuidance)
 		fmt.Fprintln(c.Out, "Run `portless relay install` to update the privileged helper and repair the system service and DNS configuration.")
@@ -188,16 +196,22 @@ func (c *Commands) relayStatus(ctx context.Context, jsonOutput bool) error {
 	return nil
 }
 
-func relayRepairGuidance(status relayinstallation.InstallationStatus, currentUID int, helperOutdated bool) string {
+func relayRepairGuidance(status relayinstallation.InstallationStatus, currentUID int) string {
 	if !status.ReceiptPresent || status.OwnerUID <= 0 || status.OwnerUID != currentUID {
 		return ""
 	}
 	configurationDrifted := status.ConfigurationError != ""
+	helperUnverified := status.HelperPresent && !status.HelperVerified
+	helperIncompatible := status.HelperPresent && status.HelperVerified && !status.HelperCompatible
 	switch {
-	case helperOutdated && configurationDrifted:
-		return "The installed privileged helper is from an older Portless build, and its system configuration no longer matches the current Portless installation."
-	case helperOutdated:
-		return "The installed privileged helper is from an older Portless build."
+	case helperUnverified && configurationDrifted:
+		return "The installed privileged helper cannot be verified against its ownership receipt, and its system configuration has drifted."
+	case helperUnverified:
+		return "The installed privileged helper must be reinstalled to establish receipt-bound integrity."
+	case helperIncompatible && configurationDrifted:
+		return fmt.Sprintf("The installed privileged helper version %s does not match required version %s, and its system configuration has drifted.", status.HelperVersion, status.RequiredHelperVersion)
+	case helperIncompatible:
+		return fmt.Sprintf("The installed privileged helper version %s does not match required version %s.", status.HelperVersion, status.RequiredHelperVersion)
 	case configurationDrifted:
 		return "The relay service or DNS configuration no longer matches the current Portless installation."
 	default:

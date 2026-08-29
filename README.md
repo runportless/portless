@@ -296,9 +296,16 @@ inventory, permission boundaries, limits, and troubleshooting.
   its ownership receipt, and drops to the installing user before serving
   traffic. Privileged install, repair, restart, and removal are serialized by
   a fixed root-owned lifecycle lock; activation commits only after HTTP, DNS,
-  and system-resolver readiness succeeds.
+  and system-resolver readiness succeeds. The receipt binds the exact installed
+  helper hash for integrity, while a relay-owned semantic helper version
+  determines compatibility. Rebuilding unrelated Portless code does not
+  require reinstalling the helper.
 - Discovery is static, bounded, read-only, and confined to the supplied
   checkout. It does not run project code or fetch network resources.
+- Locally launched project code is trusted at the developer's user-account
+  level. Portless does not sandbox those processes or isolate them from the
+  developer environment because they must behave like directly launched code
+  for debugging.
 - Secret-bearing provider values remain separate from redacted configuration
   inspection data. Authorization, cookie, common token headers, and
   unambiguously identified protocol-authentication fields are redacted before

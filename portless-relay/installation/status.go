@@ -25,9 +25,12 @@ type InstallationStatus struct {
 	Healthy               bool       `json:"healthy"`
 	HTTPHealthy           bool       `json:"httpHealthy"`
 	HelperPresent         bool       `json:"helperPresent"`
-	HelperCurrent         bool       `json:"helperCurrent"`
+	HelperVerified        bool       `json:"helperVerified"`
+	HelperCompatible      bool       `json:"helperCompatible"`
 	HelperBuildID         string     `json:"helperBuildId,omitempty"`
-	CurrentBuildID        string     `json:"currentBuildId,omitempty"`
+	HelperVersion         string     `json:"helperVersion,omitempty"`
+	RequiredHelperVersion string     `json:"requiredHelperVersion"`
+	HelperError           string     `json:"helperError,omitempty"`
 	ConfigurationPresent  bool       `json:"configurationPresent"`
 	ConfigurationError    string     `json:"configurationError,omitempty"`
 	ReceiptPresent        bool       `json:"receiptPresent"`
@@ -111,12 +114,16 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 		Platform: details.Name, Service: details.Service, HelperPath: details.HelperPath,
 		ConfigurationPath: details.ConfigurationPath, ReceiptPath: details.ReceiptPath,
 		ResolverPath: details.ResolverPath, LocalhostResolverPath: details.LocalhostResolverPath,
-		DNSListenAddress: relayruntime.DefaultDNSAddress,
+		DNSListenAddress: relayruntime.DefaultDNSAddress, RequiredHelperVersion: relayruntime.HelperVersion,
 	}
 	helperPresent, helperErr := inspectArtifact(details.HelperPath, 0o755, details.ArtifactUID, details.ArtifactGID)
 	configurationPresent, configurationErr := inspectArtifact(details.ConfigurationPath, 0o644, details.ArtifactUID, details.ArtifactGID)
 	receiptPresent, receiptArtifactErr := inspectArtifact(details.ReceiptPath, 0o644, details.ArtifactUID, details.ArtifactGID)
-	for _, artifactErr := range []error{helperErr, configurationErr, receiptArtifactErr} {
+	if helperErr != nil {
+		status.HelperError = helperErr.Error()
+		status.Problem = appendProblem(status.Problem, helperErr.Error())
+	}
+	for _, artifactErr := range []error{configurationErr, receiptArtifactErr} {
 		if artifactErr != nil {
 			status.Problem = appendProblem(status.Problem, artifactErr.Error())
 		}
@@ -136,12 +143,12 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 	}
 	status.HelperPresent = helperPresent
 	if helperPresent && helperErr == nil {
-		helperBuildID, currentBuildID, current, buildErr := inspectHelperBuild(details.HelperPath)
+		helperBuildID, buildErr := installation.BuildIDForPath(details.HelperPath)
 		status.HelperBuildID = helperBuildID
-		status.CurrentBuildID = currentBuildID
-		status.HelperCurrent = current
 		if buildErr != nil {
-			status.Problem = appendProblem(status.Problem, buildErr.Error())
+			message := fmt.Errorf("fingerprint installed relay helper: %w", buildErr).Error()
+			status.HelperError = appendProblem(status.HelperError, message)
+			status.Problem = appendProblem(status.Problem, message)
 		}
 	}
 	status.ConfigurationPresent = configurationPresent
@@ -160,8 +167,23 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 			receiptValid = true
 			status.OwnerUID, status.OwnerGID = receipt.OwnerUID, receipt.OwnerGID
 			status.TargetSocket, status.DNSTargetSocket = receipt.TargetSocket, receipt.DNSTargetSocket
+			status.HelperVersion = receipt.HelperVersion
 			installedAt := receipt.InstalledAt
 			status.InstalledAt = &installedAt
+			status.HelperCompatible = receipt.HelperVersion == relayruntime.HelperVersion
+			if !status.HelperCompatible {
+				message := fmt.Sprintf("installed relay helper version %s does not match required version %s", receipt.HelperVersion, relayruntime.HelperVersion)
+				status.HelperError = appendProblem(status.HelperError, message)
+				status.Problem = appendProblem(status.Problem, message)
+			}
+			if helperPresent && helperErr == nil && status.HelperBuildID != "" {
+				status.HelperVerified = status.HelperBuildID == receipt.HelperBuildID
+				if !status.HelperVerified {
+					message := "installed relay helper content does not match its ownership receipt"
+					status.HelperError = appendProblem(status.HelperError, message)
+					status.Problem = appendProblem(status.Problem, message)
+				}
+			}
 			if !receiptUsesCurrentLoopbackPool(receipt) {
 				status.Problem = appendProblem(status.Problem, "installation receipt uses an outdated loopback address pool; run `portless setup` to repair it")
 			}
@@ -219,7 +241,7 @@ func inspect(ctx context.Context, platform hostPlatform, probes inspectionProbes
 		} else {
 			status.ResolverHealthError = resolverErr.Error()
 		}
-		artifactsHealthy := helperPresent && configurationPresent && receiptPresent && status.OwnerUID > 0 && resolverPresent && status.Problem == ""
+		artifactsHealthy := helperPresent && status.HelperVerified && status.HelperCompatible && configurationPresent && receiptPresent && status.OwnerUID > 0 && resolverPresent && status.Problem == ""
 		pathsHealthy := httpErr == nil && dnsErr == nil && resolverErr == nil && pool.ready && poolErr == nil
 		status.Healthy = status.Running && artifactsHealthy && pathsHealthy
 	}
@@ -312,18 +334,6 @@ func (details platformInstallation) resolverPaths() []string {
 		paths = append(paths, details.LocalhostResolverPath)
 	}
 	return paths
-}
-
-func inspectHelperBuild(helperPath string) (helperBuildID, currentBuildID string, current bool, err error) {
-	helperBuildID, err = installation.BuildIDForPath(helperPath)
-	if err != nil {
-		return "", "", false, fmt.Errorf("fingerprint installed relay helper: %w", err)
-	}
-	currentBuildID, err = installation.CurrentBuildID()
-	if err != nil {
-		return helperBuildID, "", false, fmt.Errorf("fingerprint current Portless executable: %w", err)
-	}
-	return helperBuildID, currentBuildID, helperBuildID == currentBuildID, nil
 }
 
 func pathExists(path string) (bool, error) {

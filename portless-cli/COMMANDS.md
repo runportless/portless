@@ -429,7 +429,7 @@ repair the narrow machine-wide HTTP and DNS relay.
 | --- | --- |
 | `portless setup` | Configure system-resolvable clean HTTP URLs and `portless.test` TCP endpoint DNS. Idempotent. |
 | `portless relay install` | Explicitly install or repair the HTTP and DNS relay. Idempotent. |
-| `portless relay status` | Show relay installation, ownership, HTTP, and DNS health, with an explicit repair command when the installed helper or receipt-bound configuration is stale. |
+| `portless relay status` | Show relay installation, ownership, helper integrity and compatibility, HTTP, and DNS health, with an explicit repair command when the receipt-bound helper, helper version, or system configuration requires repair. |
 | `portless relay restart` | Restart an installed relay whose ownership matches the current installation. There is deliberately no force option. |
 | `portless relay uninstall` | Remove only the privileged relay and scoped resolver integration. Alias: `relay remove`. `--force` permits intentional cleanup of fixed artifacts when the owner is another user or unknown, but it never removes macOS loopback aliases without a valid receipt. Residual aliases are reported for explicit verification. |
 

@@ -843,6 +843,184 @@ func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {
 	t.Fatal("completed TCP traffic was not published")
 }
 
+func TestLocalProcessResponseHeadersCanWaitForDebugger(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		select {
+		case <-releaseResponse:
+			writer.WriteHeader(http.StatusNoContent)
+		case <-request.Context().Done():
+		}
+	}))
+	defer upstream.Close()
+	defer func() {
+		select {
+		case <-releaseResponse:
+		default:
+			close(releaseResponse)
+		}
+	}()
+
+	manager := newManagerForTest(controlStore)
+	defer manager.Close(context.Background())
+	if manager.localProcessTransport.ResponseHeaderTimeout != 0 {
+		t.Fatalf("local process response header timeout = %s, want no timeout", manager.localProcessTransport.ResponseHeaderTimeout)
+	}
+	manager.boundedTransport.ResponseHeaderTimeout = 20 * time.Millisecond
+	manager.SetTarget(scope, "checkout", upstream.Listener.Addr().(*net.TCPAddr).Port)
+	response := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() {
+		manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/debug", nil), scope, "checkout")
+		close(finished)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("local process did not receive the request")
+	}
+	select {
+	case <-finished:
+		t.Fatalf("local process request ended before the debugger delay was released: %d %q", response.Code, response.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseResponse)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("local process request did not finish after releasing the response")
+	}
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("local process response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestRemoteResponseHeadersRemainBounded(t *testing.T) {
+	controlStore := environmentStore(t)
+	defer controlStore.Close()
+	scope := model.EnvironmentSelector("billing", "local")
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	remote := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		select {
+		case <-releaseResponse:
+			writer.WriteHeader(http.StatusNoContent)
+		case <-request.Context().Done():
+		}
+	}))
+	defer remote.Close()
+	defer func() {
+		select {
+		case <-releaseResponse:
+		default:
+			close(releaseResponse)
+		}
+	}()
+
+	manager := newManagerForTest(controlStore)
+	defer manager.Close(context.Background())
+	if manager.boundedTransport.ResponseHeaderTimeout != 30*time.Second {
+		t.Fatalf("remote response header timeout = %s, want 30s", manager.boundedTransport.ResponseHeaderTimeout)
+	}
+	manager.boundedTransport.ResponseHeaderTimeout = 25 * time.Millisecond
+	if err := manager.SetRemoteTarget(scope, "payments", model.RemoteTarget{URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://payments.local.billing.localhost/debug", nil), scope, "payments")
+
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("remote target did not receive the request")
+	}
+	if response.Code != http.StatusBadGateway || !strings.Contains(strings.ToLower(response.Body.String()), "timeout") {
+		t.Fatalf("remote timeout response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestUpstreamRequestsHonorClientCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		remote bool
+	}{
+		{name: "local process"},
+		{name: "remote", remote: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controlStore := environmentStore(t)
+			defer controlStore.Close()
+			scope := model.EnvironmentSelector("billing", "local")
+			requestStarted := make(chan struct{})
+			requestCanceled := make(chan struct{})
+			releaseResponse := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				close(requestStarted)
+				select {
+				case <-request.Context().Done():
+					close(requestCanceled)
+				case <-releaseResponse:
+					writer.WriteHeader(http.StatusNoContent)
+				}
+			}))
+			defer upstream.Close()
+			defer func() {
+				select {
+				case <-releaseResponse:
+				default:
+					close(releaseResponse)
+				}
+			}()
+
+			manager := newManagerForTest(controlStore)
+			defer manager.Close(context.Background())
+			if test.remote {
+				if err := manager.SetRemoteTarget(scope, "payments", model.RemoteTarget{URL: upstream.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				manager.SetTarget(scope, "payments", upstream.Listener.Addr().(*net.TCPAddr).Port)
+			}
+			requestContext, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request := httptest.NewRequest(http.MethodGet, "http://payments.local.billing.localhost/debug", nil).WithContext(requestContext)
+			response := httptest.NewRecorder()
+			finished := make(chan struct{})
+			go func() {
+				manager.ServeIngress(response, request, scope, "payments")
+				close(finished)
+			}()
+
+			select {
+			case <-requestStarted:
+			case <-time.After(time.Second):
+				t.Fatal("upstream did not receive the request")
+			}
+			cancel()
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Fatal("proxy did not stop after client cancellation")
+			}
+			select {
+			case <-requestCanceled:
+			case <-time.After(time.Second):
+				t.Fatal("upstream request was not canceled")
+			}
+			if response.Code != http.StatusBadGateway {
+				t.Fatalf("canceled response status = %d, want %d", response.Code, http.StatusBadGateway)
+			}
+		})
+	}
+}
+
 func TestRemoteTargetForwardsHTTPAndEnforcesReadOnlyPolicy(t *testing.T) {
 	controlStore := environmentStore(t)
 	defer controlStore.Close()
