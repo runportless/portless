@@ -33,13 +33,28 @@ const recording: Recording = {
   eventCount: 3,
 }
 
+const completedRecording: Recording = {
+  ...recording,
+  name: 'completed-checkout',
+  status: 'completed',
+  completedAt: '2026-08-28T12:05:00Z',
+}
+
 describe('RecordingsPanel', () => {
-  it('renders recordings as the page workspace and defers creation to a dialog action', () => {
+  it('makes the active recording primary and explains why another cannot be created', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording]} refresh={async () => undefined} />)
 
     expect(html).toContain('class="recordings-page"')
     expect(html).toContain('class="panel experiment-list"')
     expect(html).toContain('CREATE RECORDING')
+    expect(html).toContain('id="recording-create-unavailable"')
+    expect(html).toContain('Stop checkout-debug before creating another recording.')
+    expect(html).toContain('aria-describedby="recording-create-unavailable"')
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="recording-create-unavailable"[^>]*>CREATE RECORDING<\/button>/)
+    expect(html).toContain('class="experiment-row recording-row recording-row--active"')
+    expect(html).toContain('>RECORDING</span>')
+    expect(html).not.toContain('RECORDING NOW')
+    expect(html).toContain('STOP RECORDING')
     expect(html).toContain('checkout-debug')
     expect(html).toContain('checkout → orders · 3 events')
     expect(html).not.toContain('class="panel experiment-form"')
@@ -51,5 +66,23 @@ describe('RecordingsPanel', () => {
 
     expect(html).toContain('No recordings. Create one before reproducing a local issue.')
     expect(html).toContain('CREATE RECORDING')
+    expect(html).not.toContain('recording-create-unavailable')
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>CREATE RECORDING<\/button>/)
+  })
+
+  it('uses a singular event label for the first captured exchange', () => {
+    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[{ ...recording, eventCount: 1 }]} refresh={async () => undefined} />)
+
+    expect(html).toContain('checkout → orders · 1 event')
+    expect(html).not.toContain('1 events')
+  })
+
+  it('presents deletion as a named row action before confirmation', () => {
+    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[completedRecording]} refresh={async () => undefined} />)
+
+    expect(html).toContain('completed-checkout')
+    expect(html).toContain('aria-label="Delete completed-checkout"')
+    expect(html).toContain('>DELETE</button>')
+    expect(html).not.toContain('Confirm delete completed-checkout')
   })
 })
