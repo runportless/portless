@@ -46,6 +46,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const [controlRequest, setControlRequest] = useState(0)
   const [busy, setBusy] = useState('')
   const [deleteName, setDeleteName] = useState('')
+  const [deleteAllConfirm, setDeleteAllConfirm] = useState(false)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [historyPage, setHistoryPage] = useState(0)
   const activeRecording = recordings.find((recording) => recording.status === 'active')
@@ -57,6 +58,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     setRepeatFrom(undefined)
     setControlRequest(0)
     setDeleteName('')
+    setDeleteAllConfirm(false)
     setError(null)
     setHistoryPage(0)
   }, [environment.project, environment.name])
@@ -64,6 +66,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const start = async (input: CreateRecordingInput) => {
     setBusy('create')
     setDeleteName('')
+    setDeleteAllConfirm(false)
     setError(null)
     try {
       await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody(input) })
@@ -79,6 +82,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const stop = async (recording: Recording) => {
     setBusy(`stop:${recording.name}`)
     setDeleteName('')
+    setDeleteAllConfirm(false)
     setError(null)
     try {
       await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/stop`), { method: 'POST' })
@@ -91,6 +95,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   }
 
   const remove = async (recording: Recording) => {
+    setDeleteAllConfirm(false)
     if (deleteName !== recording.name) {
       setDeleteName(recording.name)
       setError(null)
@@ -109,17 +114,45 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     }
   }
 
+  const removeAll = async () => {
+    if (busy || historyRecordings.length === 0) return
+    if (!deleteAllConfirm) {
+      setDeleteAllConfirm(true)
+      setDeleteName('')
+      setError(null)
+      return
+    }
+    setBusy('delete-all')
+    setDeleteAllConfirm(false)
+    setDeleteName('')
+    setError(null)
+    try {
+      for (const recording of historyRecordings) {
+        await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}`), { method: 'DELETE' })
+      }
+      await refresh()
+      setHistoryPage(0)
+    } catch (value) {
+      await refresh().catch(() => undefined)
+      setHistoryPage(0)
+      setError(actionError("Recording history wasn't fully deleted", value))
+    } finally {
+      setBusy('')
+    }
+  }
+
   const prepareRepeat = (recording: Recording) => {
     setRepeatFrom(recording)
     setControlRequest((value) => value + 1)
     setDeleteName('')
+    setDeleteAllConfirm(false)
     setError(null)
   }
 
   return <div className="recordings-page">
     {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
     <section className="panel recording-control-panel">
-      <div className="panel-title"><span>RECORDING CONTROL</span><small>{activeRecording ? 'CAPTURE IN PROGRESS' : 'READY'}</small></div>
+      <div className="panel-title"><span>{activeRecording ? 'ACTIVE RECORDING' : 'NEW RECORDING'}</span>{activeRecording && <small>RECORDING</small>}</div>
       {activeRecording
         ? <ActiveRecordingControl recording={activeRecording} busy={busy === `stop:${activeRecording.name}`} onStop={() => void stop(activeRecording)} />
         : <RecordingControlForm
@@ -136,6 +169,17 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     <section className="panel recording-history-panel">
       <div className="panel-title recording-history-title">
         <span>HISTORY</span>
+        <button
+          className={`recording-history-delete-all${deleteAllConfirm ? ' is-confirming' : ''}`}
+          type="button"
+          disabled={!!busy || historyRecordings.length === 0}
+          aria-label={deleteAllConfirm
+            ? `Confirm delete all ${historyRecordings.length} completed recording${historyRecordings.length === 1 ? '' : 's'}`
+            : historyRecordings.length === 0
+              ? 'Delete all completed recordings'
+              : `Delete all ${historyRecordings.length} completed recording${historyRecordings.length === 1 ? '' : 's'}`}
+          onClick={() => void removeAll()}
+        >{busy === 'delete-all' ? 'DELETING…' : deleteAllConfirm ? 'CONFIRM' : 'DELETE ALL'}</button>
       </div>
       <div className="recording-history-scroll">
         <table className="recording-history-table">
@@ -161,7 +205,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
                 <a
                   className="recording-history__export"
                   href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}
-                  onClick={() => setDeleteName('')}
+                  onClick={() => { setDeleteName(''); setDeleteAllConfirm(false) }}
                 >EXPORT</a>
                 <button
                   className={deleteName === recording.name ? 'is-confirming' : ''}
@@ -176,7 +220,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
           </tbody>
         </table>
       </div>
-      <PanelPagination label="recordings" pagination={historyPagination} onPage={(page) => { setHistoryPage(page); setDeleteName('') }} />
+      <PanelPagination label="recordings" pagination={historyPagination} onPage={(page) => { setHistoryPage(page); setDeleteName(''); setDeleteAllConfirm(false) }} />
     </section>
   </div>
 }
@@ -187,12 +231,9 @@ function formatRecordingTimestamp(value: string) {
 
 function ActiveRecordingControl({ recording, busy, onStop }: { recording: Recording; busy: boolean; onStop: () => void }) {
   return <div className="recording-active-control">
-    <div className="recording-active-control__lead">
-      <div className="recording-active-control__identity">
-        <span className="recording-active-control__pulse" aria-hidden="true" />
-        <div><div><strong>{recording.name}</strong><span className="recording-active-control__badge">RECORDING</span></div></div>
-      </div>
-      <button className="button button--danger" type="button" disabled={busy} onClick={onStop}>{busy ? 'STOPPING…' : 'STOP RECORDING'}</button>
+    <div className="recording-active-control__identity">
+      <span className="recording-active-control__pulse" aria-hidden="true" />
+      <div><div><strong>{recording.name}</strong><span className="recording-active-control__badge">RECORDING</span></div></div>
     </div>
     <div className="recording-active-control__details">
       <div><span>TRAFFIC SCOPE</span><strong>{recordingScopeLabel(recording)}</strong></div>
@@ -200,6 +241,7 @@ function ActiveRecordingControl({ recording, busy, onStop }: { recording: Record
       <div><span>STARTED</span><strong>{relativeTime(recording.startedAt)} ago</strong></div>
       <div><span>PAYLOADS</span><strong>{recording.capturePayloads ? 'Captured' : 'Not captured'}</strong></div>
     </div>
+    <button className="button button--danger" type="button" disabled={busy} onClick={onStop}>{busy ? 'STOPPING…' : 'STOP RECORDING'}</button>
   </div>
 }
 
@@ -257,16 +299,21 @@ function RecordingControlForm({ environment, defaults, busy, focusNameRequest, o
         maxPayloadBytes,
       })
     }}>
-      <p>Capture traffic while you reproduce an issue.</p>
-      <div className="recording-control__fields">
+      <div className="recording-control-form__primary">
         <label><span>NAME</span><input ref={nameInput} name="portless-recording-name" required autoComplete="off" spellCheck="false" value={name} disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); change() }} /></label>
-        <label><span>TRAFFIC SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} disabled={busy} onChange={(event) => { setScopeID(event.target.value); change() }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>
-        <label className="recording-body-toggle provider-field--wide"><input type="checkbox" checked={capturePayloads} disabled={busy} onChange={(event) => { setCapturePayloads(event.target.checked); change() }} /><span><strong>CAPTURE PAYLOADS</strong><small>Retains HTTP bodies and decoded database or messaging content.</small></span></label>
-        {capturePayloads && <>
-          <label><span>MAXIMUM PAYLOAD SIZE</span><select value={maxPayloadBytes} disabled={busy} onChange={(event) => { setMaxPayloadBytes(Number(event.target.value)); change() }}>{![16384, 65536, 262144, 1048576].includes(maxPayloadBytes) && <option value={maxPayloadBytes}>{maxPayloadBytes.toLocaleString()} bytes</option>}<option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select></label>
-          <div className="recording-body-warning"><strong>APPLICATION DATA</strong><span>Captured payloads are retained locally and can contain application data.</span></div>
-        </>}
+        <label><span>SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} disabled={busy} onChange={(event) => { setScopeID(event.target.value); change() }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>
+        <div className={`recording-payload-field${capturePayloads ? ' is-active' : ''}`} role="group" aria-labelledby="recording-payload-label">
+          <span id="recording-payload-label">PAYLOADS</span>
+          <div className="recording-payload-field__control">
+            <label className="recording-payload-toggle"><input type="checkbox" checked={capturePayloads} disabled={busy} onChange={(event) => { setCapturePayloads(event.target.checked); change() }} /><span>INCLUDE</span></label>
+            <select aria-label="Maximum payload size" value={maxPayloadBytes} disabled={busy || !capturePayloads} onChange={(event) => { setMaxPayloadBytes(Number(event.target.value)); change() }}>{![16384, 65536, 262144, 1048576].includes(maxPayloadBytes) && <option value={maxPayloadBytes}>{maxPayloadBytes.toLocaleString()} bytes</option>}<option value={16384}>16 KiB</option><option value={65536}>64 KiB</option><option value={262144}>256 KiB</option><option value={1048576}>1 MiB</option></select>
+            <span className="recording-payload-help">
+              <button type="button" aria-label="About payload capture" aria-describedby="recording-payload-help">i</button>
+              <span className="recording-payload-tooltip" id="recording-payload-help" role="tooltip">Captured payloads are retained locally and may contain application data.</span>
+            </span>
+          </div>
+        </div>
+        <button className="button button--primary recording-control-form__start" type="submit" disabled={busy || !name.trim()}>{busy ? 'STARTING…' : '● START RECORDING'}</button>
       </div>
-      <footer><button className="button button--primary" type="submit" disabled={busy || !name.trim()}>{busy ? 'STARTING…' : '● START RECORDING'}</button></footer>
     </form>
 }
