@@ -332,7 +332,7 @@ roots:
 | --- | --- | --- |
 | `portless-cli` | Commands, selection, output, confirmation, completion, and browser launching. | [CLI README](portless-cli/README.md), [command reference](portless-cli/COMMANDS.md) |
 | `portless-daemon` | API, control plane, discovery, state, runtimes, traffic, and embedded UI serving. | [Daemon README](portless-daemon/README.md), [OpenAPI](portless-daemon/api/openapi.yaml), [events](portless-daemon/api/events.md) |
-| `portless-relay` | Narrow machine-wide HTTP and DNS relay, installation, health, restart, and removal. | [Source](portless-relay/) |
+| `portless-relay` | Narrow machine-wide HTTP and DNS relay, installation, health, restart, and removal. | [Relay README](portless-relay/README.md) |
 | `portless-web` | React control plane embedded in the executable. | [Embedded assets](portless-web/embedded-assets.md) |
 | `portless-site` | Static marketing site published separately at [www.portless.run](https://www.portless.run). | [Website README](portless-site/README.md) |
 | `portless-mcp` | Local stdio MCP runtime, scope and capability policy, redaction, and result limits. | [MCP README](portless-mcp/README.md) |

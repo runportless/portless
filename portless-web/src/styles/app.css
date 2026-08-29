@@ -796,7 +796,7 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .traffic-command-result > .traffic-semantic-grid { min-height:200px; flex:1 1 auto; }
 .traffic-command-result:only-child > .traffic-semantic-grid { min-height:300px; }
 .traffic-command-results--single .traffic-semantic-grid { grid-template-columns:minmax(0,1fr); }
-.traffic-detail__message { min-height:0; padding:16px; flex:1 0 auto; background:var(--nested-bg); display:flex; }
+.traffic-detail__message { min-height:0; padding:16px; flex:1 1 auto; background:var(--nested-bg); display:flex; }
 .traffic-message-workbench { min-width:0; flex:1 1 auto; border:1px solid var(--line); background:var(--panel-bg-strong); display:flex; flex-direction:column; }
 .traffic-message-workbench__summary { min-height:55px; padding:8px 13px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:16px; align-items:center; }
 .traffic-message-workbench__summary > code { min-width:0; color:var(--text); font-size:11px; font-weight:600; overflow-wrap:anywhere; }
@@ -805,7 +805,7 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .traffic-payload-tabs button { position:relative; padding:1px 0 0; border:0; background:transparent; color:var(--faint); font-size:8px; font-weight:800; letter-spacing:.08em; cursor:pointer; }
 .traffic-payload-tabs button:hover,.traffic-payload-tabs button.is-active { color:var(--text); }
 .traffic-payload-tabs button.is-active::after { content:''; position:absolute; right:0; bottom:0; left:0; height:2px; background:var(--teal); }
-.traffic-payload { min-height:300px; padding:15px; flex:1 0 auto; background:var(--log-surface); }
+.traffic-payload { min-height:0; padding:15px; flex:1 1 auto; background:var(--log-surface); }
 .traffic-payload pre { margin:0; color:var(--log-text); font-size:10px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
 .traffic-headers__key { color:inherit; }
 .traffic-json__key { color:inherit; }
