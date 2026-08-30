@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/providers"
@@ -24,10 +25,14 @@ type fakeRuntime struct {
 	lastPlan     providers.ContainerPlan
 	inspection   RecoveryInspection
 	inspectError error
+	probeFunc    func(context.Context) ProbeResult
 }
 
 func (r *fakeRuntime) Name() RuntimeName { return r.name }
-func (r *fakeRuntime) Probe(context.Context) ProbeResult {
+func (r *fakeRuntime) Probe(ctx context.Context) ProbeResult {
+	if r.probeFunc != nil {
+		return r.probeFunc(ctx)
+	}
 	result := r.probe
 	result.Name = r.name
 	return result
@@ -166,6 +171,25 @@ func TestUnavailableStatusExplainsEveryCandidate(t *testing.T) {
 	status := newTestManager(filepath.Join(t.TempDir(), "runtime.json"), podman, docker).Status(context.Background())
 	if status.State != "failed" || len(status.Candidates) != 2 || status.Reason == "" {
 		t.Fatalf("unexpected unavailable status: %#v", status)
+	}
+}
+
+func TestStatusBoundsRuntimeProbes(t *testing.T) {
+	podman := &fakeRuntime{name: RuntimePodman, probeFunc: func(ctx context.Context) ProbeResult {
+		<-ctx.Done()
+		return ProbeResult{State: "failed", Reason: ctx.Err().Error()}
+	}}
+	docker := &fakeRuntime{name: RuntimeDocker, probe: ProbeResult{State: "ready", Version: "29.4.0"}}
+	manager := newTestManager(filepath.Join(t.TempDir(), "runtime.json"), podman, docker)
+	manager.probeTimeout = 10 * time.Millisecond
+
+	started := time.Now()
+	status := manager.Status(context.Background())
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("runtime status took %s", elapsed)
+	}
+	if status.Selected != RuntimeDocker || len(status.Candidates) != 2 || status.Candidates[0].State != "failed" {
+		t.Fatalf("unexpected bounded status: %#v", status)
 	}
 }
 

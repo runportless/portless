@@ -10,10 +10,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/providers"
 )
+
+const defaultProbeTimeout = 2 * time.Second
 
 type persistedSelection struct {
 	Preference RuntimeName   `json:"preference"`
@@ -23,19 +26,20 @@ type persistedSelection struct {
 
 // Manager selects a runtime, persists that choice, and delegates resource operations.
 type Manager struct {
-	mu         sync.Mutex
-	statePath  string
-	preference RuntimeName
-	selected   RuntimeName
-	used       map[RuntimeName]bool
-	runtimes   map[RuntimeName]Runtime
-	order      []RuntimeName
-	resources  *providers.Registry
+	mu           sync.Mutex
+	statePath    string
+	preference   RuntimeName
+	selected     RuntimeName
+	used         map[RuntimeName]bool
+	runtimes     map[RuntimeName]Runtime
+	order        []RuntimeName
+	resources    *providers.Registry
+	probeTimeout time.Duration
 }
 
 // NewManager constructs a runtime selector from registered engines and persisted preference.
 func NewManager(statePath string, resources *providers.Registry, runtimes ...Runtime) *Manager {
-	manager := &Manager{statePath: statePath, preference: RuntimeAuto, used: make(map[RuntimeName]bool), runtimes: make(map[RuntimeName]Runtime), resources: resources}
+	manager := &Manager{statePath: statePath, preference: RuntimeAuto, used: make(map[RuntimeName]bool), runtimes: make(map[RuntimeName]Runtime), resources: resources, probeTimeout: defaultProbeTimeout}
 	for _, runtime := range runtimes {
 		if runtime == nil || runtime.Name() == "" {
 			continue
@@ -259,7 +263,9 @@ func (m *Manager) readyRuntime(ctx context.Context) (Runtime, error) {
 func (m *Manager) probes(ctx context.Context) []ProbeResult {
 	result := make([]ProbeResult, 0, len(m.order))
 	for _, name := range m.order {
-		probe := m.runtimes[name].Probe(ctx)
+		probeContext, cancel := context.WithTimeout(ctx, m.probeTimeout)
+		probe := m.runtimes[name].Probe(probeContext)
+		cancel()
 		probe.Name = name
 		result = append(result, probe)
 	}
