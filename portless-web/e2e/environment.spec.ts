@@ -356,6 +356,6 @@ test('renders durable lifecycle events from the environment timeline', async ({ 
   await page.getByLabel('Timeline rows per page').selectOption('50')
   await expect(rows).toHaveCount(Math.min(50, result.timeline.length))
   await page.reload()
-  await expect(page.getByText('ENVIRONMENT TIMELINE')).toBeVisible()
+  await expect(page.getByText('RECENT ACTIVITY')).toBeVisible()
   await expect(page.locator('.timeline-event').filter({ hasText: result.timeline[0].summary }).first()).toBeVisible()
 })

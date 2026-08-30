@@ -397,6 +397,7 @@ describe('environment topology', () => {
     })) as TimelineEvent[]
 
     const markup = renderToStaticMarkup(createElement(TimelinePanel, { timeline }))
+    expect(markup).toContain('<span>RECENT ACTIVITY</span>')
     expect(markup).toContain('aria-label="Timeline rows per page"')
     expect(markup).toContain('<option value="25" selected="">25</option>')
     expect(markup).toContain('<option value="50">50</option>')

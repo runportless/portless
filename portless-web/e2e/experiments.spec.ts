@@ -107,15 +107,15 @@ test('creates and hot-binds a mock profile without restarting peer services', as
 
   await mockDrawer.getByRole('button', { name: 'PREVIEW REQUEST' }).click()
   const previewDialog = page.getByRole('dialog', { name: 'Preview request' })
-  const previewTarget = previewDialog.getByLabel('PATH AND QUERY', { exact: true })
-  const previewHeaders = previewDialog.getByLabel('REQUEST HEADERS · ONE NAME: VALUE PER LINE', { exact: true })
-  const previewBody = previewDialog.getByLabel('REQUEST BODY', { exact: true })
+  const previewTarget = previewDialog.getByRole('textbox', { name: 'PATH AND QUERY', exact: true })
+  const previewHeaders = previewDialog.getByRole('textbox', { name: 'REQUEST HEADERS · ONE NAME: VALUE PER LINE', exact: true })
+  const previewBody = previewDialog.getByRole('textbox', { name: 'REQUEST BODY', exact: true })
   const previewTargetValue = '/inventory/coffee-mug?warehouse=central'
   const previewHeadersValue = 'Content-Type: application/json\nX-Trace: one\nX-Trace: two'
   const previewBodyValue = '{"sku":"coffee-mug","quantity":1}'
   await expect(previewTarget).toBeFocused()
   await expect(previewBody).toHaveCount(0)
-  await previewDialog.getByLabel('METHOD', { exact: true }).selectOption('POST')
+  await previewDialog.getByRole('combobox', { name: 'METHOD', exact: true }).selectOption('POST')
   await expect(previewBody).toBeVisible()
   await previewTarget.fill(previewTargetValue)
   await previewHeaders.fill(previewHeadersValue)

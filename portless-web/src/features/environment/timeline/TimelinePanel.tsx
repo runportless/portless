@@ -16,7 +16,7 @@ export function TimelinePanel({ timeline }: { timeline: TimelineEvent[] }) {
 
   return <section className="panel timeline-panel">
     <div className="panel-title">
-      <span>ENVIRONMENT TIMELINE</span>
+      <span>RECENT ACTIVITY</span>
       <label className="timeline-page-size"><span>ROWS PER PAGE</span><select aria-label="Timeline rows per page" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(0) }}>{timelinePageSizes.map((size) => <option value={size} key={size}>{size}</option>)}</select></label>
     </div>
     {Object.entries(groups).map(([date, events]) => <div className="timeline-group" key={date}><div className="timeline-date">{date}</div>{events.map((event) => <div className="timeline-event" key={event.sequence}><time>{new Date(event.timestamp).toLocaleTimeString()}</time><span className={`timeline-dot timeline-dot--${event.severity}`} /><div><strong>{event.summary}</strong><small>{event.type} · {event.actor}{event.subject ? ` · ${event.subject}` : ''}</small></div><code>#{event.sequence}</code></div>)}</div>)}
