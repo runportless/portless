@@ -70,7 +70,7 @@ test('keeps environment panel title bars at one height across tabs', async ({ pa
     ['topology', '.topology-panel--page > .panel-title'],
     ['traffic', '.traffic-header'],
     ['mocks', '.mock-profiles-panel > .panel-title'],
-    ['recordings', '.recordings-panel-title'],
+    ['recordings', '.recording-control-panel > .panel-title'],
     ['faults', '.faults-panel-title'],
     ['bindings', '.configured-providers-panel > .panel-title'],
     ['timeline', '.timeline-panel > .panel-title'],
