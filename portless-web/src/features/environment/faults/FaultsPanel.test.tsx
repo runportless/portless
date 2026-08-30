@@ -35,6 +35,7 @@ describe('FaultsPanel', () => {
     expect(html).toContain('<span>FAULTS</span>')
     expect(html).toMatch(/<button[^>]*class="button button--primary button--small panel-create-button"[^>]*>CREATE FAULT<\/button>/)
     expect(html).toContain('class="fault-table"')
+    expect(html).toContain('<tr class="sortable-header-row is-default-sort">')
     expect(html).toContain('aria-sort="ascending"><span>State</span>')
     expect(html).toContain('aria-sort="none"><span>Name</span>')
     for (const label of ['Connection', 'Fault', 'Matches', 'Lifetime', 'Enabled at', 'Created at']) {

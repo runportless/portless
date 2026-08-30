@@ -23,11 +23,11 @@ export function ProviderBindingsTable({ environment, onConfigure }: { environmen
   return <section className="panel experiment-list configured-providers-panel">
     <div className="panel-title"><span>PROVIDERS</span><button className="button button--primary button--small panel-create-button configure-provider-button" type="button" aria-haspopup="dialog" disabled={!environment.services.length} onClick={() => onConfigure()}>CONFIGURE PROVIDER</button></div>
     <div className="provider-table" role="table" aria-label="Configured providers">
-      <div className="provider-row provider-row--header sortable-header-row" role="row">
-        <SortableGridHeader label="Service" sortKey="service" sort={sort} defaultSort={defaultProviderBindingSort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
-        <SortableGridHeader label="Provider" sortKey="provider" sort={sort} defaultSort={defaultProviderBindingSort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
-        <SortableGridHeader label="Configuration" sortKey="configuration" sort={sort} defaultSort={defaultProviderBindingSort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
-        <SortableGridHeader label="Modified" sortKey="modified" sort={sort} defaultSort={defaultProviderBindingSort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
+      <div className={`provider-row provider-row--header sortable-header-row${sort.key === defaultProviderBindingSort.key && sort.direction === defaultProviderBindingSort.direction ? ' is-default-sort' : ''}`} role="row">
+        <SortableGridHeader label="Service" sortKey="service" sort={sort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
+        <SortableGridHeader label="Provider" sortKey="provider" sort={sort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
+        <SortableGridHeader label="Configuration" sortKey="configuration" sort={sort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
+        <SortableGridHeader label="Modified" sortKey="modified" sort={sort} itemCount={orderedBindings.length} onSort={(nextSort) => { setSort(nextSort); setPage(0) }} />
         <span role="columnheader" aria-label="Row actions" />
       </div>
       {providers.items.map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>

@@ -9,7 +9,6 @@ type SortableHeaderProps<Key extends string> = {
   label: string
   sortKey: Key
   sort: TableSort<Key>
-  defaultSort: TableSort<Key>
   itemCount: number
   onSort: (sort: TableSort<Key>) => void
 }
@@ -22,9 +21,8 @@ export function SortableGridHeader<Key extends string>(props: SortableHeaderProp
   return <SortableColumnHeader {...props} layout="grid" />
 }
 
-function SortableColumnHeader<Key extends string>({ label, sortKey, sort, defaultSort, itemCount, onSort, layout }: SortableHeaderProps<Key> & { layout: 'table' | 'grid' }) {
+function SortableColumnHeader<Key extends string>({ label, sortKey, sort, itemCount, onSort, layout }: SortableHeaderProps<Key> & { layout: 'table' | 'grid' }) {
   const active = sort.key === sortKey
-  const defaultActive = active && sort.key === defaultSort.key && sort.direction === defaultSort.direction
   const nextDirection: TableSortDirection = active && sort.direction === 'asc' ? 'desc' : 'asc'
   const ariaSort = active ? sort.direction === 'asc' ? 'ascending' : 'descending' : 'none'
   const content = <>
@@ -41,7 +39,7 @@ function SortableColumnHeader<Key extends string>({ label, sortKey, sort, defaul
     </button>}
   </>
 
-  const stateClasses = `${active ? ' is-active' : ''}${defaultActive ? ' is-default-sort' : ''}`
+  const stateClasses = active ? ' is-active' : ''
   if (layout === 'table') return <th className={`sortable-table-header${stateClasses}`} aria-sort={ariaSort}>{content}</th>
   return <span className={`sortable-grid-header${stateClasses}`} role="columnheader" aria-sort={ariaSort}>{content}</span>
 }

@@ -20,7 +20,8 @@ describe('MocksPanel', () => {
     const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectProfile={() => undefined} onChanged={() => undefined} />)
     expect(html).toContain('MOCK PROFILES')
     expect(html).toContain('CREATE PROFILE')
-    expect(html).toContain('class="sortable-grid-header is-active is-default-sort" role="columnheader" aria-sort="ascending"><span>State</span>')
+    expect(html).toContain('class="mock-profile-row mock-profile-row--header sortable-header-row is-default-sort" role="row"')
+    expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>State</span>')
     for (const label of ['Name', 'Service', 'Routes', 'Created at', 'Enabled at', 'Modified at']) {
       expect(html).toContain(`class="sortable-grid-header" role="columnheader" aria-sort="none"><span>${label}</span>`)
     }

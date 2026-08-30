@@ -197,12 +197,12 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
       </div>
       <div className="recording-history-scroll">
         <table className="recording-history-table">
-          <thead><tr className="sortable-header-row">
-            <SortableTableHeader label="Recording" sortKey="name" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
-            <SortableTableHeader label="Events" sortKey="events" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
-            <SortableTableHeader label="Created at" sortKey="createdAt" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
-            <SortableTableHeader label="Duration" sortKey="duration" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
-            <SortableTableHeader label="Completed" sortKey="completed" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+          <thead><tr className={`sortable-header-row${historySort.key === defaultRecordingHistorySort.key && historySort.direction === defaultRecordingHistorySort.direction ? ' is-default-sort' : ''}`}>
+            <SortableTableHeader label="Recording" sortKey="name" sort={historySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Events" sortKey="events" sort={historySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Created at" sortKey="createdAt" sort={historySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Duration" sortKey="duration" sort={historySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Completed" sortKey="completed" sort={historySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
             <th aria-label="Actions" />
           </tr></thead>
           <tbody>

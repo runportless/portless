@@ -62,15 +62,15 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
     </div>
     <section className="panel services-panel">
       <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} workloads</small></div>
-      <div className="table-row table-row--header service-row sortable-header-row" role="row">
+      <div className={`table-row table-row--header service-row sortable-header-row${serviceSort.key === defaultOverviewServiceSort.key && serviceSort.direction === defaultOverviewServiceSort.direction ? ' is-default-sort' : ''}`} role="row">
         <span aria-hidden="true" />
-        <SortableGridHeader label="Name" sortKey="name" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
-        <SortableGridHeader label="Mode" sortKey="mode" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
-        <SortableGridHeader label="State" sortKey="state" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
-        <SortableGridHeader label="Restarts" sortKey="restarts" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
-        <SortableGridHeader label="Requests" sortKey="requests" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
-        <SortableGridHeader label="P95" sortKey="p95" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
-        <SortableGridHeader label="Endpoint / reason" sortKey="endpoint" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Name" sortKey="name" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Mode" sortKey="mode" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="State" sortKey="state" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Restarts" sortKey="restarts" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Requests" sortKey="requests" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="P95" sortKey="p95" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Endpoint / reason" sortKey="endpoint" sort={serviceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
         <span aria-label="Actions" />
       </div>
       {services.items.map((service) => {

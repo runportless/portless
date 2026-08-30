@@ -923,7 +923,8 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .fault-table th { height:38px; color:var(--faint); font-size:9px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; }
 .fault-table th.sortable-table-header { white-space:nowrap; }
 :is(.sortable-table-header,.sortable-grid-header) > span { vertical-align:middle; }
-:is(.sortable-table-header,.sortable-grid-header) > button { width:18px; height:22px; margin-left:4px; padding:0; border:0; outline:0; background:transparent; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:var(--faint); cursor:pointer; vertical-align:middle; }
+:is(.sortable-table-header,.sortable-grid-header) { position:relative; }
+:is(.sortable-table-header,.sortable-grid-header) > button { width:18px; height:22px; padding:0; border:0; outline:0; position:absolute; z-index:1; top:50%; right:-9px; transform:translateY(-50%); background:transparent; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:var(--faint); cursor:pointer; }
 .sortable-column-sort-control__triangle { width:0; height:0; color:var(--faint); transition:color .12s ease; }
 .sortable-column-sort-control__triangle--up { border-right:4px solid transparent; border-bottom:5px solid currentColor; border-left:4px solid transparent; }
 .sortable-column-sort-control__triangle--down { border-top:5px solid currentColor; border-right:4px solid transparent; border-left:4px solid transparent; }
@@ -932,7 +933,7 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 :is(.sortable-table-header,.sortable-grid-header) > button:focus-visible { outline:1px solid var(--teal); outline-offset:0; }
 @media (hover:hover) {
   :is(.sortable-table-header,.sortable-grid-header) > button { opacity:0; }
-  .sortable-header-row:hover :is(.sortable-table-header,.sortable-grid-header) > button,:is(.sortable-table-header,.sortable-grid-header):focus-within > button,:is(.sortable-table-header,.sortable-grid-header).is-active:not(.is-default-sort) > button { opacity:1; }
+  .sortable-header-row:hover :is(.sortable-table-header,.sortable-grid-header) > button,:is(.sortable-table-header,.sortable-grid-header):focus-within > button,.sortable-header-row:not(.is-default-sort) :is(.sortable-table-header,.sortable-grid-header).is-active > button { opacity:1; }
 }
 .fault-table td { height:56px; color:var(--muted); font-size:10px; }
 .fault-table tbody tr:hover td { background:var(--row-hover); }

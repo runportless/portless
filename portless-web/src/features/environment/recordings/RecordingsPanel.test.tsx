@@ -178,7 +178,8 @@ describe('RecordingsPanel', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[earlier, later]} refresh={async () => undefined} />)
 
     expect(html.match(/class="sortable-column-sort-control"/g)).toHaveLength(5)
-    expect(html).toContain('class="sortable-table-header is-active is-default-sort" aria-sort="descending"><span>Created at</span>')
+    expect(html).toContain('<tr class="sortable-header-row is-default-sort">')
+    expect(html).toContain('class="sortable-table-header is-active" aria-sort="descending"><span>Created at</span>')
     expect(sortRecordingHistory([earlier, later], { key: 'createdAt', direction: 'desc' }).map((item) => item.name)).toEqual(['beta', 'alpha'])
     expect(sortRecordingHistory([earlier, later], { key: 'events', direction: 'desc' }).map((item) => item.name)).toEqual(['alpha', 'beta'])
     expect(sortRecordingHistory([earlier, later], { key: 'duration', direction: 'asc' }).map((item) => item.name)).toEqual(['beta', 'alpha'])
