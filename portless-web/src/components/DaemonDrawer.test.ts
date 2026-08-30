@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
-import { DaemonDrawer, daemonDiagnostics, daemonTabIndexForKey } from './DaemonDrawer'
+import { DaemonDrawer, daemonDiagnostics, daemonTabIndexForKey, handoffBlockingEnvironments } from './DaemonDrawer'
 
 const runtime: RuntimeStatus = {
   selected: 'docker', version: '29.4.0', state: 'ready', preference: 'auto',
@@ -93,6 +93,17 @@ describe('daemon diagnostics', () => {
     const output = daemonDiagnostics(status, runtime, residualRelay)
     expect(output).toContain('TCP endpoint pool: residual; ownership unverified')
     expect(output).toContain('Relay helper: Residual aliases (Ownership receipt unavailable)')
+  })
+
+  it('identifies only the environments responsible for scoped handoff failures', () => {
+    expect(handoffBlockingEnvironments(
+      ['store/local', 'store/qa-local'],
+      ['store/qa-local/external:orders-redis: public TCP endpoint is not listening'],
+    )).toEqual(['store/qa-local'])
+    expect(handoffBlockingEnvironments(
+      ['store/local', 'store/qa-local'],
+      ['daemon runtime ownership is not configured'],
+    )).toEqual(['store/local', 'store/qa-local'])
   })
 
   it('opens on a status summary with ordered operational sections and accessible tabs', () => {

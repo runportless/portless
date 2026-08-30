@@ -200,9 +200,9 @@ func (h *Handler) verifyHandoff(ctx context.Context, active []string) HandoffSta
 	}
 }
 
-// Restart validates replacement of instanceID after proving that active
-// runtime state can be handed off safely.
-func (h *Handler) Restart(ctx context.Context, instanceID string) (ShutdownResponse, error) {
+// Restart validates replacement of instanceID. Force permits replacement when
+// a fresh audit still finds active runtime state unsafe to hand off.
+func (h *Handler) Restart(ctx context.Context, instanceID string, force bool) (ShutdownResponse, error) {
 	active, err := h.currentActiveEnvironments(ctx)
 	if err != nil {
 		return ShutdownResponse{}, err
@@ -215,6 +215,12 @@ func (h *Handler) Restart(ctx context.Context, instanceID string) (ShutdownRespo
 	}
 	verification := h.verifyHandoff(ctx, active)
 	if len(verification.ActiveEnvironments) > 0 && verification.State != HandoffReady {
+		if force {
+			return ShutdownResponse{
+				Stopping: true, Handoff: false, InstanceID: h.identity.InstanceID,
+				ActiveEnvironments: append([]string(nil), verification.ActiveEnvironments...),
+			}, nil
+		}
 		return ShutdownResponse{}, &LifecycleError{
 			Code: "HANDOFF_UNAVAILABLE", Message: "active environments cannot be safely handed off",
 			ActiveEnvironments: verification.ActiveEnvironments, Problems: verification.Problems,

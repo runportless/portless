@@ -193,6 +193,13 @@ Both can inspect services and effective connections, tail structured logs,
 follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
 
+Each browser tab stays focused on one project. The sidebar shows only that
+project's environments, while the project switcher keeps running and recently
+opened projects close at hand and remembers the last environment used in each.
+The Projects page is the durable searchable registry, including projects hidden
+from the recent list. Forgetting a project is available only after all of its
+environments are stopped and never deletes source checkouts from disk.
+
 The control plane's Portless System drawer groups daemon identity and build
 provenance, control-plane health, recovery, managed runtime inventory, local
 networking, handoff safety, and retained storage into focused Status, Runtime,
@@ -206,9 +213,15 @@ Normal CLI and browser daemon restarts share a five-second end-to-end readiness
 deadline and ordinarily complete in under two seconds. The accepted restart
 receipt identifies the coalesced handoff, target build, and deadline; the
 Portless System drawer reports the last measured duration and whether it met
-the SLA.
-Forced or legacy recovery is deliberately outside that SLA because it may have
-to signal an unresponsive process and can interrupt active environments.
+the SLA. If a handoff audit blocks restart, the CLI and System drawer identify
+the responsible environments, show the exact `portless down --env
+project/environment` commands, and direct the user to retry the restart.
+After a fresh audit specifically reports a blocked handoff, the System drawer
+also exposes a separately confirmed force restart. Its confirmation names every
+active environment and warns that bypassing handoff safety may interrupt
+services or require `portless up` afterward. Legacy CLI recovery remains
+outside the normal restart SLA because it may have to signal an unresponsive
+process.
 
 HTTP exchanges retain bounded inspectable headers and bodies. Declared
 PostgreSQL, Redis/Valkey, MySQL, and NATS connections are decoded into bounded

@@ -25,6 +25,55 @@ test('surfaces a failed control-plane refresh and reconnects automatically', asy
   expect((await applicationRequest('/checkout?sku=reconnected&quantity=1')).status).toBe(200)
 })
 
+test('explains which environment must stop before a blocked daemon restart', async ({ page }) => {
+  const state = readE2EState()
+  const blockingEnvironment = `${state.project}/qa-local`
+  let forcedRestartRequest: { instanceId?: string; force?: boolean } | undefined
+  await page.route(`${state.baseURL}/api/v1/daemon/handoff`, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      state: 'blocked',
+      verifiedAt: new Date().toISOString(),
+      activeEnvironments: [`${state.project}/${state.environment}`, blockingEnvironment],
+      problems: [`${blockingEnvironment}/external:orders-redis: public TCP endpoint is not listening`],
+    }),
+  }))
+  await page.route(`${state.baseURL}/api/v1/daemon/restart`, async (route) => {
+    forcedRestartRequest = route.request().postDataJSON() as { instanceId?: string; force?: boolean }
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'E2E_FORCE_RESTART_REFUSED', message: 'simulated force restart refusal' } }),
+    })
+  })
+
+  await authenticate(page)
+  await page.locator('.sidebar__footer').click()
+  const drawer = page.getByRole('dialog', { name: 'Portless System' })
+  await drawer.getByRole('tab', { name: 'RUNTIME' }).click()
+
+  await expect(drawer).toContainText('Stop the environment marked below, then retry the daemon restart.')
+  const blockingRow = drawer.locator('.daemon-environments > .is-blocking')
+  await expect(blockingRow).toContainText(blockingEnvironment)
+  await expect(blockingRow).toContainText('STOP REQUIRED')
+  await expect(drawer.getByText(`$ portless down --env ${blockingEnvironment}`, { exact: true })).toBeVisible()
+  await expect(drawer.getByRole('button', { name: 'RESTART DAEMON' })).toBeDisabled()
+  const forceRestart = drawer.getByRole('button', { name: 'FORCE RESTART' })
+  await expect(forceRestart).toBeEnabled()
+  await forceRestart.click()
+
+  const confirmation = drawer.getByRole('alertdialog', { name: 'Confirm force daemon restart' })
+  await expect(confirmation).toContainText('Runtime handoff safety will be bypassed.')
+  await expect(confirmation).toContainText(`${state.project}/${state.environment}`)
+  await expect(confirmation).toContainText(blockingEnvironment)
+  await expect(confirmation).toContainText('portless up')
+  await confirmation.getByRole('button', { name: 'FORCE RESTART AND RECONNECT' }).click()
+  await expect.poll(() => forcedRestartRequest?.force).toBe(true)
+  await expect.poll(() => forcedRestartRequest?.instanceId).toBeTruthy()
+  await expect(drawer).toContainText('simulated force restart refusal')
+})
+
 test('shows Portless system details and reconnects after a daemon restart', async ({ page }) => {
   await authenticate(page)
   const before = await controlAPI<{ instanceId: string; pid: number; protocolVersion: string; apiVersion: string }>('/api/v1/daemon')

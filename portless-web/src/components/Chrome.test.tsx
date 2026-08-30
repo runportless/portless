@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus } from '../api/contracts/system'
+import { emptyProjectNavigationPreferences } from '../features/projects/projectNavigation'
 import { AppChrome, scrollCommandIntoView, type EnvironmentView, type SettingsView } from './Chrome'
 
 const project = { name: 'billing' } as Project
@@ -18,16 +19,19 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       projects={[project]}
       environments={[environment]}
       activeProject={activeEnvironment ? project : undefined}
+      sidebarProject={project}
       activeEnvironment={activeEnvironment}
       activeView={activeView}
       settingsActive={settingsActive}
       settingsView={settingsView}
+      navigation={emptyProjectNavigationPreferences()}
       commands={[]}
       daemon={daemon}
       diagnostics={diagnostics}
       controlPlaneHealth={controlPlaneHealth}
       live={live}
       onNavigate={() => undefined}
+      onSwitchProject={() => undefined}
       onSettingsToggle={() => undefined}
       onDaemonRefresh={async () => daemon}
       onDaemonDiagnosticsRefresh={async () => diagnostics}
@@ -41,15 +45,14 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
 }
 
 describe('application navigation', () => {
-  it('does not invent an environment scope from the first environment', () => {
+  it('keeps one project in the sidebar without inventing an active environment view', () => {
     const markup = renderChrome()
 
     expect(markup).toContain('aria-label="Portless projects"')
-    expect(markup).not.toContain('<small>local</small>')
-    expect(markup).not.toContain('environment-chip')
-    expect(markup).toContain('aria-label="Projects"')
-    expect(markup).not.toContain('All projects')
-    expect(markup).not.toContain('Workspace')
+    expect(markup).toContain('aria-label="Current project billing. Switch project"')
+    expect(markup).toContain('aria-label="billing environments"')
+    expect(markup).toContain('aria-label="billing/local, healthy"')
+    expect(markup).not.toContain('aria-label="billing/local, healthy" aria-current="page"')
     expect(markup).not.toContain('Bindings')
     expect(markup).not.toContain('Topology')
     expect(markup).not.toContain('Traffic')
@@ -60,7 +63,7 @@ describe('application navigation', () => {
     expect(markup).not.toContain('<span>daemon ready</span>')
     expect(markup).toContain('aria-label="daemon ready"')
     expect(markup).toContain('aria-label="Collapse navigation" aria-expanded="true"')
-    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('aria-haspopup="dialog" aria-expanded="false"')
   })
 
   it('shows and selects views only for the active environment', () => {
@@ -101,7 +104,6 @@ describe('application navigation', () => {
   it('restores a compact icon rail with accessible navigation labels', () => {
     vi.stubGlobal('window', {
       localStorage: { getItem: (key: string) => key === 'portless.sidebar-collapsed' ? 'true' : null },
-      sessionStorage: { getItem: (key: string) => key === 'portless.expanded-projects' ? JSON.stringify(['billing']) : null },
     })
 
     try {
@@ -109,7 +111,7 @@ describe('application navigation', () => {
 
       expect(markup).toContain('<div class="shell shell--sidebar-collapsed">')
       expect(markup).toContain('aria-label="Expand navigation" aria-expanded="false"')
-      expect(markup).toContain('aria-label="billing project, 1 environment" title="billing"')
+      expect(markup).toContain('aria-label="Current project billing. Switch project" aria-haspopup="dialog" aria-expanded="false" title="billing"')
       expect(markup).toContain('aria-label="billing/local, healthy" aria-current="page" title="billing/local"')
       expect(markup).toContain('aria-label="Traffic" aria-current="page" title="Traffic"')
       expect(markup).toContain('aria-label="Settings" title="Settings"')

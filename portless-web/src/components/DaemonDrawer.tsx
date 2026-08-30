@@ -7,6 +7,7 @@ import { DrawerShell } from './overlays/DrawerShell'
 import { relativeTime, StatusMark } from './Status'
 
 type RestartPhase = 'idle' | 'confirm' | 'restarting' | 'reconnected' | 'failed'
+type RestartMode = 'normal' | 'force'
 type HandoffPhase = 'idle' | 'checking' | 'ready' | 'blocked' | 'failed'
 type StoragePhase = 'idle' | 'loading' | 'ready' | 'failed'
 type DaemonDrawerTab = 'status' | 'runtime' | 'storage' | 'logs'
@@ -29,10 +30,11 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
   onRefresh: () => Promise<DaemonStatus>
   onRefreshDiagnostics: (includeStorage?: boolean) => Promise<DaemonDiagnostics>
   onVerifyHandoff: () => Promise<DaemonHandoffStatus>
-  onRestart: (instanceId: string) => Promise<DaemonRestart>
+  onRestart: (instanceId: string, force?: boolean) => Promise<DaemonRestart>
   onReconnected: () => Promise<void>
 }) {
   const [phase, setPhase] = useState<RestartPhase>('idle')
+  const [restartMode, setRestartMode] = useState<RestartMode>('normal')
   const [error, setError] = useState('')
   const [copyState, setCopyState] = useState('COPY DIAGNOSTICS')
   const [tab, setTab] = useState<DaemonDrawerTab>('status')
@@ -48,6 +50,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
   const handoffReady = handoff?.state === 'ready'
   const restartSafe = active.length === 0 || handoffReady
   const handoffBlocked = active.length > 0 && (handoffPhase === 'blocked' || handoffPhase === 'failed')
+  const forceAvailable = active.length > 0 && handoffPhase === 'blocked'
   const restarting = phase === 'restarting'
   const effectiveState = restarting ? 'restarting' : phase === 'reconnected' ? 'ready' : live ? status?.state ?? 'unknown' : 'unreachable'
 
@@ -106,6 +109,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
   const prepareRestart = async () => {
     if (!status || !live || restarting) return
     selectTab('runtime')
+    setRestartMode('normal')
     setPhase('idle')
     setError('')
     setHandoffError('')
@@ -118,7 +122,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
       setHandoff(result)
       setHandoffPhase(result.state)
       if (result.activeEnvironments.length > 0 && result.state !== 'ready') {
-        setError('The refreshed runtime handoff audit does not permit a safe restart.')
+        setError(blockedRestartMessage(handoffBlockingEnvironments(result.activeEnvironments, result.problems)))
         setPhase('failed')
         return
       }
@@ -133,14 +137,45 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
     }
   }
 
+  const prepareForceRestart = async () => {
+    if (!status || !live || restarting || !forceAvailable) return
+    selectTab('runtime')
+    setRestartMode('force')
+    setPhase('idle')
+    setError('')
+    setHandoffError('')
+    setHandoffPhase('checking')
+    const diagnosticsRefresh = onRefreshDiagnostics(false).catch(() => undefined)
+    try {
+      const result = await onVerifyHandoff()
+      await diagnosticsRefresh
+      if (!mounted.current) return
+      setHandoff(result)
+      setHandoffPhase(result.state)
+      if (result.activeEnvironments.length === 0 || result.state === 'ready') {
+        setRestartMode('normal')
+      }
+      setPhase('confirm')
+    } catch (value) {
+      if (!mounted.current) return
+      const message = errorMessage(value)
+      setHandoffError(message)
+      setHandoffPhase('failed')
+      setError(message)
+      setPhase('failed')
+    }
+  }
+
   const restartDaemon = async () => {
-    if (!status || !restartSafe || restarting) return
+    const force = restartMode === 'force'
+    if (!status || (!force && !restartSafe) || restarting) return
     const previousInstance = status.instanceId
     setError('')
     setPhase('restarting')
     const initiatedAt = Date.now()
     try {
-      const receipt = await onRestart(previousInstance)
+      const receipt = await onRestart(previousInstance, force)
+      if (receipt.handoff && mounted.current) setRestartMode('normal')
       const deadline = daemonRestartDeadline(receipt, initiatedAt)
       let attempt = 0
       while (Date.now() < deadline && mounted.current) {
@@ -187,6 +222,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
     header={<div className="daemon-drawer-heading"><div><h2>Portless System</h2><StatusMark status={effectiveState} /></div></div>}
     actions={<>
         <button className="button button--warning" onClick={() => void prepareRestart()} disabled={!status || !live || !restartSafe || restarting || (active.length > 0 && handoffPhase === 'checking')}>RESTART DAEMON</button>
+        {forceAvailable && <button className="button button--danger" onClick={() => void prepareForceRestart()} disabled={!status || !live || restarting}>FORCE RESTART</button>}
         <button className="button" onClick={() => void copyDiagnostics()} disabled={!status}>{copyState}</button>
       </>}
     tabs={<div className="drawer-tabs daemon-drawer-tabs" role="tablist" aria-label="System details">
@@ -201,14 +237,22 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
         {tab === 'storage' && <StoragePanel storage={diagnostics?.storage ?? null} phase={storagePhase} error={storageError} />}
         {tab === 'logs' && (live ? <DaemonLogs instanceId={status?.instanceId} /> : <Unavailable title="DAEMON LOGS UNAVAILABLE" message="The UI is waiting for the local daemon to become reachable." />)}
 
-        {tab === 'runtime' && phase === 'confirm' && <section className="daemon-confirm" role="alertdialog" aria-label="Confirm daemon restart">
+        {tab === 'runtime' && phase === 'confirm' && restartMode === 'normal' && <section className="daemon-confirm" role="alertdialog" aria-label="Confirm daemon restart">
           <h3>Restart the Portless daemon?</h3>
           <ul><li>Services and containers keep running.</li><li>The control plane reconnects automatically.</li><li>Clean URL routing and traffic capture may pause briefly.</li></ul>
           <div><button className="button button--warning" onClick={() => void restartDaemon()}>RESTART AND RECONNECT</button><button className="button" onClick={() => setPhase('idle')}>CANCEL</button></div>
         </section>}
 
+        {tab === 'runtime' && phase === 'confirm' && restartMode === 'force' && <section className="daemon-confirm daemon-confirm--danger" role="alertdialog" aria-label="Confirm force daemon restart">
+          <h3>Force restart the Portless daemon?</h3>
+          <p>Portless could not prove that these active environments can be handed off safely:</p>
+          <ul className="daemon-force-environments">{active.map((environment) => <li key={environment}><code>{environment}</code></li>)}</ul>
+          <p>Runtime handoff safety will be bypassed. Active services may be interrupted, and you may need to run <code>portless up</code> again afterward.</p>
+          <div><button className="button button--danger" onClick={() => void restartDaemon()}>FORCE RESTART AND RECONNECT</button><button className="button" onClick={() => { setRestartMode('normal'); setPhase('idle') }}>CANCEL</button></div>
+        </section>}
+
         {tab === 'runtime' && (phase === 'restarting' || phase === 'reconnected') && <section className={`daemon-progress ${phase === 'reconnected' ? 'daemon-progress--complete' : ''}`} aria-live="polite">
-          <i aria-hidden="true" /><div><strong>{phase === 'reconnected' ? 'Daemon restarted' : 'Restarting daemon…'}</strong><small>{phase === 'reconnected' ? 'Connected to the replacement instance.' : 'Waiting for the replacement instance.'}</small></div>
+          <i aria-hidden="true" /><div><strong>{phase === 'reconnected' ? 'Daemon restarted' : restartMode === 'force' ? 'Force restarting daemon…' : 'Restarting daemon…'}</strong><small>{phase === 'reconnected' ? 'Connected to the replacement instance.' : restartMode === 'force' ? 'Waiting for the replacement instance; active runtimes may need recovery.' : 'Waiting for the replacement instance.'}</small></div>
         </section>}
 
         {tab === 'runtime' && (phase === 'failed' || (!live && phase !== 'restarting')) && <Unavailable title={phase === 'failed' ? 'RESTART FAILED' : 'DAEMON UNREACHABLE'} message={error || 'The UI is waiting for the local daemon to become reachable.'} />}
@@ -294,6 +338,8 @@ function RuntimePanel({ status, diagnostics, runtime, relay, active, handoff, ha
 }) {
   if (!status) return <Unavailable title="RUNTIME STATUS UNAVAILABLE" message="Portless could not load daemon runtime information." />
   const networkingReady = relay?.healthy === true && relay.helperVerified === true && relay.helperCompatible === true
+  const blockingEnvironments = handoffBlocked ? handoffBlockingEnvironments(active, handoff?.problems ?? []) : []
+  const blocking = new Set(blockingEnvironments)
   return <>
     <RuntimeEngine runtime={runtime} />
     <ManagedInventory diagnostics={diagnostics} />
@@ -310,8 +356,9 @@ function RuntimePanel({ status, diagnostics, runtime, relay, active, handoff, ha
     </section>
     <section className={`drawer-section daemon-handoff ${handoffBlocked ? 'daemon-handoff--blocked' : ''}`}>
       <div className="daemon-section-heading"><span className="eyebrow">RUNTIME HANDOFF</span><div className="daemon-handoff-heading-status">{handoff?.verifiedAt && <time className="daemon-handoff-verified" dateTime={handoff.verifiedAt}><span>VERIFIED</span><strong>{relativeTime(handoff.verifiedAt)} ago</strong></time>}<StatusMark status={handoffDisplayState(active, handoffPhase)} /></div></div>
-      <p>{handoffDescription(active, handoffPhase)}</p>
-      {active.length > 0 && <div className="daemon-environments">{active.map((environment) => <div key={environment}><StatusMark status={handoffReady ? 'active' : 'unknown'} label={false} /><code>{environment}</code><small>ACTIVE</small></div>)}</div>}
+      <p>{handoffDescription(active, handoffPhase, blockingEnvironments)}</p>
+      {active.length > 0 && <div className="daemon-environments">{active.map((environment) => <div className={blocking.has(environment) ? 'is-blocking' : undefined} key={environment}><StatusMark status={blocking.has(environment) ? 'failed' : handoffReady ? 'active' : 'unknown'} label={false} /><code>{environment}</code><small>{blocking.has(environment) ? 'STOP REQUIRED' : 'ACTIVE'}</small></div>)}</div>}
+      {blockingEnvironments.length > 0 && <div className="daemon-handoff-remediation" aria-label="Stop blocking environments">{blockingEnvironments.map((environment) => <code key={environment}><span>$</span> portless down --env {environment}</code>)}</div>}
       <Problems values={[handoffError, ...(handoff?.problems ?? [])]} />
     </section>
   </>
@@ -597,13 +644,35 @@ function handoffDisplayState(active: string[], phase: HandoffPhase) {
   return 'unknown'
 }
 
-function handoffDescription(active: string[], phase: HandoffPhase) {
+function handoffDescription(active: string[], phase: HandoffPhase, blocking: string[] = []) {
   if (phase === 'checking') return 'Verifying supervisors, containers, and proxy listeners…'
   if (active.length === 0) return 'No active environments need to be handed off.'
   if (phase === 'ready') return 'Managed services can be adopted by a replacement daemon without stopping the environment.'
-  if (phase === 'blocked') return 'The daemon cannot restart safely while it manages active environments.'
+  if (phase === 'blocked') return `Stop the ${blocking.length === 1 ? 'environment' : 'environments'} marked below, then retry the daemon restart.`
   if (phase === 'failed') return 'Portless could not verify runtime handoff safety.'
   return 'Runtime handoff has not been verified.'
+}
+
+export function handoffBlockingEnvironments(active: string[], problems: string[]) {
+  const matched = new Set<string>()
+  let unscopedProblem = false
+  for (const problem of problems) {
+    let problemMatched = false
+    for (const environment of active) {
+      if (problem.startsWith(`${environment}/`) || problem.startsWith(`${environment}:`)) {
+        matched.add(environment)
+        problemMatched = true
+      }
+    }
+    if (!problemMatched) unscopedProblem = true
+  }
+  if (unscopedProblem || matched.size === 0) return [...active]
+  return active.filter((environment) => matched.has(environment))
+}
+
+function blockedRestartMessage(environments: string[]) {
+  if (environments.length === 1) return `Safe daemon restart is blocked by environment ${environments[0]}. Stop it, then retry.`
+  return `Safe daemon restart is blocked by these environments: ${environments.join(', ')}. Stop them, then retry.`
 }
 
 function errorMessage(value: unknown) {

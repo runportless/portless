@@ -16,6 +16,10 @@ export function overviewServiceEndpoint(environment: Pick<Environment, 'bindings
   return publicEndpoint(service)?.url || binding?.remote?.url || ''
 }
 
+export function openableServiceURL(environment: Pick<Environment, 'bindings'>, service: Service) {
+  return serviceEndpoints(service, bindingFor(environment, service.name)).find((endpoint) => endpoint.href)?.href || ''
+}
+
 export function displayLaunchMode(environment: Pick<Environment, 'bindings'>, service: Service) {
   const provider = bindingFor(environment, service.name)?.provider
   if (provider === 'mock') return 'mock'

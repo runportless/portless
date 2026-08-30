@@ -1,15 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, environmentPath } from '../../../api'
-import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
+import { ActionErrorNotice } from '../../../components/ActionError'
 import { ServiceLogs } from '../../../components/logs/ServiceLogs'
 import { DrawerShell } from '../../../components/overlays/DrawerShell'
 import { relativeTime, StatusMark } from '../../../components/Status'
-import type { Environment, Operation } from '../../../api/contracts/environments'
+import type { Environment } from '../../../api/contracts/environments'
 import type { Service, ServiceConfiguration } from '../../../api/contracts/topology'
-import { waitForEnvironmentOperation } from '../operationPolling'
+import { serviceActionProgressLabel, useServiceActions } from './serviceActions'
 import { bindingFor, displayLaunchMode, publicEndpoint, serviceEndpoints } from './servicePresentation'
-
-type ServiceAction = 'restart' | 'stop' | 'start' | 'debug' | 'manage'
 
 export function ServiceDrawer({ environment, service, onClose, onChanged }: {
   environment: Environment
@@ -19,34 +17,13 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
 }) {
   const [configuration, setConfiguration] = useState<ServiceConfiguration | null>(null)
   const [drawerTab, setDrawerTab] = useState<'details' | 'logs' | 'configuration'>('details')
-  const [busy, setBusy] = useState<ServiceAction | ''>('')
-  const [error, setError] = useState<ActionErrorDetails | null>(null)
-  const actionInFlight = useRef(false)
+  const serviceActions = useServiceActions(environment, onChanged)
+  const busy = serviceActions.busy?.service === service.name ? serviceActions.busy.action : ''
   const base = environmentPath(environment, `/services/${encodeURIComponent(service.name)}`)
 
   useEffect(() => {
     api<ServiceConfiguration>(`${base}/configuration`).then(setConfiguration).catch(() => setConfiguration(null))
   }, [base, environment.name, service.name])
-
-  const action = async (name: ServiceAction) => {
-    if (actionInFlight.current) return
-    actionInFlight.current = true
-    setBusy(name)
-    setError(null)
-    try {
-      const operation = await api<Operation>(`${base}/${name}`, { method: 'POST' })
-      onChanged()
-      const completed = await waitForEnvironmentOperation(environment, operation)
-      if (completed.state === 'failed') throw new Error(completed.error || `${service.name} ${name} failed`)
-      onChanged()
-    } catch (value) {
-      setError(actionError(`Couldn't ${serviceActionDescription(name)} ${service.name}`, value))
-    } finally {
-      actionInFlight.current = false
-      setBusy('')
-      onChanged()
-    }
-  }
 
   const endpoints = serviceEndpoints(service, bindingFor(environment, service.name))
   const httpEndpoint = publicEndpoint(service, 'http')
@@ -56,9 +33,9 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
     subject={`${service.name} service`}
     className="service-drawer"
     header={<div><span className="eyebrow">{environment.project} / {environment.name} / service</span><h2>{service.name}</h2><StatusMark status={service.status} /></div>}
-    actions={<>{localProcess && service.debug && <button className="button button--primary" type="button" onClick={() => void action(service.launchMode === 'debug' ? 'manage' : 'debug')} disabled={!!busy}>{busy === 'debug' || busy === 'manage' ? serviceActionProgressLabel(busy) : service.launchMode === 'debug' ? 'RUN NORMALLY' : 'DEBUG'}</button>}<button className={`button${!localProcess || !service.debug ? ' button--primary' : ''}`} type="button" onClick={() => void action(service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy === 'restart' || busy === 'start' ? serviceActionProgressLabel(busy) : service.status === 'ready' ? 'RESTART' : 'START'}</button><button className="button" type="button" onClick={() => void action('stop')} disabled={!!busy || service.status === 'stopped'}>{busy === 'stop' ? serviceActionProgressLabel(busy) : 'STOP'}</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</>}
+    actions={<>{localProcess && service.debug && <button className="button button--primary" type="button" onClick={() => void serviceActions.run(service, service.launchMode === 'debug' ? 'manage' : 'debug')} disabled={!!busy}>{busy === 'debug' || busy === 'manage' ? serviceActionProgressLabel(busy) : service.launchMode === 'debug' ? 'RUN NORMALLY' : 'DEBUG'}</button>}<button className={`button${!localProcess || !service.debug ? ' button--primary' : ''}`} type="button" onClick={() => void serviceActions.run(service, service.status === 'ready' ? 'restart' : 'start')} disabled={!!busy}>{busy === 'restart' || busy === 'start' ? serviceActionProgressLabel(busy) : service.status === 'ready' ? 'RESTART' : 'START'}</button><button className="button" type="button" onClick={() => void serviceActions.run(service, 'stop')} disabled={!!busy || service.status === 'stopped'}>{busy === 'stop' ? serviceActionProgressLabel(busy) : 'STOP'}</button>{httpEndpoint && <a className="button" href={httpEndpoint.url} target="_blank" rel="noreferrer">OPEN ↗</a>}</>}
     actionProps={{ 'aria-busy': !!busy }}
-    notice={error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
+    notice={serviceActions.error && <ActionErrorNotice error={serviceActions.error} onDismiss={serviceActions.dismissError} />}
     tabs={<nav className="drawer-tabs service-drawer-tabs">{(['details', 'logs', 'configuration'] as const).map((name) => <button type="button" key={name} className={drawerTab === name ? 'is-active' : ''} onClick={() => setDrawerTab(name)}>{name}</button>)}</nav>}
     contentClassName={`service-drawer-content service-drawer-content--${drawerTab}`}
     onClose={onClose}
@@ -73,24 +50,6 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
     {drawerTab === 'logs' && <ServiceLogs environment={environment} service={service.name} />}
     {drawerTab === 'configuration' && <section className="drawer-section service-configuration"><div className="eyebrow">ENVIRONMENT CONFIGURATION</div><div className="config-table"><div className="config-row config-row--head"><span>KEY</span><span>EFFECTIVE VALUE</span><span>SOURCE</span></div>{configuration?.environment?.map((item) => <div className="config-row" key={item.key}><code>{item.key}</code><span className={item.classification === 'masked' ? 'masked-value' : ''}>{item.value}</span><small>{item.source} · {item.classification}</small></div>)}{!configuration?.environment.length && <div className="empty-row">No static environment values were discovered. Connection bindings are generated at runtime.</div>}</div></section>}
   </DrawerShell>
-}
-
-function serviceActionProgressLabel(action: ServiceAction) {
-  switch (action) {
-    case 'debug': return 'STARTING DEBUG…'
-    case 'manage': return 'RUNNING NORMALLY…'
-    case 'restart': return 'RESTARTING…'
-    case 'start': return 'STARTING…'
-    case 'stop': return 'STOPPING…'
-  }
-}
-
-function serviceActionDescription(action: ServiceAction) {
-  switch (action) {
-    case 'debug': return 'start debugging'
-    case 'manage': return 'run'
-    default: return action
-  }
 }
 
 function Detail({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {

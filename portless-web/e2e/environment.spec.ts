@@ -29,9 +29,29 @@ test('renders real services, endpoints, topology, and service details', async ({
   for (const name of ['checkout', 'inventory', 'orders']) {
     await expect(services.filter({ hasText: name })).toBeVisible()
   }
-  await expect(services.filter({ hasText: 'checkout' })).toContainText('http://checkout.local.ui-e2e.localhost')
+  const checkoutRow = services.filter({ hasText: 'checkout' })
+  await expect(checkoutRow).toContainText('http://checkout.local.ui-e2e.localhost')
+  await expect(checkoutRow).not.toContainText('DETAILS')
 
-  await services.filter({ hasText: 'checkout' }).getByRole('button', { name: 'Copy checkout endpoint' }).click()
+  const checkoutActions = checkoutRow.getByRole('button', { name: 'Service actions for checkout' })
+  await checkoutActions.click()
+  let actionMenu = page.getByRole('menu', { name: 'checkout actions' })
+  const openCheckout = actionMenu.getByRole('menuitem', { name: 'OPEN ↗' })
+  await expect(openCheckout).toHaveAttribute('href', 'http://checkout.local.ui-e2e.localhost')
+  await expect(openCheckout).toHaveAttribute('target', '_blank')
+  await expect(actionMenu.getByRole('menuitem', { name: 'RESTART' })).toBeVisible()
+  await expect(actionMenu.getByRole('menuitem', { name: 'DEBUG' })).toHaveCount(0)
+  await expect(actionMenu.getByRole('menuitem', { name: 'STOP' })).toBeVisible()
+  await page.getByRole('heading', { name: state.environment, exact: true }).click()
+  await expect(actionMenu).toHaveCount(0)
+
+  await checkoutActions.click()
+  actionMenu = page.getByRole('menu', { name: 'checkout actions' })
+  await actionMenu.getByRole('menuitem', { name: 'RESTART' }).press('Escape')
+  await expect(actionMenu).toHaveCount(0)
+  await expect(checkoutActions).toBeFocused()
+
+  await checkoutRow.getByRole('button', { name: 'Copy checkout endpoint' }).click()
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://checkout.local.ui-e2e.localhost')
 
   const topology = page.getByRole('region', { name: 'Service topology' })
@@ -64,7 +84,7 @@ test('renders real services, endpoints, topology, and service details', async ({
     const url = new URL(request.url())
     if (url.pathname.endsWith('/logs') && url.searchParams.get('service') === 'checkout') serviceLogRequests++
   })
-  await services.filter({ hasText: 'checkout' }).getByRole('button', { name: 'INSPECT' }).click()
+  await checkoutRow.click()
   const drawer = page.getByRole('dialog', { name: 'checkout service' })
   await expect(drawer).toContainText('http://checkout.local.ui-e2e.localhost')
   await drawer.getByRole('button', { name: 'logs' }).click()
@@ -97,7 +117,7 @@ test('renders real services, endpoints, topology, and service details', async ({
   await drawer.getByRole('button', { name: 'Close' }).click()
   await page.waitForTimeout(100)
   const checkoutRequestsAfterClose = serviceLogRequests
-  await services.filter({ hasText: 'inventory' }).getByRole('button', { name: 'INSPECT' }).click()
+  await services.filter({ hasText: 'inventory' }).click()
   const inventoryDrawer = page.getByRole('dialog', { name: 'inventory service' })
   await inventoryDrawer.getByRole('button', { name: 'logs' }).click()
   await expect(inventoryDrawer.getByLabel('inventory logs')).toBeVisible()
@@ -113,13 +133,14 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
 
   const checkout = page.locator('.service-row--interactive').filter({ hasText: 'checkout' })
   await expect(checkout).toContainText('managed')
-  await checkout.getByRole('button', { name: 'INSPECT' }).click()
+  await checkout.getByRole('button', { name: 'Service actions for checkout' }).click()
+  const actionMenu = page.getByRole('menu', { name: 'checkout actions' })
+  await actionMenu.getByRole('menuitem', { name: 'DEBUG' }).click()
+  await expect(actionMenu).toHaveCount(0)
+  await expect(checkout).toContainText('debug', { timeout: 30_000 })
+  await checkout.getByRole('button', { name: 'View checkout details' }).click()
 
   const drawer = page.getByRole('dialog', { name: 'checkout service' })
-  await drawer.getByRole('button', { name: 'DEBUG' }).click()
-  await expect(drawer.getByRole('button', { name: 'STARTING DEBUG…' })).toBeDisabled()
-  await expect(drawer.getByRole('button', { name: /^(RESTART|START)$/ })).toBeDisabled()
-  await expect(drawer.getByRole('button', { name: 'STOP' })).toBeDisabled()
   await expect(drawer).toContainText('node-inspector', { timeout: 30_000 })
   await expect(drawer).toContainText('listening', { timeout: 30_000 })
   await expect(drawer).toContainText('Attach to Process')

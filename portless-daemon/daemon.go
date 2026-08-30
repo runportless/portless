@@ -246,7 +246,7 @@ func Run(ctx context.Context, config Config) error {
 	defer stopWatching()
 	go watchExecutable(watchContext, executable, buildID, app.CanHandoff, func(targetBuildID string) {
 		activeEnvironments, _ := app.ActiveEnvironments(watchContext)
-		receipt, prepareErr := replacements.prepare("executable-change", instanceID, targetBuildID, time.Now().UTC(), activeEnvironments, ErrExecutableChanged)
+		receipt, prepareErr := replacements.prepare("executable-change", instanceID, targetBuildID, time.Now().UTC(), true, activeEnvironments, ErrExecutableChanged)
 		if prepareErr != nil {
 			slog.Error("Prepare automatic daemon replacement", "error", prepareErr)
 			return
@@ -404,9 +404,9 @@ func (c lifecycleAPIControl) HandoffStatus(ctx context.Context) (contract.Daemon
 }
 
 // Restart requests lifecycle replacement and adapts its structured result or error.
-func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID, reason string) (contract.DaemonRestart, error) {
+func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID, reason string, force bool) (contract.DaemonRestart, error) {
 	auditStartedAt := time.Now()
-	result, err := c.handler.Restart(ctx, instanceID)
+	result, err := c.handler.Restart(ctx, instanceID, force)
 	if err != nil {
 		var lifecycleError *lifecycle.LifecycleError
 		if errors.As(err, &lifecycleError) {
@@ -423,11 +423,11 @@ func (c lifecycleAPIControl) Restart(ctx context.Context, instanceID, reason str
 		return contract.DaemonRestart{}, fmt.Errorf("inspect replacement daemon build: %w", err)
 	}
 	acceptedAt := time.Now().UTC()
-	receipt, err := c.replacements.prepare(reason, result.InstanceID, targetBuildID, acceptedAt, result.ActiveEnvironments, ErrRestartRequested)
+	receipt, err := c.replacements.prepare(reason, result.InstanceID, targetBuildID, acceptedAt, result.Handoff, result.ActiveEnvironments, ErrRestartRequested)
 	if err != nil {
 		return contract.DaemonRestart{}, err
 	}
-	slog.Info("Portless daemon restart accepted", "event", "daemon.restart.accepted", "restart", receipt.RestartID, "reason", receipt.Reason, "deadline", receipt.DeadlineAt, "auditMs", time.Since(auditStartedAt).Milliseconds())
+	slog.Info("Portless daemon restart accepted", "event", "daemon.restart.accepted", "restart", receipt.RestartID, "reason", receipt.Reason, "handoff", receipt.Handoff, "deadline", receipt.DeadlineAt, "auditMs", time.Since(auditStartedAt).Milliseconds())
 	return receipt, nil
 }
 

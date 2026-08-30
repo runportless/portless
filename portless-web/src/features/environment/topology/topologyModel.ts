@@ -138,7 +138,7 @@ export function topologyCenterPosition(viewport: { scrollWidth: number; clientWi
 export function buildTopology(environment: Environment) {
   const services = new Map(environment.services.map((service) => [service.name, service]))
   const primary = environment.primaryService && services.has(environment.primaryService) ? environment.primaryService : environment.services[0]?.name
-  const graphEdges = environment.connections.filter((connection) => services.has(connection.source) && services.has(connection.target))
+  const graphEdges = (environment.connections || []).filter((connection) => services.has(connection.source) && services.has(connection.target))
   const edges = [...(primary ? [{ source: 'external', target: primary, protocol: 'http' as const }] : []), ...graphEdges]
   const depths = new Map<string, number>(primary ? [[primary, 1]] : [])
   const incoming = new Map<string, string[]>()

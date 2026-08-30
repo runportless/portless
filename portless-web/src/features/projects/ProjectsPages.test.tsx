@@ -4,7 +4,8 @@ import type { Environment } from '../../api/contracts/environments'
 import type { Project } from '../../api/contracts/projects'
 import { CreateEnvironmentDialog } from './CreateEnvironmentDialog'
 import { ProjectOverviewPage } from './ProjectOverviewPage'
-import { ProjectsIndexPage } from './ProjectsIndexPage'
+import { ForgetProjectDialog, ProjectsIndexPage, sortProjectRegistryRows } from './ProjectsIndexPage'
+import { emptyProjectNavigationPreferences, type ProjectNavigationPreferences } from './projectNavigation'
 
 const project = { name: 'store', sources: [{ name: 'store', services: ['checkout', 'inventory', 'orders'] }] } as Project
 const environment = {
@@ -34,10 +35,15 @@ const qaEnvironment = { ...environment, name: 'qa-local', revision: 2, sources: 
 const stoppedEnvironment = { ...qaEnvironment, name: 'demo', status: 'stopped' } satisfies Environment
 
 describe('projects index page', () => {
-  it('uses the concise Projects title without initializing project management UI', () => {
+  it('uses a focused project registry without initializing project detail UI', () => {
     const markup = renderProjectIndex()
 
     expect(markup).toContain('<h1>Projects</h1>')
+    expect(markup).toContain('<div class="eyebrow">Workspace</div>')
+    expect(markup).toContain('The sidebar shows one project at a time. Use this page to find, switch, or forget projects.')
+    expect(markup).toContain('aria-label="Project registry controls"')
+    expect(markup).toContain('placeholder="Search"')
+    expect(markup).toContain('<span>all</span><strong>1</strong>')
     expect(markup).not.toContain('LOCAL CONTROL PLANE')
     expect(markup).not.toContain('Projects &amp; environments')
     expect(markup).not.toContain('CONTAINER RUNTIME')
@@ -48,13 +54,69 @@ describe('projects index page', () => {
   it('lists each project once instead of rendering one row per environment', () => {
     const markup = renderProjectIndex([environment, qaEnvironment])
 
-    expect(markup).toContain('<div class="panel-title"><span>PROJECTS</span></div>')
-    expect(markup.match(/class="table-row project-index-row"/g)).toHaveLength(1)
+    expect(markup).toContain('class="panel projects-table project-registry-table" aria-label="Projects"')
+    expect(markup).toContain('table-row project-registry-row project-registry-row--interactive')
+    expect(markup.match(/class="project-registry-row__project"/g)).toHaveLength(1)
     expect(markup).not.toContain('class="table-row environment-row"')
-    expect(markup).toContain('title="local, qa-local"')
-    expect(markup).toContain('<span>Last updated</span>')
-    expect(markup).not.toContain('<span>Why</span>')
-    expect(markup).toContain('<time dateTime=')
+    expect(markup).toContain('<span>Last opened</span>')
+    expect(markup).toContain('aria-label="Project actions for store"')
+    expect(markup).toContain('<time>never</time>')
+  })
+
+  it('sorts projects by most recently opened by default and exposes every column sort', () => {
+    const alpha = { name: 'alpha' } as Project
+    const middle = { name: 'middle' } as Project
+    const zulu = { name: 'zulu' } as Project
+    const navigation = {
+      ...emptyProjectNavigationPreferences(),
+      lastOpenedByProject: {
+        middle: '2026-08-20T12:00:00Z',
+        zulu: '2026-08-29T12:00:00Z',
+      },
+    }
+
+    const markup = renderProjectIndex([], navigation, [alpha, middle, zulu])
+
+    expect(markup).toContain('project-registry-row sortable-header-row is-default-sort')
+    expect(markup).toContain('aria-sort="descending"><span>Last opened</span><button class="sortable-column-sort-control" type="button" aria-label="Sort Last opened ascending"')
+    expect(markup).toContain('aria-label="Sort Project ascending"')
+    expect(markup).toContain('aria-label="Sort Runtime ascending"')
+    expect(markup).toContain('aria-label="Sort Environments ascending"')
+    expect(markup.indexOf('<strong>zulu</strong>')).toBeLessThan(markup.indexOf('<strong>middle</strong>'))
+    expect(markup.indexOf('<strong>middle</strong>')).toBeLessThan(markup.indexOf('<strong>alpha</strong>'))
+  })
+
+  it('sorts project rows by each registry column with project name as the stable tie-breaker', () => {
+    const rows = [
+      registryRow('bravo', 'healthy', 1, '2026-08-20T12:00:00Z'),
+      registryRow('alpha', 'stopped', 3, undefined),
+      { ...registryRow('charlie', 'failed', 2, '2026-08-29T12:00:00Z'), focused: true },
+    ]
+
+    expect(sortProjectRegistryRows(rows, { key: 'project', direction: 'asc' }).map((row) => row.project.name)).toEqual(['alpha', 'bravo', 'charlie'])
+    expect(sortProjectRegistryRows(rows, { key: 'runtime', direction: 'asc' }).map((row) => row.project.name)).toEqual(['charlie', 'bravo', 'alpha'])
+    expect(sortProjectRegistryRows(rows, { key: 'environments', direction: 'desc' }).map((row) => row.project.name)).toEqual(['alpha', 'charlie', 'bravo'])
+    expect(sortProjectRegistryRows(rows, { key: 'lastOpened', direction: 'desc' }).map((row) => row.project.name)).toEqual(['charlie', 'bravo', 'alpha'])
+  })
+
+  it('paginates the project registry after ten rows', () => {
+    const projects = Array.from({ length: 11 }, (_, index) => ({
+      name: `project-${String(index + 1).padStart(2, '0')}`,
+    } as Project))
+    const navigation = {
+      ...emptyProjectNavigationPreferences(),
+      lastOpenedByProject: Object.fromEntries(projects.map((item, index) => [item.name, new Date(Date.UTC(2026, 7, index + 1)).toISOString()])),
+    }
+
+    const markup = renderProjectIndex([], navigation, projects)
+
+    expect(markup).toContain('aria-label="projects pagination"')
+    expect(markup).toContain('1–10 of 11')
+    expect(markup.match(/class="project-registry-row__project"/g)).toHaveLength(10)
+    expect(markup).toContain('<strong>project-11</strong>')
+    expect(markup).not.toContain('<strong>project-01</strong>')
+    expect(markup).toContain('aria-label="Previous projects page" disabled=""')
+    expect(markup).toContain('aria-label="Next projects page"')
   })
 
   it('does not degrade a project because an intentionally stopped environment exists', () => {
@@ -65,12 +127,32 @@ describe('projects index page', () => {
   })
 
   it('keeps the empty state focused on setup instructions', () => {
-    const markup = renderToStaticMarkup(<ProjectsIndexPage projects={[]} environments={[]} onNavigate={() => undefined} />)
+    const markup = renderToStaticMarkup(<ProjectsIndexPage projects={[]} environments={[]} navigation={emptyProjectNavigationPreferences()} onOpenProject={() => undefined} onProjectHiddenChange={() => undefined} onForgetProject={async () => undefined} />)
 
     expect(markup).toContain('No projects yet')
     expect(markup).toContain('Start one repository or assemble several.')
     expect(markup).not.toContain('repository—or')
     expect(markup).not.toContain('empty-environment__graphic')
+  })
+
+  it('marks projects hidden from recents without removing them from the registry', () => {
+    const markup = renderProjectIndex([environment], { ...emptyProjectNavigationPreferences(), hiddenProjects: ['store'] })
+
+    expect(markup).toContain('<small>HIDDEN</small>')
+    expect(markup).toContain('<span>hidden</span><strong>1</strong>')
+    expect(markup).toContain('<strong>store</strong>')
+  })
+
+  it('previews retained state and blocks forgetting a running project', () => {
+    const markup = renderToStaticMarkup(<ForgetProjectDialog project={project} environments={[environment]} busy={false} error={null} onDismissError={() => undefined} onClose={() => undefined} onForget={async () => undefined} />)
+
+    expect(markup).toContain('role="alertdialog"')
+    expect(markup).toContain('<h2 id="forget-project-title">Forget store?</h2>')
+    expect(markup).toContain('Source files and checkouts on disk are not deleted.')
+    expect(markup).toContain('local · healthy')
+    expect(markup).toContain('Timelines, traffic, mocks, recordings, faults, and provider bindings')
+    expect(markup).toContain('Stop every environment first: local.')
+    expect(markup).toMatch(/<button class="button button--danger" type="button" disabled="">FORGET PROJECT<\/button>/)
   })
 })
 
@@ -184,8 +266,12 @@ describe('project overview page', () => {
   })
 })
 
-function renderProjectIndex(renderedEnvironments: Environment[] = [environment]) {
-  return renderToStaticMarkup(<ProjectsIndexPage projects={[project]} environments={renderedEnvironments} onNavigate={() => undefined} />)
+function renderProjectIndex(renderedEnvironments: Environment[] = [environment], navigation: ProjectNavigationPreferences = emptyProjectNavigationPreferences(), projects: Project[] = [project]) {
+  return renderToStaticMarkup(<ProjectsIndexPage projects={projects} environments={renderedEnvironments} navigation={navigation} onOpenProject={() => undefined} onProjectHiddenChange={() => undefined} onForgetProject={async () => undefined} />)
+}
+
+function registryRow(name: string, status: Environment['status'], environmentCount: number, openedAt?: string) {
+  return { project: { name } as Project, status, environmentNames: '', sourceCount: 0, serviceCount: 0, running: status !== 'stopped', openedAt, environmentCount, focused: false }
 }
 
 function renderProjectOverview(renderedEnvironments: Environment[] = [environment], renderedProject: Project = project) {

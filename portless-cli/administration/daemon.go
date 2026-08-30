@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/runportless/portless/portless-cli/command"
+	apiclient "github.com/runportless/portless/portless-daemon/api/client"
 	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/control"
 )
@@ -205,7 +207,7 @@ func daemonRestartJSONOutput(result control.RestartResult) daemonRestartOutput {
 func (c *Commands) restartDaemon(ctx context.Context, force, jsonOutput bool) error {
 	result, err := c.Daemon.Restart(ctx, control.RestartOptions{Force: force})
 	if err != nil {
-		return err
+		return actionableDaemonRestartError(err)
 	}
 	if jsonOutput {
 		return command.WriteJSON(c.Out, daemonRestartJSONOutput(result))
@@ -215,6 +217,93 @@ func (c *Commands) restartDaemon(ctx context.Context, force, jsonOutput bool) er
 		printForcedDaemonWarning(c, control.StopResult{Forced: true, ActiveEnvironments: result.Restart.ActiveEnvironments})
 	}
 	return nil
+}
+
+func actionableDaemonRestartError(err error) error {
+	var clientError *apiclient.ClientError
+	if !errors.As(err, &clientError) || clientError.Code != "HANDOFF_UNAVAILABLE" {
+		return err
+	}
+	blocking := clientErrorDetailStrings(clientError.Details, "blockingEnvironments")
+	if len(blocking) == 0 {
+		active := clientErrorDetailStrings(clientError.Details, "activeEnvironments")
+		blocking = blockingRestartEnvironments(active, clientErrorDetailStrings(clientError.Details, "problems"))
+	}
+	if len(blocking) == 0 {
+		return err
+	}
+	if clientError.Details == nil {
+		clientError.Details = make(map[string]any)
+	}
+	clientError.Details["blockingEnvironments"] = append([]string(nil), blocking...)
+	clientError.Message = actionableDaemonRestartMessage(blocking)
+	clientError.Remediation = actionableDaemonRestartRemediation(blocking)
+	return err
+}
+
+func clientErrorDetailStrings(details map[string]any, key string) []string {
+	if details == nil {
+		return nil
+	}
+	switch values := details[key].(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func blockingRestartEnvironments(active, problems []string) []string {
+	matched := make(map[string]bool, len(active))
+	unscopedProblem := false
+	for _, problem := range problems {
+		problemMatched := false
+		for _, environment := range active {
+			if strings.HasPrefix(problem, environment+"/") || strings.HasPrefix(problem, environment+":") {
+				matched[environment] = true
+				problemMatched = true
+			}
+		}
+		if !problemMatched {
+			unscopedProblem = true
+		}
+	}
+	if unscopedProblem || len(matched) == 0 {
+		return append([]string(nil), active...)
+	}
+	blocking := make([]string, 0, len(matched))
+	for _, environment := range active {
+		if matched[environment] {
+			blocking = append(blocking, environment)
+		}
+	}
+	return blocking
+}
+
+func actionableDaemonRestartMessage(environments []string) string {
+	if len(environments) == 1 {
+		return fmt.Sprintf("Safe daemon restart is blocked by environment %s. Stop it, then retry.", environments[0])
+	}
+	return fmt.Sprintf("Safe daemon restart is blocked by these environments: %s. Stop them, then retry.", strings.Join(environments, ", "))
+}
+
+func actionableDaemonRestartRemediation(environments []string) []contract.Remediation {
+	remediation := make([]contract.Remediation, 0, len(environments)+2)
+	for _, environment := range environments {
+		remediation = append(remediation, contract.Remediation{Label: "Stop " + environment, Command: "portless down --env " + environment})
+	}
+	return append(remediation,
+		contract.Remediation{Label: "Retry daemon restart", Command: "portless daemon restart"},
+		contract.Remediation{Label: "Diagnose Portless", Command: "portless doctor"},
+	)
 }
 
 func printForcedDaemonWarning(c *Commands, result control.StopResult) {

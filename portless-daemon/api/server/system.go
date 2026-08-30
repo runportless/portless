@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -115,21 +116,21 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 		writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "DAEMON_INSTANCE_REQUIRED", Message: "instanceId is required"})
 		return
 	}
+	if input.Force && !principal.Session {
+		writeAPIError(writer, http.StatusForbidden, contract.APIError{Code: "BROWSER_SESSION_REQUIRED", Message: "forced daemon restart is available only from the authenticated Portless control plane"})
+		return
+	}
 	reason := "cli"
 	if principal.Session {
 		reason = "browser"
 	} else if principal.Actor == "MCP" {
 		reason = "mcp"
 	}
-	result, err := s.daemonControl.Restart(request.Context(), input.InstanceID, reason)
+	result, err := s.daemonControl.Restart(request.Context(), input.InstanceID, reason, input.Force)
 	if err != nil {
 		var lifecycleError *contract.DaemonControlError
 		if errors.As(err, &lifecycleError) {
-			details := map[string]any{
-				"activeEnvironments": nonNil(append([]string(nil), lifecycleError.ActiveEnvironments...)),
-				"problems":           nonNil(append([]string(nil), lifecycleError.Problems...)),
-			}
-			writeAPIError(writer, http.StatusConflict, contract.APIError{Code: lifecycleError.Code, Message: lifecycleError.Message, Details: details, Remediation: []contract.Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}})
+			writeAPIError(writer, http.StatusConflict, daemonRestartAPIError(lifecycleError))
 			return
 		}
 		writeAPIError(writer, http.StatusInternalServerError, contract.APIError{Code: "DAEMON_RESTART_FAILED", Message: err.Error(), Remediation: []contract.Remediation{{Label: "Restart from the CLI", Command: "portless daemon restart"}}})
@@ -141,6 +142,69 @@ func (s *Server) handleDaemon(writer http.ResponseWriter, request *http.Request,
 		flusher.Flush()
 	}
 	s.daemonControl.CommitRestart(result.RestartID)
+}
+
+func daemonRestartAPIError(input *contract.DaemonControlError) contract.APIError {
+	active := append([]string(nil), input.ActiveEnvironments...)
+	problems := append([]string(nil), input.Problems...)
+	details := map[string]any{
+		"activeEnvironments": nonNil(active),
+		"problems":           nonNil(problems),
+	}
+	message := input.Message
+	remediation := []contract.Remediation{{Label: "Diagnose Portless", Command: "portless doctor"}}
+	if input.Code == "HANDOFF_UNAVAILABLE" && len(active) > 0 {
+		blocking := blockingHandoffEnvironments(active, problems)
+		details["blockingEnvironments"] = nonNil(append([]string(nil), blocking...))
+		message = blockedDaemonRestartMessage(blocking)
+		remediation = blockedDaemonRestartRemediation(blocking)
+	}
+	return contract.APIError{Code: input.Code, Message: message, Details: details, Remediation: remediation}
+}
+
+func blockingHandoffEnvironments(active, problems []string) []string {
+	matched := make(map[string]bool, len(active))
+	unscopedProblem := false
+	for _, problem := range problems {
+		problemMatched := false
+		for _, environment := range active {
+			if strings.HasPrefix(problem, environment+"/") || strings.HasPrefix(problem, environment+":") {
+				matched[environment] = true
+				problemMatched = true
+			}
+		}
+		if !problemMatched {
+			unscopedProblem = true
+		}
+	}
+	if unscopedProblem || len(matched) == 0 {
+		return append([]string(nil), active...)
+	}
+	blocking := make([]string, 0, len(matched))
+	for _, environment := range active {
+		if matched[environment] {
+			blocking = append(blocking, environment)
+		}
+	}
+	return blocking
+}
+
+func blockedDaemonRestartMessage(environments []string) string {
+	if len(environments) == 1 {
+		return fmt.Sprintf("Safe daemon restart is blocked by environment %s. Stop it, then retry.", environments[0])
+	}
+	return fmt.Sprintf("Safe daemon restart is blocked by these environments: %s. Stop them, then retry.", strings.Join(environments, ", "))
+}
+
+func blockedDaemonRestartRemediation(environments []string) []contract.Remediation {
+	remediation := make([]contract.Remediation, 0, len(environments)+2)
+	for _, environment := range environments {
+		remediation = append(remediation, contract.Remediation{Label: "Stop " + environment, Command: "portless down --env " + environment})
+	}
+	return append(remediation,
+		contract.Remediation{Label: "Retry daemon restart", Command: "portless daemon restart"},
+		contract.Remediation{Label: "Diagnose Portless", Command: "portless doctor"},
+	)
 }
 
 func (s *Server) handleSystem(writer http.ResponseWriter, request *http.Request, segments []string, principal auth.Principal) {

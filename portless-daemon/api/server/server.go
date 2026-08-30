@@ -40,8 +40,9 @@ type DaemonControl interface {
 	Logs(context.Context) (contract.DaemonLogSnapshot, error)
 	// HandoffStatus performs a fresh runtime-adoption safety audit.
 	HandoffStatus(context.Context) (contract.DaemonHandoffStatus, error)
-	// Restart requests replacement of the identified daemon instance.
-	Restart(context.Context, string, string) (contract.DaemonRestart, error)
+	// Restart requests replacement of the identified daemon instance and may
+	// bypass a blocked handoff when force is explicitly authorized.
+	Restart(context.Context, string, string, bool) (contract.DaemonRestart, error)
 	// CommitRestart begins an accepted replacement after its response has been written.
 	CommitRestart(string)
 }

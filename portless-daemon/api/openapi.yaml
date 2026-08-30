@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.8.0
+  version: 12.9.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.8.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.9.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -133,13 +133,18 @@ paths:
     post:
       operationId: restartDaemon
       description: >-
-        Requests an authenticated daemon replacement without force. Active
-        environments must pass runtime handoff checks. Browser sessions remain
-        valid across the replacement. A successful response is a restart
-        receipt with one shared five-second readiness deadline; clients
-        reconnect by observing a different ready instanceId. Concurrent CLI,
-        browser, MCP, and executable-change triggers coalesce into one
-        replacement.
+        Requests an authenticated daemon replacement. Active environments must
+        pass runtime handoff checks unless an authenticated browser session
+        explicitly sends force after its fresh handoff audit reports blocked.
+        A forced browser request still verifies the exact daemon instance and
+        active-environment inventory, but may return handoff false when it
+        bypasses the blocked adoption check. Browser sessions remain valid
+        across the replacement. A successful response is a restart receipt
+        with one shared five-second readiness deadline; clients reconnect by
+        observing a different ready instanceId. Concurrent CLI, browser, MCP,
+        and executable-change triggers coalesce into one replacement. A blocked
+        ordinary handoff response identifies the environments responsible and
+        provides stop-then-retry remediation commands.
       requestBody:
         required: true
         content:
@@ -149,12 +154,14 @@ paths:
               required: [instanceId]
               properties:
                 instanceId: { type: string }
+                force: { type: boolean, default: false, description: Browser-session-only recovery that permits replacement when a fresh runtime handoff audit is blocked. }
       responses:
         '202':
           description: Replacement accepted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DaemonRestart' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
   /relay:
     get:
@@ -1248,6 +1255,11 @@ components:
       description: Maximum newest matching entries to return; defaults to 500.
       schema: { type: integer, minimum: 1, maximum: 10000 }
   responses:
+    Forbidden:
+      description: Authenticated caller is not authorized for this operation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     NotFound:
       description: Named resource not found
       content:
@@ -1310,7 +1322,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.8.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.9.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1421,7 +1433,7 @@ components:
         targetBuildId: { type: string, description: SHA-256 identity of the executable the replacement will run. }
         acceptedAt: { type: string, format: date-time }
         deadlineAt: { type: string, format: date-time, description: Ready-state deadline five seconds after restart acceptance. }
-        handoff: { type: boolean, const: true }
+        handoff: { type: boolean, description: True when every active runtime passed adoption safety checks; false only for an explicitly confirmed browser force restart. }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonRestartStatus:
       type: object

@@ -249,7 +249,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("relay status response code=%d body=%s", relayStatus.Code, relayStatus.Body.String())
 	}
 	daemonRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, true)
-	if daemonRestart.Code != http.StatusAccepted || !strings.Contains(daemonRestart.Body.String(), `"restarting":true`) || !strings.Contains(daemonRestart.Body.String(), `"deadlineAt":`) || daemonControl.restartedInstance != "instance-current" || daemonControl.restartedReason != "cli" || daemonControl.committedRestart == "" {
+	if daemonRestart.Code != http.StatusAccepted || !strings.Contains(daemonRestart.Body.String(), `"restarting":true`) || !strings.Contains(daemonRestart.Body.String(), `"deadlineAt":`) || daemonControl.restartedInstance != "instance-current" || daemonControl.restartedReason != "cli" || daemonControl.restartedForce || daemonControl.committedRestart == "" {
 		t.Fatalf("daemon restart response code=%d body=%s restarted=%q", daemonRestart.Code, daemonRestart.Body.String(), daemonControl.restartedInstance)
 	}
 	staleRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"stale"}`, true)
@@ -269,8 +269,16 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("browser restart without CSRF returned %d body=%s", missingCSRF.Code, missingCSRF.Body.String())
 	}
 	browserRestart := requestBrowser(server, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, sessionToken, csrf)
-	if browserRestart.Code != http.StatusAccepted || daemonControl.restartedReason != "browser" {
+	if browserRestart.Code != http.StatusAccepted || daemonControl.restartedReason != "browser" || daemonControl.restartedForce {
 		t.Fatalf("browser restart with CSRF returned %d body=%s", browserRestart.Code, browserRestart.Body.String())
+	}
+	forcedBrowserRestart := requestBrowser(server, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current","force":true}`, sessionToken, csrf)
+	if forcedBrowserRestart.Code != http.StatusAccepted || daemonControl.restartedReason != "browser" || !daemonControl.restartedForce || !strings.Contains(forcedBrowserRestart.Body.String(), `"handoff":false`) {
+		t.Fatalf("forced browser restart returned %d body=%s", forcedBrowserRestart.Code, forcedBrowserRestart.Body.String())
+	}
+	forcedCLIRestart := request(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current","force":true}`, true)
+	if forcedCLIRestart.Code != http.StatusForbidden || !strings.Contains(forcedCLIRestart.Body.String(), `"code":"BROWSER_SESSION_REQUIRED"`) {
+		t.Fatalf("forced CLI API restart returned %d body=%s", forcedCLIRestart.Code, forcedCLIRestart.Body.String())
 	}
 	mcpRestart := requestClientKind(server, authManager, http.MethodPost, "/api/v1/daemon/restart", `{"instanceId":"instance-current"}`, string(contract.ClientKindMCP))
 	if mcpRestart.Code != http.StatusAccepted || daemonControl.restartedReason != "mcp" {
@@ -404,6 +412,7 @@ type fakeDaemonControl struct {
 	handoffCalls       int
 	restartedInstance  string
 	restartedReason    string
+	restartedForce     bool
 	committedRestart   string
 }
 
@@ -430,18 +439,19 @@ func (f *fakeDaemonControl) HandoffStatus(context.Context) (contract.DaemonHando
 	return f.handoff, nil
 }
 
-func (f *fakeDaemonControl) Restart(_ context.Context, instanceID, reason string) (contract.DaemonRestart, error) {
+func (f *fakeDaemonControl) Restart(_ context.Context, instanceID, reason string, force bool) (contract.DaemonRestart, error) {
 	if instanceID != f.identity.InstanceID {
 		return contract.DaemonRestart{}, &contract.DaemonControlError{Code: "DAEMON_INSTANCE_CHANGED", Message: "daemon instance changed"}
 	}
 	f.restartedInstance = instanceID
 	f.restartedReason = reason
+	f.restartedForce = force
 	acceptedAt := time.Now().UTC()
 	return contract.DaemonRestart{
 		Restarting: true, RestartID: "restart-" + reason, Reason: reason,
 		PreviousInstanceID: instanceID, TargetBuildID: f.identity.BuildID,
 		AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-		Handoff: true, ActiveEnvironments: append([]string(nil), f.identity.ActiveEnvironments...),
+		Handoff: !force, ActiveEnvironments: append([]string(nil), f.identity.ActiveEnvironments...),
 	}, nil
 }
 
@@ -507,6 +517,35 @@ func TestDirectorySelectionRequiresABrowserSessionAndHandlesCancellation(t *test
 	unavailable := requestBrowser(server, http.MethodPost, "/api/v1/system/directories/select", `{"initialPath":""}`, sessionToken, csrf)
 	if unavailable.Code != http.StatusServiceUnavailable || !strings.Contains(unavailable.Body.String(), `"code":"DIRECTORY_PICKER_UNAVAILABLE"`) {
 		t.Fatalf("unavailable directory selection code=%d body=%s", unavailable.Code, unavailable.Body.String())
+	}
+}
+
+func TestDaemonRestartHandoffErrorNamesTheEnvironmentToStop(t *testing.T) {
+	result := daemonRestartAPIError(&contract.DaemonControlError{
+		Code:               "HANDOFF_UNAVAILABLE",
+		Message:            "active environments cannot be safely handed off",
+		ActiveEnvironments: []string{"store/local", "store/qa-local"},
+		Problems:           []string{"store/qa-local/external:orders-redis: public TCP endpoint is not listening"},
+	})
+	if result.Message != "Safe daemon restart is blocked by environment store/qa-local. Stop it, then retry." {
+		t.Fatalf("restart message = %q", result.Message)
+	}
+	blocking, ok := result.Details["blockingEnvironments"].([]string)
+	if !ok || strings.Join(blocking, ",") != "store/qa-local" {
+		t.Fatalf("blocking environments = %#v", result.Details["blockingEnvironments"])
+	}
+	commands := make([]string, 0, len(result.Remediation))
+	for _, remediation := range result.Remediation {
+		commands = append(commands, remediation.Command)
+	}
+	joined := strings.Join(commands, "\n")
+	for _, expected := range []string{"portless down --env store/qa-local", "portless daemon restart", "portless doctor"} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("restart remediation does not contain %q:\n%s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "portless down --env store/local") {
+		t.Fatalf("restart remediation stops a handoff-ready environment:\n%s", joined)
 	}
 }
 

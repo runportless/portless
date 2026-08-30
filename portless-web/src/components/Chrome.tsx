@@ -2,24 +2,26 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
+import type { ProjectNavigationPreferences } from '../features/projects/projectNavigation'
 import { DaemonDrawer } from './DaemonDrawer'
-import { StatusMark } from './Status'
+import { ProjectContextNav } from './ProjectContextNav'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
 export type EnvironmentView = 'overview' | 'topology' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'bindings' | 'timeline'
 export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
-const expandedProjectsKey = 'portless.expanded-projects'
 const sidebarCollapsedKey = 'portless.sidebar-collapsed'
 
-export function AppChrome({ projects, environments, activeProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, sidebarProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', navigation, runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, onSwitchProject, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
+  sidebarProject?: Project
   activeEnvironment?: Environment
   activeView: EnvironmentView
   settingsActive?: boolean
   settingsView?: SettingsView
+  navigation: ProjectNavigationPreferences
   runtime?: RuntimeStatus | null
   daemon: DaemonStatus | null
   diagnostics: DaemonDiagnostics | null
@@ -27,33 +29,19 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
   relay?: RelayStatus | null
   children: ReactNode
   onNavigate: (path: string) => void
+  onSwitchProject: (project: Project) => void
   onSettingsToggle: () => void
   commands: Command[]
   live?: boolean
   onDaemonRefresh: () => Promise<DaemonStatus>
   onDaemonDiagnosticsRefresh: (includeStorage?: boolean) => Promise<DaemonDiagnostics>
   onDaemonHandoffVerify: () => Promise<DaemonHandoffStatus>
-  onDaemonRestart: (instanceId: string) => Promise<DaemonRestart>
+  onDaemonRestart: (instanceId: string, force?: boolean) => Promise<DaemonRestart>
   onDaemonReconnected: () => Promise<void>
 }) {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [daemonOpen, setDaemonOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed)
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(readExpandedProjects)
-  const scopedProject = activeEnvironment?.project ?? activeProject?.name
-
-  useEffect(() => {
-    if (!scopedProject) return
-    setExpandedProjects((current) => {
-      if (current.has(scopedProject)) return current
-      return new Set([...current, scopedProject])
-    })
-  }, [scopedProject])
-
-  useEffect(() => {
-    try { window.sessionStorage.setItem(expandedProjectsKey, JSON.stringify([...expandedProjects])) }
-    catch { /* Disclosure state can remain in memory when storage is unavailable. */ }
-  }, [expandedProjects])
 
   useEffect(() => {
     try { window.localStorage.setItem(sidebarCollapsedKey, sidebarCollapsed ? 'true' : 'false') }
@@ -71,25 +59,12 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
     return () => window.removeEventListener('keydown', keydown)
   }, [])
   const allCommands = useMemo<Command[]>(() => [
-    ...projects.map((project) => ({ group: 'Projects', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onNavigate(`/projects/${encodeURIComponent(project.name)}`) })),
+    ...projects.map((project) => ({ group: 'Switch project', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onSwitchProject(project) })),
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
     { group: 'System', label: 'Configure MCP', detail: activeEnvironment ? `${activeEnvironment.project}/${activeEnvironment.name}` : 'AI client access', run: () => onNavigate(mcpSettingsRoute(activeEnvironment)) },
     { group: 'System', label: 'Settings', detail: 'Appearance, runtime, and MCP', run: onSettingsToggle },
-  ], [activeEnvironment, commands, environments, onNavigate, onSettingsToggle, projects])
-
-  const expandProject = (name: string) => {
-    setExpandedProjects((current) => current.has(name) ? current : new Set([...current, name]))
-  }
-
-  const toggleProject = (name: string) => {
-    setExpandedProjects((current) => {
-      const next = new Set(current)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-  }
+  ], [activeEnvironment, commands, environments, onNavigate, onSettingsToggle, onSwitchProject, projects])
 
   const inspectDaemon = () => {
     setPaletteOpen(false)
@@ -108,27 +83,7 @@ export function AppChrome({ projects, environments, activeProject, activeEnviron
         <button className="sidebar__collapse" type="button" aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} aria-expanded={!sidebarCollapsed} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} onClick={() => setSidebarCollapsed((value) => !value)}><SidebarCollapseIcon collapsed={sidebarCollapsed} /></button>
       </div>
       <div className="sidebar__body">
-        <div className="sidebar__section-label">Projects</div>
-        <nav className="project-nav" aria-label="Projects">
-          {projects.map((project) => {
-            const expanded = expandedProjects.has(project.name)
-            const selected = activeProject?.name === project.name && !activeEnvironment
-            const projectEnvironments = environments.filter((item) => item.project === project.name)
-            return <div className="project-nav__branch" key={project.name}>
-              <div className={selected ? 'project-nav__row is-active' : 'project-nav__row'}>
-                <button className="project-nav__disclosure" type="button" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${project.name}`} aria-expanded={expanded} onClick={() => toggleProject(project.name)}><ChevronIcon expanded={expanded} /></button>
-                <button className="project-nav__project-link" type="button" aria-label={`${project.name} project, ${projectEnvironments.length} ${projectEnvironments.length === 1 ? 'environment' : 'environments'}`} aria-current={selected ? 'page' : undefined} title={sidebarCollapsed ? project.name : undefined} onClick={() => { expandProject(project.name); onNavigate(`/projects/${encodeURIComponent(project.name)}`) }}><ProjectIcon /><span>{project.name}</span><small>{projectEnvironments.length} env</small></button>
-              </div>
-              {expanded && <div className="project-nav__children">{projectEnvironments.map((environment) => {
-                const environmentSelected = activeEnvironment?.project === environment.project && activeEnvironment.name === environment.name
-                return <button key={environment.name} className={environmentSelected ? 'project-nav__item project-nav__item--child is-active' : 'project-nav__item project-nav__item--child'} aria-label={`${environment.project}/${environment.name}, ${environment.status}`} aria-current={environmentSelected ? 'page' : undefined} title={sidebarCollapsed ? `${environment.project}/${environment.name}` : undefined} onClick={() => onNavigate(environmentRoute(environment))}>
-                  <span className="project-nav__environment-icon"><EnvironmentIcon /><StatusMark status={environment.status} label={false} /></span><span>{environment.name}</span><small>{environment.status}</small>
-                </button>
-              })}</div>}
-            </div>
-          })}
-          {projects.length === 0 && <div className="sidebar__empty">Run <code>portless up</code> or create a multi-source project.</div>}
-        </nav>
+        <ProjectContextNav projects={projects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} navigation={navigation} collapsed={sidebarCollapsed} onNavigate={onNavigate} onSwitchProject={onSwitchProject} />
         {activeEnvironment && <>
           <div className="sidebar__section-label sidebar__section-label--context"><span>Environment</span><small title={`${activeEnvironment.project}/${activeEnvironment.name}`}>{activeEnvironment.project}/{activeEnvironment.name}</small></div>
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>
@@ -223,20 +178,11 @@ export function scrollCommandIntoView(command: Pick<Element, 'scrollIntoView'> |
 function environmentRoute(environment: Pick<Environment, 'project' | 'name'>) { return `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}` }
 function environmentViewRoute(environment: Pick<Environment, 'project' | 'name'>, view: EnvironmentView) { const base = environmentRoute(environment); return view === 'overview' ? base : `${base}?tab=${view}` }
 function mcpSettingsRoute(environment?: Pick<Environment, 'project' | 'name'>) { return environment ? `/settings?tab=mcp&env=${encodeURIComponent(`${environment.project}/${environment.name}`)}` : '/settings?tab=mcp' }
-function readExpandedProjects() {
-  try {
-    const stored = JSON.parse(window.sessionStorage.getItem(expandedProjectsKey) ?? '[]')
-    return new Set<string>(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === 'string') : [])
-  } catch { return new Set<string>() }
-}
 function readSidebarCollapsed() {
   try { return window.localStorage.getItem(sidebarCollapsedKey) === 'true' }
   catch { return false }
 }
-function ChevronIcon({ expanded }: { expanded: boolean }) { return <svg className={expanded ? 'is-expanded' : ''} viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2.5 3.5 3.5L4 9.5" /></svg> }
 function SidebarCollapseIcon({ collapsed }: { collapsed: boolean }) { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d={collapsed ? 'm6 3 5 5-5 5' : 'm10 3-5 5 5 5'} /></svg> }
-function ProjectIcon() { return <svg className="project-nav__project-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4l1.3 1.7H14v6.3H2z" /><path d="M2 4.5V3h4.6l1.2 1.5H14v1.7" /></svg> }
-function EnvironmentIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m8 1.8 5.3 3.1v6.2L8 14.2l-5.3-3.1V4.9z" /><path d="m2.9 5 5.1 3 5.1-3M8 8v6" /></svg> }
 function GridIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" /><rect x="9" y="2" width="5" height="5" /><rect x="2" y="9" width="5" height="5" /><rect x="9" y="9" width="5" height="5" /></svg> }
 function TopologyIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.5" /><circle cx="10.5" cy="3.5" r="1.5" /><circle cx="13" cy="11.5" r="1.5" /><path d="m4.5 7.1 4.6-2.7M4.5 8.7l7 2.3M11.2 5l1.2 5" /></svg> }
 function LinkIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 5.5 5 4a3 3 0 0 0-4 4l2 2a3 3 0 0 0 4 0l1-1"/><path d="m9.5 10.5 1.5 1.5a3 3 0 0 0 4-4l-2-2a3 3 0 0 0-4 0L8 7"/></svg> }

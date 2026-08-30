@@ -76,7 +76,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
     <nav className="tabs" aria-label="Environment views">
       {environmentTabs.map((name) => <button key={name} className={tab === name ? 'is-active' : ''} onClick={() => navigateTab(name)}>{name}<small>{name === 'recordings' ? activity.recordings.length : name === 'faults' ? activeFaults.length : ''}</small></button>)}
     </nav>
-    {tab === 'overview' && <OverviewPanel environment={environment} timeline={activity.timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onNavigate={navigateTab} />}
+    {tab === 'overview' && <OverviewPanel environment={environment} timeline={activity.timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onNavigate={navigateTab} onChanged={onChanged} />}
     {tab === 'topology' && <TopologyPanel environment={environment} faults={activeFaults} onService={setSelectedService} onEdge={(edge) => navigateTab('traffic', { edge: `${edge.source}:${edge.target}`, protocol: edge.protocol === 'http' ? 'http' : 'tcp' })} />}
     {tab === 'bindings' && <BindingsPanel environment={environment} project={project} onNavigate={onNavigate} onChanged={onChanged} />}
     {tab === 'traffic' && <TrafficPanel environment={environment} />}

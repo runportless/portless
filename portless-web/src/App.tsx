@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, APIError, environmentPath, eventStreamHealth, jsonBody, setCSRF, subscribeEventStreamHealth } from './api'
+import { api, APIError, environmentPath, eventStreamHealth, jsonBody, projectPath, setCSRF, subscribeEventStreamHealth } from './api'
 import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
 import { DAEMON_RESTART_SLA_MS } from './daemonRestart'
 import { EnvironmentPage } from './features/environment/EnvironmentPage'
 import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
 import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
+import { initialProjectDestination, projectDestination, pruneProjectNavigationPreferences, readProjectNavigationPreferences, recordProjectVisit, removeProjectNavigationPreferences, setProjectHidden, sidebarProjectFor, writeProjectNavigationPreferences } from './features/projects/projectNavigation'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
 import type { Environment, EnvironmentList, Operation } from './api/contracts/environments'
@@ -30,6 +31,7 @@ export function App() {
   const [live, setLive] = useState(true)
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference)
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(readThemePreference()))
+  const [projectNavigation, setProjectNavigation] = useState(readProjectNavigationPreferences)
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -160,12 +162,52 @@ export function App() {
 
   const parsed = parseRoute(route)
   const activeProject = parsed.project ? projects.find((project) => project.name === parsed.project) : undefined
+  const activeProjectName = activeProject?.name
   const activeEnvironment = parsed.project && parsed.environment
     ? environments.find((environment) => environment.project === parsed.project && environment.name === parsed.environment)
     : undefined
+  const sidebarProject = sidebarProjectFor(projects, activeProject, projectNavigation)
+
+  useEffect(() => {
+    if (loading) return
+    setProjectNavigation((current) => {
+      const next = pruneProjectNavigationPreferences(current, projects)
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next
+    })
+  }, [loading, projects])
+
+  useEffect(() => {
+    if (!activeProjectName) return
+    setProjectNavigation((current) => recordProjectVisit(current, activeProjectName, activeEnvironment?.name))
+  }, [activeEnvironment?.name, activeProjectName])
+
+  useEffect(() => writeProjectNavigationPreferences(projectNavigation), [projectNavigation])
+
+  useEffect(() => {
+    if (loading || !session || new URL(route, 'http://portless.localhost').pathname !== '/') return
+    const destination = initialProjectDestination(projects, environments, projectNavigation)
+    history.replaceState({}, '', destination)
+    settingsReturnRoute.current = destination
+    setRoute(destination)
+  }, [environments, loading, projectNavigation, projects, route, session])
+
   useEffect(() => {
     document.title = pageTitle(activeProject?.name)
   }, [activeProject?.name])
+
+  const switchProject = useCallback((project: Project) => {
+    navigate(projectDestination(project, environments, projectNavigation))
+  }, [environments, navigate, projectNavigation])
+
+  const changeProjectHidden = useCallback((project: string, hidden: boolean) => {
+    setProjectNavigation((current) => setProjectHidden(current, project, hidden))
+  }, [])
+
+  const forgetProject = useCallback(async (project: string) => {
+    await api(projectPath(project), { method: 'DELETE' })
+    setProjectNavigation((current) => removeProjectNavigationPreferences(current, project))
+    await refreshCore()
+  }, [refreshCore])
   const mutateEnvironment = useCallback(async (action: 'up' | 'down') => {
     if (!activeEnvironment) return
     await api<Operation>(environmentPath(activeEnvironment, `/${action}`), { method: 'POST', ...(action === 'down' ? jsonBody({ removeVolumes: false }) : {}) })
@@ -179,11 +221,11 @@ export function App() {
     const status = await api<RuntimeStatus>('/runtime/start', { method: 'POST' })
     setRuntimeStatus(status)
   }, [])
-  const restartDaemon = useCallback(async (instanceId: string) => {
+  const restartDaemon = useCallback(async (instanceId: string, force = false) => {
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), DAEMON_RESTART_SLA_MS)
     try {
-      return await api<DaemonRestart>('/daemon/restart', { method: 'POST', signal: controller.signal, ...jsonBody({ instanceId }) })
+      return await api<DaemonRestart>('/daemon/restart', { method: 'POST', signal: controller.signal, ...jsonBody({ instanceId, force }) })
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw new Error(`The daemon did not accept restart within the ${DAEMON_RESTART_SLA_MS / 1_000} second SLA.`)
       throw error
@@ -217,9 +259,9 @@ export function App() {
       ? <ProjectOverviewPage key={activeProject.name} project={activeProject} environments={environments} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
   } else {
-    content = <ProjectsIndexPage projects={projects} environments={environments} onNavigate={navigate} />
+    content = <ProjectsIndexPage projects={projects} environments={environments} focusedProject={sidebarProject?.name} navigation={projectNavigation} onOpenProject={switchProject} onProjectHiddenChange={changeProjectHidden} onForgetProject={forgetProject} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

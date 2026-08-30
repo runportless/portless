@@ -30,7 +30,7 @@ func newReplacementCoordinator() *replacementCoordinator {
 	return &replacementCoordinator{requests: make(chan replacementRequest, 1)}
 }
 
-func (c *replacementCoordinator) prepare(reason, previousInstanceID, targetBuildID string, acceptedAt time.Time, activeEnvironments []string, cause error) (contract.DaemonRestart, error) {
+func (c *replacementCoordinator) prepare(reason, previousInstanceID, targetBuildID string, acceptedAt time.Time, handoff bool, activeEnvironments []string, cause error) (contract.DaemonRestart, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.pending != nil {
@@ -49,7 +49,7 @@ func (c *replacementCoordinator) prepare(reason, previousInstanceID, targetBuild
 		Restarting: true, RestartID: restartID, Reason: reason,
 		PreviousInstanceID: previousInstanceID, TargetBuildID: targetBuildID,
 		AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-		Handoff: true, ActiveEnvironments: append([]string(nil), activeEnvironments...),
+		Handoff: handoff, ActiveEnvironments: append([]string(nil), activeEnvironments...),
 	}
 	c.pending = &replacementRequest{receipt: receipt, cause: cause}
 	return cloneDaemonRestart(receipt), nil

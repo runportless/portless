@@ -123,7 +123,7 @@ The CLI E2E suite protects these product contracts:
 The Playwright suite protects these browser journeys:
 
 - browser authentication and one-use claim consumption;
-- project, environment, persistent collapsible icon-rail sidebar, Settings return, and breadcrumb navigation;
+- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with hide and safe forget workflows, the persistent collapsible icon rail, Settings return, and breadcrumbs;
 - environment creation through the modal without duplicating project sources;
 - browser theme persistence;
 - services, copyable endpoints, topology edges, service details, and default-on
@@ -148,7 +148,8 @@ The Playwright suite protects these browser journeys:
 - keyboard topology inspection, command-palette navigation, runtime status,
   not-found routes, and automatic recovery from a failed control-plane poll;
 - daemon details, restart timing, and logs; full-screen drawer behavior;
-  five-second restart failure messaging, reconnect, and runtime adoption.
+  blocked-handoff stop guidance and force-restart confirmation; five-second
+  restart failure messaging, reconnect, and runtime adoption.
 
 ## Test-only ingress
 

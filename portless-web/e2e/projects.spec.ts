@@ -169,3 +169,172 @@ test('manages project sources separately from environment checkouts', async ({ p
   await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { name: state.environment, exact: true }).locator('..')).toContainText('healthy')
 })
+
+test('focuses the sidebar on one project while retaining searchable project history', async ({ page }) => {
+  const state = readE2EState()
+  const archivedProject = 'archive-ui'
+  const archivedCheckout = join(state.root, archivedProject)
+  mkdirSync(archivedCheckout, { recursive: true })
+  writeFileSync(join(archivedCheckout, 'package.json'), JSON.stringify({
+    name: archivedProject,
+    scripts: { start: 'node server.js' },
+    dependencies: { express: '1.0.0' },
+  }))
+  writeFileSync(join(archivedCheckout, 'server.js'), "require('http').createServer((_request, response) => response.end('archive')).listen(Number(process.env.PORT))\n")
+  await controlAPI('/api/v1/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: archivedProject, sources: [{ name: archivedProject, path: realpathSync(archivedCheckout) }] }),
+  })
+
+  await authenticate(page)
+  await page.reload()
+  const sidebar = page.locator('.sidebar')
+  await expect(page.getByRole('button', { name: `Current project ${state.project}. Switch project` })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: `${state.project} environments` })).toBeVisible()
+  await expect(sidebar).not.toContainText(archivedProject)
+  await expect(page.getByRole('button', { name: /other project.*running/i })).toBeVisible()
+
+  const currentProjectTrigger = page.getByRole('button', { name: `Current project ${state.project}. Switch project` })
+  await currentProjectTrigger.click()
+  let switcher = page.getByRole('dialog', { name: 'Switch project' })
+  await expect(switcher.getByLabel('Search projects')).toHaveAttribute('placeholder', 'Search')
+  await expect(switcher.getByText('RUNNING')).toBeVisible()
+  await expect(switcher.getByRole('option', { name: new RegExp(state.debugProject) })).toBeVisible()
+  await switcher.getByLabel('Search projects').press('Escape')
+  await expect(currentProjectTrigger).toBeFocused()
+  await currentProjectTrigger.click()
+  switcher = page.getByRole('dialog', { name: 'Switch project' })
+  await switcher.getByLabel('Search projects').fill(archivedProject)
+  await switcher.getByRole('option', { name: new RegExp(archivedProject) }).click()
+  await expect(page).toHaveURL(new RegExp(`/environments/${archivedProject}/local$`))
+  await expect(page.getByRole('button', { name: `Current project ${archivedProject}. Switch project` })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: `${archivedProject} environments` })).toBeVisible()
+  await expect(sidebar).not.toContainText(state.project)
+
+  await page.getByRole('button', { name: `Current project ${archivedProject}. Switch project` }).click()
+  switcher = page.getByRole('dialog', { name: 'Switch project' })
+  await switcher.getByLabel('Search projects').fill(state.project)
+  await switcher.getByRole('option', { name: new RegExp(state.project) }).click()
+  await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
+
+  await page.getByRole('button', { name: `Current project ${state.project}. Switch project` }).click()
+  switcher = page.getByRole('dialog', { name: 'Switch project' })
+  await expect(switcher.getByRole('option', { name: new RegExp(archivedProject) })).toBeVisible()
+  await switcher.getByRole('button', { name: 'Manage projects' }).click()
+  await expect(page).toHaveURL(/\/projects$/)
+  await expect(page.getByLabel('Search projects')).toHaveAttribute('placeholder', 'Search')
+
+  const projectRow = (name: string) => page.locator('.project-registry-row:not(.table-row--header)').filter({ hasText: name })
+  const projectNames = () => page.locator('.project-registry-row:not(.table-row--header) .project-registry-row__project strong').allTextContents()
+  const defaultNames = await projectNames()
+  expect(defaultNames).toEqual([state.project, archivedProject, state.debugProject])
+  await expect(page.getByRole('columnheader', { name: /Last opened/ })).toHaveAttribute('aria-sort', 'descending')
+
+  await page.getByRole('button', { name: 'Sort Project ascending' }).click()
+  expect(await projectNames()).toEqual([...defaultNames].sort())
+  await page.getByRole('button', { name: 'Sort Project descending' }).click()
+  expect(await projectNames()).toEqual([...defaultNames].sort().reverse())
+  await page.getByRole('button', { name: 'Sort Last opened ascending' }).click()
+  expect(await projectNames()).toEqual([state.debugProject, archivedProject, state.project])
+  await page.getByRole('button', { name: 'Sort Last opened descending' }).click()
+  expect(await projectNames()).toEqual(defaultNames)
+
+  await projectRow(state.project).locator('.project-registry-row__runtime').click()
+  await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
+  await page.goto(`${state.baseURL}/projects`)
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+
+  await projectRow(state.project).getByRole('button', { name: `Project actions for ${state.project}` }).click()
+  await expect(page.getByRole('menu', { name: `${state.project} actions` })).toBeVisible()
+  await page.getByRole('heading', { name: 'Projects' }).click()
+  await expect(page.getByRole('menu', { name: `${state.project} actions` })).toHaveCount(0)
+
+  await projectRow(state.project).getByRole('button', { name: `Project actions for ${state.project}` }).click()
+  await page.getByRole('menuitem', { name: 'FORGET PROJECT' }).click()
+  let forgetDialog = page.getByRole('alertdialog', { name: `Forget ${state.project}?` })
+  await expect(forgetDialog).toContainText(`Stop every environment first: ${state.environment}.`)
+  await expect(forgetDialog.getByRole('button', { name: 'FORGET PROJECT', exact: true })).toBeDisabled()
+  await forgetDialog.getByRole('button', { name: 'CANCEL' }).click()
+
+  await projectRow(archivedProject).getByRole('button', { name: `Project actions for ${archivedProject}` }).click()
+  await page.getByRole('menuitem', { name: 'HIDE FROM RECENT' }).click()
+  await page.getByRole('button', { name: /recent/i }).click()
+  await expect(projectRow(archivedProject)).toHaveCount(0)
+
+  await page.getByRole('button', { name: `Current project ${state.project}. Switch project` }).click()
+  switcher = page.getByRole('dialog', { name: 'Switch project' })
+  await switcher.getByLabel('Search projects').fill(archivedProject)
+  await expect(switcher.getByRole('option', { name: new RegExp(archivedProject) })).toContainText('HIDDEN')
+  await switcher.getByRole('button', { name: 'Close project switcher' }).click()
+
+  await page.getByRole('button', { name: /all/i }).click()
+  await page.getByLabel('Search projects').fill(archivedProject)
+  await projectRow(archivedProject).getByRole('button', { name: `Project actions for ${archivedProject}` }).click()
+  await page.getByRole('menuitem', { name: 'FORGET PROJECT' }).click()
+  forgetDialog = page.getByRole('alertdialog', { name: `Forget ${archivedProject}?` })
+  await expect(forgetDialog).toContainText('Source files and checkouts on disk are not deleted.')
+  await expect(forgetDialog.getByRole('button', { name: 'FORGET PROJECT', exact: true })).toBeEnabled()
+  await forgetDialog.getByRole('button', { name: 'FORGET PROJECT', exact: true }).click()
+  await expect(forgetDialog).toHaveCount(0)
+  await expect(projectRow(archivedProject)).toHaveCount(0)
+})
+
+test('paginates the project registry after ten rows and resets the page when controls change', async ({ page }) => {
+  const state = readE2EState()
+  const projectNames = Array.from({ length: 9 }, (_, index) => `pagination-ui-${String(index + 1).padStart(2, '0')}`)
+  const createdProjects: string[] = []
+  let cleanupFailure = ''
+
+  try {
+    for (const projectName of projectNames) {
+      const checkout = join(state.root, projectName)
+      mkdirSync(checkout, { recursive: true })
+      writeFileSync(join(checkout, 'package.json'), JSON.stringify({
+        name: projectName,
+        scripts: { start: 'node server.js' },
+        dependencies: { express: '1.0.0' },
+      }))
+      writeFileSync(join(checkout, 'server.js'), "require('http').createServer((_request, response) => response.end('pagination')).listen(Number(process.env.PORT))\n")
+      await controlAPI('/api/v1/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: projectName, sources: [{ name: projectName, path: realpathSync(checkout) }] }),
+      })
+      createdProjects.push(projectName)
+    }
+
+    await authenticate(page, '/projects')
+    const rows = page.locator('.project-registry-row:not(.table-row--header)')
+    const pagination = page.getByLabel('projects pagination')
+
+    await expect(rows).toHaveCount(10)
+    await expect(pagination).toContainText('1–10 of 11')
+    await expect(page.getByRole('button', { name: 'Previous projects page' })).toBeDisabled()
+
+    await page.getByRole('button', { name: 'Next projects page' }).click()
+    await expect(rows).toHaveCount(1)
+    await expect(pagination).toContainText('11–11 of 11')
+    await expect(page.getByRole('button', { name: 'Next projects page' })).toBeDisabled()
+
+    await page.getByRole('button', { name: 'Sort Project ascending' }).click()
+    await expect(rows).toHaveCount(10)
+    await expect(pagination).toContainText('1–10 of 11')
+
+    await page.getByRole('button', { name: 'Next projects page' }).click()
+    await expect(pagination).toContainText('11–11 of 11')
+    await page.getByLabel('Search projects').fill(projectNames[0])
+    await expect(rows).toHaveCount(1)
+    await expect(rows).toContainText(projectNames[0])
+    await expect(pagination).toHaveCount(0)
+  } finally {
+    for (const projectName of createdProjects.reverse()) {
+      const response = await fetch(`${state.baseURL}/api/v1/projects/${encodeURIComponent(projectName)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${state.token}` },
+      })
+      if (!response.ok && !cleanupFailure) cleanupFailure = `DELETE ${projectName}: ${response.status} ${await response.text()}`
+    }
+  }
+  expect(cleanupFailure).toBe('')
+})

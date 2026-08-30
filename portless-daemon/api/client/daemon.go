@@ -40,7 +40,8 @@ func (c *Client) DaemonHandoffStatus(ctx context.Context) (contract.DaemonHandof
 	return result, err
 }
 
-// RestartDaemon requests guarded replacement of one daemon instance.
+// RestartDaemon requests guarded replacement of one daemon instance. Browser
+// force recovery is intentionally outside the CLI-authenticated client.
 func (c *Client) RestartDaemon(ctx context.Context, instanceID string) (contract.DaemonRestart, error) {
 	var result contract.DaemonRestart
 	err := c.do(ctx, http.MethodPost, "/api/v1/daemon/restart", contract.DaemonRestartRequest{InstanceID: instanceID}, &result)

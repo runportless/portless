@@ -150,6 +150,10 @@ describe('environment topology', () => {
     expect(markup).toContain('title="Copy endpoint"')
     expect(markup).toContain('http://checkout.local.billing.localhost')
     expect(markup).toContain('class="service-copy-button"')
+    expect(markup).toContain('aria-label="View checkout details"')
+    expect(markup).toContain('aria-label="Service actions for checkout"')
+    expect(markup).not.toContain('>DETAILS</button>')
+    expect(markup).not.toContain('>INSPECT</button>')
     expect(markup).not.toContain('sortable-column-sort-control')
   })
 
@@ -542,6 +546,15 @@ describe('environment topology', () => {
     const topology = buildTopology(environment)
 
     expect(topology.edges).toEqual([{ source: 'external', target: 'checkout', protocol: 'http' }])
+  })
+
+  it('renders a topology when a stopped environment omits its empty connections', () => {
+    const environment = {
+      primaryService: 'checkout',
+      services: ['checkout'].map(service),
+    } as Environment
+
+    expect(buildTopology(environment).edges).toEqual([{ source: 'external', target: 'checkout', protocol: 'http' }])
   })
 
   it('places a shared dependency below its deepest caller', () => {

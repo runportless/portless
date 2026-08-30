@@ -34,7 +34,8 @@ test('keeps projects, environments, and breadcrumbs navigable', async ({ page })
   await breadcrumbs.getByRole('link', { name: 'projects' }).click()
   await expect(page).toHaveURL(/\/projects$/)
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
-  await expect(page.locator('.project-nav__project-link').filter({ hasText: state.project })).toBeVisible()
+  await expect(page.getByRole('button', { name: `Current project ${state.project}. Switch project` })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: `${state.project} environments` }).getByRole('button', { name: new RegExp(`${state.project}/${state.environment}`) })).toBeVisible()
   await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toHaveCount(0)
 })
@@ -90,19 +91,19 @@ test('collapses the sidebar into a persistent icon navigation rail', async ({ pa
 
   const shell = page.locator('.shell')
   const sidebar = page.locator('.sidebar')
-  const projectNavigation = page.getByRole('navigation', { name: 'Projects' })
+  const projectNavigation = page.getByRole('navigation', { name: `${state.project} environments` })
   const environmentViews = page.getByRole('navigation', { name: `${state.project}/${state.environment} views` })
   await page.getByRole('button', { name: 'Collapse navigation' }).click()
 
   await expect(shell).toHaveClass(/shell--sidebar-collapsed/)
   await expect(sidebar).toHaveCSS('width', '64px')
   await expect(page.locator('.brand__wordmark')).toBeHidden()
-  const project = projectNavigation.getByRole('button', { name: new RegExp(`${state.project} project`) })
+  const project = page.getByRole('button', { name: `Current project ${state.project}. Switch project` })
   const environment = projectNavigation.getByRole('button', { name: new RegExp(`${state.project}/${state.environment}`) })
   const topology = environmentViews.getByRole('button', { name: 'Topology' })
   for (const item of [project, environment, topology, page.getByRole('button', { name: 'Settings' })]) {
     await expect(item).toBeVisible()
-    await expect(item.locator('svg')).toBeVisible()
+    await expect(item.locator('svg').first()).toBeVisible()
   }
 
   await topology.click()

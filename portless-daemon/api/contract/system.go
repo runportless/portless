@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// DaemonRestartSLA is the end-to-end deadline for an authenticated normal
+// DaemonRestartSLA is the end-to-end deadline for an authenticated in-process
 // daemon replacement to publish a ready current-build instance.
 const DaemonRestartSLA = 5 * time.Second
 
@@ -158,9 +158,11 @@ type DaemonRestartStatus struct {
 	WithinSLA          bool      `json:"withinSla"`
 }
 
-// DaemonRestartRequest identifies the daemon instance the caller intends to restart.
+// DaemonRestartRequest identifies the daemon instance the caller intends to
+// restart and whether a browser recovery may bypass blocked runtime handoff.
 type DaemonRestartRequest struct {
 	InstanceID string `json:"instanceId"`
+	Force      bool   `json:"force,omitempty"`
 }
 
 // DaemonControlError is a structured refusal from a daemon lifecycle action.

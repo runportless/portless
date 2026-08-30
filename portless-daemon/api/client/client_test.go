@@ -136,6 +136,7 @@ func TestDoHonorsCancellationAndResponseLimit(t *testing.T) {
 
 func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 	requests := make(chan string, 6)
+	restartBodies := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests <- request.Method + " " + request.URL.RequestURI()
 		writer.Header().Set("Content-Type", "application/json")
@@ -153,6 +154,8 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 		case "/api/v1/daemon/handoff":
 			_, _ = io.WriteString(writer, `{"state":"ready","verifiedAt":"2026-08-25T12:00:01Z","problems":[],"activeEnvironments":["store/local"]}`)
 		case "/api/v1/daemon/restart":
+			body, _ := io.ReadAll(request.Body)
+			restartBodies <- strings.TrimSpace(string(body))
 			_, _ = io.WriteString(writer, `{"restarting":true,"restartId":"restart-id","reason":"cli","previousInstanceId":"instance","targetBuildId":"build","acceptedAt":"2026-08-25T12:00:01Z","deadlineAt":"2026-08-25T12:00:06Z","handoff":true,"activeEnvironments":["store/local"]}`)
 		default:
 			http.NotFound(writer, request)
@@ -189,5 +192,8 @@ func TestDaemonMethodsUseShallowStatusAndExplicitHandoffRoutes(t *testing.T) {
 		if actual := <-requests; actual != expected {
 			t.Fatalf("request = %q, want %q", actual, expected)
 		}
+	}
+	if body := <-restartBodies; body != `{"instanceId":"instance"}` {
+		t.Fatalf("normal restart body = %s", body)
 	}
 }

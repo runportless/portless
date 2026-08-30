@@ -72,11 +72,11 @@ func TestShutdownHTTPServersCancelsLongLivedRequestsWithinDrainBudget(t *testing
 func TestReplacementCoordinatorCoalescesAndCommitsOnce(t *testing.T) {
 	coordinator := newReplacementCoordinator()
 	acceptedAt := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
-	first, err := coordinator.prepare("cli", "old-instance", "new-build", acceptedAt, []string{"store/local"}, ErrRestartRequested)
+	first, err := coordinator.prepare("cli", "old-instance", "new-build", acceptedAt, true, []string{"store/local"}, ErrRestartRequested)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := coordinator.prepare("browser", "different-instance", "different-build", acceptedAt.Add(time.Second), nil, ErrExecutableChanged)
+	second, err := coordinator.prepare("browser", "different-instance", "different-build", acceptedAt.Add(time.Second), false, nil, ErrExecutableChanged)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +85,9 @@ func TestReplacementCoordinatorCoalescesAndCommitsOnce(t *testing.T) {
 	}
 	if !first.DeadlineAt.Equal(first.AcceptedAt.Add(contract.DaemonRestartSLA)) {
 		t.Fatalf("restart deadline = %s, want accepted + %s", first.DeadlineAt, contract.DaemonRestartSLA)
+	}
+	if !first.Handoff || !second.Handoff {
+		t.Fatalf("coalesced receipt changed handoff strategy: first=%#v second=%#v", first, second)
 	}
 	if coordinator.commit("wrong-restart") {
 		t.Fatal("coordinator committed a different restart")
@@ -99,6 +102,17 @@ func TestReplacementCoordinatorCoalescesAndCommitsOnce(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("committed replacement was not delivered")
+	}
+}
+
+func TestReplacementCoordinatorRecordsForcedHandoffBypass(t *testing.T) {
+	coordinator := newReplacementCoordinator()
+	receipt, err := coordinator.prepare("browser", "old-instance", "new-build", time.Now(), false, []string{"store/local"}, ErrRestartRequested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Handoff || strings.Join(receipt.ActiveEnvironments, ",") != "store/local" {
+		t.Fatalf("forced replacement receipt = %#v", receipt)
 	}
 }
 

@@ -182,8 +182,11 @@ func TestLifecycleIdentityRemainsAvailableWhenApplicationInventoryFails(t *testi
 	if response := shutdown(true); response.Code != http.StatusAccepted || shutdowns.Load() != 1 {
 		t.Fatalf("forced shutdown returned %d and scheduled %d shutdowns: %s", response.Code, shutdowns.Load(), response.Body.String())
 	}
-	if _, err := handler.Restart(context.Background(), "instance"); err == nil {
+	if _, err := handler.Restart(context.Background(), "instance", false); err == nil {
 		t.Fatal("browser restart accepted unavailable application inventory")
+	}
+	if _, err := handler.Restart(context.Background(), "instance", true); err == nil {
+		t.Fatal("forced browser restart accepted unavailable application inventory")
 	}
 }
 
@@ -202,7 +205,7 @@ func TestLifecycleHandlerGuardsBrowserRestart(t *testing.T) {
 		},
 	})
 
-	if _, err := handler.Restart(context.Background(), "other-instance"); err == nil {
+	if _, err := handler.Restart(context.Background(), "other-instance", false); err == nil {
 		t.Fatal("restart accepted a stale daemon instance")
 	} else {
 		var lifecycleError *lifecycle.LifecycleError
@@ -210,7 +213,7 @@ func TestLifecycleHandlerGuardsBrowserRestart(t *testing.T) {
 			t.Fatalf("stale restart error = %#v, want DAEMON_INSTANCE_CHANGED", err)
 		}
 	}
-	if _, err := handler.Restart(context.Background(), "instance"); err == nil {
+	if _, err := handler.Restart(context.Background(), "instance", false); err == nil {
 		t.Fatal("restart accepted an unsafe active handoff")
 	} else {
 		var lifecycleError *lifecycle.LifecycleError
@@ -218,8 +221,15 @@ func TestLifecycleHandlerGuardsBrowserRestart(t *testing.T) {
 			t.Fatalf("unsafe restart error = %#v", err)
 		}
 	}
+	forced, err := handler.Restart(context.Background(), "instance", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !forced.Stopping || forced.Handoff || forced.InstanceID != "instance" || strings.Join(forced.ActiveEnvironments, ",") != "billing/local" {
+		t.Fatalf("unexpected forced restart result: %#v", forced)
+	}
 	handoffReady = true
-	result, err := handler.Restart(context.Background(), "instance")
+	result, err := handler.Restart(context.Background(), "instance", false)
 	if err != nil {
 		t.Fatal(err)
 	}
