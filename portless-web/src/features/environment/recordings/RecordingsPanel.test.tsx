@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
-import { createRecordingDefaults, formatRecordingDuration, RecordingHistoryRepeatButton, RecordingsPanel, startRecordingDurationTimer } from './RecordingsPanel'
+import { createRecordingDefaults, formatRecordingDuration, RecordingHistoryRepeatButton, RecordingsPanel, sortRecordingHistory, startRecordingDurationTimer } from './RecordingsPanel'
 
 const environment: Environment = {
   project: 'store',
@@ -62,11 +62,12 @@ describe('RecordingsPanel', () => {
     expect(html).not.toContain('<span>STARTED</span>')
     expect(html).toContain('<span>HISTORY</span>')
     expect(html).not.toContain('<small>1 RECORDING</small>')
-    expect(history).toContain('<th>Recording</th>')
-    expect(history).toContain('<th>Created at</th>')
-    expect(history).toContain('<th>Duration</th>')
+    expect(history).toContain('aria-sort="none"><span>Recording</span>')
+    expect(history).toContain('aria-sort="descending"><span>Created at</span>')
+    expect(history).toContain('aria-sort="none"><span>Duration</span>')
     expect(history).toContain('<th aria-label="Actions"></th>')
     expect(history).not.toContain('<th>Actions</th>')
+    expect(history).not.toContain('sortable-column-sort-control')
     expect(history).toContain('<td class="recording-history__duration">00:05:00</td>')
     expect(history).toContain('<time dateTime="2026-08-28T12:00:00Z"')
     expect(history).toContain('completed-checkout')
@@ -169,6 +170,18 @@ describe('RecordingsPanel', () => {
     expect(html).toContain('aria-label="recordings pagination"')
     expect(html).toContain('<span>1–6 of 7</span>')
     expect(html).toContain('<small>1 / 2</small>')
+  })
+
+  it('sorts recording history and only renders controls when multiple rows can move', () => {
+    const earlier = { ...completedRecording, name: 'alpha', eventCount: 8, startedAt: '2026-08-28T10:00:00Z', completedAt: '2026-08-28T10:10:00Z' }
+    const later = { ...completedRecording, name: 'beta', eventCount: 2, startedAt: '2026-08-28T12:00:00Z', completedAt: '2026-08-28T12:01:00Z' }
+    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[earlier, later]} refresh={async () => undefined} />)
+
+    expect(html.match(/class="sortable-column-sort-control"/g)).toHaveLength(5)
+    expect(html).toContain('class="sortable-table-header is-active is-default-sort" aria-sort="descending"><span>Created at</span>')
+    expect(sortRecordingHistory([earlier, later], { key: 'createdAt', direction: 'desc' }).map((item) => item.name)).toEqual(['beta', 'alpha'])
+    expect(sortRecordingHistory([earlier, later], { key: 'events', direction: 'desc' }).map((item) => item.name)).toEqual(['alpha', 'beta'])
+    expect(sortRecordingHistory([earlier, later], { key: 'duration', direction: 'asc' }).map((item) => item.name)).toEqual(['beta', 'alpha'])
   })
 
   it('generates a repeated recording with the prior capture settings and an available name', () => {

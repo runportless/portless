@@ -9,6 +9,8 @@ type SortableHeaderProps<Key extends string> = {
   label: string
   sortKey: Key
   sort: TableSort<Key>
+  defaultSort: TableSort<Key>
+  itemCount: number
   onSort: (sort: TableSort<Key>) => void
 }
 
@@ -20,20 +22,26 @@ export function SortableGridHeader<Key extends string>(props: SortableHeaderProp
   return <SortableColumnHeader {...props} layout="grid" />
 }
 
-function SortableColumnHeader<Key extends string>({ label, sortKey, sort, onSort, layout }: SortableHeaderProps<Key> & { layout: 'table' | 'grid' }) {
+function SortableColumnHeader<Key extends string>({ label, sortKey, sort, defaultSort, itemCount, onSort, layout }: SortableHeaderProps<Key> & { layout: 'table' | 'grid' }) {
   const active = sort.key === sortKey
+  const defaultActive = active && sort.key === defaultSort.key && sort.direction === defaultSort.direction
   const nextDirection: TableSortDirection = active && sort.direction === 'asc' ? 'desc' : 'asc'
   const ariaSort = active ? sort.direction === 'asc' ? 'ascending' : 'descending' : 'none'
   const content = <>
     <span>{label}</span>
-    <button
+    {itemCount > 1 && <button
+      className="sortable-column-sort-control"
       type="button"
       aria-label={`Sort ${label} ${nextDirection === 'asc' ? 'ascending' : 'descending'}`}
       title={`Sort ${label.toLowerCase()} ${nextDirection === 'asc' ? 'ascending' : 'descending'}`}
       onClick={() => onSort({ key: sortKey, direction: nextDirection })}
-    ><span aria-hidden="true">{active && sort.direction === 'desc' ? '▼' : '▲'}</span></button>
+    >
+      <span className={`sortable-column-sort-control__triangle sortable-column-sort-control__triangle--up${active && sort.direction === 'asc' ? ' is-active' : ''}`} aria-hidden="true" />
+      <span className={`sortable-column-sort-control__triangle sortable-column-sort-control__triangle--down${active && sort.direction === 'desc' ? ' is-active' : ''}`} aria-hidden="true" />
+    </button>}
   </>
 
-  if (layout === 'table') return <th className={`sortable-table-header${active ? ' is-active' : ''}`} aria-sort={ariaSort}>{content}</th>
-  return <span className={`sortable-grid-header${active ? ' is-active' : ''}`} role="columnheader" aria-sort={ariaSort}>{content}</span>
+  const stateClasses = `${active ? ' is-active' : ''}${defaultActive ? ' is-default-sort' : ''}`
+  if (layout === 'table') return <th className={`sortable-table-header${stateClasses}`} aria-sort={ariaSort}>{content}</th>
+  return <span className={`sortable-grid-header${stateClasses}`} role="columnheader" aria-sort={ariaSort}>{content}</span>
 }

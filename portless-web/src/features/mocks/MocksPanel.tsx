@@ -300,14 +300,14 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
     {profiles.length > 0 && <div className="mock-profiles-bulk-actions">
       <button className="mock-profiles-disable-all-link" type="button" disabled={!!busy || transitionBlocked || activeBindings.length === 0} onClick={onDisableAll}>{busy === 'disable-all' ? 'DISABLING…' : 'DISABLE ALL'}</button>
     </div>}
-    <div className="mock-profile-row mock-profile-row--header" role="row">
-      <SortableGridHeader label="State" sortKey="state" sort={profileSort} onSort={setProfileSort} />
-      <SortableGridHeader label="Name" sortKey="name" sort={profileSort} onSort={setProfileSort} />
-      <SortableGridHeader label="Service" sortKey="service" sort={profileSort} onSort={setProfileSort} />
-      <SortableGridHeader label="Routes" sortKey="routes" sort={profileSort} onSort={setProfileSort} />
-      <SortableGridHeader label="Created at" sortKey="createdAt" sort={profileSort} onSort={setProfileSort} />
-      <SortableGridHeader label="Enabled at" sortKey="enabledAt" sort={profileSort} onSort={setProfileSort} />
-      <SortableGridHeader label="Modified at" sortKey="modifiedAt" sort={profileSort} onSort={setProfileSort} />
+    <div className="mock-profile-row mock-profile-row--header sortable-header-row" role="row">
+      <SortableGridHeader label="State" sortKey="state" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="Name" sortKey="name" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="Service" sortKey="service" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="Routes" sortKey="routes" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="Created at" sortKey="createdAt" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="Enabled at" sortKey="enabledAt" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="Modified at" sortKey="modifiedAt" sort={profileSort} defaultSort={defaultMockProfileSort} itemCount={profiles.length} onSort={setProfileSort} />
       <span aria-label="Actions" />
     </div>
     {orderedProfiles.map((profile) => {

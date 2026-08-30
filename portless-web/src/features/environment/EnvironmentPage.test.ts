@@ -7,9 +7,11 @@ import type { Project } from '../../api/contracts/projects'
 import type { ComponentBinding, Service } from '../../api/contracts/topology'
 import type { TrafficActivity, TrafficExchange } from '../../api/contracts/traffic'
 import { paginateItems } from '../../components/PanelPagination'
+import { sortCheckoutRows } from './bindings/CheckoutTable'
 import { defaultProviderBinding, providerBindingMatches, providerDisplayName } from './bindings/bindingPresentation'
+import { sortProviderBindings } from './bindings/ProviderBindingsTable'
 import { EnvironmentActivityIndicators, EnvironmentPage } from './EnvironmentPage'
-import { summarizeEnvironmentBindings } from './OverviewPanel'
+import { sortOverviewServices, summarizeEnvironmentBindings } from './OverviewPanel'
 import { displayLaunchMode, overviewServiceEndpoint, serviceEndpoints } from './service/servicePresentation'
 import { TimelinePanel } from './timeline/TimelinePanel'
 import { buildTopology, mergeTopologySignal, summarizeTopologyTraffic, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './topology/topologyModel'
@@ -148,6 +150,24 @@ describe('environment topology', () => {
     expect(markup).toContain('title="Copy endpoint"')
     expect(markup).toContain('http://checkout.local.billing.localhost')
     expect(markup).toContain('class="service-copy-button"')
+    expect(markup).not.toContain('sortable-column-sort-control')
+  })
+
+  it('sorts overview services and renders controls when multiple rows can move', () => {
+    const checkout: Service = { name: 'checkout', kind: 'process', required: true, health: { kind: 'http', timeout: 0, interval: 0 }, launchMode: 'managed', status: 'ready', generation: 1, restartCount: 2, recentRequests: 10, p95Millis: 80, endpoints: [] }
+    const orders: Service = { name: 'orders', kind: 'process', required: true, health: { kind: 'http', timeout: 0, interval: 0 }, launchMode: 'managed', status: 'stopped', reason: 'not running', generation: 1, restartCount: 0, recentRequests: 2, endpoints: [] }
+    const environment = {
+      project: 'billing', name: 'local', status: 'healthy', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [orders, checkout], connections: [], bindings: [{ service: 'checkout', provider: 'local' }, { service: 'orders', provider: 'remote' }],
+    } as Environment
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+
+    expect(markup.match(/class="sortable-column-sort-control"/g)).toHaveLength(7)
+    expect(markup).toContain('class="sortable-grid-header is-active is-default-sort" role="columnheader" aria-sort="ascending"><span>Name</span>')
+    expect(sortOverviewServices(environment.services, environment, { key: 'name', direction: 'asc' }).map((item) => item.name)).toEqual(['checkout', 'orders'])
+    expect(sortOverviewServices(environment.services, environment, { key: 'requests', direction: 'desc' }).map((item) => item.name)).toEqual(['checkout', 'orders'])
+    expect(sortOverviewServices(environment.services, environment, { key: 'state', direction: 'asc' }).map((item) => item.name)).toEqual(['checkout', 'orders'])
   })
 
   it('summarizes local, hybrid, and remote environment bindings', () => {
@@ -213,7 +233,9 @@ describe('environment topology', () => {
     expect(markup).toContain('class="experiment-layout bindings-layout"')
     expect(markup).toContain('<span>PROVIDERS</span><button')
     expect(markup).toContain('role="table" aria-label="Configured providers"')
-    expect(markup).toContain('<span role="columnheader">Service</span><span role="columnheader">Provider</span><span role="columnheader">Configuration</span><span role="columnheader">Modified</span><span role="columnheader" aria-label="Row actions"></span>')
+    expect(markup).toContain('class="sortable-grid-header is-active is-default-sort" role="columnheader" aria-sort="ascending"><span>Service</span>')
+    for (const label of ['Provider', 'Configuration', 'Modified']) expect(markup).toContain(`role="columnheader" aria-sort="none"><span>${label}</span>`)
+    expect(markup).toContain('<span role="columnheader" aria-label="Row actions"></span>')
     expect(markup).toContain('class="provider-service"')
     expect(markup).toContain('title="stopped"')
     expect(markup).not.toContain('<span>healthy</span>')
@@ -228,7 +250,11 @@ describe('environment topology', () => {
     expect(markup).toContain('>MANAGE SOURCES</button>')
     expect(markup).not.toContain('>ADD SOURCE</button>')
     expect(markup).toContain('<table class="source-table" aria-label="Environment checkouts">')
-    expect(markup).toContain('<th scope="col">Source</th><th scope="col">Path</th><th scope="col">Created</th><th scope="col" aria-label="Row actions"></th>')
+    expect(markup).toContain('class="sortable-table-header is-active is-default-sort" aria-sort="ascending"><span>Source</span>')
+    expect(markup).toContain('class="sortable-table-header" aria-sort="none"><span>Path</span>')
+    expect(markup).toContain('class="sortable-table-header" aria-sort="none"><span>Created</span>')
+    expect(markup).toContain('<th scope="col" aria-label="Row actions"></th>')
+    expect(markup).not.toContain('sortable-column-sort-control')
     expect(markup).not.toContain('>Actions</')
     expect(markup).not.toContain('class="source-name-button"')
     expect(markup).not.toContain('class="source-row--interactive"')
@@ -276,6 +302,25 @@ describe('environment topology', () => {
     expect(markup).not.toContain('service-6')
     expect(markup).toContain('/workspace/source-5')
     expect(markup).not.toContain('/workspace/source-6')
+    expect(markup.match(/class="sortable-column-sort-control"/g)).toHaveLength(7)
+  })
+
+  it('sorts provider and checkout binding rows by their displayed values', () => {
+    const providers: ComponentBinding[] = [
+      { service: 'orders', provider: 'remote', remote: { url: 'https://orders.example.test', classification: 'qa', writePolicy: 'read-only' }, modifiedAt: '2026-08-18T13:00:00Z' },
+      { service: 'checkout', provider: 'local', source: 'workspace', modifiedAt: '2026-08-18T12:00:00Z' },
+    ]
+    const checkoutRows: Parameters<typeof sortCheckoutRows>[0] = [
+      { source: { name: 'beta' }, checkout: { name: 'beta', path: '/workspace/beta', status: 'ready', createdAt: '2026-08-18T13:00:00Z', scannedAt: '' }, usedBy: [], required: false },
+      { source: { name: 'alpha' }, checkout: { name: 'alpha', path: '/workspace/zeta', status: 'ready', createdAt: '2026-08-18T12:00:00Z', scannedAt: '' }, usedBy: [], required: false },
+    ]
+
+    expect(sortProviderBindings(providers, { key: 'service', direction: 'asc' }).map((item) => item.service)).toEqual(['checkout', 'orders'])
+    expect(sortProviderBindings(providers, { key: 'provider', direction: 'desc' }).map((item) => item.service)).toEqual(['orders', 'checkout'])
+    expect(sortProviderBindings(providers, { key: 'modified', direction: 'desc' }).map((item) => item.service)).toEqual(['orders', 'checkout'])
+    expect(sortCheckoutRows(checkoutRows, { key: 'source', direction: 'asc' }).map((item) => item.source.name)).toEqual(['alpha', 'beta'])
+    expect(sortCheckoutRows(checkoutRows, { key: 'path', direction: 'asc' }).map((item) => item.source.name)).toEqual(['beta', 'alpha'])
+    expect(sortCheckoutRows(checkoutRows, { key: 'created', direction: 'desc' }).map((item) => item.source.name)).toEqual(['beta', 'alpha'])
   })
 
   it('shows project sources without checkouts as environment configuration choices', () => {

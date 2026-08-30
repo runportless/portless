@@ -135,15 +135,15 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
       </div>}
       <div className="fault-table-scroll">
         <table className="fault-table">
-          <thead><tr>
-            <SortableTableHeader label="State" sortKey="state" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Name" sortKey="name" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Connection" sortKey="connection" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Fault" sortKey="fault" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Matches" sortKey="matches" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Lifetime" sortKey="lifetime" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Enabled at" sortKey="enabledAt" sort={faultSort} onSort={setFaultSort} />
-            <SortableTableHeader label="Created at" sortKey="createdAt" sort={faultSort} onSort={setFaultSort} />
+          <thead><tr className="sortable-header-row">
+            <SortableTableHeader label="State" sortKey="state" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Name" sortKey="name" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Connection" sortKey="connection" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Fault" sortKey="fault" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Matches" sortKey="matches" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Lifetime" sortKey="lifetime" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Enabled at" sortKey="enabledAt" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="Created at" sortKey="createdAt" sort={faultSort} defaultSort={defaultFaultSort} itemCount={faults.length} onSort={setFaultSort} />
             <th aria-label="Actions" />
           </tr></thead>
           <tbody>

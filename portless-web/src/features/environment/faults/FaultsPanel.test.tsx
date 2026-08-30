@@ -36,14 +36,12 @@ describe('FaultsPanel', () => {
     expect(html).toMatch(/<button[^>]*class="button button--primary button--small panel-create-button"[^>]*>CREATE FAULT<\/button>/)
     expect(html).toContain('class="fault-table"')
     expect(html).toContain('aria-sort="ascending"><span>State</span>')
-    expect(html).toContain('aria-label="Sort State descending"')
     expect(html).toContain('aria-sort="none"><span>Name</span>')
-    expect(html).toContain('aria-label="Sort Name ascending"')
     for (const label of ['Connection', 'Fault', 'Matches', 'Lifetime', 'Enabled at', 'Created at']) {
       expect(html).toContain(`aria-sort="none"><span>${label}</span>`)
-      expect(html).toContain(`aria-label="Sort ${label} ascending"`)
     }
     expect(html.match(/class="sortable-table-header/g)).toHaveLength(8)
+    expect(html).not.toContain('sortable-column-sort-control')
     expect(html).toContain('<th aria-label="Actions"></th>')
     expect(html).not.toContain('Sort Actions')
     expect(html).toContain('colSpan="9"')
@@ -76,6 +74,7 @@ describe('FaultsPanel', () => {
     expect(html.indexOf('CREATE FAULT')).toBeLessThan(html.indexOf('DISABLE ALL'))
     expect(html).toContain('>DISABLE</button>')
     expect(html).toContain('>ENABLE</button>')
+    expect(html.match(/class="sortable-column-sort-control"/g)).toHaveLength(8)
   })
 
   it('shows the subheader action for declared rules and disables it when none are active', () => {

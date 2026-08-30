@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
+import { SortableGridHeader, type TableSort } from '../../components/SortableTableHeader'
 import { StatePanel, StatusMark } from '../../components/Status'
 import type { Environment, TimelineEvent } from '../../api/contracts/environments'
 import type { FaultRule, Recording } from '../../api/contracts/experiments'
@@ -9,6 +10,8 @@ import { displayLaunchMode, overviewServiceEndpoint } from './service/servicePre
 import { TopologyPreview } from './topology/TopologyPanel'
 
 const overviewPageSize = 8
+type OverviewServiceSortField = 'name' | 'mode' | 'state' | 'restarts' | 'requests' | 'p95' | 'endpoint'
+const defaultOverviewServiceSort: TableSort<OverviewServiceSortField> = { key: 'name', direction: 'asc' }
 
 export function OverviewPanel({ environment, timeline, ready, faults, activeRecording, trafficCount, onService, onNavigate }: {
   environment: Environment
@@ -21,15 +24,18 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
   onNavigate: (tab: EnvironmentTab, options?: EnvironmentNavigationOptions) => void
 }) {
   const [servicePage, setServicePage] = useState(0)
+  const [serviceSort, setServiceSort] = useState<TableSort<OverviewServiceSortField>>(defaultOverviewServiceSort)
   const [activityPage, setActivityPage] = useState(0)
   const [copiedEndpoint, setCopiedEndpoint] = useState('')
   const copyReset = useRef<number | undefined>(undefined)
-  const services = paginateItems(environment.services, servicePage, overviewPageSize)
+  const orderedServices = useMemo(() => sortOverviewServices(environment.services, environment, serviceSort), [environment, serviceSort])
+  const services = paginateItems(orderedServices, servicePage, overviewPageSize)
   const activities = paginateItems(timeline, activityPage, overviewPageSize)
   const bindingSummary = summarizeEnvironmentBindings(environment)
 
   useEffect(() => {
     setServicePage(0)
+    setServiceSort(defaultOverviewServiceSort)
     setActivityPage(0)
   }, [environment.project, environment.name])
   useEffect(() => () => window.clearTimeout(copyReset.current), [])
@@ -56,7 +62,17 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
     </div>
     <section className="panel services-panel">
       <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} workloads</small></div>
-      <div className="table-row table-row--header service-row"><span /><span>Name</span><span>Mode</span><span>State</span><span>Restarts</span><span>Requests</span><span>P95</span><span>Endpoint / reason</span><span /></div>
+      <div className="table-row table-row--header service-row sortable-header-row" role="row">
+        <span aria-hidden="true" />
+        <SortableGridHeader label="Name" sortKey="name" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Mode" sortKey="mode" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="State" sortKey="state" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Restarts" sortKey="restarts" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Requests" sortKey="requests" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="P95" sortKey="p95" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <SortableGridHeader label="Endpoint / reason" sortKey="endpoint" sort={serviceSort} defaultSort={defaultOverviewServiceSort} itemCount={environment.services.length} onSort={(sort) => { setServiceSort(sort); setServicePage(0) }} />
+        <span aria-label="Actions" />
+      </div>
       {services.items.map((service) => {
         const endpoint = overviewServiceEndpoint(environment, service)
         const copied = copiedEndpoint === service.name
@@ -84,6 +100,44 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
       </section>
     </div>
   </>
+}
+
+export function sortOverviewServices(services: Service[], environment: Pick<Environment, 'bindings'>, sort: TableSort<OverviewServiceSortField>) {
+  const direction = sort.direction === 'asc' ? 1 : -1
+  return [...services].sort((left, right) => {
+    const nameOrder = compareOverviewServiceText(left.name, right.name)
+    let order = 0
+
+    switch (sort.key) {
+      case 'name':
+        order = nameOrder
+        break
+      case 'mode':
+        order = compareOverviewServiceText(displayLaunchMode(environment, left), displayLaunchMode(environment, right))
+        break
+      case 'state':
+        order = compareOverviewServiceText(left.status, right.status)
+        break
+      case 'restarts':
+        order = left.restartCount - right.restartCount
+        break
+      case 'requests':
+        order = left.recentRequests - right.recentRequests
+        break
+      case 'p95':
+        order = (left.p95Millis || 0) - (right.p95Millis || 0)
+        break
+      case 'endpoint':
+        order = compareOverviewServiceText(left.reason || overviewServiceEndpoint(environment, left) || '', right.reason || overviewServiceEndpoint(environment, right) || '')
+        break
+    }
+
+    return direction * order || nameOrder
+  })
+}
+
+function compareOverviewServiceText(left: string, right: string) {
+  return left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true })
 }
 
 export function summarizeEnvironmentBindings(environment: Environment): { value: 'LOCAL' | 'HYBRID' | 'REMOTE'; detail: string; tone?: 'warning' } {

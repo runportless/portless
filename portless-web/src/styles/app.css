@@ -923,14 +923,16 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .fault-table th { height:38px; color:var(--faint); font-size:9px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; }
 .fault-table th.sortable-table-header { white-space:nowrap; }
 :is(.sortable-table-header,.sortable-grid-header) > span { vertical-align:middle; }
-:is(.sortable-table-header,.sortable-grid-header) > button { width:22px; height:22px; margin-left:3px; padding:0; border:0; outline:0; background:transparent; color:var(--faint); cursor:pointer; vertical-align:middle; }
-:is(.sortable-table-header,.sortable-grid-header) > button span { display:block; font-size:13px; line-height:22px; transform:scaleX(1.12); }
-:is(.sortable-table-header,.sortable-grid-header).is-active > button { color:var(--teal); }
-:is(.sortable-table-header,.sortable-grid-header) > button:hover { color:var(--text); }
+:is(.sortable-table-header,.sortable-grid-header) > button { width:18px; height:22px; margin-left:4px; padding:0; border:0; outline:0; background:transparent; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:var(--faint); cursor:pointer; vertical-align:middle; }
+.sortable-column-sort-control__triangle { width:0; height:0; color:var(--faint); transition:color .12s ease; }
+.sortable-column-sort-control__triangle--up { border-right:4px solid transparent; border-bottom:5px solid currentColor; border-left:4px solid transparent; }
+.sortable-column-sort-control__triangle--down { border-top:5px solid currentColor; border-right:4px solid transparent; border-left:4px solid transparent; }
+.sortable-column-sort-control__triangle.is-active { color:var(--green); }
+:is(.sortable-table-header,.sortable-grid-header) > button:hover .sortable-column-sort-control__triangle:not(.is-active) { color:var(--muted); }
 :is(.sortable-table-header,.sortable-grid-header) > button:focus-visible { outline:1px solid var(--teal); outline-offset:0; }
 @media (hover:hover) {
   :is(.sortable-table-header,.sortable-grid-header) > button { opacity:0; }
-  :is(.sortable-table-header,.sortable-grid-header):hover > button,:is(.sortable-table-header,.sortable-grid-header):focus-within > button,:is(.sortable-table-header,.sortable-grid-header).is-active > button { opacity:1; }
+  .sortable-header-row:hover :is(.sortable-table-header,.sortable-grid-header) > button,:is(.sortable-table-header,.sortable-grid-header):focus-within > button,:is(.sortable-table-header,.sortable-grid-header).is-active:not(.is-default-sort) > button { opacity:1; }
 }
 .fault-table td { height:56px; color:var(--muted); font-size:10px; }
 .fault-table tbody tr:hover td { background:var(--row-hover); }
@@ -985,7 +987,7 @@ button.trace-row:hover { background:var(--row-hover); color:var(--text); }
 .mock-profile-row--header:hover,.mock-route-row--header:hover { background:transparent; box-shadow:none; }
 .sortable-grid-header { min-width:0; display:flex; align-items:center; }
 .sortable-grid-header > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sortable-grid-header > button { flex:0 0 22px; }
+.sortable-grid-header > button { flex:0 0 18px; }
 .mock-profile-row__name { min-width:0; display:flex; align-items:center; }.mock-profile-row strong,.mock-route-row strong { min-width:0; overflow:hidden; color:var(--text); text-overflow:ellipsis; white-space:nowrap; }.mock-profile-row__timestamp { min-width:0; overflow:hidden; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
 .mock-enabled-state { color:var(--faint); display:flex; align-items:center; gap:8px; font-size:9px; letter-spacing:.05em; text-transform:uppercase; }
 .mock-enabled-state.is-enabled { color:var(--green); }

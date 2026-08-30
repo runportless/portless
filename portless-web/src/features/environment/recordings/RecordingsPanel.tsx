@@ -4,10 +4,13 @@ import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
 import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
+import { SortableTableHeader, type TableSort } from '../../../components/SortableTableHeader'
 import { relativeTime } from '../../../components/Status'
 import { experimentScopeID, experimentScopes, recordingScopeLabel } from '../../experimentScopes'
 
 const recordingHistoryPageSize = 6
+type RecordingHistorySortField = 'name' | 'events' | 'createdAt' | 'duration' | 'completed'
+const defaultRecordingHistorySort: TableSort<RecordingHistorySortField> = { key: 'createdAt', direction: 'desc' }
 
 export interface CreateRecordingInput {
   name: string
@@ -48,8 +51,9 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const [deleteAllConfirm, setDeleteAllConfirm] = useState(false)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [historyPage, setHistoryPage] = useState(0)
+  const [historySort, setHistorySort] = useState<TableSort<RecordingHistorySortField>>(defaultRecordingHistorySort)
   const activeRecording = recordings.find((recording) => recording.status === 'active')
-  const historyRecordings = recordings.filter((recording) => recording.status !== 'active')
+  const historyRecordings = useMemo(() => sortRecordingHistory(recordings.filter((recording) => recording.status !== 'active'), historySort), [recordings, historySort])
   const historyPagination = paginateItems(historyRecordings, historyPage, recordingHistoryPageSize)
   const controlDefaults = createRecordingDefaults(recordings)
 
@@ -59,6 +63,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     setDeleteAllConfirm(false)
     setError(null)
     setHistoryPage(0)
+    setHistorySort(defaultRecordingHistorySort)
   }, [environment.project, environment.name])
 
   const start = async (input: CreateRecordingInput, action = 'create') => {
@@ -192,7 +197,14 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
       </div>
       <div className="recording-history-scroll">
         <table className="recording-history-table">
-          <thead><tr><th>Recording</th><th>Events</th><th>Created at</th><th>Duration</th><th>Completed</th><th aria-label="Actions" /></tr></thead>
+          <thead><tr className="sortable-header-row">
+            <SortableTableHeader label="Recording" sortKey="name" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Events" sortKey="events" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Created at" sortKey="createdAt" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Duration" sortKey="duration" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <SortableTableHeader label="Completed" sortKey="completed" sort={historySort} defaultSort={defaultRecordingHistorySort} itemCount={historyRecordings.length} onSort={(sort) => { setHistorySort(sort); setHistoryPage(0); clearRowConfirmations() }} />
+            <th aria-label="Actions" />
+          </tr></thead>
           <tbody>
             {historyPagination.items.map((recording) => <tr key={recording.name}>
               <td>
@@ -263,6 +275,47 @@ export function formatRecordingDuration(startedAt: string, now = Date.now()) {
   const minutes = Math.floor(elapsedSeconds % 3600 / 60)
   const seconds = elapsedSeconds % 60
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
+}
+
+export function sortRecordingHistory(recordings: Recording[], sort: TableSort<RecordingHistorySortField>) {
+  const direction = sort.direction === 'asc' ? 1 : -1
+  return [...recordings].sort((left, right) => {
+    const nameOrder = compareRecordingText(left.name, right.name)
+    let order = 0
+
+    switch (sort.key) {
+      case 'name':
+        order = nameOrder
+        break
+      case 'events':
+        order = left.eventCount - right.eventCount
+        break
+      case 'createdAt':
+        order = recordingTimestampValue(left.startedAt) - recordingTimestampValue(right.startedAt)
+        break
+      case 'duration':
+        order = recordingDurationValue(left) - recordingDurationValue(right)
+        break
+      case 'completed':
+        order = recordingTimestampValue(left.completedAt) - recordingTimestampValue(right.completedAt)
+        break
+    }
+
+    return direction * order || nameOrder
+  })
+}
+
+function compareRecordingText(left: string, right: string) {
+  return left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true })
+}
+
+function recordingTimestampValue(value?: string) {
+  const timestamp = value ? Date.parse(value) : 0
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function recordingDurationValue(recording: Recording) {
+  return Math.max(0, recordingTimestampValue(recording.completedAt) - recordingTimestampValue(recording.startedAt))
 }
 
 type RecordingDurationScheduler = {
