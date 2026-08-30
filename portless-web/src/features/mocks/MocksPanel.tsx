@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath, jsonBody } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { DrawerShell } from '../../components/overlays/DrawerShell'
 import { FormDialog } from '../../components/overlays/FormDialog'
+import { SortableGridHeader, type TableSort } from '../../components/SortableTableHeader'
 import { StatusMark } from '../../components/Status'
 import type { Environment, Operation } from '../../api/contracts/environments'
 import type { Recording, RecordingList } from '../../api/contracts/experiments'
@@ -17,6 +18,10 @@ type RouteDraft = Pick<MockRoute, 'name' | 'method' | 'path' | 'status' | 'body'
   queryText: string
   headersText: string
 }
+
+type MockProfileSortField = 'state' | 'name' | 'service' | 'routes' | 'createdAt' | 'enabledAt' | 'modifiedAt'
+
+const defaultMockProfileSort: TableSort<MockProfileSortField> = { key: 'state', direction: 'asc' }
 
 const emptyRoute = (): RouteDraft => ({
   name: '', method: 'GET', path: '/', status: 200, body: '', delayMs: 0, enabled: true,
@@ -258,7 +263,11 @@ export function mockProfileBindings(environment: Pick<Environment, 'bindings'>) 
 }
 
 export function mockProfileIsActive(environment: Pick<Environment, 'bindings'>, profile: Pick<MockProfile, 'name' | 'service'>) {
-  return mockProfileBindings(environment).some((binding) =>
+  return !!mockProfileActiveBinding(environment, profile)
+}
+
+function mockProfileActiveBinding(environment: Pick<Environment, 'bindings'>, profile: Pick<MockProfile, 'name' | 'service'>) {
+  return mockProfileBindings(environment).find((binding) =>
     binding.service.toLowerCase() === profile.service.toLowerCase() &&
     binding.mock?.profile.toLowerCase() === profile.name.toLowerCase(),
   )
@@ -279,19 +288,39 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
   onDisableAll: () => void
 }) {
   const activeBindings = mockProfileBindings(environment)
+  const [profileSort, setProfileSort] = useState<TableSort<MockProfileSortField>>(defaultMockProfileSort)
+  const orderedProfiles = useMemo(() => sortMockProfiles(profiles, environment, profileSort), [profiles, environment, profileSort])
+
+  useEffect(() => {
+    setProfileSort(defaultMockProfileSort)
+  }, [environment.project, environment.name])
+
   return <section className="panel mock-profiles-panel">
     <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE PROFILE</button></div>
     {profiles.length > 0 && <div className="mock-profiles-bulk-actions">
       <button className="mock-profiles-disable-all-link" type="button" disabled={!!busy || transitionBlocked || activeBindings.length === 0} onClick={onDisableAll}>{busy === 'disable-all' ? 'DISABLING…' : 'DISABLE ALL'}</button>
     </div>}
-    <div className="mock-profile-row mock-profile-row--header" role="row"><span>Name</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span aria-hidden="true" /></div>
-    {profiles.map((profile) => {
-      const active = mockProfileIsActive(environment, profile)
+    <div className="mock-profile-row mock-profile-row--header" role="row">
+      <SortableGridHeader label="State" sortKey="state" sort={profileSort} onSort={setProfileSort} />
+      <SortableGridHeader label="Name" sortKey="name" sort={profileSort} onSort={setProfileSort} />
+      <SortableGridHeader label="Service" sortKey="service" sort={profileSort} onSort={setProfileSort} />
+      <SortableGridHeader label="Routes" sortKey="routes" sort={profileSort} onSort={setProfileSort} />
+      <SortableGridHeader label="Created at" sortKey="createdAt" sort={profileSort} onSort={setProfileSort} />
+      <SortableGridHeader label="Enabled at" sortKey="enabledAt" sort={profileSort} onSort={setProfileSort} />
+      <SortableGridHeader label="Modified at" sortKey="modifiedAt" sort={profileSort} onSort={setProfileSort} />
+      <span aria-label="Actions" />
+    </div>
+    {orderedProfiles.map((profile) => {
+      const activeBinding = mockProfileActiveBinding(environment, profile)
+      const active = !!activeBinding
       const toggleAction = `${active ? 'disable' : 'enable'}:${profile.name}`
       return <div className={`mock-profile-row${selectedProfile === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => onOpen(profile)}>
-        <div><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><strong>{profile.name}</strong></div>
-        <span>{profile.service}</span><span>{profile.routes.length}</span><span>{active ? 'bound' : 'available'}</span>
-        <time dateTime={profile.modifiedAt}>{formatTimestamp(profile.modifiedAt)}</time>
+        <MockEnabledState enabled={active} />
+        <div className="mock-profile-row__name"><strong>{profile.name}</strong></div>
+        <span>{profile.service}</span><span>{profile.routes.length}</span>
+        <MockTimestamp className="mock-profile-row__created" value={profile.createdAt} />
+        <MockTimestamp className="mock-profile-row__enabled" value={activeBinding?.modifiedAt} />
+        <MockTimestamp className="mock-profile-row__modified" value={profile.modifiedAt} />
         <div className="mock-row-actions table-row-actions">
           <button type="button" disabled={!!busy || transitionBlocked} aria-label={`${active ? 'Disable' : 'Enable'} ${profile.name}`} onClick={(event) => { event.stopPropagation(); onToggle(profile, !active) }}>{busy === toggleAction ? active ? 'DISABLING…' : 'ENABLING…' : active ? 'DISABLE' : 'ENABLE'}</button>
           <button type="button" disabled={!!busy} onClick={(event) => { event.stopPropagation(); onOpen(profile) }}>OPEN</button>
@@ -324,7 +353,7 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
     className="mock-profile-drawer"
     closeLabel="Close mock profile"
     closeBlocked={!!busy}
-    header={<div><span className="eyebrow">{environment.project} / {environment.name} / mock profile</span><div className="mock-profile-drawer__title"><h2>{profile.name}</h2><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><small>{active ? 'bound' : 'available'}</small></div></div>}
+    header={<div><span className="eyebrow">{environment.project} / {environment.name} / mock profile</span><div className="mock-profile-drawer__title"><h2>{profile.name}</h2><MockEnabledState enabled={active} /></div></div>}
     actions={<><button className="button" type="button" disabled={!!busy} onClick={onPreview}>PREVIEW REQUEST</button><button className="button button--primary" type="button" disabled={!!busy} onClick={onAddRoute}>ADD ROUTE</button></>}
     actionProps={{ 'aria-busy': !!busy }}
     notice={error && <div className="mock-profile-drawer__error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
@@ -335,12 +364,77 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
           <div className="mock-route-table__title"><span>ROUTES</span><small>{profile.routes.length}</small></div>
           <div className="mock-route-row mock-route-row--header"><span>Route</span><span>Match</span><span>Response</span><span>Delay</span><span>State</span><span aria-hidden="true" /></div>
           {profile.routes.map((route) => <div className="mock-route-row" key={route.name}>
-            <strong>{route.name}</strong><code>{route.method} {route.path}{formatQuerySummary(route.query)}</code><span>{route.status}{route.body ? ` · ${new Blob([route.body]).size} B` : ''}</span><span>{route.delayMs ? `${route.delayMs} ms` : '—'}</span><StatusMark status={route.enabled ? 'ready' : 'stopped'} />
+            <strong>{route.name}</strong><code>{route.method} {route.path}{formatQuerySummary(route.query)}</code><span>{route.status}{route.body ? ` · ${new Blob([route.body]).size} B` : ''}</span><span>{route.delayMs ? `${route.delayMs} ms` : '—'}</span><MockEnabledState enabled={route.enabled} />
             <div className="mock-row-actions table-row-actions"><button type="button" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button><button className={deleteName === `delete-route:${route.name}` ? 'is-confirming' : ''} type="button" disabled={!!busy} onClick={() => onDeleteRoute(route)}>{deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button></div>
           </div>)}
           {profile.routes.length === 0 && <div className="empty-row">This profile has no routes. Unmatched requests return 501 so missing behavior is visible.</div>}
         </section>
   </DrawerShell>
+}
+
+function MockEnabledState({ enabled }: { enabled: boolean }) {
+  const label = enabled ? 'Enabled' : 'Disabled'
+  return <div className={`mock-enabled-state${enabled ? ' is-enabled' : ''}`}>
+    <StatusMark status={label.toLowerCase()} label={false} />
+    <span>{label}</span>
+  </div>
+}
+
+function MockTimestamp({ className, value }: { className: string; value?: string }) {
+  const classes = `mock-profile-row__timestamp ${className}`
+  if (!value) return <span className={classes}>—</span>
+  return <time className={classes} dateTime={value} title={new Date(value).toLocaleString()}>{formatTimestamp(value)}</time>
+}
+
+export function sortMockProfiles(profiles: MockProfile[], environment: Pick<Environment, 'bindings'>, sort: TableSort<MockProfileSortField>) {
+  const direction = sort.direction === 'asc' ? 1 : -1
+  return [...profiles].sort((left, right) => {
+    const leftBinding = mockProfileActiveBinding(environment, left)
+    const rightBinding = mockProfileActiveBinding(environment, right)
+    const nameOrder = compareMockText(left.name, right.name)
+    let order = 0
+
+    switch (sort.key) {
+      case 'state':
+        order = !!leftBinding === !!rightBinding ? 0 : leftBinding ? -1 : 1
+        break
+      case 'name':
+        order = nameOrder
+        break
+      case 'service':
+        order = compareMockText(left.service, right.service)
+        break
+      case 'routes':
+        order = left.routes.length - right.routes.length
+        break
+      case 'createdAt':
+        order = mockTimestampValue(left.createdAt) - mockTimestampValue(right.createdAt)
+        break
+      case 'enabledAt':
+        order = compareMockEnabledAt(leftBinding?.modifiedAt, rightBinding?.modifiedAt)
+        break
+      case 'modifiedAt':
+        order = mockTimestampValue(left.modifiedAt) - mockTimestampValue(right.modifiedAt)
+        break
+    }
+
+    return direction * order || nameOrder
+  })
+}
+
+function compareMockText(left: string, right: string) {
+  return left.localeCompare(right, undefined, { sensitivity: 'base', numeric: true })
+}
+
+function mockTimestampValue(value: string) {
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function compareMockEnabledAt(left?: string, right?: string) {
+  if (!!left !== !!right) return left ? 1 : -1
+  if (!left || !right) return 0
+  return mockTimestampValue(left) - mockTimestampValue(right)
 }
 
 export function CreateProfileModal({ environment, recordings, busy, error, onDismissError, onClose, onCreate }: {
@@ -366,7 +460,7 @@ export function CreateProfileModal({ environment, recordings, busy, error, onDis
     closeLabel="Close create mock"
     closeBlocked={busy}
     initialFocusRef={nameInput}
-    header={<div><div className="eyebrow">HTTP MOCK</div><h2 id="create-mock-title">Create mock profile</h2></div>}
+    header={<div><div className="eyebrow">HTTP MOCK</div><h2 id="create-mock-title">Create Mock Profile</h2></div>}
     onClose={onClose}
   >
     <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onCreate({ name: name.trim(), service, description: description.trim(), ...(source === 'recording' ? { fromRecording: recording } : {}), ...(source === 'openapi' ? { openapiDocument: document } : {}) }) }}>

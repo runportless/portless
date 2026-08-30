@@ -60,10 +60,11 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
   const primaryService = environment.services.find((service) => service.name === environment.primaryService)
   const primaryHTTP = primaryService && publicEndpoint(primaryService, 'http')
   const error = actionFailure || activity.error
+  const statusMessage = environment.reason || (environment.status === 'stopped' ? 'not running' : '')
 
   return <div className="page project-page environment-page">
     <div className="project-heading">
-      <div><div className="eyebrow">{environment.project} / ENVIRONMENT</div><div className="title-with-status"><h1>{environment.name}</h1><StatusMark status={environment.status} /></div>{(environment.reason || environment.status === 'stopped') && <p>{environment.reason || 'not running'}</p>}</div>
+      <div><div className="eyebrow">{environment.project} / ENVIRONMENT</div><div className="title-with-status"><h1>{environment.name}</h1><StatusMark status={environment.status} /></div><p className="environment-heading__message">{statusMessage}</p></div>
       <div className="project-actions">
         <EnvironmentActivityIndicators environment={environment} activeRecording={activeRecording} activeFaultCount={activeFaults.length} onNavigate={onNavigate} />
         {environment.status !== 'stopped' ? <button className="button" disabled={!!busy || environment.status === 'recovering'} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : environment.status === 'recovering' ? 'RECOVERING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}

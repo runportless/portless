@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment } from '../../api/contracts/environments'
 import type { MockProfile } from '../../api/contracts/mocks'
-import { createAndEnableMockProfile, CreateProfileModal, MockProfileDrawer, MockProfilesList, MocksPanel, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, RouteModal } from './MocksPanel'
+import { createAndEnableMockProfile, CreateProfileModal, MockProfileDrawer, MockProfilesList, MocksPanel, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, RouteModal, sortMockProfiles } from './MocksPanel'
 
 const environment: Environment = {
   project: 'store', name: 'local', revision: 1, status: 'healthy', createdAt: '', updatedAt: '',
@@ -11,7 +11,7 @@ const environment: Environment = {
 }
 
 const profile: MockProfile = {
-  project: 'store', environment: 'local', name: 'sold-out', service: 'inventory', description: 'Inventory has no available stock', createdAt: '2026-08-18T12:00:00Z', modifiedAt: '2026-08-18T12:00:00Z',
+  project: 'store', environment: 'local', name: 'sold-out', service: 'inventory', description: 'Inventory has no available stock', createdAt: '2026-08-18T12:00:00Z', modifiedAt: '2026-08-18T13:15:00Z',
   routes: [{ name: 'lookup', method: 'GET', path: '/inventory/{sku}', status: 200, body: '{"available":false}', delayMs: 0, enabled: true }],
 }
 
@@ -20,7 +20,13 @@ describe('MocksPanel', () => {
     const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectProfile={() => undefined} onChanged={() => undefined} />)
     expect(html).toContain('MOCK PROFILES')
     expect(html).toContain('CREATE PROFILE')
-    expect(html).toContain('<span>Name</span><span>Service</span>')
+    expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>State</span>')
+    for (const label of ['Name', 'Service', 'Routes', 'Created at', 'Enabled at', 'Modified at']) {
+      expect(html).toContain(`class="sortable-grid-header" role="columnheader" aria-sort="none"><span>${label}</span>`)
+      expect(html).toContain(`aria-label="Sort ${label} ascending"`)
+    }
+    expect(html.match(/class="sortable-grid-header/g)).toHaveLength(7)
+    expect(html).not.toContain('Sort Actions')
     expect(html).toContain('Loading mock profiles')
   })
 
@@ -58,12 +64,19 @@ describe('MocksPanel', () => {
     expect(html.indexOf('CREATE PROFILE')).toBeLessThan(html.indexOf('DISABLE ALL'))
     expect(html).toContain('aria-label="Enable sold-out"')
     expect(html).toContain('>ENABLE</button>')
+    expect(html).toContain('class="mock-enabled-state"')
+    expect(html).toContain('class="status status--muted" title="disabled"')
+    expect(html).toContain('<span>Disabled</span>')
+    expect(html).toContain('class="mock-profile-row__timestamp mock-profile-row__created" dateTime="2026-08-18T12:00:00Z"')
+    expect(html).toContain('class="mock-profile-row__timestamp mock-profile-row__enabled">—</span>')
+    expect(html).toContain('class="mock-profile-row__timestamp mock-profile-row__modified" dateTime="2026-08-18T13:15:00Z"')
+    expect(html).not.toContain('>available</span>')
   })
 
   it('offers disable actions for the active profile and enables the bulk control', () => {
     const activeEnvironment: Environment = {
       ...environment,
-      bindings: [{ service: 'inventory', provider: 'mock', mock: { profile: 'sold-out' } }],
+      bindings: [{ service: 'inventory', provider: 'mock', mock: { profile: 'sold-out' }, modifiedAt: '2026-08-18T14:30:00Z' }],
     }
     const html = renderToStaticMarkup(<MockProfilesList
       environment={activeEnvironment}
@@ -83,7 +96,11 @@ describe('MocksPanel', () => {
     expect(html).toMatch(/class="mock-profiles-disable-all-link"(?![^>]*disabled)[^>]*>DISABLE ALL<\/button>/)
     expect(html).toContain('aria-label="Disable sold-out"')
     expect(html).toContain('>DISABLE</button>')
-    expect(html).toContain('>bound</span>')
+    expect(html).toContain('class="mock-enabled-state is-enabled"')
+    expect(html).toContain('class="status status--success" title="enabled"')
+    expect(html).toContain('<span>Enabled</span>')
+    expect(html).toContain('class="mock-profile-row__timestamp mock-profile-row__enabled" dateTime="2026-08-18T14:30:00Z"')
+    expect(html).not.toContain('>bound</span>')
   })
 
   it('enables a newly created profile by default and preserves it when activation fails', async () => {
@@ -101,6 +118,37 @@ describe('MocksPanel', () => {
       async () => created,
       async () => { throw activationFailure },
     )).resolves.toEqual({ created, activated: false, activationFailure })
+  })
+
+  it('sorts profiles by every data column in either direction', () => {
+    const profiles: MockProfile[] = [
+      { ...profile, name: 'bravo', service: 'zeta', routes: [profile.routes[0], profile.routes[0], profile.routes[0]], createdAt: '2026-08-18T14:00:00Z', modifiedAt: '2026-08-18T11:00:00Z' },
+      { ...profile, name: 'alpha', service: 'orders', routes: [profile.routes[0]], createdAt: '2026-08-18T12:00:00Z', modifiedAt: '2026-08-18T14:00:00Z' },
+      { ...profile, name: 'charlie', service: 'billing', routes: [profile.routes[0], profile.routes[0]], createdAt: '2026-08-18T13:00:00Z', modifiedAt: '2026-08-18T13:00:00Z' },
+    ]
+    const sortEnvironment: Environment = {
+      ...environment,
+      bindings: [
+        { service: 'orders', provider: 'mock', mock: { profile: 'alpha' }, modifiedAt: '2026-08-18T12:00:00Z' },
+        { service: 'billing', provider: 'mock', mock: { profile: 'charlie' }, modifiedAt: '2026-08-18T13:00:00Z' },
+      ],
+    }
+    const names = (key: Parameters<typeof sortMockProfiles>[2]['key'], direction: 'asc' | 'desc') => sortMockProfiles(profiles, sortEnvironment, { key, direction }).map((item) => item.name)
+
+    expect(names('state', 'asc')).toEqual(['alpha', 'charlie', 'bravo'])
+    expect(names('state', 'desc')).toEqual(['bravo', 'alpha', 'charlie'])
+    expect(names('name', 'asc')).toEqual(['alpha', 'bravo', 'charlie'])
+    expect(names('name', 'desc')).toEqual(['charlie', 'bravo', 'alpha'])
+    expect(names('service', 'asc')).toEqual(['charlie', 'alpha', 'bravo'])
+    expect(names('service', 'desc')).toEqual(['bravo', 'alpha', 'charlie'])
+    expect(names('routes', 'asc')).toEqual(['alpha', 'charlie', 'bravo'])
+    expect(names('routes', 'desc')).toEqual(['bravo', 'charlie', 'alpha'])
+    expect(names('createdAt', 'asc')).toEqual(['alpha', 'charlie', 'bravo'])
+    expect(names('createdAt', 'desc')).toEqual(['bravo', 'charlie', 'alpha'])
+    expect(names('enabledAt', 'asc')).toEqual(['bravo', 'alpha', 'charlie'])
+    expect(names('enabledAt', 'desc')).toEqual(['charlie', 'alpha', 'bravo'])
+    expect(names('modifiedAt', 'asc')).toEqual(['bravo', 'charlie', 'alpha'])
+    expect(names('modifiedAt', 'desc')).toEqual(['alpha', 'charlie', 'bravo'])
   })
 
   it('parses multiline query and header fields without changing values', () => {
@@ -154,6 +202,7 @@ describe('MocksPanel', () => {
       onCreate={async () => undefined}
     />)
 
+    expect(html).toContain('<h2 id="create-mock-title">Create Mock Profile</h2>')
     expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
     expect(html).toMatch(/<input(?=[^>]*name="portless-mock-profile-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")(?=[^>]*data-lpignore="true")(?=[^>]*data-bwignore="true")[^>]*>/)
   })

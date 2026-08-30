@@ -158,13 +158,17 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
 
 test('stops and starts the environment from the UI', async ({ page }) => {
   await authenticate(page)
+  const tabs = page.getByRole('navigation', { name: 'Environment views' })
+  const initialTabsTop = await tabs.evaluate((element) => Math.round(element.getBoundingClientRect().top))
   await page.getByRole('button', { name: 'STOP ALL' }).click()
   await expect(page.getByRole('button', { name: 'START ALL' })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { name: 'local', exact: true }).locator('..')).toContainText('stopped')
+  expect(await tabs.evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(initialTabsTop)
 
   await page.getByRole('button', { name: 'START ALL' }).click()
   await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { name: 'local', exact: true }).locator('..')).toContainText('healthy')
+  expect(await tabs.evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(initialTabsTop)
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })
 

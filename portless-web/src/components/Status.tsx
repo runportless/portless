@@ -14,7 +14,7 @@ export function StatusMark({ status, label = true }: { status: StatusValue; labe
 }
 
 export function statusTone(status: StatusValue) {
-  if (['healthy', 'ready', 'active', 'succeeded'].includes(status)) return 'success'
+  if (['healthy', 'ready', 'active', 'enabled', 'succeeded'].includes(status)) return 'success'
   if (['degraded', 'unhealthy', 'starting', 'checking', 'recovering', 'restarting', 'stopping'].includes(status)) return 'warning'
   if (['failed', 'exited', 'unreachable'].includes(status)) return 'danger'
   if (['unknown', 'missing'].includes(status)) return 'unknown'

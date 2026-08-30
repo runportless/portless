@@ -4,6 +4,8 @@ import { duration, statusTone } from './Status'
 describe('status presentation', () => {
   it('maps domain states to consistent safety tones', () => {
     expect(statusTone('healthy')).toBe('success')
+    expect(statusTone('enabled')).toBe('success')
+    expect(statusTone('disabled')).toBe('muted')
     expect(statusTone('starting')).toBe('warning')
     expect(statusTone('checking')).toBe('warning')
     expect(statusTone('failed')).toBe('danger')

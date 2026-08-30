@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { SortableTableHeader } from './SortableTableHeader'
+import { SortableGridHeader, SortableTableHeader } from './SortableTableHeader'
 
 describe('SortableTableHeader', () => {
   it('places an accessible direction arrow next to the column label', () => {
@@ -16,5 +16,18 @@ describe('SortableTableHeader', () => {
     expect(html).toContain('aria-label="Sort Name ascending"')
     expect(html.match(/<span aria-hidden="true">▲<\/span>/g)).toHaveLength(2)
     expect(html.match(/sortable-table-header is-active/g)).toHaveLength(1)
+  })
+
+  it('supports the same single-sort control in grid headers', () => {
+    const html = renderToStaticMarkup(<div role="row">
+      <SortableGridHeader label="State" sortKey="state" sort={{ key: 'state', direction: 'asc' }} onSort={() => undefined} />
+      <SortableGridHeader label="Name" sortKey="name" sort={{ key: 'state', direction: 'asc' }} onSort={() => undefined} />
+    </div>)
+
+    expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>State</span>')
+    expect(html).toContain('aria-label="Sort State descending"')
+    expect(html).toContain('class="sortable-grid-header" role="columnheader" aria-sort="none"><span>Name</span>')
+    expect(html).toContain('aria-label="Sort Name ascending"')
+    expect(html.match(/sortable-grid-header is-active/g)).toHaveLength(1)
   })
 })

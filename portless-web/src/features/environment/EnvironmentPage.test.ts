@@ -47,6 +47,25 @@ describe('environment topology', () => {
     expect(tabs.indexOf('>bindings<')).toBeLessThan(tabs.indexOf('>timeline<'))
   })
 
+  it('reserves the environment status message row when there is no message', () => {
+    const environment = {
+      project: 'billing', name: 'local', status: 'healthy', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [], connections: [],
+    } as Environment
+
+    const healthyMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+    const reasonMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment: { ...environment, status: 'degraded', reason: 'Waiting for orders to become ready' },
+      tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+
+    expect(healthyMarkup).toContain('<p class="environment-heading__message"></p>')
+    expect(reasonMarkup).toContain('<p class="environment-heading__message">Waiting for orders to become ready</p>')
+  })
+
   it('renders the overview topology as a bounded preview that opens the dedicated view', () => {
     const environment = {
       project: 'billing', name: 'local', status: 'healthy', revision: 1,
