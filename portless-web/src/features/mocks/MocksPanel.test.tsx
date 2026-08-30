@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment } from '../../api/contracts/environments'
 import type { MockProfile } from '../../api/contracts/mocks'
-import { createAndEnableMockProfile, MockProfileDrawer, MockProfilesList, MocksPanel, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, RouteModal } from './MocksPanel'
+import { createAndEnableMockProfile, CreateProfileModal, MockProfileDrawer, MockProfilesList, MocksPanel, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, RouteModal } from './MocksPanel'
 
 const environment: Environment = {
   project: 'store', name: 'local', revision: 1, status: 'healthy', createdAt: '', updatedAt: '',
@@ -141,5 +141,20 @@ describe('MocksPanel', () => {
 
     expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
     expect(html).toMatch(/<input(?=[^>]*name="portless-mock-route-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")[^>]*>/)
+  })
+
+  it('keeps password managers away from the mock profile name field', () => {
+    const html = renderToStaticMarkup(<CreateProfileModal
+      environment={environment}
+      recordings={[]}
+      busy={false}
+      error={null}
+      onDismissError={() => undefined}
+      onClose={() => undefined}
+      onCreate={async () => undefined}
+    />)
+
+    expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
+    expect(html).toMatch(/<input(?=[^>]*name="portless-mock-profile-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")(?=[^>]*data-lpignore="true")(?=[^>]*data-bwignore="true")[^>]*>/)
   })
 })

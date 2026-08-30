@@ -343,7 +343,7 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
   </DrawerShell>
 }
 
-function CreateProfileModal({ environment, recordings, busy, error, onDismissError, onClose, onCreate }: {
+export function CreateProfileModal({ environment, recordings, busy, error, onDismissError, onClose, onCreate }: {
   environment: Environment
   recordings: Recording[]
   busy: boolean
@@ -369,10 +369,10 @@ function CreateProfileModal({ environment, recordings, busy, error, onDismissErr
     header={<div><div className="eyebrow">HTTP MOCK</div><h2 id="create-mock-title">Create mock profile</h2></div>}
     onClose={onClose}
   >
-    <form onSubmit={(event) => { event.preventDefault(); void onCreate({ name: name.trim(), service, description: description.trim(), ...(source === 'recording' ? { fromRecording: recording } : {}), ...(source === 'openapi' ? { openapiDocument: document } : {}) }) }}>
+    <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onCreate({ name: name.trim(), service, description: description.trim(), ...(source === 'recording' ? { fromRecording: recording } : {}), ...(source === 'openapi' ? { openapiDocument: document } : {}) }) }}>
       <p>A profile belongs to one service and can be selected as that service's provider in this environment.</p>
       <div className="form-modal__fields">
-        <label><span>NAME</span><input ref={nameInput} name="mock-profile-name" autoComplete="off" placeholder="sold-out" value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+        <label><span>NAME</span><input ref={nameInput} name="portless-mock-profile-name" required autoComplete="off" spellCheck="false" placeholder="sold-out" value={name} disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => setName(event.target.value)} /></label>
         <label><span>SERVICE</span><select value={service} disabled={busy} onChange={(event) => setService(event.target.value)}>{services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
         <label className="provider-field--wide"><span>DESCRIPTION</span><input placeholder="Inventory has no available stock" value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
         <label className="provider-field--wide"><span>START WITH</span><select value={source} disabled={busy} onChange={(event) => setSource(event.target.value as typeof source)}><option value="empty">Empty profile</option><option value="recording">Retained recording</option><option value="openapi">OpenAPI document</option></select></label>
