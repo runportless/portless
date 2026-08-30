@@ -36,14 +36,15 @@ func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
 	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
 		t.Fatal(err)
 	}
+	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	persistent, err := app.CreateFault(ctx, model.FaultRule{
 		Project: "billing", Environment: "local", Name: "persistent-latency",
-		Source: "external", Target: "checkout", Probability: 1, LatencyMS: 250,
+		Source: "external", Target: "checkout", Probability: 1, LatencyMS: 250, CreatedAt: createdAt,
 	}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !persistent.Enabled || persistent.ExpiresAt != nil {
+	if !persistent.Enabled || persistent.ExpiresAt != nil || !persistent.EnabledAt.Equal(createdAt) {
 		t.Fatalf("default fault = %#v, want enabled with no expiry", persistent)
 	}
 
@@ -78,7 +79,7 @@ func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !persistent.Enabled || persistent.Revision != 3 {
+	if !persistent.Enabled || persistent.Revision != 3 || !persistent.EnabledAt.After(createdAt) {
 		t.Fatalf("re-enabled fault = %#v, want enabled revision 3", persistent)
 	}
 	if err := app.DisableFault(ctx, "billing", "local", persistent.Name, "test"); err != nil {

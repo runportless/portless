@@ -188,7 +188,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	}
 	faultPath := "/api/v1/environments/billing/local/faults/api-latency"
 	createdFault := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/faults", `{"name":"api-latency","source":"external","target":"checkout","probability":1,"latencyMs":50}`, true)
-	if createdFault.Code != http.StatusCreated || !strings.Contains(createdFault.Body.String(), `"enabled":true`) {
+	if createdFault.Code != http.StatusCreated || !strings.Contains(createdFault.Body.String(), `"enabled":true`) || !strings.Contains(createdFault.Body.String(), `"enabledAt":`) {
 		t.Fatalf("fault create response code=%d body=%s", createdFault.Code, createdFault.Body.String())
 	}
 	disabledFaults := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/faults/disable-all", "", true)
@@ -196,7 +196,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("disable-all response code=%d body=%s", disabledFaults.Code, disabledFaults.Body.String())
 	}
 	reenabledFault := request(server, authManager, http.MethodPost, faultPath+"/enable", "", true)
-	if reenabledFault.Code != http.StatusOK || !strings.Contains(reenabledFault.Body.String(), `"enabled":true`) {
+	if reenabledFault.Code != http.StatusOK || !strings.Contains(reenabledFault.Body.String(), `"enabled":true`) || !strings.Contains(reenabledFault.Body.String(), `"enabledAt":`) {
 		t.Fatalf("fault enable response code=%d body=%s", reenabledFault.Code, reenabledFault.Body.String())
 	}
 	disabledFault := request(server, authManager, http.MethodPost, faultPath+"/disable", "", true)

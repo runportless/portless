@@ -110,6 +110,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"operations", "request_fingerprint", "TEXT NOT NULL DEFAULT ''"},
 		{"environment_bindings", "modified_at", "TEXT NOT NULL DEFAULT ''"},
 		{"environment_sources", "created_at", "TEXT NOT NULL DEFAULT ''"},
+		{"fault_rules", "enabled_at", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.definition); err != nil {
 			return err
@@ -143,6 +144,12 @@ WHERE modified_at = ''`, nowText()); err != nil {
 		return fmt.Errorf("backfill environment source creation times: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(7, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled_at = created_at WHERE enabled_at = ''`); err != nil {
+		return fmt.Errorf("backfill fault enable times: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(8, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -413,6 +420,7 @@ CREATE TABLE IF NOT EXISTS fault_rules (
   status_code INTEGER NOT NULL DEFAULT 0,
   abort INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
+  enabled_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   expires_at TEXT,
   match_count INTEGER NOT NULL DEFAULT 0,

@@ -289,6 +289,7 @@ func (s *Store) CreateFault(ctx context.Context, fault model.FaultRule) (model.F
 	if fault.CreatedAt.IsZero() {
 		fault.CreatedAt = time.Now().UTC()
 	}
+	fault.EnabledAt = fault.CreatedAt
 	if fault.Probability == 0 {
 		fault.Probability = 1
 	}
@@ -303,10 +304,10 @@ func (s *Store) CreateFault(ctx context.Context, fault model.FaultRule) (model.F
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO fault_rules(environment_key, name, source, target, method, path, probability, latency_ms, jitter_ms,
-  status_code, abort, enabled, created_at, expires_at, revision, scope_summary)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)`, environmentKey, fault.Name, fault.Source, fault.Target,
+  status_code, abort, enabled, enabled_at, created_at, expires_at, revision, scope_summary)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?)`, environmentKey, fault.Name, fault.Source, fault.Target,
 		fault.Method, fault.Path, fault.Probability, fault.LatencyMS, fault.JitterMS, fault.StatusCode, boolInt(fault.Abort),
-		fault.CreatedAt.Format(time.RFC3339Nano), expires, fault.ScopeSummary)
+		fault.EnabledAt.Format(time.RFC3339Nano), fault.CreatedAt.Format(time.RFC3339Nano), expires, fault.ScopeSummary)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return model.FaultRule{}, ErrAlreadyExists
@@ -324,7 +325,7 @@ func (s *Store) Faults(ctx context.Context, selector string, enabledOnly bool) (
 	}
 	query := `
 SELECT name, source, target, method, path, probability, latency_ms, jitter_ms, status_code, abort,
-  enabled, created_at, expires_at, match_count, revision, scope_summary
+  enabled, enabled_at, created_at, expires_at, match_count, revision, scope_summary
 FROM fault_rules WHERE environment_key = ?`
 	if enabledOnly {
 		query += ` AND enabled = 1`
@@ -362,7 +363,7 @@ func (s *Store) Fault(ctx context.Context, selector, name string) (model.FaultRu
 	}
 	fault, err := scanFault(s.db.QueryRowContext(ctx, `
 SELECT name, source, target, method, path, probability, latency_ms, jitter_ms, status_code, abort,
-  enabled, created_at, expires_at, match_count, revision, scope_summary
+  enabled, enabled_at, created_at, expires_at, match_count, revision, scope_summary
 FROM fault_rules WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name), selector)
 	return fault, mapSQLError(err)
 }
@@ -390,7 +391,7 @@ func (s *Store) EnableFault(ctx context.Context, selector, name string) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 1, revision = revision + 1 WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name)
+	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 1, enabled_at = ?, revision = revision + 1 WHERE environment_key = ? AND name = ? COLLATE NOCASE`, nowText(), environmentKey, name)
 	if err != nil {
 		return err
 	}
@@ -459,14 +460,15 @@ func scanRecording(scanner rowScanner, selector string) (model.Recording, error)
 func scanFault(scanner rowScanner, selector string) (model.FaultRule, error) {
 	var fault model.FaultRule
 	var abort, enabled int
-	var created string
+	var enabledAt, created string
 	var expires sql.NullString
 	err := scanner.Scan(&fault.Name, &fault.Source, &fault.Target, &fault.Method, &fault.Path, &fault.Probability,
-		&fault.LatencyMS, &fault.JitterMS, &fault.StatusCode, &abort, &enabled, &created, &expires,
+		&fault.LatencyMS, &fault.JitterMS, &fault.StatusCode, &abort, &enabled, &enabledAt, &created, &expires,
 		&fault.MatchCount, &fault.Revision, &fault.ScopeSummary)
 	fault.Project, fault.Environment = publicScope(selector)
 	fault.Abort = abort != 0
 	fault.Enabled = enabled != 0
+	fault.EnabledAt = parseTime(enabledAt)
 	fault.CreatedAt = parseTime(created)
 	fault.ExpiresAt = parseOptionalTime(expires)
 	return fault, err

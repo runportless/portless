@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -11,6 +12,39 @@ import (
 
 	"github.com/runportless/portless/portless-daemon/model"
 )
+
+func TestOpenBackfillsLegacyFaultEnableTime(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "portless.db")
+	legacy, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := "2026-08-29T12:00:00Z"
+	if _, err := legacy.Exec(`CREATE TABLE fault_rules (created_at TEXT NOT NULL)`); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO fault_rules(created_at) VALUES(?)`, createdAt); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	controlStore, err := Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+	var enabledAt string
+	if err := controlStore.DB().QueryRow(`SELECT enabled_at FROM fault_rules`).Scan(&enabledAt); err != nil {
+		t.Fatal(err)
+	}
+	if enabledAt != createdAt {
+		t.Fatalf("migrated enable time = %q, want %q", enabledAt, createdAt)
+	}
+}
 
 func TestProjectAndEnvironmentStateAreSeparated(t *testing.T) {
 	ctx := context.Background()

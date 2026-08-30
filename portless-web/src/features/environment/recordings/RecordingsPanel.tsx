@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, environmentPath, jsonBody } from '../../../api'
 import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
@@ -7,7 +7,7 @@ import { paginateItems, PanelPagination } from '../../../components/PanelPaginat
 import { relativeTime } from '../../../components/Status'
 import { experimentScopeID, experimentScopes, recordingScopeLabel } from '../../experimentScopes'
 
-const recordingHistoryPageSize = 5
+const recordingHistoryPageSize = 6
 
 export interface CreateRecordingInput {
   name: string
@@ -42,9 +42,8 @@ export function createRecordingDefaults(recordings: Recording[], previous?: Reco
 }
 
 export function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
-  const [repeatFrom, setRepeatFrom] = useState<Recording>()
-  const [controlRequest, setControlRequest] = useState(0)
   const [busy, setBusy] = useState('')
+  const [repeatName, setRepeatName] = useState('')
   const [deleteName, setDeleteName] = useState('')
   const [deleteAllConfirm, setDeleteAllConfirm] = useState(false)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
@@ -52,26 +51,25 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const activeRecording = recordings.find((recording) => recording.status === 'active')
   const historyRecordings = recordings.filter((recording) => recording.status !== 'active')
   const historyPagination = paginateItems(historyRecordings, historyPage, recordingHistoryPageSize)
-  const controlDefaults = createRecordingDefaults(recordings, repeatFrom)
+  const controlDefaults = createRecordingDefaults(recordings)
 
   useEffect(() => {
-    setRepeatFrom(undefined)
-    setControlRequest(0)
+    setRepeatName('')
     setDeleteName('')
     setDeleteAllConfirm(false)
     setError(null)
     setHistoryPage(0)
   }, [environment.project, environment.name])
 
-  const start = async (input: CreateRecordingInput) => {
-    setBusy('create')
+  const start = async (input: CreateRecordingInput, action = 'create') => {
+    setBusy(action)
+    setRepeatName('')
     setDeleteName('')
     setDeleteAllConfirm(false)
     setError(null)
     try {
       await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody(input) })
       await refresh()
-      setRepeatFrom(undefined)
     } catch (value) {
       setError(actionError("Recording wasn't started", value))
     } finally {
@@ -81,6 +79,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const stop = async (recording: Recording) => {
     setBusy(`stop:${recording.name}`)
+    setRepeatName('')
     setDeleteName('')
     setDeleteAllConfirm(false)
     setError(null)
@@ -96,6 +95,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const remove = async (recording: Recording) => {
     setDeleteAllConfirm(false)
+    setRepeatName('')
     if (deleteName !== recording.name) {
       setDeleteName(recording.name)
       setError(null)
@@ -118,6 +118,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     if (busy || historyRecordings.length === 0) return
     if (!deleteAllConfirm) {
       setDeleteAllConfirm(true)
+      setRepeatName('')
       setDeleteName('')
       setError(null)
       return
@@ -141,28 +142,36 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     }
   }
 
-  const prepareRepeat = (recording: Recording) => {
-    setRepeatFrom(recording)
-    setControlRequest((value) => value + 1)
+  const recordAgain = async (recording: Recording) => {
+    if (repeatName !== recording.name) {
+      setRepeatName(recording.name)
+      setDeleteName('')
+      setDeleteAllConfirm(false)
+      setError(null)
+      return
+    }
+    await start(createRecordingDefaults(recordings, recording), `repeat:${recording.name}`)
+  }
+
+  const clearRowConfirmations = () => {
+    setRepeatName('')
     setDeleteName('')
     setDeleteAllConfirm(false)
-    setError(null)
   }
 
   return <div className="recordings-page">
     {error && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
     <section className="panel recording-control-panel">
-      <div className="panel-title"><span>{activeRecording ? 'ACTIVE RECORDING' : 'NEW RECORDING'}</span>{activeRecording && <small>RECORDING</small>}</div>
+      <div className="panel-title"><span>{activeRecording ? 'ACTIVE RECORDING' : 'NEW RECORDING'}</span></div>
       {activeRecording
         ? <ActiveRecordingControl recording={activeRecording} busy={busy === `stop:${activeRecording.name}`} onStop={() => void stop(activeRecording)} />
         : <RecordingControlForm
-            key={`${environment.project}/${environment.name}:${controlRequest}`}
+            key={`${environment.project}/${environment.name}`}
             environment={environment}
             defaults={controlDefaults}
-            busy={busy === 'create'}
-            focusNameRequest={controlRequest}
+            busy={!!busy}
             onDismissError={() => setError(null)}
-            onCreate={start}
+            onCreate={(input) => start(input)}
           />}
     </section>
 
@@ -183,7 +192,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
       </div>
       <div className="recording-history-scroll">
         <table className="recording-history-table">
-          <thead><tr><th>Recording</th><th>Events</th><th>Created at</th><th>Completed</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Recording</th><th>Events</th><th>Created at</th><th>Duration</th><th>Completed</th><th aria-label="Actions" /></tr></thead>
           <tbody>
             {historyPagination.items.map((recording) => <tr key={recording.name}>
               <td>
@@ -194,18 +203,20 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
               </td>
               <td>{recording.eventCount.toLocaleString()}</td>
               <td className="recording-history__created"><time dateTime={recording.startedAt} title={new Date(recording.startedAt).toLocaleString()}>{formatRecordingTimestamp(recording.startedAt)}</time></td>
+              <td className="recording-history__duration">{recording.completedAt ? formatRecordingDuration(recording.startedAt, new Date(recording.completedAt).getTime()) : '—'}</td>
               <td className="recording-history__time"><time dateTime={recording.completedAt || recording.startedAt}>{relativeTime(recording.completedAt || recording.startedAt)} ago</time></td>
               <td><div className="table-row-actions recording-history__actions">
-                <button
-                  type="button"
+                <RecordingHistoryRepeatButton
+                  recordingName={recording.name}
+                  confirming={repeatName === recording.name}
+                  starting={busy === `repeat:${recording.name}`}
                   disabled={!!busy || !!activeRecording}
-                  aria-label={`Record ${recording.name} again`}
-                  onClick={() => prepareRepeat(recording)}
-                >RECORD AGAIN</button>
+                  onClick={() => void recordAgain(recording)}
+                />
                 <a
                   className="recording-history__export"
                   href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}
-                  onClick={() => { setDeleteName(''); setDeleteAllConfirm(false) }}
+                  onClick={clearRowConfirmations}
                 >EXPORT</a>
                 <button
                   className={deleteName === recording.name ? 'is-confirming' : ''}
@@ -216,20 +227,60 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
                 >{busy === `delete:${recording.name}` ? 'DELETING…' : deleteName === recording.name ? 'CONFIRM' : 'DELETE'}</button>
               </div></td>
             </tr>)}
-            {historyRecordings.length === 0 && <tr><td className="recording-history__empty" colSpan={5}>No recording history yet. Completed recordings will appear here.</td></tr>}
+            {historyRecordings.length === 0 && <tr><td className="recording-history__empty" colSpan={6}>No recording history yet. Completed recordings will appear here.</td></tr>}
           </tbody>
         </table>
       </div>
-      <PanelPagination label="recordings" pagination={historyPagination} onPage={(page) => { setHistoryPage(page); setDeleteName(''); setDeleteAllConfirm(false) }} />
+      <PanelPagination label="recordings" pagination={historyPagination} onPage={(page) => { setHistoryPage(page); clearRowConfirmations() }} />
     </section>
   </div>
+}
+
+export function RecordingHistoryRepeatButton({ recordingName, confirming, starting, disabled, onClick }: {
+  recordingName: string
+  confirming: boolean
+  starting: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  return <button
+    className={`recording-history__repeat${confirming ? ' is-confirming' : ''}`}
+    type="button"
+    disabled={disabled}
+    aria-label={confirming ? `Confirm record ${recordingName} again` : `Record ${recordingName} again`}
+    onClick={onClick}
+  >{starting ? 'STARTING…' : confirming ? 'CONFIRM' : 'RECORD AGAIN'}</button>
 }
 
 function formatRecordingTimestamp(value: string) {
   return new Date(value).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
 }
 
+export function formatRecordingDuration(startedAt: string, now = Date.now()) {
+  const started = new Date(startedAt).getTime()
+  const elapsedSeconds = Number.isFinite(started) && Number.isFinite(now) ? Math.max(0, Math.floor((now - started) / 1000)) : 0
+  const hours = Math.floor(elapsedSeconds / 3600)
+  const minutes = Math.floor(elapsedSeconds % 3600 / 60)
+  const seconds = elapsedSeconds % 60
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
+}
+
+type RecordingDurationScheduler = {
+  setInterval: (callback: () => void, milliseconds: number) => number
+  clearInterval: (timer: number) => void
+}
+
+export function startRecordingDurationTimer(onTick: (now: number) => void, scheduler: RecordingDurationScheduler = window) {
+  const tick = () => onTick(Date.now())
+  tick()
+  const timer = scheduler.setInterval(tick, 1000)
+  return () => scheduler.clearInterval(timer)
+}
+
 function ActiveRecordingControl({ recording, busy, onStop }: { recording: Recording; busy: boolean; onStop: () => void }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => startRecordingDurationTimer(setNow), [recording.startedAt])
+
   return <div className="recording-active-control">
     <div className="recording-active-control__identity">
       <span className="recording-active-control__pulse" aria-hidden="true" />
@@ -238,18 +289,17 @@ function ActiveRecordingControl({ recording, busy, onStop }: { recording: Record
     <div className="recording-active-control__details">
       <div><span>TRAFFIC SCOPE</span><strong>{recordingScopeLabel(recording)}</strong></div>
       <div><span>CAPTURED EVENTS</span><strong>{recording.eventCount.toLocaleString()}</strong></div>
-      <div><span>STARTED</span><strong>{relativeTime(recording.startedAt)} ago</strong></div>
+      <div><span>DURATION</span><strong>{formatRecordingDuration(recording.startedAt, now)}</strong></div>
       <div><span>PAYLOADS</span><strong>{recording.capturePayloads ? 'Captured' : 'Not captured'}</strong></div>
     </div>
     <button className="button button--danger" type="button" disabled={busy} onClick={onStop}>{busy ? 'STOPPING…' : 'STOP RECORDING'}</button>
   </div>
 }
 
-function RecordingControlForm({ environment, defaults, busy, focusNameRequest, onDismissError, onCreate }: {
+function RecordingControlForm({ environment, defaults, busy, onDismissError, onCreate }: {
   environment: Environment
   defaults: CreateRecordingInput
   busy: boolean
-  focusNameRequest: number
   onDismissError: () => void
   onCreate: (input: CreateRecordingInput) => Promise<void>
 }) {
@@ -265,7 +315,6 @@ function RecordingControlForm({ environment, defaults, busy, focusNameRequest, o
   const [capturePayloads, setCapturePayloads] = useState(defaults.capturePayloads)
   const [maxPayloadBytes, setMaxPayloadBytes] = useState(defaults.maxPayloadBytes)
   const [dirty, setDirty] = useState(false)
-  const nameInput = useRef<HTMLInputElement>(null)
   const selectedScope = scopes.find((scope) => scope.id === scopeID)
 
   useEffect(() => {
@@ -275,12 +324,6 @@ function RecordingControlForm({ environment, defaults, busy, focusNameRequest, o
     setCapturePayloads(defaults.capturePayloads)
     setMaxPayloadBytes(defaults.maxPayloadBytes)
   }, [defaults.capturePayloads, defaults.maxPayloadBytes, defaults.name, defaults.source, defaults.target, dirty])
-
-  useEffect(() => {
-    if (!focusNameRequest) return
-    nameInput.current?.focus()
-    nameInput.current?.select()
-  }, [focusNameRequest])
 
   const change = () => {
     setDirty(true)
@@ -300,7 +343,7 @@ function RecordingControlForm({ environment, defaults, busy, focusNameRequest, o
       })
     }}>
       <div className="recording-control-form__primary">
-        <label><span>NAME</span><input ref={nameInput} name="portless-recording-name" required autoComplete="off" spellCheck="false" value={name} disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); change() }} /></label>
+        <label><span>NAME</span><input name="portless-recording-name" required autoComplete="off" spellCheck="false" value={name} disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); change() }} /></label>
         <label><span>SCOPE</span><select aria-label="Recording traffic scope" value={scopeID} disabled={busy} onChange={(event) => { setScopeID(event.target.value); change() }}><option value="">All traffic</option>{scopes.map((scope) => <option value={scope.id} key={scope.id}>{scope.label}</option>)}</select></label>
         <div className={`recording-payload-field${capturePayloads ? ' is-active' : ''}`} role="group" aria-labelledby="recording-payload-label">
           <span id="recording-payload-label">PAYLOADS</span>

@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { api, environmentPath, jsonBody } from '../../api'
 import { StatusMark } from '../../components/Status'
 import type { Environment, Operation } from '../../api/contracts/environments'
+import type { Recording } from '../../api/contracts/experiments'
 import type { Project } from '../../api/contracts/projects'
 import type { Service } from '../../api/contracts/topology'
 import { MocksPanel } from '../mocks'
@@ -64,8 +65,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
     <div className="project-heading">
       <div><div className="eyebrow">{environment.project} / ENVIRONMENT</div><div className="title-with-status"><h1>{environment.name}</h1><StatusMark status={environment.status} /></div>{(environment.reason || environment.status === 'stopped') && <p>{environment.reason || 'not running'}</p>}</div>
       <div className="project-actions">
-        {activeRecording && <span className="recording-indicator"><i />REC {activeRecording.name}</span>}
-        {activeFaults.length > 0 && <span className="fault-indicator">▲ {activeFaults.length} ACTIVE {activeFaults.length === 1 ? 'FAULT' : 'FAULTS'}</span>}
+        <EnvironmentActivityIndicators environment={environment} activeRecording={activeRecording} activeFaultCount={activeFaults.length} onNavigate={onNavigate} />
         {environment.status !== 'stopped' ? <button className="button" disabled={!!busy || environment.status === 'recovering'} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : environment.status === 'recovering' ? 'RECOVERING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}
         {primaryHTTP && <a className="button" href={primaryHTTP.url} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
       </div>
@@ -79,10 +79,30 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
     {tab === 'topology' && <TopologyPanel environment={environment} faults={activeFaults} onService={setSelectedService} onEdge={(edge) => navigateTab('traffic', { edge: `${edge.source}:${edge.target}`, protocol: edge.protocol === 'http' ? 'http' : 'tcp' })} />}
     {tab === 'bindings' && <BindingsPanel environment={environment} project={project} onNavigate={onNavigate} onChanged={onChanged} />}
     {tab === 'traffic' && <TrafficPanel environment={environment} />}
-    {tab === 'mocks' && <MocksPanel environment={environment} selectedProfile={mockProfile} onSelectProfile={(profile) => navigateTab('mocks', { profile })} />}
+    {tab === 'mocks' && <MocksPanel environment={environment} project={project} selectedProfile={mockProfile} onSelectProfile={(profile) => navigateTab('mocks', { profile })} onChanged={onChanged} />}
     {tab === 'recordings' && <RecordingsPanel environment={environment} recordings={activity.recordings} refresh={activity.refresh} />}
     {tab === 'faults' && <FaultsPanel environment={environment} faults={activity.faults} refresh={activity.refresh} />}
     {tab === 'timeline' && <TimelinePanel key={`${environment.project}/${environment.name}`} timeline={activity.timeline} />}
     {selectedService && <ServiceDrawer environment={environment} service={selectedService} onClose={() => setSelectedService(null)} onChanged={onChanged} />}
   </div>
+}
+
+export function EnvironmentActivityIndicators({ environment, activeRecording, activeFaultCount, onNavigate }: {
+  environment: Pick<Environment, 'project' | 'name'>
+  activeRecording?: Recording
+  activeFaultCount: number
+  onNavigate: (path: string) => void
+}) {
+  const recordingPath = environmentUIPath(environment, 'recordings')
+  const faultsPath = environmentUIPath(environment, 'faults')
+  const navigate = (event: ReactMouseEvent<HTMLAnchorElement>, path: string) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    onNavigate(path)
+  }
+
+  return <>
+    {activeRecording && <a className="recording-indicator" href={recordingPath} onClick={(event) => navigate(event, recordingPath)}><i />REC {activeRecording.name}</a>}
+    {activeFaultCount > 0 && <a className="fault-indicator" href={faultsPath} onClick={(event) => navigate(event, faultsPath)}>▲ {activeFaultCount} ACTIVE {activeFaultCount === 1 ? 'FAULT' : 'FAULTS'}</a>}
+  </>
 }

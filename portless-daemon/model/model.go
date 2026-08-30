@@ -771,6 +771,7 @@ type FaultRule struct {
 	StatusCode   int        `json:"statusCode,omitempty"`
 	Abort        bool       `json:"abort,omitempty"`
 	Enabled      bool       `json:"enabled"`
+	EnabledAt    time.Time  `json:"enabledAt"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 	MatchCount   int64      `json:"matchCount"`

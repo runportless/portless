@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment } from '../../api/contracts/environments'
 import type { MockProfile } from '../../api/contracts/mocks'
-import { MockProfileDrawer, MocksPanel, mockHTTPStatusGroups, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs } from './MocksPanel'
+import { createAndEnableMockProfile, MockProfileDrawer, MockProfilesList, MocksPanel, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, RouteModal } from './MocksPanel'
 
 const environment: Environment = {
   project: 'store', name: 'local', revision: 1, status: 'healthy', createdAt: '', updatedAt: '',
@@ -10,9 +10,14 @@ const environment: Environment = {
   connections: [], bindings: [{ service: 'inventory', provider: 'local', source: 'store' }],
 }
 
+const profile: MockProfile = {
+  project: 'store', environment: 'local', name: 'sold-out', service: 'inventory', description: 'Inventory has no available stock', createdAt: '2026-08-18T12:00:00Z', modifiedAt: '2026-08-18T12:00:00Z',
+  routes: [{ name: 'lookup', method: 'GET', path: '/inventory/{sku}', status: 200, body: '{"available":false}', delayMs: 0, enabled: true }],
+}
+
 describe('MocksPanel', () => {
   it('starts with a clear environment-scoped profile workspace', () => {
-    const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectProfile={() => undefined} />)
+    const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectProfile={() => undefined} onChanged={() => undefined} />)
     expect(html).toContain('MOCK PROFILES')
     expect(html).toContain('CREATE PROFILE')
     expect(html).toContain('<span>Name</span><span>Service</span>')
@@ -20,10 +25,6 @@ describe('MocksPanel', () => {
   })
 
   it('renders profile routes in the standard maximizable drawer', () => {
-    const profile: MockProfile = {
-      project: 'store', environment: 'local', name: 'sold-out', service: 'inventory', description: 'Inventory has no available stock', createdAt: '2026-08-18T12:00:00Z', modifiedAt: '2026-08-18T12:00:00Z',
-      routes: [{ name: 'lookup', method: 'GET', path: '/inventory/{sku}', status: 200, body: '{"available":false}', delayMs: 0, enabled: true }],
-    }
     const html = renderToStaticMarkup(<MockProfileDrawer environment={environment} profile={profile} active busy="" deleteName="" error={null} onDismissError={() => undefined} onClose={() => undefined} onPreview={() => undefined} onAddRoute={() => undefined} onEditRoute={() => undefined} onDeleteRoute={() => undefined} />)
     expect(html).toContain('class="drawer mock-profile-drawer"')
     expect(html).toContain('role="dialog" aria-modal="true" aria-label="sold-out mock profile"')
@@ -35,6 +36,71 @@ describe('MocksPanel', () => {
     expect(html).not.toContain('<span>Actions</span>')
     expect(html).toContain('GET /inventory/{sku}')
     expect(html).toContain('Inventory has no available stock')
+  })
+
+  it('adds a disable-all subheader and enable action for available profiles', () => {
+    const html = renderToStaticMarkup(<MockProfilesList
+      environment={environment}
+      profiles={[profile]}
+      loading={false}
+      busy=""
+      deleteName=""
+      transitionBlocked={false}
+      onCreate={() => undefined}
+      onOpen={() => undefined}
+      onToggle={() => undefined}
+      onDelete={() => undefined}
+      onDisableAll={() => undefined}
+    />)
+
+    expect(html).toContain('class="mock-profiles-bulk-actions"')
+    expect(html).toMatch(/class="mock-profiles-disable-all-link"[^>]*disabled=""[^>]*>DISABLE ALL<\/button>/)
+    expect(html.indexOf('CREATE PROFILE')).toBeLessThan(html.indexOf('DISABLE ALL'))
+    expect(html).toContain('aria-label="Enable sold-out"')
+    expect(html).toContain('>ENABLE</button>')
+  })
+
+  it('offers disable actions for the active profile and enables the bulk control', () => {
+    const activeEnvironment: Environment = {
+      ...environment,
+      bindings: [{ service: 'inventory', provider: 'mock', mock: { profile: 'sold-out' } }],
+    }
+    const html = renderToStaticMarkup(<MockProfilesList
+      environment={activeEnvironment}
+      profiles={[profile]}
+      loading={false}
+      busy=""
+      deleteName=""
+      transitionBlocked={false}
+      onCreate={() => undefined}
+      onOpen={() => undefined}
+      onToggle={() => undefined}
+      onDelete={() => undefined}
+      onDisableAll={() => undefined}
+    />)
+
+    expect(mockProfileIsActive(activeEnvironment, profile)).toBe(true)
+    expect(html).toMatch(/class="mock-profiles-disable-all-link"(?![^>]*disabled)[^>]*>DISABLE ALL<\/button>/)
+    expect(html).toContain('aria-label="Disable sold-out"')
+    expect(html).toContain('>DISABLE</button>')
+    expect(html).toContain('>bound</span>')
+  })
+
+  it('enables a newly created profile by default and preserves it when activation fails', async () => {
+    const created = { mock: profile, warnings: [] }
+    let enabledProfile = ''
+
+    await expect(createAndEnableMockProfile(
+      async () => created,
+      async (item) => { enabledProfile = item.name },
+    )).resolves.toEqual({ created, activated: true })
+    expect(enabledProfile).toBe('sold-out')
+
+    const activationFailure = new Error('provider handoff failed')
+    await expect(createAndEnableMockProfile(
+      async () => created,
+      async () => { throw activationFailure },
+    )).resolves.toEqual({ created, activated: false, activationFailure })
   })
 
   it('parses multiline query and header fields without changing values', () => {
@@ -59,5 +125,21 @@ describe('MocksPanel', () => {
     expect(codes).not.toContain(103)
     expect(codes).not.toContain(299)
     expect(codes).not.toContain(599)
+  })
+
+  it('keeps password managers away from the mock route name field', () => {
+    const html = renderToStaticMarkup(<RouteModal
+      draft={{ name: '', method: 'GET', path: '/', status: 200, body: '', delayMs: 0, enabled: true, queryText: '', headersText: '' }}
+      editing={false}
+      busy={false}
+      error={null}
+      onDismissError={() => undefined}
+      onChange={() => undefined}
+      onClose={() => undefined}
+      onSave={async () => undefined}
+    />)
+
+    expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
+    expect(html).toMatch(/<input(?=[^>]*name="portless-mock-route-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")[^>]*>/)
   })
 })

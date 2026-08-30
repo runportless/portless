@@ -135,8 +135,8 @@ The Playwright suite protects these browser journeys:
   credentials, and Portless-injected trace carriers kept out of header views;
 - recording, mock-provider, and fault workflows, including a URL-addressable,
   maximizable mock-profile route drawer, complete header/body preview input,
-  and a live mock handoff that keeps peer service PIDs stable and preserves
-  traffic attribution;
+  and profile creation that hot-binds its service by default while keeping peer
+  service PIDs stable and preserving traffic attribution;
 - environment stop/start controls, project-page source add/delete, and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;

@@ -32,6 +32,7 @@ export interface FaultRule {
   statusCode?: number
   abort?: boolean
   enabled: boolean
+  enabledAt: string
   createdAt: string
   expiresAt?: string
   matchCount: number

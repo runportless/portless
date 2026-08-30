@@ -4,9 +4,14 @@ import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../c
 import { DrawerShell } from '../../components/overlays/DrawerShell'
 import { FormDialog } from '../../components/overlays/FormDialog'
 import { StatusMark } from '../../components/Status'
-import type { Environment } from '../../api/contracts/environments'
+import type { Environment, Operation } from '../../api/contracts/environments'
 import type { Recording, RecordingList } from '../../api/contracts/experiments'
 import type { MockMutation, MockPreview, MockProfile, MockProfileList, MockRoute } from '../../api/contracts/mocks'
+import type { Project } from '../../api/contracts/projects'
+import type { ComponentBinding } from '../../api/contracts/topology'
+import { defaultProviderBinding } from '../environment/bindings/bindingPresentation'
+import { waitForEnvironmentOperation } from '../environment/operationPolling'
+import { httpStatusGroups } from '../httpStatuses'
 
 type RouteDraft = Pick<MockRoute, 'name' | 'method' | 'path' | 'status' | 'body' | 'delayMs' | 'enabled'> & {
   queryText: string
@@ -18,34 +23,15 @@ const emptyRoute = (): RouteDraft => ({
   queryText: '', headersText: 'Content-Type: application/json',
 })
 
-export const mockHTTPStatusGroups = [
-  { label: '2xx Success', statuses: [
-    [200, 'OK'], [201, 'Created'], [202, 'Accepted'], [203, 'Non-Authoritative Information'],
-    [204, 'No Content'], [205, 'Reset Content'], [206, 'Partial Content'], [207, 'Multi-Status'],
-    [208, 'Already Reported'], [226, 'IM Used'],
-  ] },
-  { label: '3xx Redirection', statuses: [
-    [300, 'Multiple Choices'], [301, 'Moved Permanently'], [302, 'Found'], [303, 'See Other'],
-    [304, 'Not Modified'], [305, 'Use Proxy'], [307, 'Temporary Redirect'], [308, 'Permanent Redirect'],
-  ] },
-  { label: '4xx Client Error', statuses: [
-    [400, 'Bad Request'], [401, 'Unauthorized'], [402, 'Payment Required'], [403, 'Forbidden'],
-    [404, 'Not Found'], [405, 'Method Not Allowed'], [406, 'Not Acceptable'], [407, 'Proxy Authentication Required'],
-    [408, 'Request Timeout'], [409, 'Conflict'], [410, 'Gone'], [411, 'Length Required'],
-    [412, 'Precondition Failed'], [413, 'Request Entity Too Large'], [414, 'Request URI Too Long'],
-    [415, 'Unsupported Media Type'], [416, 'Requested Range Not Satisfiable'], [417, 'Expectation Failed'],
-    [418, "I'm a teapot"], [421, 'Misdirected Request'], [422, 'Unprocessable Entity'], [423, 'Locked'],
-    [424, 'Failed Dependency'], [425, 'Too Early'], [426, 'Upgrade Required'], [428, 'Precondition Required'],
-    [429, 'Too Many Requests'], [431, 'Request Header Fields Too Large'], [451, 'Unavailable For Legal Reasons'],
-  ] },
-  { label: '5xx Server Error', statuses: [
-    [500, 'Internal Server Error'], [501, 'Not Implemented'], [502, 'Bad Gateway'], [503, 'Service Unavailable'],
-    [504, 'Gateway Timeout'], [505, 'HTTP Version Not Supported'], [506, 'Variant Also Negotiates'],
-    [507, 'Insufficient Storage'], [508, 'Loop Detected'], [510, 'Not Extended'], [511, 'Network Authentication Required'],
-  ] },
-] as const
+export const mockHTTPStatusGroups = httpStatusGroups
 
-export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { environment: Environment; selectedProfile?: string; onSelectProfile: (profile?: string) => void }) {
+export function MocksPanel({ environment, project, selectedProfile, onSelectProfile, onChanged }: {
+  environment: Environment
+  project?: Project
+  selectedProfile?: string
+  onSelectProfile: (profile?: string) => void
+  onChanged: () => void | Promise<void>
+}) {
   const [profiles, setProfiles] = useState<MockProfile[]>([])
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [loading, setLoading] = useState(true)
@@ -58,6 +44,7 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
   const [deleteName, setDeleteName] = useState('')
   const [busy, setBusy] = useState('')
   const selected = selectedProfile ? profiles.find((profile) => profile.name === selectedProfile) : undefined
+  const transitionBlocked = ['starting', 'stopping', 'recovering', 'unknown'].includes(environment.status)
 
   const refresh = async () => {
     const [mockResult, recordingResult] = await Promise.all([
@@ -91,6 +78,53 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
       setDeleteName(''); await refresh()
     } catch (reason) { setError(actionError("Mock profile wasn't deleted", reason)) }
     finally { setBusy('') }
+  }
+
+  const replaceBinding = async (binding: ComponentBinding) => {
+    const operation = await api<Operation>(environmentPath(environment, `/bindings/${encodeURIComponent(binding.service)}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(binding),
+    })
+    const completed = await waitForEnvironmentOperation(environment, operation)
+    if (completed.state !== 'succeeded') throw new Error(completed.error || `Provider change ${completed.state}`)
+  }
+
+  const defaultBindingFor = (serviceName: string) => {
+    const service = environment.services.find((item) => item.name.toLowerCase() === serviceName.toLowerCase())
+    if (!service) throw new Error(`Service ${serviceName} is no longer available.`)
+    const binding = defaultProviderBinding(project, environment, service)
+    if (!binding) throw new Error(`Configure a checkout for ${service.name} before disabling its mock profile.`)
+    return binding
+  }
+
+  const setProfileEnabled = async (profile: MockProfile, enabled: boolean) => {
+    const action = `${enabled ? 'enable' : 'disable'}:${profile.name}`
+    setBusy(action); setDeleteName(''); setError(null)
+    try {
+      await replaceBinding(enabled
+        ? { service: profile.service, provider: 'mock', mock: { profile: profile.name } }
+        : defaultBindingFor(profile.service))
+      await onChanged()
+    } catch (reason) { setError(actionError(`Mock profile wasn't ${enabled ? 'enabled' : 'disabled'}`, reason)) }
+    finally { setBusy('') }
+  }
+
+  const disableAllProfiles = async () => {
+    const activeBindings = mockProfileBindings(environment)
+    if (activeBindings.length === 0) return
+    setBusy('disable-all'); setDeleteName(''); setError(null)
+    let changed = false
+    try {
+      for (const binding of activeBindings) {
+        await replaceBinding(defaultBindingFor(binding.service))
+        changed = true
+      }
+      await onChanged()
+    } catch (reason) {
+      if (changed) void Promise.resolve(onChanged()).catch(() => undefined)
+      setError(actionError("Mock profiles weren't disabled", reason))
+    } finally { setBusy('') }
   }
 
   const openRoute = (route?: MockRoute) => {
@@ -141,26 +175,25 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
   return <div className="mocks-page">
     {error && !createOpen && !routeDraft && !selected && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
     {warnings.length > 0 && <div className="mock-warning"><strong>IMPORT FINISHED WITH NOTES</strong><span>{warnings.join(' ')}</span><button type="button" onClick={() => setWarnings([])}>DISMISS</button></div>}
-    <section className="panel mock-profiles-panel">
-      <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" onClick={() => { setCreateOpen(true); setError(null) }}>CREATE PROFILE</button></div>
-      <div className="mock-profile-row mock-profile-row--header" role="row"><span>Name</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span aria-hidden="true" /></div>
-      {profiles.map((profile) => {
-        const active = environment.bindings?.some((binding) => binding.provider === 'mock' && binding.mock?.profile === profile.name)
-        return <div className={`mock-profile-row${selected?.name === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => { setDeleteName(''); setError(null); onSelectProfile(profile.name) }}>
-          <div><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><strong>{profile.name}</strong></div>
-          <span>{profile.service}</span><span>{profile.routes.length}</span><span>{active ? 'bound' : 'available'}</span>
-          <time dateTime={profile.modifiedAt}>{formatTimestamp(profile.modifiedAt)}</time>
-          <div className="mock-row-actions table-row-actions"><button type="button" disabled={busy !== ''} onClick={(event) => { event.stopPropagation(); setError(null); onSelectProfile(profile.name) }}>OPEN</button><button className={deleteName === profile.name ? 'is-confirming' : ''} type="button" disabled={busy !== ''} onClick={(event) => { event.stopPropagation(); void removeProfile(profile) }}>{deleteName === profile.name ? 'CONFIRM' : 'DELETE'}</button></div>
-        </div>
-      })}
-      {!loading && profiles.length === 0 && <div className="empty-row">No mock profiles. Create one for a service you do not want to run locally.</div>}
-      {loading && <div className="empty-row">Loading mock profiles…</div>}
-    </section>
+    <MockProfilesList
+      environment={environment}
+      profiles={profiles}
+      selectedProfile={selected?.name}
+      loading={loading}
+      busy={busy}
+      deleteName={deleteName}
+      transitionBlocked={transitionBlocked}
+      onCreate={() => { setCreateOpen(true); setDeleteName(''); setError(null) }}
+      onOpen={(profile) => { setDeleteName(''); setError(null); onSelectProfile(profile.name) }}
+      onToggle={(profile, enabled) => { void setProfileEnabled(profile, enabled) }}
+      onDelete={(profile) => { void removeProfile(profile) }}
+      onDisableAll={() => { void disableAllProfiles() }}
+    />
 
     {selected && <MockProfileDrawer
       environment={environment}
       profile={selected}
-      active={!!environment.bindings?.some((binding) => binding.provider === 'mock' && binding.mock?.profile === selected.name)}
+      active={mockProfileIsActive(environment, selected)}
       busy={busy}
       deleteName={deleteName}
       error={!createOpen && !routeDraft ? error : null}
@@ -174,15 +207,101 @@ export function MocksPanel({ environment, selectedProfile, onSelectProfile }: { 
 
     {createOpen && <CreateProfileModal environment={environment} recordings={recordings} busy={busy === 'create'} error={error} onDismissError={() => setError(null)} onClose={() => setCreateOpen(false)} onCreate={async (input) => {
       setBusy('create'); setError(null)
+      let result: Awaited<ReturnType<typeof createAndEnableMockProfile>>
       try {
-        const created = await api<MockMutation>(environmentPath(environment, '/mocks'), { method: 'POST', ...jsonBody(input) })
-        setWarnings(created.warnings || []); setCreateOpen(false); await refresh(); onSelectProfile(created.mock.name)
-      } catch (reason) { setError(actionError("Mock profile wasn't created", reason)) }
-      finally { setBusy('') }
+        result = await createAndEnableMockProfile(
+          () => api<MockMutation>(environmentPath(environment, '/mocks'), { method: 'POST', ...jsonBody(input) }),
+          async (profile) => {
+            await replaceBinding({ service: profile.service, provider: 'mock', mock: { profile: profile.name } })
+            await onChanged()
+          },
+        )
+      } catch (reason) {
+        setError(actionError("Mock profile wasn't created", reason))
+        setBusy('')
+        return
+      }
+      const { created } = result
+      setWarnings(created.warnings || [])
+      setCreateOpen(false)
+      try {
+        await refresh()
+      } catch (reason) {
+        setError(actionError("Mock profile was created, but the profile list couldn't be refreshed", reason))
+        setBusy('')
+        return
+      }
+      setBusy('')
+      if (!result.activated) {
+        setError(actionError("Mock profile was created but wasn't enabled", result.activationFailure))
+        return
+      }
+      onSelectProfile(created.mock.name)
     }} />}
     {routeDraft && <RouteModal draft={routeDraft} editing={!!routeOriginalName} busy={busy === 'route'} error={error} onDismissError={() => setError(null)} onChange={setRouteDraft} onClose={() => setRouteDraft(null)} onSave={saveRoute} />}
     {previewOpen && selected && <PreviewModal environment={environment} profile={selected} onClose={() => setPreviewOpen(false)} />}
   </div>
+}
+
+export async function createAndEnableMockProfile(create: () => Promise<MockMutation>, enable: (profile: MockProfile) => Promise<void>) {
+  const created = await create()
+  try {
+    await enable(created.mock)
+    return { created, activated: true as const }
+  } catch (activationFailure) {
+    return { created, activated: false as const, activationFailure }
+  }
+}
+
+export function mockProfileBindings(environment: Pick<Environment, 'bindings'>) {
+  return (environment.bindings || []).filter((binding) => binding.provider === 'mock')
+}
+
+export function mockProfileIsActive(environment: Pick<Environment, 'bindings'>, profile: Pick<MockProfile, 'name' | 'service'>) {
+  return mockProfileBindings(environment).some((binding) =>
+    binding.service.toLowerCase() === profile.service.toLowerCase() &&
+    binding.mock?.profile.toLowerCase() === profile.name.toLowerCase(),
+  )
+}
+
+export function MockProfilesList({ environment, profiles, selectedProfile, loading, busy, deleteName, transitionBlocked, onCreate, onOpen, onToggle, onDelete, onDisableAll }: {
+  environment: Environment
+  profiles: MockProfile[]
+  selectedProfile?: string
+  loading: boolean
+  busy: string
+  deleteName: string
+  transitionBlocked: boolean
+  onCreate: () => void
+  onOpen: (profile: MockProfile) => void
+  onToggle: (profile: MockProfile, enabled: boolean) => void
+  onDelete: (profile: MockProfile) => void
+  onDisableAll: () => void
+}) {
+  const activeBindings = mockProfileBindings(environment)
+  return <section className="panel mock-profiles-panel">
+    <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE PROFILE</button></div>
+    {profiles.length > 0 && <div className="mock-profiles-bulk-actions">
+      <button className="mock-profiles-disable-all-link" type="button" disabled={!!busy || transitionBlocked || activeBindings.length === 0} onClick={onDisableAll}>{busy === 'disable-all' ? 'DISABLING…' : 'DISABLE ALL'}</button>
+    </div>}
+    <div className="mock-profile-row mock-profile-row--header" role="row"><span>Name</span><span>Service</span><span>Routes</span><span>State</span><span>Modified</span><span aria-hidden="true" /></div>
+    {profiles.map((profile) => {
+      const active = mockProfileIsActive(environment, profile)
+      const toggleAction = `${active ? 'disable' : 'enable'}:${profile.name}`
+      return <div className={`mock-profile-row${selectedProfile === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => onOpen(profile)}>
+        <div><StatusMark status={active ? 'ready' : 'stopped'} label={false} /><strong>{profile.name}</strong></div>
+        <span>{profile.service}</span><span>{profile.routes.length}</span><span>{active ? 'bound' : 'available'}</span>
+        <time dateTime={profile.modifiedAt}>{formatTimestamp(profile.modifiedAt)}</time>
+        <div className="mock-row-actions table-row-actions">
+          <button type="button" disabled={!!busy || transitionBlocked} aria-label={`${active ? 'Disable' : 'Enable'} ${profile.name}`} onClick={(event) => { event.stopPropagation(); onToggle(profile, !active) }}>{busy === toggleAction ? active ? 'DISABLING…' : 'ENABLING…' : active ? 'DISABLE' : 'ENABLE'}</button>
+          <button type="button" disabled={!!busy} onClick={(event) => { event.stopPropagation(); onOpen(profile) }}>OPEN</button>
+          <button className={deleteName === profile.name ? 'is-confirming' : ''} type="button" disabled={!!busy} aria-label={deleteName === profile.name ? `Confirm delete ${profile.name}` : `Delete ${profile.name}`} onClick={(event) => { event.stopPropagation(); onDelete(profile) }}>{busy === `delete-profile:${profile.name}` ? 'DELETING…' : deleteName === profile.name ? 'CONFIRM' : 'DELETE'}</button>
+        </div>
+      </div>
+    })}
+    {!loading && profiles.length === 0 && <div className="empty-row">No mock profiles. Create one for a service you do not want to run locally.</div>}
+    {loading && <div className="empty-row">Loading mock profiles…</div>}
+  </section>
 }
 
 export function MockProfileDrawer({ environment, profile, active, busy, deleteName, error, onDismissError, onClose, onPreview, onAddRoute, onEditRoute, onDeleteRoute }: {
@@ -266,7 +385,7 @@ function CreateProfileModal({ environment, recordings, busy, error, onDismissErr
   </FormDialog>
 }
 
-function RouteModal({ draft, editing, busy, error, onDismissError, onChange, onClose, onSave }: { draft: RouteDraft; editing: boolean; busy: boolean; error: ActionErrorDetails | null; onDismissError: () => void; onChange: (draft: RouteDraft) => void; onClose: () => void; onSave: () => Promise<void> }) {
+export function RouteModal({ draft, editing, busy, error, onDismissError, onChange, onClose, onSave }: { draft: RouteDraft; editing: boolean; busy: boolean; error: ActionErrorDetails | null; onDismissError: () => void; onChange: (draft: RouteDraft) => void; onClose: () => void; onSave: () => Promise<void> }) {
   const nameInput = useRef<HTMLInputElement>(null)
   const change = <K extends keyof RouteDraft>(key: K, value: RouteDraft[K]) => onChange({ ...draft, [key]: value })
   return <FormDialog
@@ -278,9 +397,9 @@ function RouteModal({ draft, editing, busy, error, onDismissError, onChange, onC
     header={<div><div className="eyebrow">CONFIGURE MOCK</div><h2 id="mock-route-title">{editing ? 'Edit mock route' : 'Add mock route'}</h2></div>}
     onClose={onClose}
   >
-    <form onSubmit={(event) => { event.preventDefault(); void onSave() }}>
+    <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onSave() }}>
       <div className="form-modal__fields">
-        <label><span>NAME</span><input ref={nameInput} value={draft.name} disabled={busy || editing} placeholder="get-product" onChange={(event) => change('name', event.target.value)} /></label>
+        <label><span>NAME</span><input ref={nameInput} name="portless-mock-route-name" required autoComplete="off" spellCheck="false" value={draft.name} disabled={busy || editing} placeholder="get-product" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => change('name', event.target.value)} /></label>
         <label><span>METHOD</span><select value={draft.method} disabled={busy} onChange={(event) => change('method', event.target.value)}>{['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((method) => <option key={method}>{method}</option>)}</select></label>
         <label className="provider-field--wide"><span>PATH</span><input value={draft.path} disabled={busy} placeholder="/inventory/{sku}" onChange={(event) => change('path', event.target.value)} /></label>
         <label className="provider-field--wide"><span>REQUIRED QUERY · ONE NAME=VALUE PER LINE</span><textarea value={draft.queryText} disabled={busy} placeholder={'warehouse=central\ninclude=availability'} onChange={(event) => change('queryText', event.target.value)} /></label>

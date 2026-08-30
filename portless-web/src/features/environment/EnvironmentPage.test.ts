@@ -2,12 +2,13 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment, TimelineEvent } from '../../api/contracts/environments'
+import type { Recording } from '../../api/contracts/experiments'
 import type { Project } from '../../api/contracts/projects'
 import type { ComponentBinding, Service } from '../../api/contracts/topology'
 import type { TrafficActivity, TrafficExchange } from '../../api/contracts/traffic'
 import { paginateItems } from '../../components/PanelPagination'
 import { defaultProviderBinding, providerBindingMatches, providerDisplayName } from './bindings/bindingPresentation'
-import { EnvironmentPage } from './EnvironmentPage'
+import { EnvironmentActivityIndicators, EnvironmentPage } from './EnvironmentPage'
 import { summarizeEnvironmentBindings } from './OverviewPanel'
 import { displayLaunchMode, overviewServiceEndpoint, serviceEndpoints } from './service/servicePresentation'
 import { TimelinePanel } from './timeline/TimelinePanel'
@@ -16,6 +17,19 @@ import { buildTopology, mergeTopologySignal, summarizeTopologyTraffic, topologyC
 const service = (name: string): Service => ({ name } as Service)
 
 describe('environment topology', () => {
+  it('links active recording and fault indicators to their environment views', () => {
+    const environment = { project: 'billing', name: 'local' } as Environment
+    const activeRecording = { name: 'checkout-flow', status: 'active' } as Recording
+    const markup = renderToStaticMarkup(createElement(EnvironmentActivityIndicators, {
+      environment, activeRecording, activeFaultCount: 2, onNavigate: () => undefined,
+    }))
+
+    expect(markup).toContain('class="recording-indicator" href="/environments/billing/local?tab=recordings"')
+    expect(markup).toContain('>REC checkout-flow</a>')
+    expect(markup).toContain('class="fault-indicator" href="/environments/billing/local?tab=faults"')
+    expect(markup).toContain('>▲ 2 ACTIVE FAULTS</a>')
+  })
+
   it('places the infrequently used bindings tab immediately before timeline', () => {
     const environment = {
       project: 'billing', name: 'local', status: 'healthy', revision: 1,

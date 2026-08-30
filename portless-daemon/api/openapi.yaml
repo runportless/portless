@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.7.0
+  version: 12.8.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.7.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.8.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -1310,7 +1310,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.7.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.8.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -2025,11 +2025,12 @@ components:
       allOf:
         - { $ref: '#/components/schemas/FaultInput' }
         - type: object
-          required: [project, environment, enabled, createdAt, matchCount, revision, scopeSummary]
+          required: [project, environment, enabled, enabledAt, createdAt, matchCount, revision, scopeSummary]
           properties:
             project: { $ref: '#/components/schemas/ProjectName' }
             environment: { $ref: '#/components/schemas/EnvironmentName' }
             enabled: { type: boolean }
+            enabledAt: { type: string, format: date-time, description: Most recent time the fault was enabled. }
             createdAt: { type: string, format: date-time }
             matchCount: { type: integer, format: int64, minimum: 0 }
             revision: { type: integer, format: int64, minimum: 1 }

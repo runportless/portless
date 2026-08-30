@@ -29,6 +29,11 @@ Current topics:
 - `traffic.cleared`
 - `traffic.tcp.activity`
 
+`fault.state` carries the full fault rule after creation or activation, including
+`enabledAt`, the most recent activation time. Disable and delete notifications
+carry compact state or tombstone payloads; clients should reload the fault list
+after any fault event.
+
 `mock.state` carries the current profile after a profile or route change, or a
 small `{name, deleted}` tombstone after deletion. Clients should reload the
 mock collection after receiving it because active profiles are recompiled and
