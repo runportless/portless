@@ -82,6 +82,14 @@ PostgreSQL, Valkey, MySQL, and NATS. The
 [implementation boundary](docs/implementation-status.md) is the maintained
 inventory of supported behavior and deferred release work.
 
+Discovery also selects an HTTP readiness endpoint when bounded static evidence
+proves one: NestJS decorators, Express/Fastify literal GET registrations,
+Next.js route files, raw Node URL comparisons, FastAPI decorators, Go HTTP
+registrations, and Spring Boot Actuator configuration are recognized. Dynamic
+or equally strong conflicting routes keep the conservative TCP readiness check;
+Portless never executes application code or probes candidate routes during
+discovery.
+
 The compact [Store example](examples/store/README.md) discovers one mixed-stack
 checkout with Spring Boot and Node services, persists inventory reservations
 and orders in two independently managed PostgreSQL instances, caches order

@@ -45,6 +45,11 @@ func TestDispatchExampleCompilesThreeCheckoutsIntoOneProject(t *testing.T) {
 	if got := serviceNames(project.Services); strings.Join(got, ",") != "api,api-mysql,console,dispatch-nats,geocoder,notifier,routing" {
 		t.Fatalf("services = %v", got)
 	}
+	for _, service := range project.Services {
+		if service.Kind == model.ServiceProcess && (service.Health.Kind != "http" || service.Health.Path != "/health") {
+			t.Errorf("%s readiness = %#v, want HTTP /health", service.Name, service.Health)
+		}
+	}
 	if got := sourceServices(sources); strings.Join(got, ",") != "console=console,maps=geocoder+routing,operations=api+notifier" {
 		t.Fatalf("source services = %v", got)
 	}

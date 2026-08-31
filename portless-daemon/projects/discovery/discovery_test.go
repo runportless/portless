@@ -278,7 +278,8 @@ func TestStoreExampleMatchesItsRuntimeTopology(t *testing.T) {
 	services := make(map[string]bool, len(result.Model.Services))
 	for _, service := range result.Model.Services {
 		services[service.Name] = true
-		if service.Name == "inventory" {
+		switch service.Name {
+		case "inventory":
 			if service.Framework != "spring-boot" {
 				t.Errorf("inventory framework = %q, want spring-boot", service.Framework)
 			}
@@ -287,6 +288,10 @@ func TestStoreExampleMatchesItsRuntimeTopology(t *testing.T) {
 			}
 			if service.Health.Kind != "http" || service.Health.Path != "/actuator/health" {
 				t.Errorf("inventory health = %#v", service.Health)
+			}
+		case "checkout", "orders":
+			if service.Health.Kind != "http" || service.Health.Path != "/health" {
+				t.Errorf("%s health = %#v", service.Name, service.Health)
 			}
 		}
 	}
@@ -348,6 +353,178 @@ func TestNodeFrameworkPluginsResolveSpecificFrameworks(t *testing.T) {
 	}
 }
 
+func TestDiscoverNodeFrameworkHealthRoutesWithoutExecutingCode(t *testing.T) {
+	tests := []struct {
+		name      string
+		manifest  string
+		file      string
+		source    string
+		framework string
+		path      string
+	}{
+		{
+			name: "NestJS decorators and global prefix", framework: "nestjs", path: "/api/system/ready",
+			manifest: `{"name":"api","scripts":{"start:dev":"nest start --watch"},"dependencies":{"@nestjs/core":"11","@nestjs/terminus":"11"}}`,
+			file:     "src/health.controller.ts", source: `
+const bootstrap = async () => { const app = await NestFactory.create(AppModule); app.setGlobalPrefix('api') }
+@Controller('system')
+class HealthController {
+  @Get('ready')
+  @HealthCheck()
+  check() { return this.health.check([]) }
+}`,
+		},
+		{
+			name: "Express literal GET", framework: "express", path: "/health",
+			manifest: `{"name":"api","scripts":{"dev":"node server.js"},"dependencies":{"express":"5"}}`,
+			file:     "server.js", source: `const app = express(); app.get('/health', (_request, response) => response.send('ok'))`,
+		},
+		{
+			name: "Fastify literal GET", framework: "fastify", path: "/readyz",
+			manifest: `{"name":"api","scripts":{"start":"node server.js"},"dependencies":{"fastify":"5"}}`,
+			file:     "server.js", source: `const app = Fastify(); app.get('/readyz', async () => ({ ok: true }))`,
+		},
+		{
+			name: "Next.js app route", framework: "nextjs", path: "/api/health",
+			manifest: `{"name":"web","scripts":{"dev":"next dev"},"dependencies":{"next":"16"}}`,
+			file:     "src/app/api/health/route.ts", source: `export function GET() { return Response.json({ ok: true }) }`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "workspace")
+			writeFixture(t, filepath.Join(root, "package.json"), test.manifest)
+			writeFixture(t, filepath.Join(root, filepath.FromSlash(test.file)), test.source)
+			result, err := Discover(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := result.Model.Services[0]
+			if service.Framework != test.framework || service.Health.Kind != "http" || service.Health.Path != test.path {
+				t.Fatalf("service = %#v", service)
+			}
+			if len(service.Evidence) < 2 || service.Evidence[1].File != test.file {
+				t.Fatalf("health evidence = %#v", service.Evidence)
+			}
+		})
+	}
+}
+
+func TestAmbiguousAndUnprovenNodeHealthRoutesKeepTCPReadiness(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		diagnostic bool
+	}{
+		{
+			name: "ambiguous server routes", diagnostic: true,
+			source: `const app = express(); app.get('/health', handler); app.get('/api/health', handler)`,
+		},
+		{
+			name:   "comments and client calls",
+			source: `const app = express(); client.get('/health'); /* app.get('/ready', handler) */`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "workspace")
+			writeFixture(t, filepath.Join(root, "package.json"), `{"name":"api","scripts":{"start":"node server.js"},"dependencies":{"express":"5"}}`)
+			writeFixture(t, filepath.Join(root, "server.js"), test.source)
+			result, err := Discover(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if health := result.Model.Services[0].Health; health.Kind != "tcp" || health.Path != "" {
+				t.Fatalf("health = %#v", health)
+			}
+			found := false
+			for _, diagnostic := range result.Diagnostics {
+				found = found || diagnostic.Code == "AMBIGUOUS_HEALTH_ENDPOINT"
+			}
+			if found != test.diagnostic {
+				t.Fatalf("diagnostics = %#v", result.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestNodeHealthRoutesStayWithinNearestPackage(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	writeFixture(t, filepath.Join(root, "package.json"), `{"name":"gateway","scripts":{"start":"node server.js"},"dependencies":{"express":"5"}}`)
+	writeFixture(t, filepath.Join(root, "server.js"), `const app = express(); client.get('/health')`)
+	writeFixture(t, filepath.Join(root, "apps", "worker", "package.json"), `{"name":"worker","scripts":{"start":"node server.js"},"dependencies":{"express":"5"}}`)
+	writeFixture(t, filepath.Join(root, "apps", "worker", "server.js"), `const app = express(); app.get('/ready', handler)`)
+
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health := make(map[string]model.HealthCheck)
+	for _, service := range result.Model.Services {
+		health[service.Name] = service.Health
+	}
+	if health["gateway"].Kind != "tcp" || health["worker"].Kind != "http" || health["worker"].Path != "/ready" {
+		t.Fatalf("health by service = %#v", health)
+	}
+}
+
+func TestDynamicNestGlobalPrefixKeepsTCPReadiness(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	writeFixture(t, filepath.Join(root, "package.json"), `{"name":"api","scripts":{"start:dev":"nest start --watch"},"dependencies":{"@nestjs/core":"11","@nestjs/terminus":"11"}}`)
+	writeFixture(t, filepath.Join(root, "src", "main.ts"), `app.setGlobalPrefix(configuration.apiPrefix)`)
+	writeFixture(t, filepath.Join(root, "src", "health.controller.ts"), `@Controller() class HealthController { @Get('health') @HealthCheck() check() {} }`)
+
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health := result.Model.Services[0].Health; health.Kind != "tcp" || health.Path != "" {
+		t.Fatalf("health = %#v", health)
+	}
+	found := false
+	for _, diagnostic := range result.Diagnostics {
+		found = found || diagnostic.Code == "DYNAMIC_HEALTH_ENDPOINT"
+	}
+	if !found {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+}
+
+func TestValidateProcessReadinessContract(t *testing.T) {
+	valid := model.ProjectModel{
+		SuggestedName: "project", PrimaryService: "api",
+		Services: []model.ServiceDefinition{{
+			Name: "api", Kind: model.ServiceProcess, Command: []string{"server"}, Required: true,
+			Health: model.HealthCheck{Kind: "http", Path: "/health", Timeout: time.Minute, Interval: time.Second},
+		}},
+	}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("valid model: %v", err)
+	}
+	tests := []struct {
+		name   string
+		health model.HealthCheck
+	}{
+		{name: "relative HTTP path", health: model.HealthCheck{Kind: "http", Path: "health", Timeout: time.Minute, Interval: time.Second}},
+		{name: "HTTP query", health: model.HealthCheck{Kind: "http", Path: "/health?full=true", Timeout: time.Minute, Interval: time.Second}},
+		{name: "dynamic HTTP path", health: model.HealthCheck{Kind: "http", Path: "/health/:name", Timeout: time.Minute, Interval: time.Second}},
+		{name: "TCP path", health: model.HealthCheck{Kind: "tcp", Path: "/health", Timeout: time.Minute, Interval: time.Second}},
+		{name: "unsupported kind", health: model.HealthCheck{Kind: "exec", Timeout: time.Minute, Interval: time.Second}},
+		{name: "zero timeout", health: model.HealthCheck{Kind: "tcp", Interval: time.Second}},
+		{name: "zero interval", health: model.HealthCheck{Kind: "tcp", Timeout: time.Minute}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := valid
+			invalid.Services = append([]model.ServiceDefinition(nil), valid.Services...)
+			invalid.Services[0].Health = test.health
+			if err := Validate(invalid); err == nil {
+				t.Fatalf("health %#v was accepted", test.health)
+			}
+		})
+	}
+}
+
 func TestDiscoverGoHTTPServiceWithoutRunningGoCommands(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspace")
 	writeFixture(t, filepath.Join(root, "go.mod"), "module example.com/store\n\ngo 1.26\n")
@@ -356,7 +533,10 @@ import (
     "net/http"
     "os"
 )
-func main() { _ = http.ListenAndServe(":"+os.Getenv("PORT"), nil) }
+func main() {
+    http.HandleFunc("GET /health", func(http.ResponseWriter, *http.Request) {})
+    _ = http.ListenAndServe(":"+os.Getenv("PORT"), nil)
+}
 `)
 
 	result, err := Discover(context.Background(), root)
@@ -372,6 +552,9 @@ func main() { _ = http.ListenAndServe(":"+os.Getenv("PORT"), nil) }
 	}
 	if command := strings.Join(service.Command, " "); command != "go run ./cmd/orders" {
 		t.Fatalf("command = %q", command)
+	}
+	if service.Health.Kind != "http" || service.Health.Path != "/health" || len(service.Evidence) < 2 {
+		t.Fatalf("health = %#v, evidence = %#v", service.Health, service.Evidence)
 	}
 }
 
@@ -454,11 +637,108 @@ func TestDiscoverSpringBootMavenService(t *testing.T) {
 	}
 }
 
+func TestDiscoverSpringBootConfigurationAwareHealthEndpoint(t *testing.T) {
+	tests := []struct {
+		name          string
+		configuration string
+		path          string
+	}{
+		{
+			name: "properties",
+			configuration: `server.servlet.context-path=/inventory
+management.endpoints.web.base-path=/manage
+management.endpoints.web.path-mapping.health=ready
+`,
+			path: "/inventory/manage/ready",
+		},
+		{
+			name: "YAML",
+			configuration: `server:
+  servlet:
+    context-path: /inventory
+management:
+  endpoints:
+    web:
+      base-path: /manage
+      path-mapping:
+        health: readyz
+`,
+			path: "/inventory/manage/readyz",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "inventory")
+			writeFixture(t, filepath.Join(root, "build.gradle"), `plugins { id 'org.springframework.boot' version '4.0.0' }
+dependencies { implementation 'org.springframework.boot:spring-boot-starter-actuator' }
+`)
+			extension := ".properties"
+			if test.name == "YAML" {
+				extension = ".yaml"
+			}
+			writeFixture(t, filepath.Join(root, "src", "main", "resources", "application"+extension), test.configuration)
+			result, err := Discover(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := result.Model.Services[0]
+			if service.Health.Kind != "http" || service.Health.Path != test.path || len(service.Evidence) < 2 {
+				t.Fatalf("health = %#v, evidence = %#v", service.Health, service.Evidence)
+			}
+		})
+	}
+}
+
+func TestSpringBootSeparateManagementPortKeepsTCPReadiness(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "inventory")
+	writeFixture(t, filepath.Join(root, "build.gradle"), `plugins { id 'org.springframework.boot' version '4.0.0' }
+dependencies { implementation 'org.springframework.boot:spring-boot-starter-actuator' }
+`)
+	writeFixture(t, filepath.Join(root, "src", "main", "resources", "application.properties"), "management.server.port=9090\n")
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health := result.Model.Services[0].Health; health.Kind != "tcp" || health.Path != "" {
+		t.Fatalf("health = %#v", health)
+	}
+	found := false
+	for _, diagnostic := range result.Diagnostics {
+		found = found || diagnostic.Code == "SEPARATE_MANAGEMENT_PORT"
+	}
+	if !found {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+}
+
+func TestSpringBootConflictingHealthConfigurationKeepsTCPReadiness(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "inventory")
+	writeFixture(t, filepath.Join(root, "build.gradle"), `plugins { id 'org.springframework.boot' version '4.0.0' }
+dependencies { implementation 'org.springframework.boot:spring-boot-starter-actuator' }
+`)
+	writeFixture(t, filepath.Join(root, "src", "main", "resources", "application.properties"), "management.endpoints.web.base-path=/manage\n")
+	writeFixture(t, filepath.Join(root, "src", "main", "resources", "application.yaml"), "management:\n  endpoints:\n    web:\n      base-path: /admin\n")
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health := result.Model.Services[0].Health; health.Kind != "tcp" || health.Path != "" {
+		t.Fatalf("health = %#v", health)
+	}
+	found := false
+	for _, diagnostic := range result.Diagnostics {
+		found = found || diagnostic.Code == "AMBIGUOUS_HEALTH_ENDPOINT"
+	}
+	if !found {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+}
+
 func TestDiscoverFastAPIService(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "catalog")
 	writeFixture(t, filepath.Join(root, "pyproject.toml"), "[project]\ndependencies = [\"fastapi\", \"uvicorn\"]\n")
 	writeFixture(t, filepath.Join(root, "uv.lock"), "version = 1\n")
-	writeFixture(t, filepath.Join(root, "app", "main.py"), "from fastapi import FastAPI\napp = FastAPI()\n")
+	writeFixture(t, filepath.Join(root, "app", "main.py"), "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/health')\ndef health(): return {'ok': True}\n")
 
 	result, err := Discover(context.Background(), root)
 	if err != nil {
@@ -470,6 +750,31 @@ func TestDiscoverFastAPIService(t *testing.T) {
 	}
 	if command := strings.Join(service.Command, " "); command != "uv run uvicorn app.main:app" {
 		t.Fatalf("command = %q", command)
+	}
+	if service.Health.Kind != "http" || service.Health.Path != "/health" || len(service.Evidence) < 2 {
+		t.Fatalf("health = %#v, evidence = %#v", service.Health, service.Evidence)
+	}
+}
+
+func TestDiscoverFastAPIHealthRouteWithStaticRouterPrefixes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "catalog")
+	writeFixture(t, filepath.Join(root, "requirements.txt"), "fastapi\nuvicorn\n")
+	writeFixture(t, filepath.Join(root, "main.py"), `
+from fastapi import APIRouter, FastAPI
+app = FastAPI()
+router = APIRouter(prefix="/system")
+app.include_router(router, prefix="/api")
+
+@router.get("/ready")
+def ready(): return {"ready": True}
+`)
+
+	result, err := Discover(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health := result.Model.Services[0].Health; health.Kind != "http" || health.Path != "/api/system/ready" {
+		t.Fatalf("health = %#v", health)
 	}
 }
 

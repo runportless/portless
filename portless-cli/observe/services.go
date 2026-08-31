@@ -30,6 +30,21 @@ func providerFor(environment model.Environment, service string) model.ProviderKi
 	return model.ProviderLocal
 }
 
+func readinessDescription(health model.HealthCheck) string {
+	switch health.Kind {
+	case "http":
+		return "HTTP GET " + command.EmptyAs(health.Path, "/")
+	case "tcp":
+		return "TCP connect"
+	case "exec":
+		return "provider command"
+	case "":
+		return "unknown"
+	default:
+		return strings.ToUpper(health.Kind)
+	}
+}
+
 func (c *Commands) listServices(ctx context.Context, limit int) error {
 	if err := command.ValidLimit(limit, 1000); err != nil {
 		return err
@@ -132,6 +147,9 @@ func (c *Commands) showServiceConfiguration(ctx context.Context, name string) er
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Command:", strings.Join(configuration.Command, " "))
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Working directory:", command.EmptyAs(configuration.WorkingDirectory, "default"))
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Port variable:", command.EmptyAs(configuration.PortEnvironment, "PORT"))
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Readiness:", readinessDescription(configuration.Health))
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Ready timeout:", configuration.Health.Timeout)
+	fmt.Fprintf(c.Out, "  %-18s %s\n", "Ready interval:", configuration.Health.Interval)
 	fmt.Fprintln(c.Out, "\n"+c.Muted(c.Out, fmt.Sprintf("%-28s %-28s %-14s %s", "KEY", "VALUE", "CLASS", "SOURCE")))
 	for _, value := range configuration.Environment {
 		fmt.Fprintf(c.Out, "%-28s %-28s %-14s %s\n", value.Key, value.Value, value.Classification, value.Source)

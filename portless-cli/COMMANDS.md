@@ -220,7 +220,7 @@ metadata unless the separate volume-deletion flags are supplied.
 | --- | --- |
 | `portless service list` | List services. `--limit <n>` defaults to `250`. Alias: `service ls`. |
 | `portless service show <service>` | Show service identity, provider, runtime, health, debugger, and public endpoint details. |
-| `portless service config <service>` | Show the effective discovered and provider configuration for one service. |
+| `portless service config <service>` | Show the effective discovered and provider configuration for one service, including readiness kind/path, timeout, and interval. |
 | `portless service start <service>` | Start one service. |
 | `portless service stop <service>` | Stop one service. |
 | `portless service restart <service>` | Restart one service while preserving its configured launch mode. |

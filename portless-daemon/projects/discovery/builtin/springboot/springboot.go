@@ -72,6 +72,15 @@ func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Find
 		if !matched {
 			continue
 		}
+		if candidate.Definition.Health.Kind == "http" {
+			healthDetection, healthErr := detectSpringHealth(ctx, workspace, directory, file, candidate.Definition.Health.Timeout)
+			if healthErr != nil {
+				return spec.Findings{}, healthErr
+			}
+			candidate.Definition.Health = healthDetection.health
+			candidate.Definition.Evidence = append(candidate.Definition.Evidence, healthDetection.evidence...)
+			result.Diagnostics = append(result.Diagnostics, healthDetection.diagnostics...)
+		}
 		if previous, duplicate := seen[directory]; duplicate {
 			result.Diagnostics = append(result.Diagnostics, spec.Diagnostic{
 				Severity: spec.SeverityWarning, Code: "MULTIPLE_BUILD_SYSTEMS", File: file,

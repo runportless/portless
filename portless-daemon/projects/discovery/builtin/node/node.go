@@ -124,17 +124,45 @@ func (d detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Fi
 				Message: fmt.Sprintf("%s can run normally, but its package scripts do not expose a safe Node or NestJS debug command", name),
 			})
 		}
+		health := model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second}
+		evidence := []model.Evidence{{File: current.file, Explanation: d.explanation, Confidence: "high"}}
+		if nodeDetectorOwnsHealth(d.descriptor.ID, current.manifest) {
+			healthDetection, healthErr := detectNodeHealth(ctx, workspace, packages, current, d.descriptor.ID)
+			if healthErr != nil {
+				return spec.Findings{}, healthErr
+			}
+			if healthDetection.path != "" {
+				health.Kind = "http"
+				health.Path = healthDetection.path
+				evidence = append(evidence, *healthDetection.evidence)
+			}
+			if healthDetection.diagnostic != nil {
+				result.Diagnostics = append(result.Diagnostics, *healthDetection.diagnostic)
+			}
+		}
 		result.Candidates = append(result.Candidates, spec.Candidate{
 			Key: current.directory, Directory: current.directory, RunDirectory: current.directory,
 			Definition: model.ServiceDefinition{
 				Name: name, Kind: model.ServiceProcess, Framework: d.descriptor.ID, Debug: debug,
 				Command: []string{manager, "run", script}, PortEnvironment: "PORT", Required: true,
-				Health:   model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second},
-				Evidence: []model.Evidence{{File: current.file, Explanation: d.explanation, Confidence: "high"}},
+				Health: health, Evidence: evidence,
 			},
 		})
 	}
 	return result, nil
+}
+
+func nodeDetectorOwnsHealth(framework string, manifest packageJSON) bool {
+	if framework != "express" && framework != "fastify" {
+		return true
+	}
+	return !hasNodeDependency(manifest, "@nestjs/core") && !hasNodeDependency(manifest, "next")
+}
+
+func hasNodeDependency(manifest packageJSON, dependency string) bool {
+	_, production := manifest.Dependencies[dependency]
+	_, development := manifest.DevDependencies[dependency]
+	return production || development
 }
 
 func nodeDebugCapability(manifest packageJSON, manager, managedScript string) *model.DebugCapability {

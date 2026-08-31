@@ -84,8 +84,9 @@ The CLI E2E suite protects these product contracts:
   `down` lifecycle;
 - framework-plugin discovery for Spring Boot with Gradle and Maven, NestJS,
   Express, Fastify, Next.js, Go, and FastAPI, including commands, port
-  contracts, health checks, evidence, debugger metadata, precedence, rescan,
-  and fail-closed malformed manifests;
+  contracts, statically proven HTTP readiness paths with TCP fallback, evidence,
+  debugger metadata, precedence, deterministic rescan, and fail-closed malformed
+  manifests;
 - resource-plugin discovery for PostgreSQL, Valkey, MySQL, and NATS, including
   versions, ports, generated environment bindings, and dependency edges;
 - context-aware startup from a nested service directory, Portless-owned Node

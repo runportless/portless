@@ -78,13 +78,26 @@ func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Find
 		if name == "" {
 			return spec.Findings{}, fmt.Errorf("FastAPI project %s does not produce a valid service name", entry.projectRoot)
 		}
+		health := model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second}
+		healthDetection, err := detectFastAPIHealth(ctx, workspace, entry)
+		if err != nil {
+			return spec.Findings{}, err
+		}
+		evidence := []model.Evidence{{File: entry.file, Explanation: "FastAPI application entrypoint found", Confidence: "high"}}
+		if healthDetection.path != "" {
+			health.Kind = "http"
+			health.Path = healthDetection.path
+			evidence = append(evidence, *healthDetection.evidence)
+		}
+		if healthDetection.diagnostic != nil {
+			result.Diagnostics = append(result.Diagnostics, *healthDetection.diagnostic)
+		}
 		result.Candidates = append(result.Candidates, spec.Candidate{
 			Key: entry.projectRoot, Directory: entry.projectRoot, RunDirectory: entry.projectRoot,
 			Definition: model.ServiceDefinition{
 				Name: name, Kind: model.ServiceProcess, Framework: "fastapi", Command: command,
 				PortEnvironment: "UVICORN_PORT", Required: true,
-				Health:   model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second},
-				Evidence: []model.Evidence{{File: entry.file, Explanation: "FastAPI application entrypoint found", Confidence: "high"}},
+				Health: health, Evidence: evidence,
 			},
 		})
 	}

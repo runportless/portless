@@ -13,6 +13,7 @@ import (
 
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/projects/discovery/spec"
+	"github.com/runportless/portless/portless-daemon/projects/discovery/statichealth"
 	"github.com/runportless/portless/portless-daemon/providers"
 )
 
@@ -801,6 +802,9 @@ func Validate(definition model.ProjectModel, resources *providers.Registry) erro
 			if service.Resource != nil {
 				return fmt.Errorf("process service %q declares a resource definition", service.Name)
 			}
+			if err := validateProcessHealth(service); err != nil {
+				return err
+			}
 		case model.ServiceResource:
 			if service.Resource == nil {
 				return fmt.Errorf("resource service %q has no resource definition", service.Name)
@@ -887,6 +891,28 @@ func Validate(definition model.ProjectModel, resources *providers.Registry) erro
 		if reference.Environment == "" || !environmentPattern.MatchString(reference.Environment) {
 			return fmt.Errorf("connection reference from %s has invalid environment variable %q", reference.Source, reference.Environment)
 		}
+	}
+	return nil
+}
+
+func validateProcessHealth(service model.ServiceDefinition) error {
+	if service.Health.Timeout <= 0 {
+		return fmt.Errorf("process service %q has a non-positive readiness timeout", service.Name)
+	}
+	if service.Health.Interval <= 0 {
+		return fmt.Errorf("process service %q has a non-positive readiness interval", service.Name)
+	}
+	switch service.Health.Kind {
+	case "tcp":
+		if service.Health.Path != "" {
+			return fmt.Errorf("process service %q has a TCP readiness check with HTTP path %q", service.Name, service.Health.Path)
+		}
+	case "http":
+		if cleaned := statichealth.CleanPath(service.Health.Path); cleaned == "" || cleaned != service.Health.Path {
+			return fmt.Errorf("process service %q has invalid HTTP readiness path %q", service.Name, service.Health.Path)
+		}
+	default:
+		return fmt.Errorf("process service %q has unsupported readiness kind %q", service.Name, service.Health.Kind)
 	}
 	return nil
 }

@@ -43,11 +43,13 @@ type mainPackage struct {
 	evidence    string
 	signal      string
 	dynamicPort bool
+	sources     []goSource
 }
 
 var serverImports = map[string]string{
 	"github.com/gin-gonic/gin":    "Gin server import",
 	"github.com/go-chi/chi":       "Chi server import",
+	"github.com/go-chi/chi/v5":    "Chi server import",
 	"github.com/gofiber/fiber":    "Fiber server import",
 	"github.com/gofiber/fiber/v2": "Fiber server import",
 	"github.com/labstack/echo":    "Echo server import",
@@ -106,6 +108,9 @@ func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Find
 		if current.signal == "" {
 			current.signal = serverSignal(parsed, encoded)
 		}
+		if healthSource, parseErr := parser.ParseFile(token.NewFileSet(), file, encoded, 0); parseErr == nil {
+			current.sources = append(current.sources, goSource{file: file, parsed: healthSource})
+		}
 		if hasDynamicPort(encoded) {
 			current.dynamicPort = true
 		}
@@ -147,13 +152,23 @@ func (Detector) Detect(ctx context.Context, workspace spec.Workspace) (spec.Find
 		if relativePackage != "." {
 			commandTarget = "./" + relativePackage
 		}
+		health := model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second}
+		healthDetection := detectGoHealth(current.sources)
+		evidence := []model.Evidence{{File: current.evidence, Explanation: current.signal, Confidence: "high"}}
+		if healthDetection.path != "" {
+			health.Kind = "http"
+			health.Path = healthDetection.path
+			evidence = append(evidence, *healthDetection.evidence)
+		}
+		if healthDetection.diagnostic != nil {
+			result.Diagnostics = append(result.Diagnostics, *healthDetection.diagnostic)
+		}
 		result.Candidates = append(result.Candidates, spec.Candidate{
 			Key: current.directory, Directory: current.directory, RunDirectory: current.module.directory,
 			Definition: model.ServiceDefinition{
 				Name: name, Kind: model.ServiceProcess, Framework: "go", Command: []string{"go", "run", commandTarget},
 				PortEnvironment: "PORT", Required: true,
-				Health:   model.HealthCheck{Kind: "tcp", Timeout: 90 * time.Second, Interval: time.Second},
-				Evidence: []model.Evidence{{File: current.evidence, Explanation: current.signal, Confidence: "high"}},
+				Health: health, Evidence: evidence,
 			},
 		})
 	}
