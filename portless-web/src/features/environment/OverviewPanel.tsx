@@ -107,7 +107,26 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
         const menuOpen = menuService === service.name
         const hasMenu = !!openURL || actions.length > 0
         return <div className="table-row service-row service-row--interactive" key={service.name} onClick={() => onService(service)}>
-          <StatusMark status={service.status} label={false} /><button className="service-row__details" type="button" aria-label={`View ${service.name} details`} onClick={(event) => { event.stopPropagation(); onService(service) }}><strong>{service.name}</strong></button><span>{displayLaunchMode(environment, service)}</span><StatusMark status={service.status} /><span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span><span>{service.recentRequests || '—'}</span><span>{service.p95Millis ? `${service.p95Millis}ms` : '—'}</span><span className="service-list-endpoint"><span className="truncate muted" title={service.reason || endpoint || 'not running'}>{service.reason || endpoint || 'not running'}</span>{!service.reason && endpoint && <button className={`service-copy-button${copied ? ' is-copied' : ''}`} type="button" aria-label={`Copy ${service.name} endpoint`} title={copied ? 'Copied' : 'Copy endpoint'} onClick={(event) => void copyServiceEndpoint(event, service.name, endpoint)}><CopyIcon copied={copied} /></button>}</span><div ref={menuOpen ? serviceMenu : undefined} className="service-row__actions">
+          <StatusMark status={service.status} label={false} />
+          <button className="service-row__details" type="button" aria-label={`View ${service.name} details`} onClick={(event) => { event.stopPropagation(); onService(service) }}><strong>{service.name}</strong></button>
+          <span>{displayLaunchMode(environment, service)}</span>
+          <StatusMark status={service.status} />
+          <span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span>
+          <span>{service.recentRequests || '—'}</span>
+          <span>{service.p95Millis ? `${service.p95Millis}ms` : '—'}</span>
+          {!service.reason && endpoint
+            ? <button
+                className={`service-list-endpoint service-list-endpoint--copyable${copied ? ' is-copied' : ''}`}
+                type="button"
+                aria-label={copied ? `${service.name} endpoint copied` : `Copy ${service.name} endpoint`}
+                title={copied ? 'Copied' : 'Copy endpoint'}
+                onClick={(event) => void copyServiceEndpoint(event, service.name, endpoint)}
+              >
+                <span className="truncate" title={endpoint}>{endpoint}</span>
+                <span className="service-copy-indicator" aria-hidden="true"><CopyIcon copied={copied} /></span>
+              </button>
+            : <span className="service-list-endpoint"><span className="truncate muted" title={service.reason || 'not running'}>{service.reason || 'not running'}</span></span>}
+          <div ref={menuOpen ? serviceMenu : undefined} className="service-row__actions">
             {hasMenu && <button className="service-row__menu-trigger" type="button" aria-label={`Service actions for ${service.name}`} aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!serviceActions.busy} onClick={(event) => { event.stopPropagation(); setMenuService(menuOpen ? '' : service.name) }}>•••</button>}
             {menuOpen && <div className="service-row__menu" role="menu" aria-label={`${service.name} actions`} onClick={(event) => event.stopPropagation()}>
               {openURL && <a href={openURL} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setMenuService('')}>OPEN ↗</a>}

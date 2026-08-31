@@ -51,8 +51,12 @@ test('renders real services, endpoints, topology, and service details', async ({
   await expect(actionMenu).toHaveCount(0)
   await expect(checkoutActions).toBeFocused()
 
-  await checkoutRow.getByRole('button', { name: 'Copy checkout endpoint' }).click()
+  await page.evaluate(() => navigator.clipboard.writeText('before endpoint copy'))
+  const checkoutEndpoint = checkoutRow.getByRole('button', { name: 'Copy checkout endpoint' })
+  await checkoutEndpoint.getByText('http://checkout.local.ui-e2e.localhost', { exact: true }).click()
+  await expect(checkoutRow.getByRole('button', { name: 'checkout endpoint copied' })).toBeVisible()
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('http://checkout.local.ui-e2e.localhost')
+  await expect(page.getByRole('dialog', { name: 'checkout service' })).toHaveCount(0)
 
   const topology = page.getByRole('region', { name: 'Service topology' })
   for (const edge of ['external to checkout', 'checkout to inventory', 'checkout to orders']) {
