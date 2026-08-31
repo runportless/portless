@@ -12,7 +12,7 @@ export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const sidebarCollapsedKey = 'portless.sidebar-collapsed'
 
-export function AppChrome({ projects, environments, activeProject, sidebarProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', navigation, runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, onSwitchProject, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, environments, activeProject, sidebarProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', navigation, runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, onSwitchProject, onEnvironmentChanged, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
   environments: Environment[]
   activeProject?: Project
@@ -30,6 +30,7 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
   children: ReactNode
   onNavigate: (path: string) => void
   onSwitchProject: (project: Project) => void
+  onEnvironmentChanged: () => Promise<void>
   onSettingsToggle: () => void
   commands: Command[]
   live?: boolean
@@ -83,7 +84,7 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
         <button className="sidebar__collapse" type="button" aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} aria-expanded={!sidebarCollapsed} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} onClick={() => setSidebarCollapsed((value) => !value)}><SidebarCollapseIcon collapsed={sidebarCollapsed} /></button>
       </div>
       <div className="sidebar__body">
-        <ProjectContextNav projects={projects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} navigation={navigation} collapsed={sidebarCollapsed} onNavigate={onNavigate} onSwitchProject={onSwitchProject} />
+        <ProjectContextNav projects={projects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} navigation={navigation} collapsed={sidebarCollapsed} onNavigate={onNavigate} onSwitchProject={onSwitchProject} onEnvironmentChanged={onEnvironmentChanged} />
         {activeEnvironment && <>
           <div className="sidebar__section-label sidebar__section-label--context"><span>Environment</span><small title={`${activeEnvironment.project}/${activeEnvironment.name}`}>{activeEnvironment.project}/{activeEnvironment.name}</small></div>
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>

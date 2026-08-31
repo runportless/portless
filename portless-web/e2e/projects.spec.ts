@@ -6,13 +6,12 @@ import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
 
-test('creates a cloned environment from the project modal without duplicating sources', async ({ page }) => {
+test('creates a cloned environment from the sidebar without duplicating sources', async ({ page }) => {
   const state = readE2EState()
   await authenticate(page)
-  await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
 
-  await page.getByRole('button', { name: 'CREATE ENVIRONMENT' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Create environment' })
+  await page.getByRole('button', { name: `Create environment in ${state.project}` }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create Environment' })
   const name = dialog.getByLabel('NAME')
   await expect(name).toBeFocused()
   await expect(name).toHaveValue('')
@@ -25,10 +24,53 @@ test('creates a cloned environment from the project modal without duplicating so
 
   await expect(page).toHaveURL(new RegExp(`/environments/${state.project}/qa-ui$`))
   await expect(page.getByRole('heading', { name: 'qa-ui', exact: true })).toBeVisible()
+  const cloneOrigin = page.locator('.environment-clone-origin')
+  await expect(cloneOrigin).toHaveText('FROM local')
+  await expect(cloneOrigin).toHaveAttribute('title', `Created by cloning ${state.project}/local; changes are independent.`)
+  await expect(page.locator('.environment-heading__message')).toHaveText('not running')
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
   await expect(page.getByRole('button', { name: /qa-ui.*stopped/ })).toBeVisible()
   await expect(page.locator('.project-source-row:not(.table-row--header)')).toHaveCount(1)
   await expect(page.locator('.project-sources-panel')).not.toContainText('local, qa-ui')
+})
+
+test('forgets a stopped environment from its page header and blocks a running environment', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+
+  const localActions = page.getByRole('button', { name: `Environment actions for ${state.project}/${state.environment}` })
+  await localActions.click()
+  await page.getByRole('menuitem', { name: 'FORGET ENVIRONMENT' }).click()
+  let dialog = page.getByRole('alertdialog', { name: `Forget ${state.project}/${state.environment}?` })
+  await expect(dialog).toContainText('Stop this environment before forgetting it.')
+  await expect(dialog.getByRole('button', { name: 'FORGET ENVIRONMENT', exact: true })).toBeDisabled()
+  await dialog.getByRole('button', { name: 'CANCEL' }).click()
+  await expect(localActions).toBeFocused()
+
+  const cloneName = 'qa-ui'
+  const clonePath = `/environments/${state.project}/${cloneName}`
+  await page.getByRole('navigation', { name: `${state.project} environments` }).getByRole('button', { name: new RegExp(`${cloneName}.*stopped`) }).click()
+  await expect(page).toHaveURL(new RegExp(`${clonePath}$`))
+
+  const cloneActions = page.getByRole('button', { name: `Environment actions for ${state.project}/${cloneName}` })
+  await cloneActions.click()
+  const actionMenu = page.getByRole('menu', { name: `${state.project}/${cloneName} actions` })
+  await actionMenu.getByRole('menuitem', { name: 'FORGET ENVIRONMENT' }).press('Escape')
+  await expect(actionMenu).toHaveCount(0)
+  await expect(cloneActions).toBeFocused()
+
+  await cloneActions.click()
+  await page.getByRole('menuitem', { name: 'FORGET ENVIRONMENT' }).click()
+  dialog = page.getByRole('alertdialog', { name: `Forget ${state.project}/${cloneName}?` })
+  await expect(dialog).toContainText('Source files and checkouts on disk are not deleted.')
+  await expect(dialog).toContainText('Source checkouts and managed data volumes')
+  const confirm = dialog.getByRole('button', { name: 'FORGET ENVIRONMENT', exact: true })
+  await expect(confirm).toBeEnabled()
+  await confirm.click()
+
+  await expect(page).toHaveURL(/\/projects$/)
+  await expect(page.getByRole('navigation', { name: `${state.project} environments` }).getByRole('button', { name: new RegExp(cloneName) })).toHaveCount(0)
+  await expect(controlAPI(`/api/v1/environments/${state.project}/${cloneName}`)).rejects.toThrow('404')
 })
 
 test('stops one or every running environment from the project page', async ({ page }) => {
@@ -37,24 +79,42 @@ test('stops one or every running environment from the project page', async ({ pa
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
   await expect(page).toHaveURL(new RegExp(`/projects/${state.project}$`))
 
-  const stopEnvironment = page.getByRole('button', { name: `Stop ${state.environment}`, exact: true })
-  await expect(stopEnvironment).toBeEnabled()
-  await stopEnvironment.click()
-  await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*stopped`) })).toBeVisible({ timeout: 30_000 })
-  const startEnvironment = () => page.getByRole('button', { name: `Start ${state.environment}`, exact: true })
-  await expect(startEnvironment()).toBeEnabled()
+  const environmentRow = () => page.locator('.environment-row-shell--interactive').filter({ has: page.locator(`.environment-row > strong[title="${state.environment}"]`) })
+  const environmentActions = () => environmentRow().getByRole('button', { name: `Environment actions for ${state.project}/${state.environment}` })
+  const actionMenu = () => page.getByRole('menu', { name: `${state.environment} environment actions` })
 
-  await startEnvironment().click()
+  await environmentRow().click()
+  await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
+  await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
+
+  await environmentActions().click()
+  await expect(actionMenu()).toBeVisible()
+  await expect(actionMenu().getByRole('menuitem')).toHaveText(['RESTART', 'STOP'])
+  await actionMenu().getByRole('menuitem', { name: 'RESTART', exact: true }).press('Escape')
+  await expect(actionMenu()).toHaveCount(0)
+  await expect(environmentActions()).toBeFocused()
+
+  await environmentActions().click()
+  await actionMenu().getByRole('menuitem', { name: 'STOP', exact: true }).click()
+  await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*stopped`) })).toBeVisible({ timeout: 30_000 })
+
+  await environmentActions().click()
+  await expect(actionMenu().getByRole('menuitem')).toHaveText(['START'])
+  await actionMenu().getByRole('menuitem', { name: 'START', exact: true }).click()
   await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*healthy`) })).toBeVisible({ timeout: 30_000 })
+
+  await environmentActions().click()
+  await expect(actionMenu().getByRole('menuitem')).toHaveText(['RESTART', 'STOP'])
+  await actionMenu().getByRole('menuitem', { name: 'RESTART', exact: true }).press('Escape')
 
   const stopAll = page.getByRole('button', { name: `Stop all ${state.project} environments` })
   await expect(stopAll).toBeEnabled()
   await stopAll.click()
   await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*stopped`) })).toBeVisible({ timeout: 30_000 })
   await expect(stopAll).toBeDisabled()
-  await expect(startEnvironment()).toBeEnabled()
 
-  await startEnvironment().click()
+  await environmentActions().click()
+  await actionMenu().getByRole('menuitem', { name: 'START', exact: true }).click()
   await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*healthy`) })).toBeVisible({ timeout: 30_000 })
 })
 
@@ -153,7 +213,11 @@ test('manages project sources separately from environment checkouts', async ({ p
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
   const retainedProjectSource = page.locator('.project-source-row:not(.table-row--header)').filter({ hasText: 'catalog' })
   await expect(retainedProjectSource).toContainText('not bound locally')
-  await retainedProjectSource.getByRole('button', { name: 'DELETE' }).click()
+  const sourceActions = retainedProjectSource.getByRole('button', { name: 'Source actions for catalog' })
+  await sourceActions.click()
+  const sourceMenu = page.getByRole('menu', { name: 'catalog source actions' })
+  await expect(sourceMenu).toBeVisible()
+  await sourceMenu.getByRole('menuitem', { name: 'DELETE' }).click()
   const deleteDialog = page.getByRole('alertdialog', { name: 'Delete catalog?' })
   await expect(deleteDialog).toContainText('catalog')
   await deleteDialog.getByRole('button', { name: 'DELETE SOURCE', exact: true }).click()
@@ -246,9 +310,20 @@ test('focuses the sidebar on one project while retaining searchable project hist
   await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
 
   await projectRow(state.project).getByRole('button', { name: `Project actions for ${state.project}` }).click()
-  await expect(page.getByRole('menu', { name: `${state.project} actions` })).toBeVisible()
+  const projectActions = page.getByRole('menu', { name: `${state.project} actions` })
+  await expect(projectActions).toBeVisible()
+  await expect(projectActions.getByRole('menuitem')).toHaveText(['CONFIGURE', 'HIDE FROM RECENT', 'FORGET PROJECT'])
+  await projectActions.getByRole('menuitem', { name: 'CONFIGURE' }).click()
+  await expect(page).toHaveURL(`${state.baseURL}/projects/${encodeURIComponent(state.project)}`)
+  await expect(page.getByRole('heading', { name: state.project, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT', exact: true })).toBeVisible()
+
+  await page.goto(`${state.baseURL}/projects`)
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+  await projectRow(state.project).getByRole('button', { name: `Project actions for ${state.project}` }).click()
+  await expect(projectActions).toBeVisible()
   await page.getByRole('heading', { name: 'Projects' }).click()
-  await expect(page.getByRole('menu', { name: `${state.project} actions` })).toHaveCount(0)
+  await expect(projectActions).toHaveCount(0)
 
   await projectRow(state.project).getByRole('button', { name: `Project actions for ${state.project}` }).click()
   await page.getByRole('menuitem', { name: 'FORGET PROJECT' }).click()

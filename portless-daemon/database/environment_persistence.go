@@ -23,6 +23,7 @@ type environmentRow struct {
 	reason         string
 	primaryService string
 	modelJSON      []byte
+	clonedFrom     string
 	createdAt      string
 	updatedAt      string
 }
@@ -30,7 +31,7 @@ type environmentRow struct {
 func (s *Store) readEnvironmentRow(ctx context.Context, projectName, environmentName string) (environmentRow, error) {
 	row, err := scanEnvironmentRow(s.db.QueryRowContext(ctx, `
 SELECT e.private_key, e.project_key, p.name, e.name, e.revision, e.status, e.reason,
-       e.primary_service, e.model_json, e.created_at, e.updated_at
+       e.primary_service, e.model_json, e.cloned_from_name, e.created_at, e.updated_at
 FROM environments e JOIN projects p ON p.private_key = e.project_key
 WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, environmentName))
 	return row, mapSQLError(err)
@@ -43,7 +44,7 @@ type rowScanner interface {
 func scanEnvironmentRow(scanner rowScanner) (environmentRow, error) {
 	var row environmentRow
 	err := scanner.Scan(&row.key, &row.projectKey, &row.projectName, &row.environment,
-		&row.revision, &row.status, &row.reason, &row.primaryService, &row.modelJSON, &row.createdAt, &row.updatedAt)
+		&row.revision, &row.status, &row.reason, &row.primaryService, &row.modelJSON, &row.clonedFrom, &row.createdAt, &row.updatedAt)
 	return row, err
 }
 
@@ -106,7 +107,7 @@ FROM service_runtime WHERE environment_key = ?`, row.key)
 		return model.Environment{}, err
 	}
 	return model.Environment{
-		Project: row.projectName, Name: row.environment, Revision: row.revision,
+		Project: row.projectName, Name: row.environment, ClonedFrom: row.clonedFrom, Revision: row.revision,
 		Status: model.EnvironmentStatus(row.status), Reason: row.reason, PrimaryService: row.primaryService,
 		CreatedAt: parseTime(row.createdAt), UpdatedAt: parseTime(row.updatedAt), Sources: sources,
 		Bindings: bindings, Services: services, Connections: definition.Connections,

@@ -123,11 +123,15 @@ The CLI E2E suite protects these product contracts:
 The Playwright suite protects these browser journeys:
 
 - browser authentication and one-use claim consumption;
-- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with hide and safe forget workflows, the persistent collapsible icon rail, Settings return, and breadcrumbs;
-- environment creation through the modal without duplicating project sources;
+- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with direct configuration, hide, and safe forget workflows, the persistent collapsible icon rail, Settings return, and breadcrumbs;
+- environment creation from the persistent sidebar through the modal without
+  duplicating project sources,
+  including visible clone provenance that does not displace status messaging,
+  plus stopped-only forgetting from the current environment header;
 - browser theme persistence;
-- services, copyable endpoints, topology edges, service details, and default-on
-  live logs with a plain-text raw tab and pause/resume controls;
+- services, copyable endpoints, hover- and focus-driven topology service
+  previews with connected-edge emphasis, service details, and default-on live
+  logs with a plain-text raw tab and pause/resume controls;
 - starting a real Portless-owned Node debugger from the service drawer,
   displaying its attach endpoint, preserving healthy environment semantics,
   and returning the service to normal mode;

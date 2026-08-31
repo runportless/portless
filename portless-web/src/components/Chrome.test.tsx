@@ -32,6 +32,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       live={live}
       onNavigate={() => undefined}
       onSwitchProject={() => undefined}
+      onEnvironmentChanged={async () => undefined}
       onSettingsToggle={() => undefined}
       onDaemonRefresh={async () => daemon}
       onDaemonDiagnosticsRefresh={async () => diagnostics}
@@ -52,6 +53,8 @@ describe('application navigation', () => {
     expect(markup).toContain('aria-label="Current project billing. Switch project"')
     expect(markup).toContain('aria-label="billing environments"')
     expect(markup).toContain('aria-label="billing/local, healthy"')
+    expect(markup).toContain('aria-label="Create environment in billing" aria-haspopup="dialog"')
+    expect(markup).toContain('<span class="sidebar__section-action-label">NEW</span>')
     expect(markup).not.toContain('aria-label="billing/local, healthy" aria-current="page"')
     expect(markup).not.toContain('Bindings')
     expect(markup).not.toContain('Topology')
@@ -113,6 +116,7 @@ describe('application navigation', () => {
       expect(markup).toContain('aria-label="Expand navigation" aria-expanded="false"')
       expect(markup).toContain('aria-label="Current project billing. Switch project" aria-haspopup="dialog" aria-expanded="false" title="billing"')
       expect(markup).toContain('aria-label="billing/local, healthy" aria-current="page" title="billing/local"')
+      expect(markup).toContain('aria-label="Create environment in billing" aria-haspopup="dialog" title="Create environment"')
       expect(markup).toContain('aria-label="Traffic" aria-current="page" title="Traffic"')
       expect(markup).toContain('aria-label="Settings" title="Settings"')
       expect(markup).toContain('aria-label="Daemon ready" aria-expanded="false" title="Daemon ready"')

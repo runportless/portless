@@ -6,6 +6,7 @@ import { EnvironmentPage } from './features/environment/EnvironmentPage'
 import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
 import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
 import { initialProjectDestination, projectDestination, pruneProjectNavigationPreferences, readProjectNavigationPreferences, recordProjectVisit, removeProjectNavigationPreferences, setProjectHidden, sidebarProjectFor, writeProjectNavigationPreferences } from './features/projects/projectNavigation'
+import { projectRoute } from './features/projects/projectOperations'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
 import type { Environment, EnvironmentList, Operation } from './api/contracts/environments'
@@ -199,6 +200,10 @@ export function App() {
     navigate(projectDestination(project, environments, projectNavigation))
   }, [environments, navigate, projectNavigation])
 
+  const configureProject = useCallback((project: Project) => {
+    navigate(projectRoute(project.name))
+  }, [navigate])
+
   const changeProjectHidden = useCallback((project: string, hidden: boolean) => {
     setProjectNavigation((current) => setProjectHidden(current, project, hidden))
   }, [])
@@ -259,9 +264,9 @@ export function App() {
       ? <ProjectOverviewPage key={activeProject.name} project={activeProject} environments={environments} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="project" name={parsed.project} onNavigate={navigate} />
   } else {
-    content = <ProjectsIndexPage projects={projects} environments={environments} focusedProject={sidebarProject?.name} navigation={projectNavigation} onOpenProject={switchProject} onProjectHiddenChange={changeProjectHidden} onForgetProject={forgetProject} />
+    content = <ProjectsIndexPage projects={projects} environments={environments} focusedProject={sidebarProject?.name} navigation={projectNavigation} onOpenProject={switchProject} onConfigureProject={configureProject} onProjectHiddenChange={changeProjectHidden} onForgetProject={forgetProject} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

@@ -174,6 +174,10 @@ portless --env billing/qa-assisted env bind payments \
 portless --env billing/qa-assisted up
 ```
 
+The clone records its direct source environment and copies its provider
+bindings, mock profiles, and routes. The resulting configuration is independent;
+later changes do not propagate between the source and clone.
+
 HTTP remote providers still pass through the source-aware proxy, so traffic,
 recordings, and faults keep working. A read-only binding blocks mutating HTTP
 methods locally before the request leaves the machine. Active provider changes
@@ -197,8 +201,15 @@ Each browser tab stays focused on one project. The sidebar shows only that
 project's environments, while the project switcher keeps running and recently
 opened projects close at hand and remembers the last environment used in each.
 The Projects page is the durable searchable registry, including projects hidden
-from the recent list. Forgetting a project is available only after all of its
+from the recent list. Its project action menu opens configuration for creating
+environments and managing sources, hides the project from the recent list, or
+safely forgets it. Forgetting is available only after all of the project's
 environments are stopped and never deletes source checkouts from disk.
+Each environment page exposes the corresponding forget action in its header.
+The confirmation requires that environment to be stopped, removes its retained
+Portless state, and preserves source checkouts and managed data volumes.
+The sidebar's Environments heading also exposes a persistent create action. It
+clones the current environment by default and opens the new stopped environment.
 
 The control plane's Portless System drawer groups daemon identity and build
 provenance, control-plane health, recovery, managed runtime inventory, local

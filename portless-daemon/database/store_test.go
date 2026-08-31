@@ -283,6 +283,9 @@ func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if local.ClonedFrom != "" {
+		t.Fatalf("independently created environment clone source = %q", local.ClonedFrom)
+	}
 	localModifiedAt := local.Bindings[0].ModifiedAt
 	if localModifiedAt.IsZero() {
 		t.Fatal("initial provider binding has no modification time")
@@ -293,6 +296,9 @@ func TestClonedEnvironmentCanUseRemoteProviderIndependently(t *testing.T) {
 	qa, err := controlStore.CloneEnvironment(ctx, "billing", "local", "qa-local")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if qa.ClonedFrom != "local" {
+		t.Fatalf("cloned environment source = %q, want local", qa.ClonedFrom)
 	}
 	if qa.Bindings[0].ModifiedAt.IsZero() {
 		t.Fatal("cloned provider binding has no modification time")

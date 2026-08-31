@@ -21,6 +21,7 @@ export interface ConfigurationIssue {
 export interface Environment {
   project: string
   name: string
+  clonedFrom?: string
   revision: number
   status: EnvironmentStatus
   reason?: string

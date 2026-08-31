@@ -64,6 +64,36 @@ test('renders real services, endpoints, topology, and service details', async ({
   }
   await expect(topology.getByRole('button', { name: 'Inspect traffic from checkout to redis' })).toHaveCount(0)
 
+  const topologyPreview = topology.getByRole('tooltip')
+  const checkoutTopologyNode = topology.locator('.topology-node[data-service="checkout"]')
+  const inventoryTopologyNode = topology.locator('.topology-node[data-service="inventory"]')
+  await expect(topologyPreview).toHaveCount(0)
+  await checkoutTopologyNode.hover()
+  await expect(topologyPreview).toBeVisible()
+  await expect(topologyPreview).toContainText('checkout')
+  await expect(topologyPreview).toContainText('managed')
+  await expect(topologyPreview).toContainText('http://checkout.local.ui-e2e.localhost')
+  await expect(topologyPreview).toContainText('recent requests')
+  await expect(topologyPreview).toContainText('1 inbound · 2 outbound')
+  await expect(topologyPreview).toContainText('Click node for full details')
+
+  await inventoryTopologyNode.hover()
+  await expect(topologyPreview).toContainText('inventory')
+  await expect(topology.locator('.topology-edge[data-source="checkout"][data-target="inventory"]')).toHaveClass(/is-preview-connected/)
+  await expect(topology.locator('.topology-edge[data-source="external"][data-target="checkout"]')).toHaveClass(/is-preview-dimmed/)
+  await expect(topology.locator('.topology-node[data-service="orders"]')).toHaveClass(/is-preview-dimmed/)
+  await expect(checkoutTopologyNode).toHaveClass(/is-preview-related/)
+
+  await checkoutTopologyNode.focus()
+  await expect(topologyPreview).toContainText('checkout')
+  await checkoutTopologyNode.press('Tab')
+  await expect(inventoryTopologyNode).toBeFocused()
+  await expect(topologyPreview).toContainText('inventory')
+  const centerTopology = topology.getByRole('button', { name: 'Center topology' })
+  await centerTopology.hover()
+  await centerTopology.focus()
+  await expect(topologyPreview).toHaveCount(0)
+
   const ingressEdge = topology.locator('.topology-edge').first()
   const ingressLine = ingressEdge.locator('.topology-edge__line')
   const edgeGeometry = () => ingressLine.evaluate((element) => {

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
+import { CreateEnvironmentDialog } from '../features/projects/CreateEnvironmentDialog'
 import { aggregateProjectStatus } from '../features/projects/projectPresentation'
 import { formatProjectLastOpened, projectIsRunning, recentProjects, runningProjects, type ProjectNavigationPreferences } from '../features/projects/projectNavigation'
 import { environmentRoute } from '../features/projects/projectOperations'
 import { StatusMark } from './Status'
 
-export function ProjectContextNav({ projects, environments, project, activeEnvironment, navigation, collapsed, onNavigate, onSwitchProject }: {
+export function ProjectContextNav({ projects, environments, project, activeEnvironment, navigation, collapsed, onNavigate, onSwitchProject, onEnvironmentChanged }: {
   projects: Project[]
   environments: Environment[]
   project?: Project
@@ -15,8 +16,10 @@ export function ProjectContextNav({ projects, environments, project, activeEnvir
   collapsed: boolean
   onNavigate: (path: string) => void
   onSwitchProject: (project: Project) => void
+  onEnvironmentChanged: () => Promise<void>
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const ownedEnvironments = useMemo(() => environments.filter((environment) => environment.project === project?.name).sort((left, right) => left.name.localeCompare(right.name)), [environments, project?.name])
   const otherRunning = useMemo(() => runningProjects(projects, environments).filter((item) => item.name !== project?.name), [environments, project?.name, projects])
@@ -51,7 +54,18 @@ export function ProjectContextNav({ projects, environments, project, activeEnvir
     </div>
 
     {project && <>
-      <div className="sidebar__section-label">Environments</div>
+      <div className="sidebar__section-label sidebar__section-label--action">
+        <span>Environments</span>
+        <button
+          className="sidebar__section-action"
+          type="button"
+          aria-label={`Create environment in ${project.name}`}
+          aria-haspopup="dialog"
+          title={ownedEnvironments.length === 0 ? 'Run portless up to create the first environment' : collapsed ? 'Create environment' : undefined}
+          disabled={ownedEnvironments.length === 0}
+          onClick={() => setCreateOpen(true)}
+        ><span aria-hidden="true">+</span><span className="sidebar__section-action-label">NEW</span></button>
+      </div>
       <nav className="project-nav project-environment-nav" aria-label={`${project.name} environments`}>
         {ownedEnvironments.map((environment) => {
           const selected = activeEnvironment?.project === environment.project && activeEnvironment.name === environment.name
@@ -59,7 +73,7 @@ export function ProjectContextNav({ projects, environments, project, activeEnvir
             <span className="project-nav__environment-icon"><EnvironmentIcon /><StatusMark status={environment.status} label={false} /></span><span>{environment.name}</span><small data-status={environment.status}>{environment.status}</small>
           </button>
         })}
-        {ownedEnvironments.length === 0 && <div className="sidebar__empty">This project has no environments.</div>}
+        {ownedEnvironments.length === 0 && <div className="sidebar__empty">Run <code>portless up</code> to create this project's first environment.</div>}
       </nav>
     </>}
 
@@ -69,6 +83,7 @@ export function ProjectContextNav({ projects, environments, project, activeEnvir
     </button>}
 
     {!project && projects.length === 0 && <div className="sidebar__empty">Run <code>portless up</code> or create a multi-source project.</div>}
+    {project && createOpen && <CreateEnvironmentDialog project={project} environments={ownedEnvironments} initialCloneFrom={activeEnvironment?.project === project.name ? activeEnvironment.name : undefined} onClose={() => setCreateOpen(false)} onNavigate={onNavigate} onChanged={onEnvironmentChanged} />}
   </>
 }
 

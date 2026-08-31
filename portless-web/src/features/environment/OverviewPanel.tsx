@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ActionErrorNotice } from '../../components/ActionError'
+import { MoreActionsIcon } from '../../components/MoreActionsIcon'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { SortableGridHeader, type TableSort } from '../../components/SortableTableHeader'
 import { StatePanel, StatusMark } from '../../components/Status'
@@ -127,7 +128,7 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
               </button>
             : <span className="service-list-endpoint"><span className="truncate muted" title={service.reason || 'not running'}>{service.reason || 'not running'}</span></span>}
           <div ref={menuOpen ? serviceMenu : undefined} className="service-row__actions">
-            {hasMenu && <button className="service-row__menu-trigger" type="button" aria-label={`Service actions for ${service.name}`} aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!serviceActions.busy} onClick={(event) => { event.stopPropagation(); setMenuService(menuOpen ? '' : service.name) }}>•••</button>}
+            {hasMenu && <button className="service-row__menu-trigger" type="button" aria-label={`Service actions for ${service.name}`} aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!serviceActions.busy} onClick={(event) => { event.stopPropagation(); setMenuService(menuOpen ? '' : service.name) }}><MoreActionsIcon /></button>}
             {menuOpen && <div className="service-row__menu" role="menu" aria-label={`${service.name} actions`} onClick={(event) => event.stopPropagation()}>
               {openURL && <a href={openURL} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setMenuService('')}>OPEN ↗</a>}
               {actions.map((item) => <button className={item.danger ? 'is-danger' : undefined} type="button" role="menuitem" key={item.action} onClick={() => { setMenuService(''); void serviceActions.run(service, item.action) }}>{item.label}</button>)}

@@ -24,6 +24,10 @@ Finish the lifecycle foundation before adding more runtime surface area:
 
 Save everything needed to reproduce a diagnosis into one portable artifact:
 
+The detailed format, safety, API, CLI, browser, persistence, replay, and staged
+delivery design is maintained in the
+[reproduction bundles implementation plan](reproduction-bundles.md).
+
 - Project topology and environment bindings.
 - Source revisions and checkout metadata.
 - Sanitized effective configuration.

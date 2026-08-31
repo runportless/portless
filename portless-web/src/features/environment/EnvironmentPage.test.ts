@@ -1,8 +1,8 @@
-import { createElement } from 'react'
+import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment, TimelineEvent } from '../../api/contracts/environments'
-import type { Recording } from '../../api/contracts/experiments'
+import type { FaultRule, Recording } from '../../api/contracts/experiments'
 import type { Project } from '../../api/contracts/projects'
 import type { ComponentBinding, Service } from '../../api/contracts/topology'
 import type { TrafficActivity, TrafficExchange } from '../../api/contracts/traffic'
@@ -11,9 +11,11 @@ import { sortCheckoutRows } from './bindings/CheckoutTable'
 import { defaultProviderBinding, providerBindingMatches, providerDisplayName } from './bindings/bindingPresentation'
 import { sortProviderBindings } from './bindings/ProviderBindingsTable'
 import { EnvironmentActivityIndicators, EnvironmentPage } from './EnvironmentPage'
+import { ForgetEnvironmentDialog } from './ForgetEnvironmentDialog'
 import { sortOverviewServices, summarizeEnvironmentBindings } from './OverviewPanel'
 import { displayLaunchMode, overviewServiceEndpoint, serviceEndpoints } from './service/servicePresentation'
 import { TimelinePanel } from './timeline/TimelinePanel'
+import { topologyServicePreviewDetails, topologyServicePreviewPlacement } from './topology/TopologyCanvas'
 import { buildTopology, mergeTopologySignal, summarizeTopologyTraffic, topologyCenterPosition, topologyEdgeKey, topologyEdgeTone, topologyEdgeVisualState, topologyPanPosition, topologyParticleMotion } from './topology/topologyModel'
 
 const service = (name: string): Service => ({ name } as Service)
@@ -63,9 +65,46 @@ describe('environment topology', () => {
       environment: { ...environment, status: 'degraded', reason: 'Waiting for orders to become ready' },
       tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
     }))
+    const clonedMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment: { ...environment, name: 'qa-assisted', clonedFrom: 'local' },
+      tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
 
     expect(healthyMarkup).toContain('<p class="environment-heading__message"></p>')
     expect(reasonMarkup).toContain('<p class="environment-heading__message">Waiting for orders to become ready</p>')
+    expect(clonedMarkup).toContain('class="environment-clone-origin" title="Created by cloning billing/local; changes are independent."')
+    expect(clonedMarkup).toContain('>FROM <strong>local</strong></span>')
+    expect(clonedMarkup).toContain('<p class="environment-heading__message"></p>')
+  })
+
+  it('offers preview-first environment forgetting from the page header', () => {
+    const environment = {
+      project: 'billing', name: 'qa', status: 'stopped', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [], connections: [],
+    } as Environment
+    const pageMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
+      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+    }))
+    const dialogProps = {
+      busy: false,
+      error: null,
+      restoreFocusRef: createRef<HTMLElement>(),
+      onDismissError: () => undefined,
+      onClose: () => undefined,
+      onForget: async () => undefined,
+    }
+    const stoppedMarkup = renderToStaticMarkup(createElement(ForgetEnvironmentDialog, { ...dialogProps, environment }))
+    const runningMarkup = renderToStaticMarkup(createElement(ForgetEnvironmentDialog, { ...dialogProps, environment: { ...environment, status: 'healthy' } }))
+
+    expect(pageMarkup).toContain('aria-label="Environment actions for billing/qa" aria-haspopup="menu" aria-expanded="false"')
+    expect(pageMarkup).not.toContain('>FORGET ENVIRONMENT</button>')
+    expect(stoppedMarkup).toContain('<h2 id="forget-environment-title">Forget billing/qa?</h2>')
+    expect(stoppedMarkup).toContain('Source files and checkouts on disk are not deleted.')
+    expect(stoppedMarkup).toContain('Source checkouts and managed data volumes')
+    expect(stoppedMarkup).toContain('<button class="button button--danger" type="button">FORGET ENVIRONMENT</button>')
+    expect(runningMarkup).toContain('Stop this environment before forgetting it.')
+    expect(runningMarkup).toContain('<button class="button button--danger" type="button" disabled="">FORGET ENVIRONMENT</button>')
   })
 
   it('renders the overview topology as a bounded preview that opens the dedicated view', () => {
@@ -374,6 +413,42 @@ describe('environment topology', () => {
   it('calculates the initial and requested topology center consistently', () => {
     expect(topologyCenterPosition({ scrollWidth: 1200, clientWidth: 800, scrollHeight: 900, clientHeight: 500 })).toEqual({ scrollLeft: 200, scrollTop: 120 })
     expect(topologyCenterPosition({ scrollWidth: 600, clientWidth: 800, scrollHeight: 400, clientHeight: 500 })).toEqual({ scrollLeft: 0, scrollTop: 0 })
+  })
+
+  it('summarizes topology service details, relationships, and active faults', () => {
+    const checkout = {
+      name: 'checkout', kind: 'process', framework: 'nestjs', launchMode: 'managed', status: 'ready', endpoints: [
+        { kind: 'public', protocol: 'http', host: 'checkout.local.store.localhost', port: 80, url: 'http://checkout.local.store.localhost' },
+      ],
+    } as Service
+    const environment = {
+      project: 'store', name: 'local', primaryService: 'checkout', services: [checkout, service('inventory'), service('orders')],
+      connections: [{ source: 'checkout', target: 'inventory', protocol: 'http' }, { source: 'checkout', target: 'orders', protocol: 'http' }],
+      bindings: [{ service: 'checkout', provider: 'local' }],
+    } as Environment
+    const faults = [{ name: 'checkout-delay', source: 'checkout', target: 'orders', enabled: true }] as FaultRule[]
+
+    expect(topologyServicePreviewDetails(environment, checkout, buildTopology(environment).edges, faults)).toEqual({
+      type: 'nestjs',
+      mode: 'managed',
+      endpoint: 'http://checkout.local.store.localhost',
+      inbound: 1,
+      outbound: 2,
+      fault: 'checkout-delay on checkout → orders',
+    })
+  })
+
+  it('keeps topology service previews within the visible canvas viewport', () => {
+    expect(topologyServicePreviewPlacement(
+      { left: 800, right: 964, top: 500 },
+      { left: 238, right: 908, top: 306, bottom: 950 },
+      { left: 300, top: 400 },
+    )).toEqual({ left: 200, top: 72, onLeft: true })
+    expect(topologyServicePreviewPlacement(
+      { left: 350, right: 514, top: 400 },
+      { left: 238, right: 908, top: 306, bottom: 950 },
+      { left: 300, top: 400 },
+    )).toEqual({ left: 228, top: -28, onLeft: false })
   })
 
   it('paginates overview collections at eight items', () => {

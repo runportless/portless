@@ -300,7 +300,7 @@ portless up
 | `portless env current` | Show the effective environment, current source path, and whether selection came from a flag, saved selection, or inference. |
 | `portless env clear` | Clear only the saved selection for the current checkout. This command rejects `--env`. |
 | `portless env list [project]` | List environments, optionally for one project. `--limit <n>` defaults to `100`. |
-| `portless env clone <name>` | Clone environment configuration. `--from <environment>` selects the source environment; otherwise the selected environment is used. |
+| `portless env clone <name>` | Clone environment configuration and record its direct source as provenance. `--from <environment>` selects the source environment; otherwise the selected environment is used. Provider bindings, mock profiles, and routes are copied independently. |
 | `portless env bind <service>` | Choose exactly one provider with `--local <source>`, `--container`, `--remote <url>`, or `--mock <profile>`. See provider options below. |
 | `portless env checkout list` | List source checkout paths configured for the selected environment. |
 | `portless env checkout set <source>` | Discover `--path <checkout>` and configure it for the selected environment. The environment must be stopped. |

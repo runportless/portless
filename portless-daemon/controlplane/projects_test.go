@@ -33,8 +33,12 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid"); err != nil {
+	cloned, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if cloned.ClonedFrom != "local" {
+		t.Fatalf("cloned environment source = %q, want local", cloned.ClonedFrom)
 	}
 	remote := model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
 		URL: "https://checkout.qa.example.test", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly,

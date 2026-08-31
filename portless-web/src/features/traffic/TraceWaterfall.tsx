@@ -151,12 +151,14 @@ export function TraceWaterfall({ trace, onItem }: {
   const [maximized, setMaximized] = useState(false)
   useEffect(() => {
     if (!maximized) return
-    const restore = (event: KeyboardEvent) => { if (event.key === 'Escape') setMaximized(false) }
+    const restore = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.querySelector('.traffic-detail')) setMaximized(false)
+    }
     window.addEventListener('keydown', restore)
     return () => window.removeEventListener('keydown', restore)
   }, [maximized])
   const total = Math.max(1, trace.durationMs)
-  const inspect = (item: TraceNavigationItem) => { setMaximized(false); onItem(item) }
+  const inspect = (item: TraceNavigationItem) => onItem(item)
   return <div className={`trace-waterfall${maximized ? ' panel trace-waterfall--maximized' : ''}`} role="region" aria-label="Trace waterfall">
     {maximized && <div className="panel-title trace-waterfall__toolbar"><span>TRACE WATERFALL</span><div><button className="icon-button" type="button" title="Restore trace" aria-label="Restore trace" aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div></div>}
     <div className="trace-waterfall__content">

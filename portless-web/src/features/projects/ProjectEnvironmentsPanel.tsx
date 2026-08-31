@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
+import { MoreActionsIcon } from '../../components/MoreActionsIcon'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { StatusMark } from '../../components/Status'
 import type { Environment } from '../../api/contracts/environments'
 import type { Project } from '../../api/contracts/projects'
 import { CreateEnvironmentDialog } from './CreateEnvironmentDialog'
-import { environmentCanStop, environmentKey, environmentRoute, runEnvironmentOperation, type EnvironmentAction } from './projectOperations'
+import { environmentCanRestart, environmentCanStop, environmentKey, environmentRoute, runEnvironmentOperation, type EnvironmentAction } from './projectOperations'
 import { formatTimestamp, statusCounts } from './projectPresentation'
 
 export function ProjectEnvironmentsPanel({ project, environments, onNavigate, onChanged }: {
@@ -19,7 +20,9 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
   const [stoppingAll, setStoppingAll] = useState(false)
   const [actionErrorDetails, setActionErrorDetails] = useState<ActionErrorDetails | null>(null)
   const [page, setPage] = useState(0)
+  const [menuEnvironment, setMenuEnvironment] = useState('')
   const environmentActionsInFlight = useRef(new Set<string>())
+  const environmentMenu = useRef<HTMLDivElement>(null)
   const stopAllInFlight = useRef(false)
   const counts = statusCounts(environments)
   const pagination = paginateItems(environments, page, 10)
@@ -27,7 +30,27 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
 
   useEffect(() => {
     setPage(0)
+    setMenuEnvironment('')
   }, [project.name])
+
+  useEffect(() => {
+    if (!menuEnvironment) return
+    const dismissOutside = (event: MouseEvent) => {
+      if (!environmentMenu.current?.contains(event.target as Node)) setMenuEnvironment('')
+    }
+    const dismissWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const trigger = environmentMenu.current?.querySelector<HTMLButtonElement>('.project-table-row-actions__trigger')
+      setMenuEnvironment('')
+      window.requestAnimationFrame(() => trigger?.focus())
+    }
+    document.addEventListener('mousedown', dismissOutside)
+    window.addEventListener('keydown', dismissWithEscape)
+    return () => {
+      document.removeEventListener('mousedown', dismissOutside)
+      window.removeEventListener('keydown', dismissWithEscape)
+    }
+  }, [menuEnvironment])
 
   const markActions = (keys: string[], action: EnvironmentAction) => {
     setEnvironmentActions((current) => {
@@ -45,7 +68,7 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
   }
   const runAction = async (environment: Environment, action: EnvironmentAction) => {
     const key = environmentKey(environment)
-    const allowed = action === 'up' ? environment.status === 'stopped' : environmentCanStop(environment)
+    const allowed = action === 'up' ? environment.status === 'stopped' : action === 'restart' ? environmentCanRestart(environment) : environmentCanStop(environment)
     if (!allowed || environmentActionsInFlight.current.has(key) || stopAllInFlight.current) return
     environmentActionsInFlight.current.add(key)
     markActions([key], action)
@@ -54,7 +77,7 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
       await runEnvironmentOperation(environment, action)
       await onChanged()
     } catch (reason) {
-      setActionErrorDetails(actionError(`${environment.name} wasn't ${action === 'up' ? 'started' : 'stopped'}`, reason))
+      setActionErrorDetails(actionError(`${environment.name} wasn't ${action === 'up' ? 'started' : action === 'restart' ? 'restarted' : 'stopped'}`, reason))
       await onChanged().catch(() => undefined)
     } finally {
       environmentActionsInFlight.current.delete(key)
@@ -67,6 +90,7 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
     if (candidates.length === 0) return
     const keys = candidates.map(environmentKey)
     stopAllInFlight.current = true
+    setMenuEnvironment('')
     keys.forEach((key) => environmentActionsInFlight.current.add(key))
     setStoppingAll(true)
     markActions(keys, 'down')
@@ -112,17 +136,27 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
         const pendingAction = environmentActions.get(environmentKey(environment))
         const starting = pendingAction === 'up' || environment.status === 'starting'
         const stopping = pendingAction === 'down' || environment.status === 'stopping'
+        const restarting = pendingAction === 'restart'
         const stopped = environment.status === 'stopped' && !pendingAction
         const recovering = environment.status === 'recovering' && !pendingAction
         const startAction = stopped || starting
-        return <div className="environment-row-shell" key={`${environment.project}/${environment.name}`}>
-          <button className="table-row environment-row" onClick={() => onNavigate(environmentRoute(environment))}>
+        const actionDisabled = stoppingAll || !!pendingAction || starting || stopping || restarting || recovering
+        const menuOpen = menuEnvironment === environment.name
+        const openEnvironment = () => { setMenuEnvironment(''); onNavigate(environmentRoute(environment)) }
+        return <div className="environment-row-shell environment-row-shell--interactive" key={`${environment.project}/${environment.name}`} onClick={openEnvironment}>
+          <button className="table-row environment-row" onClick={(event) => { event.stopPropagation(); openEnvironment() }}>
             <span><StatusMark status={environment.status} /></span><strong title={environment.name}>{environment.name}</strong><span>{ready}/{environment.services.length}</span><span className={remote ? 'warning-text' : ''}>{remote || '—'}</span><time dateTime={environment.updatedAt} title={new Date(environment.updatedAt).toLocaleString()}>{formatTimestamp(environment.updatedAt)}</time><span className={environment.issues?.length ? 'warning-text truncate' : 'muted truncate'}>{environment.reason || environment.issues?.[0]?.message || (environment.status === 'stopped' ? 'not running' : environment.status === 'healthy' ? 'all required services are ready' : 'state is being reconciled')}</span>
           </button>
-          <div className="table-row-actions environment-row-actions"><button type="button" aria-label={`${startAction ? 'Start' : 'Stop'} ${environment.name}`} disabled={stoppingAll || !!pendingAction || starting || stopping || recovering} onClick={() => void runAction(environment, startAction ? 'up' : 'down')}>{starting ? 'STARTING…' : stopping ? 'STOPPING…' : recovering ? 'RECOVERING…' : stopped ? 'START' : 'STOP'}</button></div>
+          <div ref={menuOpen ? environmentMenu : undefined} className="project-table-row-actions environment-row-actions">
+            <button className="project-table-row-actions__trigger" type="button" aria-label={`Environment actions for ${environment.project}/${environment.name}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); setMenuEnvironment(menuOpen ? '' : environment.name) }}><MoreActionsIcon /></button>
+            {menuOpen && <div className="project-table-row-actions__menu" role="menu" aria-label={`${environment.name} environment actions`} onClick={(event) => event.stopPropagation()}>
+              {environmentCanRestart(environment) && <button type="button" role="menuitem" disabled={actionDisabled} onClick={() => { setMenuEnvironment(''); void runAction(environment, 'restart') }}>{restarting ? 'RESTARTING…' : 'RESTART'}</button>}
+              <button type="button" role="menuitem" disabled={actionDisabled} onClick={() => { setMenuEnvironment(''); void runAction(environment, startAction ? 'up' : 'down') }}>{starting ? 'STARTING…' : stopping ? 'STOPPING…' : recovering ? 'RECOVERING…' : stopped ? 'START' : 'STOP'}</button>
+            </div>}
+          </div>
         </div>
       })}
-      <PanelPagination label="environments" pagination={pagination} onPage={setPage} />
+      <PanelPagination label="environments" pagination={pagination} onPage={(nextPage) => { setPage(nextPage); setMenuEnvironment('') }} />
     </section> : <EmptyEnvironments />}
     {createOpen && <CreateEnvironmentDialog project={project} environments={environments} onClose={() => setCreateOpen(false)} onNavigate={onNavigate} onChanged={onChanged} />}
   </>

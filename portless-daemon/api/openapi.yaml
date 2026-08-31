@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.9.0
+  version: 12.10.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.9.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.10.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -1322,7 +1322,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.9.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.10.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1892,6 +1892,7 @@ components:
       properties:
         project: { $ref: '#/components/schemas/ProjectName' }
         name: { $ref: '#/components/schemas/EnvironmentName' }
+        clonedFrom: { $ref: '#/components/schemas/EnvironmentName', description: Direct source environment captured when this environment was cloned. Omitted for environments created independently. }
         revision: { type: integer, format: int64 }
         status: { $ref: '#/components/schemas/EnvironmentStatus' }
         reason: { type: string }
@@ -1939,6 +1940,7 @@ components:
       properties:
         project: { $ref: '#/components/schemas/ProjectName' }
         name: { $ref: '#/components/schemas/EnvironmentName' }
+        clonedFrom: { $ref: '#/components/schemas/EnvironmentName', description: Direct source environment captured when this environment was cloned. Omitted for environments created independently. }
         revision: { type: integer, format: int64 }
         status: { $ref: '#/components/schemas/EnvironmentStatus' }
         reason: { type: string }

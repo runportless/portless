@@ -381,6 +381,7 @@ type ConfigurationIssue struct {
 type EnvironmentSummary struct {
 	Project      string            `json:"project"`
 	Name         string            `json:"name"`
+	ClonedFrom   string            `json:"clonedFrom,omitempty"`
 	Revision     int64             `json:"revision"`
 	Status       EnvironmentStatus `json:"status"`
 	Reason       string            `json:"reason,omitempty"`
@@ -409,6 +410,7 @@ type Project struct {
 type Environment struct {
 	Project        string               `json:"project"`
 	Name           string               `json:"name"`
+	ClonedFrom     string               `json:"clonedFrom,omitempty"`
 	Revision       int64                `json:"revision"`
 	Status         EnvironmentStatus    `json:"status"`
 	Reason         string               `json:"reason,omitempty"`

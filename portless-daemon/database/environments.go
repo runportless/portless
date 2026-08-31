@@ -24,6 +24,10 @@ type ProjectEnvironmentConfiguration struct {
 
 // CreateEnvironment persists a new stopped environment and allocates its stable endpoints.
 func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentName string, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
+	return s.createEnvironment(ctx, projectName, environmentName, "", definition, sources, bindings)
+}
+
+func (s *Store) createEnvironment(ctx context.Context, projectName, environmentName, clonedFrom string, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
 	if err := model.ValidateEnvironmentName(environmentName); err != nil {
 		return model.Environment{}, err
 	}
@@ -55,8 +59,8 @@ func (s *Store) CreateEnvironment(ctx context.Context, projectName, environmentN
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO environments(private_key, project_key, name, revision, status, reason, primary_service, model_json, created_at, updated_at)
-VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?)`, key, projectKey, environmentName, model.EnvironmentStopped, definition.PrimaryService, modelJSON, now, now)
+INSERT INTO environments(private_key, project_key, name, revision, status, reason, primary_service, model_json, cloned_from_name, created_at, updated_at)
+VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?, ?)`, key, projectKey, environmentName, model.EnvironmentStopped, definition.PrimaryService, modelJSON, clonedFrom, now, now)
 	if err != nil {
 		if isUniqueError(err) {
 			return model.Environment{}, ErrAlreadyExists
@@ -85,7 +89,7 @@ func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, t
 	if err != nil {
 		return model.Environment{}, err
 	}
-	created, err := s.CreateEnvironment(ctx, projectName, targetName, definition, source.Sources, source.Bindings)
+	created, err := s.createEnvironment(ctx, projectName, targetName, source.Name, definition, source.Sources, source.Bindings)
 	if err != nil {
 		return model.Environment{}, err
 	}
@@ -93,7 +97,7 @@ func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, t
 		_ = s.ForgetEnvironment(context.Background(), projectName, targetName)
 		return model.Environment{}, err
 	}
-	return created, nil
+	return s.Environment(ctx, created.Project, created.Name)
 }
 
 // Environment loads and hydrates one environment by public project and environment names.
@@ -118,7 +122,7 @@ func (s *Store) EnvironmentBySelector(ctx context.Context, selector string) (mod
 func (s *Store) ListEnvironments(ctx context.Context, projectName string) ([]model.Environment, error) {
 	query := `
 SELECT e.private_key, e.project_key, p.name, e.name, e.revision, e.status, e.reason,
-       e.primary_service, e.model_json, e.created_at, e.updated_at
+       e.primary_service, e.model_json, e.cloned_from_name, e.created_at, e.updated_at
 FROM environments e JOIN projects p ON p.private_key = e.project_key`
 	var args []any
 	if projectName != "" {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, jsonBody, projectPath } from '../../api'
 import { actionError, type ActionErrorDetails } from '../../components/ActionError'
+import { MoreActionsIcon } from '../../components/MoreActionsIcon'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { StatusMark } from '../../components/Status'
 import type { Environment } from '../../api/contracts/environments'
@@ -19,7 +20,10 @@ export function ProjectSourcesPanel({ project, environments, onChanged }: {
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [notice, setNotice] = useState('')
   const [page, setPage] = useState(0)
-  const createButton = useRef<HTMLButtonElement>(null)
+  const [menuSource, setMenuSource] = useState('')
+  const [restoreFocusSource, setRestoreFocusSource] = useState('')
+  const sourceMenu = useRef<HTMLDivElement>(null)
+  const sourceMenuTrigger = useRef<HTMLButtonElement>(null)
   const sourceRows = projectSourceRows(project, environments)
   const pagination = paginateItems(sourceRows, page, 10)
 
@@ -29,7 +33,28 @@ export function ProjectSourcesPanel({ project, environments, onChanged }: {
     setSourceDelete(null)
     setError(null)
     setNotice('')
+    setMenuSource('')
+    setRestoreFocusSource('')
   }, [project.name])
+
+  useEffect(() => {
+    if (!menuSource) return
+    const dismissOutside = (event: MouseEvent) => {
+      if (!sourceMenu.current?.contains(event.target as Node)) setMenuSource('')
+    }
+    const dismissWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const trigger = sourceMenu.current?.querySelector<HTMLButtonElement>('.project-table-row-actions__trigger')
+      setMenuSource('')
+      window.requestAnimationFrame(() => trigger?.focus())
+    }
+    document.addEventListener('mousedown', dismissOutside)
+    window.addEventListener('keydown', dismissWithEscape)
+    return () => {
+      document.removeEventListener('mousedown', dismissOutside)
+      window.removeEventListener('keydown', dismissWithEscape)
+    }
+  }, [menuSource])
 
   const closeMutation = () => {
     if (busy) return
@@ -74,22 +99,30 @@ export function ProjectSourcesPanel({ project, environments, onChanged }: {
   return <>
     {notice && <div className="mock-warning source-add-notice"><strong>SOURCE CHANGE</strong><span>{notice}</span><button type="button" onClick={() => setNotice('')}>DISMISS</button></div>}
     <section className="panel project-sources-panel">
-      <div className="panel-title"><span>SOURCES</span><button ref={createButton} className="button button--primary button--small panel-create-button" type="button" aria-haspopup="dialog" onClick={() => { setError(null); setCreateOpen(true) }}>ADD SOURCE</button></div>
+      <div className="panel-title"><span>SOURCES</span><button className="button button--primary button--small panel-create-button" type="button" aria-haspopup="dialog" onClick={() => { setError(null); setCreateOpen(true) }}>ADD SOURCE</button></div>
       <div className="table-row table-row--header project-source-row"><span>Name</span><span>Path</span><span>Services</span><span aria-hidden="true" /></div>
-      {pagination.items.map((source) => <div className="table-row project-source-row" key={source.name}>
-        <div className="checkout-source"><StatusMark status={projectSourceStatus(source)} label={false} /><strong>{source.name}</strong></div>
-        <div className="project-source-bindings">{source.checkouts.map((checkout) => <div className="project-source-binding" key={checkout.path}>
-          <code className="truncate" title={checkout.path}>{checkout.path}</code>
-        </div>)}{source.unbound.map((environment) => <div className="project-source-binding" key={`unbound-${environment.name}`}>
-          <span className={environment.configurationRequired ? 'warning-text truncate' : 'muted truncate'}>{environment.configurationRequired ? 'configuration required' : 'not bound locally'}</span>
-        </div>)}</div>
-        <span className="muted truncate" title={source.services?.join(', ')}>{source.services?.join(', ') || '—'}</span>
-        <div className="table-row-actions"><button type="button" disabled={busy} onClick={() => { setError(null); setSourceDelete(source) }}>DELETE</button></div>
-      </div>)}
+      {pagination.items.map((source) => {
+        const menuOpen = menuSource === source.name
+        return <div className="table-row project-source-row" key={source.name}>
+          <div className="checkout-source"><StatusMark status={projectSourceStatus(source)} label={false} /><strong>{source.name}</strong></div>
+          <div className="project-source-bindings">{source.checkouts.map((checkout) => <div className="project-source-binding" key={checkout.path}>
+            <code className="truncate" title={checkout.path}>{checkout.path}</code>
+          </div>)}{source.unbound.map((environment) => <div className="project-source-binding" key={`unbound-${environment.name}`}>
+            <span className={environment.configurationRequired ? 'warning-text truncate' : 'muted truncate'}>{environment.configurationRequired ? 'configuration required' : 'not bound locally'}</span>
+          </div>)}</div>
+          <span className="muted truncate" title={source.services?.join(', ')}>{source.services?.join(', ') || '—'}</span>
+          <div ref={menuOpen ? sourceMenu : undefined} className="project-table-row-actions">
+            <button ref={restoreFocusSource === source.name ? sourceMenuTrigger : undefined} className="project-table-row-actions__trigger" type="button" aria-label={`Source actions for ${source.name}`} aria-haspopup="menu" aria-expanded={menuOpen} disabled={busy} onClick={() => { setRestoreFocusSource(source.name); setMenuSource(menuOpen ? '' : source.name) }}><MoreActionsIcon /></button>
+            {menuOpen && <div className="project-table-row-actions__menu" role="menu" aria-label={`${source.name} source actions`}>
+              <button className="is-danger" type="button" role="menuitem" disabled={busy} onClick={() => { setError(null); setMenuSource(''); setSourceDelete(source) }}>DELETE</button>
+            </div>}
+          </div>
+        </div>
+      })}
       {sourceRows.length === 0 && <div className="empty-row">No sources are registered with this project.</div>}
-      <PanelPagination label="sources" pagination={pagination} onPage={setPage} />
+      <PanelPagination label="sources" pagination={pagination} onPage={(nextPage) => { setPage(nextPage); setMenuSource('') }} />
     </section>
     {createOpen && <AddProjectSourceModal project={project} environments={environments} busy={busy} error={error} onDismissError={() => setError(null)} onClose={closeMutation} onAdd={addSource} />}
-    {sourceDelete && <DeleteProjectSourceModal project={project} source={sourceDelete} environments={environments} busy={busy} error={error} restoreFocusRef={createButton} onDismissError={() => setError(null)} onClose={closeMutation} onDelete={deleteSource} />}
+    {sourceDelete && <DeleteProjectSourceModal project={project} source={sourceDelete} environments={environments} busy={busy} error={error} restoreFocusRef={sourceMenuTrigger} onDismissError={() => setError(null)} onClose={closeMutation} onDelete={deleteSource} />}
   </>
 }

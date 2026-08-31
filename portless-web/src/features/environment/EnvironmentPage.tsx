@@ -1,5 +1,7 @@
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { api, environmentPath, jsonBody } from '../../api'
+import { actionError, type ActionErrorDetails } from '../../components/ActionError'
+import { MoreActionsIcon } from '../../components/MoreActionsIcon'
 import { StatusMark } from '../../components/Status'
 import type { Environment, Operation } from '../../api/contracts/environments'
 import type { Recording } from '../../api/contracts/experiments'
@@ -9,6 +11,7 @@ import { MocksPanel } from '../mocks'
 import { TrafficPanel } from '../traffic'
 import { BindingsPanel } from './bindings/BindingsPanel'
 import { FaultsPanel } from './faults/FaultsPanel'
+import { ForgetEnvironmentDialog } from './ForgetEnvironmentDialog'
 import { environmentUIPath, type EnvironmentNavigationOptions, type EnvironmentTab } from './navigation'
 import { OverviewPanel } from './OverviewPanel'
 import { RecordingsPanel } from './recordings/RecordingsPanel'
@@ -31,6 +34,12 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
   const [selectedService, setSelectedService] = useState<Service | null>(null)
   const [busy, setBusy] = useState('')
   const [actionFailure, setActionFailure] = useState('')
+  const [environmentMenuOpen, setEnvironmentMenuOpen] = useState(false)
+  const [forgetOpen, setForgetOpen] = useState(false)
+  const [forgetBusy, setForgetBusy] = useState(false)
+  const [forgetError, setForgetError] = useState<ActionErrorDetails | null>(null)
+  const environmentMenu = useRef<HTMLDivElement>(null)
+  const environmentMenuTrigger = useRef<HTMLButtonElement>(null)
   const activity = useEnvironmentActivity(environment, onChanged)
 
   useEffect(() => {
@@ -38,6 +47,24 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
     const updated = environment.services.find((service) => service.name === selectedService.name)
     if (updated) setSelectedService(updated)
   }, [environment.services]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!environmentMenuOpen) return
+    const dismissOutside = (event: MouseEvent) => {
+      if (!environmentMenu.current?.contains(event.target as Node)) setEnvironmentMenuOpen(false)
+    }
+    const dismissWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setEnvironmentMenuOpen(false)
+      window.requestAnimationFrame(() => environmentMenuTrigger.current?.focus())
+    }
+    document.addEventListener('mousedown', dismissOutside)
+    window.addEventListener('keydown', dismissWithEscape)
+    return () => {
+      document.removeEventListener('mousedown', dismissOutside)
+      window.removeEventListener('keydown', dismissWithEscape)
+    }
+  }, [environmentMenuOpen])
 
   const run = async (action: 'up' | 'down') => {
     setBusy(action)
@@ -49,6 +76,21 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
       setActionFailure(value instanceof Error ? value.message : String(value))
     } finally {
       setBusy('')
+    }
+  }
+
+  const forget = async () => {
+    if (environment.status !== 'stopped' || forgetBusy) return
+    setForgetBusy(true)
+    setForgetError(null)
+    try {
+      await api(environmentPath(environment), { method: 'DELETE' })
+      await onChanged()
+      onNavigate('/projects')
+    } catch (reason) {
+      setForgetError(actionError("Environment couldn't be forgotten", reason))
+    } finally {
+      setForgetBusy(false)
     }
   }
 
@@ -64,11 +106,17 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
 
   return <div className="page project-page environment-page">
     <div className="project-heading">
-      <div><div className="eyebrow">{environment.project} / ENVIRONMENT</div><div className="title-with-status"><h1>{environment.name}</h1><StatusMark status={environment.status} /></div><p className="environment-heading__message">{statusMessage}</p></div>
+      <div><div className="eyebrow">{environment.project} / ENVIRONMENT</div><div className="title-with-status"><h1>{environment.name}</h1><StatusMark status={environment.status} />{environment.clonedFrom && <span className="environment-clone-origin" title={`Created by cloning ${environment.project}/${environment.clonedFrom}; changes are independent.`}>FROM <strong>{environment.clonedFrom}</strong></span>}</div><p className="environment-heading__message">{statusMessage}</p></div>
       <div className="project-actions">
         <EnvironmentActivityIndicators environment={environment} activeRecording={activeRecording} activeFaultCount={activeFaults.length} onNavigate={onNavigate} />
         {environment.status !== 'stopped' ? <button className="button" disabled={!!busy || environment.status === 'recovering'} onClick={() => run('down')}>{busy === 'down' ? 'STOPPING…' : environment.status === 'recovering' ? 'RECOVERING…' : 'STOP ALL'}</button> : <button className="button button--primary" disabled={!!busy} onClick={() => run('up')}>{busy === 'up' ? 'STARTING…' : 'START ALL'}</button>}
         {primaryHTTP && <a className="button" href={primaryHTTP.url} target="_blank" rel="noreferrer">OPEN APP ↗</a>}
+        <div ref={environmentMenu} className="environment-heading-actions">
+          <button ref={environmentMenuTrigger} className="environment-heading-actions__trigger" type="button" aria-label={`Environment actions for ${environment.project}/${environment.name}`} aria-haspopup="menu" aria-expanded={environmentMenuOpen} disabled={!!busy || forgetBusy} onClick={() => setEnvironmentMenuOpen((open) => !open)}><MoreActionsIcon /></button>
+          {environmentMenuOpen && <div className="environment-heading-actions__menu" role="menu" aria-label={`${environment.project}/${environment.name} actions`}>
+            <button className="is-danger" type="button" role="menuitem" onClick={() => { setEnvironmentMenuOpen(false); setForgetError(null); setForgetOpen(true) }}>FORGET ENVIRONMENT</button>
+          </div>}
+        </div>
       </div>
     </div>
     {!!environment.issues?.length && <div className="alert alert--danger"><strong>Configuration needs attention</strong><span>{environment.issues.map((issue) => issue.message).join(' · ')}</span></div>}
@@ -85,6 +133,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, onNavi
     {tab === 'faults' && <FaultsPanel environment={environment} faults={activity.faults} refresh={activity.refresh} />}
     {tab === 'timeline' && <TimelinePanel key={`${environment.project}/${environment.name}`} timeline={activity.timeline} />}
     {selectedService && <ServiceDrawer environment={environment} service={selectedService} onClose={() => setSelectedService(null)} onChanged={onChanged} />}
+    {forgetOpen && <ForgetEnvironmentDialog environment={environment} busy={forgetBusy} error={forgetError} restoreFocusRef={environmentMenuTrigger} onDismissError={() => setForgetError(null)} onClose={() => { if (!forgetBusy) { setForgetOpen(false); setForgetError(null) } }} onForget={forget} />}
   </div>
 }
 

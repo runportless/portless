@@ -9,6 +9,7 @@ export interface ProjectSource {
 export interface EnvironmentSummary {
   project: string
   name: string
+  clonedFrom?: string
   revision: number
   status: EnvironmentStatus
   reason?: string

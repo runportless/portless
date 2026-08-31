@@ -44,6 +44,13 @@ test('paginates traces and exchanges at 25 rows', async ({ page }) => {
   await expect(trace.locator('.panel-title')).toContainText('TRACE WATERFALL')
   await expect(trace.getByRole('button', { name: /Restore trace/ })).toHaveText('×')
   await expect(trace.getByRole('button', { name: /Restore trace/ })).toHaveClass(/icon-button/)
+  await trace.getByRole('button', { name: /^Inspect / }).first().click()
+  const traceDetail = page.getByRole('dialog', { name: /Traffic request and response/ })
+  await expect(traceDetail).toBeVisible()
+  await expect(trace).toHaveClass(/trace-waterfall--maximized/)
+  await page.keyboard.press('Escape')
+  await expect(traceDetail).toHaveCount(0)
+  await expect(trace).toHaveClass(/trace-waterfall--maximized/)
   await page.keyboard.press('Escape')
   await expect(trace).not.toHaveClass(/trace-waterfall--maximized/)
   await tracePagination.getByRole('button', { name: 'Next traces page' }).click()
@@ -132,4 +139,3 @@ test('filters, pauses, resumes, and switches live traffic protocols', async ({ p
   await protocol.getByRole('button', { name: 'HTTP' }).click()
   await expect(protocol.getByRole('button', { name: 'HTTP' })).toHaveClass(/is-active/)
 })
-

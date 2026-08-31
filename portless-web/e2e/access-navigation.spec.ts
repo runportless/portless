@@ -139,6 +139,28 @@ test('supports keyboard topology inspection and command palette navigation', asy
   await page.getByRole('button', { name: 'Center topology' }).click()
   await expect.poll(topologyIsCentered).toBe(true)
 
+  const orders = canvas.locator('.topology-node[data-service="orders"]')
+  await orders.focus()
+  const preview = canvas.getByRole('tooltip')
+  await expect(preview).toBeVisible()
+  await expect(preview).toContainText('orders')
+  const previewInsets = await canvas.evaluate((element) => {
+    const card = element.querySelector('.topology-service-preview')
+    if (!(card instanceof HTMLElement)) return null
+    const viewportBounds = element.getBoundingClientRect()
+    const cardBounds = card.getBoundingClientRect()
+    return {
+      left: Math.round(cardBounds.left-viewportBounds.left),
+      right: Math.round(viewportBounds.right-cardBounds.right),
+      top: Math.round(cardBounds.top-viewportBounds.top),
+      bottom: Math.round(viewportBounds.bottom-cardBounds.bottom),
+    }
+  })
+  expect(previewInsets).not.toBeNull()
+  for (const [edgeName, inset] of Object.entries(previewInsets!)) {
+    expect(inset, `${edgeName} preview inset`).toBeGreaterThanOrEqual(9)
+  }
+
   const edge = page.getByRole('button', { name: 'Inspect traffic from external to checkout' })
   await edge.focus()
   await expect(edge).toBeFocused()

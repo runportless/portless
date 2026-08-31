@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { FormDialog } from '../../components/overlays/FormDialog'
+import { MoreActionsIcon } from '../../components/MoreActionsIcon'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
 import { SortableGridHeader, type TableSort } from '../../components/SortableTableHeader'
 import { StatusMark } from '../../components/Status'
@@ -14,12 +15,13 @@ type ProjectSortField = 'project' | 'runtime' | 'environments' | 'lastOpened'
 const defaultProjectSort: TableSort<ProjectSortField> = { key: 'lastOpened', direction: 'desc' }
 const projectRegistryPageSize = 10
 
-export function ProjectsIndexPage({ projects, environments, focusedProject, navigation, onOpenProject, onProjectHiddenChange, onForgetProject }: {
+export function ProjectsIndexPage({ projects, environments, focusedProject, navigation, onOpenProject, onConfigureProject, onProjectHiddenChange, onForgetProject }: {
   projects: Project[]
   environments: Environment[]
   focusedProject?: string
   navigation: ProjectNavigationPreferences
   onOpenProject: (project: Project) => void
+  onConfigureProject: (project: Project) => void
   onProjectHiddenChange: (project: string, hidden: boolean) => void
   onForgetProject: (project: string) => Promise<void>
 }) {
@@ -89,7 +91,6 @@ export function ProjectsIndexPage({ projects, environments, focusedProject, navi
       <header className="projects-heading__title">
         <div className="eyebrow">Workspace</div>
         <div className="projects-heading__line"><h1>Projects</h1></div>
-        <p>The sidebar shows one project at a time. Use this page to find, switch, or forget projects.</p>
       </header>
     </div>
 
@@ -120,8 +121,9 @@ export function ProjectsIndexPage({ projects, environments, focusedProject, navi
             <time dateTime={row.openedAt}>{formatProjectLastOpened(row.openedAt)}</time>
             <div ref={menuOpen ? menu : undefined} className="project-registry-row__actions">
               <button className="button button--quiet" type="button" onClick={(event) => { event.stopPropagation(); onOpenProject(row.project) }}>OPEN</button>
-              <button className="project-registry-row__menu-trigger" type="button" aria-label={`Project actions for ${row.project.name}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); setMenuProject(menuOpen ? '' : row.project.name) }}>•••</button>
+              <button className="project-registry-row__menu-trigger" type="button" aria-label={`Project actions for ${row.project.name}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); setMenuProject(menuOpen ? '' : row.project.name) }}><MoreActionsIcon /></button>
               {menuOpen && <div className="project-registry-row__menu" role="menu" aria-label={`${row.project.name} actions`} onClick={(event) => event.stopPropagation()}>
+                <button type="button" role="menuitem" onClick={() => { onConfigureProject(row.project); setMenuProject('') }}>CONFIGURE</button>
                 <button type="button" role="menuitem" onClick={() => { onProjectHiddenChange(row.project.name, !hidden); setMenuProject('') }}>{hidden ? 'SHOW IN RECENT' : 'HIDE FROM RECENT'}</button>
                 <button className="is-danger" type="button" role="menuitem" onClick={() => { setForgetProject(row.project); setMenuProject(''); setError(null) }}>FORGET PROJECT</button>
               </div>}

@@ -108,6 +108,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"connection_runtime", "listen_ip", "TEXT NOT NULL DEFAULT '127.0.0.1'"},
 		{"connection_runtime", "dns_name", "TEXT NOT NULL DEFAULT ''"},
 		{"operations", "request_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"environments", "cloned_from_name", "TEXT NOT NULL DEFAULT ''"},
 		{"environment_bindings", "modified_at", "TEXT NOT NULL DEFAULT ''"},
 		{"environment_sources", "created_at", "TEXT NOT NULL DEFAULT ''"},
 		{"fault_rules", "enabled_at", "TEXT NOT NULL DEFAULT ''"},
@@ -150,6 +151,9 @@ WHERE modified_at = ''`, nowText()); err != nil {
 		return fmt.Errorf("backfill fault enable times: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(8, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(9, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return nil
@@ -212,6 +216,7 @@ CREATE TABLE IF NOT EXISTS environments (
   reason TEXT NOT NULL DEFAULT '',
   primary_service TEXT NOT NULL DEFAULT '',
   model_json BLOB NOT NULL,
+  cloned_from_name TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(project_key, name)

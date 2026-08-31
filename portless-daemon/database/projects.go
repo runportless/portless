@@ -81,7 +81,7 @@ FROM projects WHERE name = ? COLLATE NOCASE`, name).Scan(
 			}
 		}
 		result.Environments = append(result.Environments, model.EnvironmentSummary{
-			Project: result.Name, Name: environment.Name, Revision: environment.Revision,
+			Project: result.Name, Name: environment.Name, ClonedFrom: environment.ClonedFrom, Revision: environment.Revision,
 			Status: environment.Status, Reason: environment.Reason, ServiceCount: len(environment.Services),
 			ReadyCount: ready, RemoteCount: remote, UpdatedAt: environment.UpdatedAt,
 		})

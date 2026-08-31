@@ -40,7 +40,7 @@ describe('projects index page', () => {
 
     expect(markup).toContain('<h1>Projects</h1>')
     expect(markup).toContain('<div class="eyebrow">Workspace</div>')
-    expect(markup).toContain('The sidebar shows one project at a time. Use this page to find, switch, or forget projects.')
+    expect(markup).not.toContain('The sidebar shows one project at a time. Use this page to find, switch, or forget projects.')
     expect(markup).toContain('aria-label="Project registry controls"')
     expect(markup).toContain('placeholder="Search"')
     expect(markup).toContain('<span>all</span><strong>1</strong>')
@@ -127,7 +127,7 @@ describe('projects index page', () => {
   })
 
   it('keeps the empty state focused on setup instructions', () => {
-    const markup = renderToStaticMarkup(<ProjectsIndexPage projects={[]} environments={[]} navigation={emptyProjectNavigationPreferences()} onOpenProject={() => undefined} onProjectHiddenChange={() => undefined} onForgetProject={async () => undefined} />)
+    const markup = renderToStaticMarkup(<ProjectsIndexPage projects={[]} environments={[]} navigation={emptyProjectNavigationPreferences()} onOpenProject={() => undefined} onConfigureProject={() => undefined} onProjectHiddenChange={() => undefined} onForgetProject={async () => undefined} />)
 
     expect(markup).toContain('No projects yet')
     expect(markup).toContain('Start one repository or assemble several.')
@@ -157,12 +157,13 @@ describe('projects index page', () => {
 })
 
 describe('project overview page', () => {
-  it('offers to start a stopped environment from its project row', () => {
+  it('exposes stopped environment actions through a row menu', () => {
     const markup = renderProjectOverview([stoppedEnvironment])
 
-    expect(markup).toContain('aria-label="Start demo"')
-    expect(markup).toContain('>START</button>')
-    expect(markup).not.toContain('aria-label="Stop demo"')
+    expect(markup).toContain('class="environment-row-shell environment-row-shell--interactive"')
+    expect(markup).toContain('aria-label="Environment actions for store/demo"')
+    expect(markup).toContain('aria-haspopup="menu"')
+    expect(markup).not.toContain('aria-label="Start demo"')
   })
 
   it('keeps the project detail heading and environment listing', () => {
@@ -180,7 +181,7 @@ describe('project overview page', () => {
     expect(markup).toContain('>STOP ALL</button>')
     expect(markup).toContain('<span>Modified</span>')
     expect(markup).toContain('<span>Why</span></div><span aria-hidden="true"></span>')
-    expect(markup).toContain('aria-label="Stop local"')
+    expect(markup).toContain('aria-label="Environment actions for store/local"')
     expect(markup).not.toContain('<span>Age</span>')
     expect(markup).toContain('<time dateTime=')
     expect(markup).not.toContain('<small>1 environment</small>')
@@ -195,6 +196,8 @@ describe('project overview page', () => {
     expect(markup).toContain('/Users/dev/workspace/store')
     expect(markup).toContain('checkout, inventory, orders')
     expect(markup).toContain('<div class="checkout-source"><span class="status status--success" title="ready"><span class="status__mark" aria-hidden="true">●</span></span><strong>store</strong></div>')
+    expect(markup).toContain('aria-label="Source actions for store"')
+    expect(markup.match(/class="project-table-row-actions__trigger"/g)).toHaveLength(2)
     expect(markup).not.toContain('one logical application, many repositories')
     expect(markup).not.toContain('Each environment clones this topology')
     expect(markup.indexOf('<span>ENVIRONMENTS</span>')).toBeLessThan(markup.indexOf('<span>SOURCES</span>'))
@@ -206,7 +209,8 @@ describe('project overview page', () => {
     expect(markup).toContain('<span>SOURCES</span><button')
     expect(markup).not.toContain('<small>local, qa-local</small>')
     expect(markup.match(/<code class="truncate" title="\/Users\/dev\/workspace\/store">/g)).toHaveLength(1)
-    expect(markup).toContain('>DELETE</button>')
+    expect(markup).toContain('aria-label="Source actions for store"')
+    expect(markup).not.toContain('>DELETE</button>')
     expect(markup.match(/class="table-row project-source-row"/g)).toHaveLength(1)
   })
 
@@ -257,17 +261,19 @@ describe('project overview page', () => {
 
   it('keeps environment creation in its own project-scoped dialog', () => {
     const markup = renderToStaticMarkup(<CreateEnvironmentDialog project={project} environments={[qaEnvironment, environment]} onClose={() => undefined} onNavigate={() => undefined} onChanged={async () => undefined} />)
+    const contextualMarkup = renderToStaticMarkup(<CreateEnvironmentDialog project={project} environments={[qaEnvironment, environment]} initialCloneFrom="qa-local" onClose={() => undefined} onNavigate={() => undefined} onChanged={async () => undefined} />)
 
     expect(markup).toContain('role="dialog"')
-    expect(markup).toContain('<h2 id="create-environment-title">Create environment</h2>')
+    expect(markup).toContain('<h2 id="create-environment-title">Create Environment</h2>')
     expect(markup).toContain('name="portless-environment-name"')
     expect(markup).toContain('<option>qa-local</option><option selected="">local</option>')
+    expect(contextualMarkup).toContain('<option selected="">qa-local</option><option>local</option>')
     expect(markup).toContain('>CREATE ENVIRONMENT</button>')
   })
 })
 
 function renderProjectIndex(renderedEnvironments: Environment[] = [environment], navigation: ProjectNavigationPreferences = emptyProjectNavigationPreferences(), projects: Project[] = [project]) {
-  return renderToStaticMarkup(<ProjectsIndexPage projects={projects} environments={renderedEnvironments} navigation={navigation} onOpenProject={() => undefined} onProjectHiddenChange={() => undefined} onForgetProject={async () => undefined} />)
+  return renderToStaticMarkup(<ProjectsIndexPage projects={projects} environments={renderedEnvironments} navigation={navigation} onOpenProject={() => undefined} onConfigureProject={() => undefined} onProjectHiddenChange={() => undefined} onForgetProject={async () => undefined} />)
 }
 
 function registryRow(name: string, status: Environment['status'], environmentCount: number, openedAt?: string) {
