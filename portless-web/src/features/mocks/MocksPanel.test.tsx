@@ -32,7 +32,7 @@ describe('MocksPanel', () => {
   })
 
   it('renders profile routes in the standard maximizable drawer', () => {
-    const html = renderToStaticMarkup(<MockProfileDrawer environment={environment} profile={profile} active busy="" deleteName="" error={null} onDismissError={() => undefined} onClose={() => undefined} onPreview={() => undefined} onAddRoute={() => undefined} onEditRoute={() => undefined} onDeleteRoute={() => undefined} />)
+    const html = renderToStaticMarkup(<MockProfileDrawer environment={environment} profile={profile} active busy="" deleteName="" error={null} onDismissError={() => undefined} onClose={() => undefined} onPreview={() => undefined} onAddRoute={() => undefined} onEditRoute={() => undefined} onDeleteRoute={() => undefined} onDismissDelete={() => undefined} />)
     expect(html).toContain('class="drawer mock-profile-drawer"')
     expect(html).toContain('role="dialog" aria-modal="true" aria-label="sold-out mock profile"')
     expect(html).toContain('aria-label="Full screen sold-out mock profile"')
@@ -40,6 +40,9 @@ describe('MocksPanel', () => {
     expect(html).toContain('PREVIEW REQUEST')
     expect(html).toContain('ADD ROUTE')
     expect(html).toContain('class="mock-row-actions table-row-actions"')
+    expect(html).toContain('>EDIT</button>')
+    expect(html).toContain('aria-label="Route actions for lookup"')
+    expect(html).not.toContain('>DELETE</button>')
     expect(html).not.toContain('<span>Actions</span>')
     expect(html).toContain('GET /inventory/{sku}')
     expect(html).toContain('Inventory has no available stock')
@@ -57,6 +60,7 @@ describe('MocksPanel', () => {
       onOpen={() => undefined}
       onToggle={() => undefined}
       onDelete={() => undefined}
+      onDismissDelete={() => undefined}
       onDisableAll={() => undefined}
     />)
 
@@ -65,6 +69,10 @@ describe('MocksPanel', () => {
     expect(html.indexOf('CREATE PROFILE')).toBeLessThan(html.indexOf('DISABLE ALL'))
     expect(html).toContain('aria-label="Enable sold-out"')
     expect(html).toContain('>ENABLE</button>')
+    expect(html).toContain('aria-label="Open sold-out mock profile"')
+    expect(html).toContain('aria-label="Mock profile actions for sold-out"')
+    expect(html).not.toContain('>OPEN</button>')
+    expect(html).not.toContain('>DELETE</button>')
     expect(html).toContain('class="mock-enabled-state"')
     expect(html).toContain('class="status status--muted" title="disabled"')
     expect(html).toContain('<span>Disabled</span>')
@@ -90,6 +98,7 @@ describe('MocksPanel', () => {
       onOpen={() => undefined}
       onToggle={() => undefined}
       onDelete={() => undefined}
+      onDismissDelete={() => undefined}
       onDisableAll={() => undefined}
     />)
 
@@ -188,6 +197,7 @@ describe('MocksPanel', () => {
       onSave={async () => undefined}
     />)
 
+    expect(html).toContain('<h2 id="mock-route-title">Create Route</h2>')
     expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
     expect(html).toMatch(/<input(?=[^>]*name="portless-mock-route-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")[^>]*>/)
   })

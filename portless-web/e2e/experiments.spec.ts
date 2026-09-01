@@ -4,7 +4,7 @@ import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
 
-test('creates, captures, exports, and deletes a recording', async ({ page }) => {
+test('creates, captures, exports, repeats, and deletes recordings', async ({ page }) => {
   await authenticate(page, environmentPath('recordings'))
   await page.getByLabel('NAME', { exact: true }).fill('ui-recording')
   await page.getByLabel('Recording traffic scope').selectOption('checkout:orders')
@@ -21,17 +21,37 @@ test('creates, captures, exports, and deletes a recording', async ({ page }) => 
   await expect(row.locator('td').nth(1)).toHaveText('1')
   await expect(page.locator('.recording-history-table .sortable-column-sort-control')).toHaveCount(0)
 
+  await row.getByRole('button', { name: 'Recording actions for ui-recording' }).click()
+  const recordingMenu = row.getByRole('menu', { name: 'ui-recording recording actions' })
+  await expect(recordingMenu).toBeVisible()
   const downloadEvent = page.waitForEvent('download')
-  await row.getByRole('link', { name: 'EXPORT' }).click()
+  await recordingMenu.getByRole('menuitem', { name: 'Export ui-recording' }).click()
   const download = await downloadEvent
 	const exported = JSON.parse(await readDownload(await download.path())) as { recording: string; exchanges: Array<{ source: string; target: string }> }
   expect(exported.recording).toBe('ui-recording')
 	expect(exported.exchanges).toHaveLength(1)
 	expect(exported.exchanges[0]).toMatchObject({ source: 'checkout', target: 'orders' })
 
-  await row.getByRole('button', { name: 'Delete ui-recording' }).click()
-  await row.getByRole('button', { name: 'Confirm delete ui-recording' }).click()
+  const repeatRecording = row.getByRole('button', { name: 'Repeat recording ui-recording' })
+  await expect(repeatRecording).toContainText('REPEAT')
+  await repeatRecording.click()
+  await expect(activeRecording).toContainText('ui-recording-2')
+  await expect(repeatRecording).toBeDisabled()
+  await activeRecording.getByRole('button', { name: 'STOP RECORDING' }).click()
+  const repeatedRow = page.locator('.recording-history-table tbody tr').filter({ hasText: 'ui-recording-2' })
+  await expect(repeatedRow).toContainText('checkout → orders')
+
+  await row.getByRole('button', { name: 'Recording actions for ui-recording' }).click()
+  await expect(recordingMenu).toBeVisible()
+  await recordingMenu.getByRole('menuitem', { name: 'Delete ui-recording' }).click()
+  await recordingMenu.getByRole('menuitem', { name: 'Confirm delete ui-recording' }).click()
   await expect(row).toHaveCount(0)
+
+  await repeatedRow.getByRole('button', { name: 'Recording actions for ui-recording-2' }).click()
+  const repeatedMenu = repeatedRow.getByRole('menu', { name: 'ui-recording-2 recording actions' })
+  await repeatedMenu.getByRole('menuitem', { name: 'Delete ui-recording-2' }).click()
+  await repeatedMenu.getByRole('menuitem', { name: 'Confirm delete ui-recording-2' }).click()
+  await expect(repeatedRow).toHaveCount(0)
 })
 
 test('creates and hot-binds a mock profile without restarting peer services', async ({ page }) => {
@@ -80,20 +100,20 @@ test('creates and hot-binds a mock profile without restarting peer services', as
   await expect(mockDrawer).not.toHaveClass(/drawer--fullscreen/)
   await page.keyboard.press('Escape')
   await expect(mockDrawer).toHaveCount(0)
-  const openProfile = profileRow.getByRole('button', { name: 'OPEN' })
-  await openProfile.click()
+  await expect(profileRow.getByRole('button', { name: 'OPEN', exact: true })).toHaveCount(0)
+  await profileRow.getByRole('button', { name: 'Open sold-out mock profile' }).click()
   await expect(mockDrawer).toBeVisible()
 
   const addRoute = mockDrawer.getByRole('button', { name: 'ADD ROUTE', exact: true })
   await addRoute.click()
-  let routeDialog = page.getByRole('dialog', { name: 'Add mock route' })
+  let routeDialog = page.getByRole('dialog', { name: 'Create Route' })
   await expect(routeDialog.getByLabel('NAME', { exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(routeDialog).toHaveCount(0)
   await expect(mockDrawer).toBeVisible()
   await expect(addRoute).toBeFocused()
   await addRoute.click()
-  routeDialog = page.getByRole('dialog', { name: 'Add mock route' })
+  routeDialog = page.getByRole('dialog', { name: 'Create Route' })
   await routeDialog.getByLabel('NAME', { exact: true }).fill('lookup')
   await routeDialog.getByLabel('PATH').fill('/inventory/{sku}')
   await routeDialog.getByLabel('RESPONSE STATUS').selectOption('200')
@@ -104,6 +124,14 @@ test('creates and hot-binds a mock profile without restarting peer services', as
   await expect(routeRow).toContainText('GET /inventory/{sku}')
   await expect(routeRow.locator('.mock-enabled-state').getByText('Enabled', { exact: true })).toBeVisible()
   await expect(routeRow.locator('.mock-enabled-state .status')).toHaveClass(/status--success/)
+  await expect(routeRow.getByRole('button', { name: 'EDIT', exact: true })).toBeVisible()
+  const routeActions = routeRow.getByRole('button', { name: 'Route actions for lookup' })
+  await routeActions.click()
+  const routeMenu = routeRow.getByRole('menu', { name: 'lookup route actions' })
+  await expect(routeMenu.getByRole('menuitem', { name: 'Delete lookup' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(routeMenu).toHaveCount(0)
+  await expect(routeActions).toBeFocused()
 
   await mockDrawer.getByRole('button', { name: 'PREVIEW REQUEST' }).click()
   const previewDialog = page.getByRole('dialog', { name: 'Preview request' })
@@ -168,8 +196,10 @@ test('creates and hot-binds a mock profile without restarting peer services', as
   expect(restoredByName.get('inventory')?.generation).toBe((beforeByName.get('inventory')?.generation || 0) + 1)
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 
-  await profileRow.getByRole('button', { name: 'DELETE' }).click()
-  await profileRow.getByRole('button', { name: 'CONFIRM' }).click()
+  await profileRow.getByRole('button', { name: 'Mock profile actions for sold-out' }).click()
+  const profileMenu = profileRow.getByRole('menu', { name: 'sold-out mock profile actions' })
+  await profileMenu.getByRole('menuitem', { name: 'Delete sold-out' }).click()
+  await profileMenu.getByRole('menuitem', { name: 'Confirm delete sold-out' }).click()
   await expect(profileRow).toHaveCount(0)
 })
 
@@ -197,7 +227,9 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
 
   await row.getByRole('button', { name: 'ENABLE' }).click()
   await expect(row.getByRole('button', { name: 'DISABLE' })).toBeEnabled()
-  await row.getByRole('button', { name: 'Delete ui-orders-fault' }).click()
-  await row.getByRole('button', { name: 'Confirm delete ui-orders-fault' }).click()
+  await row.getByRole('button', { name: 'Fault actions for ui-orders-fault' }).click()
+  const faultMenu = row.getByRole('menu', { name: 'ui-orders-fault fault actions' })
+  await faultMenu.getByRole('menuitem', { name: 'Delete ui-orders-fault' }).click()
+  await faultMenu.getByRole('menuitem', { name: 'Confirm delete ui-orders-fault' }).click()
   await expect(row).toHaveCount(0)
 })

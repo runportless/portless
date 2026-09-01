@@ -4,6 +4,7 @@ import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
 import { paginateItems, PanelPagination } from '../../../components/PanelPagination'
+import { RowActionsMenu } from '../../../components/RowActionsMenu'
 import { SortableTableHeader, type TableSort } from '../../../components/SortableTableHeader'
 import { relativeTime } from '../../../components/Status'
 import { experimentScopeID, experimentScopes, recordingScopeLabel } from '../../experimentScopes'
@@ -46,8 +47,8 @@ export function createRecordingDefaults(recordings: Recording[], previous?: Reco
 
 export function RecordingsPanel({ environment, recordings, refresh }: { environment: Environment; recordings: Recording[]; refresh: () => Promise<void> }) {
   const [busy, setBusy] = useState('')
-  const [repeatName, setRepeatName] = useState('')
   const [deleteName, setDeleteName] = useState('')
+  const [menuRecording, setMenuRecording] = useState('')
   const [deleteAllConfirm, setDeleteAllConfirm] = useState(false)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [historyPage, setHistoryPage] = useState(0)
@@ -58,8 +59,8 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const controlDefaults = createRecordingDefaults(recordings)
 
   useEffect(() => {
-    setRepeatName('')
     setDeleteName('')
+    setMenuRecording('')
     setDeleteAllConfirm(false)
     setError(null)
     setHistoryPage(0)
@@ -68,8 +69,8 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const start = async (input: CreateRecordingInput, action = 'create') => {
     setBusy(action)
-    setRepeatName('')
     setDeleteName('')
+    setMenuRecording('')
     setDeleteAllConfirm(false)
     setError(null)
     try {
@@ -84,8 +85,8 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const stop = async (recording: Recording) => {
     setBusy(`stop:${recording.name}`)
-    setRepeatName('')
     setDeleteName('')
+    setMenuRecording('')
     setDeleteAllConfirm(false)
     setError(null)
     try {
@@ -100,7 +101,6 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const remove = async (recording: Recording) => {
     setDeleteAllConfirm(false)
-    setRepeatName('')
     if (deleteName !== recording.name) {
       setDeleteName(recording.name)
       setError(null)
@@ -112,6 +112,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
       await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}`), { method: 'DELETE' })
       await refresh()
       setDeleteName('')
+      setMenuRecording('')
     } catch (value) {
       setError(actionError("Recording wasn't deleted", value))
     } finally {
@@ -123,14 +124,15 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     if (busy || historyRecordings.length === 0) return
     if (!deleteAllConfirm) {
       setDeleteAllConfirm(true)
-      setRepeatName('')
       setDeleteName('')
+      setMenuRecording('')
       setError(null)
       return
     }
     setBusy('delete-all')
     setDeleteAllConfirm(false)
     setDeleteName('')
+    setMenuRecording('')
     setError(null)
     try {
       for (const recording of historyRecordings) {
@@ -148,19 +150,12 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   }
 
   const recordAgain = async (recording: Recording) => {
-    if (repeatName !== recording.name) {
-      setRepeatName(recording.name)
-      setDeleteName('')
-      setDeleteAllConfirm(false)
-      setError(null)
-      return
-    }
     await start(createRecordingDefaults(recordings, recording), `repeat:${recording.name}`)
   }
 
   const clearRowConfirmations = () => {
-    setRepeatName('')
     setDeleteName('')
+    setMenuRecording('')
     setDeleteAllConfirm(false)
   }
 
@@ -220,23 +215,28 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
               <td><div className="table-row-actions recording-history__actions">
                 <RecordingHistoryRepeatButton
                   recordingName={recording.name}
-                  confirming={repeatName === recording.name}
                   starting={busy === `repeat:${recording.name}`}
                   disabled={!!busy || !!activeRecording}
                   onClick={() => void recordAgain(recording)}
                 />
-                <a
-                  className="recording-history__export"
-                  href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}
-                  onClick={clearRowConfirmations}
-                >EXPORT</a>
-                <button
-                  className={deleteName === recording.name ? 'is-confirming' : ''}
-                  type="button"
+                <RowActionsMenu
+                  label={`Recording actions for ${recording.name}`}
+                  menuLabel={`${recording.name} recording actions`}
+                  open={menuRecording === recording.name}
                   disabled={!!busy}
-                  aria-label={deleteName === recording.name ? `Confirm delete ${recording.name}` : `Delete ${recording.name}`}
-                  onClick={() => void remove(recording)}
-                >{busy === `delete:${recording.name}` ? 'DELETING…' : deleteName === recording.name ? 'CONFIRM' : 'DELETE'}</button>
+                  onOpenChange={(open) => {
+                    setMenuRecording(open ? recording.name : '')
+                    if (!open || menuRecording !== recording.name) setDeleteName('')
+                  }}
+                >
+                  <a
+                    href={`/api/v1${environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/export`)}`}
+                    role="menuitem"
+                    aria-label={`Export ${recording.name}`}
+                    onClick={clearRowConfirmations}
+                  >EXPORT</a>
+                  <button className={`is-danger${deleteName === recording.name ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === recording.name ? `Confirm delete ${recording.name}` : `Delete ${recording.name}`} onClick={() => void remove(recording)}>{busy === `delete:${recording.name}` ? 'DELETING…' : deleteName === recording.name ? 'CONFIRM' : 'DELETE'}</button>
+                </RowActionsMenu>
               </div></td>
             </tr>)}
             {historyRecordings.length === 0 && <tr><td className="recording-history__empty" colSpan={6}>No recording history yet. Completed recordings will appear here.</td></tr>}
@@ -248,20 +248,26 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   </div>
 }
 
-export function RecordingHistoryRepeatButton({ recordingName, confirming, starting, disabled, onClick }: {
+export function RecordingHistoryRepeatButton({ recordingName, starting, disabled, onClick }: {
   recordingName: string
-  confirming: boolean
   starting: boolean
   disabled: boolean
   onClick: () => void
 }) {
   return <button
-    className={`recording-history__repeat${confirming ? ' is-confirming' : ''}`}
+    className="recording-history__repeat"
     type="button"
     disabled={disabled}
-    aria-label={confirming ? `Confirm record ${recordingName} again` : `Record ${recordingName} again`}
+    aria-label={`Repeat recording ${recordingName}`}
     onClick={onClick}
-  >{starting ? 'STARTING…' : confirming ? 'CONFIRM' : 'RECORD AGAIN'}</button>
+  ><RepeatRecordingIcon /><span>{starting ? 'STARTING…' : 'REPEAT'}</span></button>
+}
+
+function RepeatRecordingIcon() {
+  return <svg className="recording-history__repeat-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M13 6.5A5.5 5.5 0 1 0 13 10" />
+    <path d="M10.5 3.5H13v3" />
+  </svg>
 }
 
 function formatRecordingTimestamp(value: string) {

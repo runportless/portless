@@ -127,33 +127,39 @@ describe('RecordingsPanel', () => {
     expect(scheduler.clearInterval).toHaveBeenCalledWith(42)
   })
 
-  it('presents deletion as a named row action before confirmation', () => {
+  it('keeps repeat visible and moves secondary recording actions into a named row menu', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[completedRecording]} refresh={async () => undefined} />)
 
     expect(html).toContain('completed-checkout')
     expect(html).toContain('aria-label="Delete all 1 completed recording"')
     expect(html).toContain('>DELETE ALL</button>')
-    expect(html).toContain('aria-label="Record completed-checkout again"')
-    expect(html).toContain('>RECORD AGAIN</button>')
-    expect(html).toContain('/recordings/completed-checkout/export')
-    expect(html).toContain('>EXPORT</a>')
-    expect(html).toContain('aria-label="Delete completed-checkout"')
-    expect(html).toContain('>DELETE</button>')
+    expect(html).toContain('aria-label="Repeat recording completed-checkout"')
+    expect(html).toContain('class="recording-history__repeat-icon"')
+    expect(html).toContain('<span>REPEAT</span>')
+    expect(html).toContain('aria-label="Recording actions for completed-checkout"')
+    expect(html).toContain('aria-haspopup="menu"')
+    expect(html).not.toContain('/recordings/completed-checkout/export')
+    expect(html).not.toContain('>EXPORT</a>')
+    expect(html).not.toContain('aria-label="Delete completed-checkout"')
+    expect(html).not.toContain('>DELETE</button>')
     expect(html).not.toContain('Confirm delete completed-checkout')
   })
 
-  it('requires confirmation before recording a history row again', () => {
-    const html = renderToStaticMarkup(<RecordingHistoryRepeatButton recordingName="completed-checkout" confirming starting={false} disabled={false} onClick={() => undefined} />)
+  it('renders repeat as a compact one-click action', () => {
+    const html = renderToStaticMarkup(<RecordingHistoryRepeatButton recordingName="completed-checkout" starting={false} disabled={false} onClick={() => undefined} />)
 
-    expect(html).toContain('class="recording-history__repeat is-confirming"')
-    expect(html).toContain('aria-label="Confirm record completed-checkout again"')
-    expect(html).toContain('>CONFIRM</button>')
+    expect(html).toContain('class="recording-history__repeat"')
+    expect(html).toContain('aria-label="Repeat recording completed-checkout"')
+    expect(html).toContain('<svg class="recording-history__repeat-icon"')
+    expect(html).toContain('<span>REPEAT</span>')
+    expect(html).not.toContain('CONFIRM')
   })
 
   it('disables repeat actions while another recording is active', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording, completedRecording]} refresh={async () => undefined} />)
 
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Record completed-checkout again"[^>]*>RECORD AGAIN<\/button>/)
+    expect(html).toMatch(/<button(?=[^>]*class="recording-history__repeat")(?=[^>]*disabled="")(?=[^>]*aria-label="Repeat recording completed-checkout")[^>]*>/)
+    expect(html).toContain('<span>REPEAT</span>')
   })
 
   it('paginates recording history after six recordings', () => {

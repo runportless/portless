@@ -3,6 +3,7 @@ import { api, connectEvents, environmentPath, jsonBody } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { DrawerShell } from '../../components/overlays/DrawerShell'
 import { FormDialog } from '../../components/overlays/FormDialog'
+import { RowActionsMenu } from '../../components/RowActionsMenu'
 import { SortableGridHeader, type TableSort } from '../../components/SortableTableHeader'
 import { StatusMark } from '../../components/Status'
 import type { Environment, Operation } from '../../api/contracts/environments'
@@ -192,6 +193,7 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
       onOpen={(profile) => { setDeleteName(''); setError(null); onSelectProfile(profile.name) }}
       onToggle={(profile, enabled) => { void setProfileEnabled(profile, enabled) }}
       onDelete={(profile) => { void removeProfile(profile) }}
+      onDismissDelete={() => setDeleteName('')}
       onDisableAll={() => { void disableAllProfiles() }}
     />
 
@@ -208,6 +210,7 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
       onAddRoute={() => openRoute()}
       onEditRoute={openRoute}
       onDeleteRoute={(route) => { void removeRoute(route) }}
+      onDismissDelete={() => setDeleteName('')}
     />}
 
     {createOpen && <CreateProfileModal environment={environment} recordings={recordings} busy={busy === 'create'} error={error} onDismissError={() => setError(null)} onClose={() => setCreateOpen(false)} onCreate={async (input) => {
@@ -273,7 +276,7 @@ function mockProfileActiveBinding(environment: Pick<Environment, 'bindings'>, pr
   )
 }
 
-export function MockProfilesList({ environment, profiles, selectedProfile, loading, busy, deleteName, transitionBlocked, onCreate, onOpen, onToggle, onDelete, onDisableAll }: {
+export function MockProfilesList({ environment, profiles, selectedProfile, loading, busy, deleteName, transitionBlocked, onCreate, onOpen, onToggle, onDelete, onDismissDelete, onDisableAll }: {
   environment: Environment
   profiles: MockProfile[]
   selectedProfile?: string
@@ -285,15 +288,24 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
   onOpen: (profile: MockProfile) => void
   onToggle: (profile: MockProfile, enabled: boolean) => void
   onDelete: (profile: MockProfile) => void
+  onDismissDelete: () => void
   onDisableAll: () => void
 }) {
   const activeBindings = mockProfileBindings(environment)
   const [profileSort, setProfileSort] = useState<TableSort<MockProfileSortField>>(defaultMockProfileSort)
+  const [profileMenu, setProfileMenu] = useState('')
   const orderedProfiles = useMemo(() => sortMockProfiles(profiles, environment, profileSort), [profiles, environment, profileSort])
 
   useEffect(() => {
     setProfileSort(defaultMockProfileSort)
+    setProfileMenu('')
   }, [environment.project, environment.name])
+
+  const changeProfileSort = (sort: TableSort<MockProfileSortField>) => {
+    setProfileSort(sort)
+    setProfileMenu('')
+    onDismissDelete()
+  }
 
   return <section className="panel mock-profiles-panel">
     <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE PROFILE</button></div>
@@ -301,30 +313,41 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
       <button className="mock-profiles-disable-all-link" type="button" disabled={!!busy || transitionBlocked || activeBindings.length === 0} onClick={onDisableAll}>{busy === 'disable-all' ? 'DISABLING…' : 'DISABLE ALL'}</button>
     </div>}
     <div className={`mock-profile-row mock-profile-row--header sortable-header-row${profileSort.key === defaultMockProfileSort.key && profileSort.direction === defaultMockProfileSort.direction ? ' is-default-sort' : ''}`} role="row">
-      <SortableGridHeader label="State" sortKey="state" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
-      <SortableGridHeader label="Name" sortKey="name" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
-      <SortableGridHeader label="Service" sortKey="service" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
-      <SortableGridHeader label="Routes" sortKey="routes" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
-      <SortableGridHeader label="Created at" sortKey="createdAt" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
-      <SortableGridHeader label="Enabled at" sortKey="enabledAt" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
-      <SortableGridHeader label="Modified at" sortKey="modifiedAt" sort={profileSort} itemCount={profiles.length} onSort={setProfileSort} />
+      <SortableGridHeader label="State" sortKey="state" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
+      <SortableGridHeader label="Name" sortKey="name" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
+      <SortableGridHeader label="Service" sortKey="service" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
+      <SortableGridHeader label="Routes" sortKey="routes" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
+      <SortableGridHeader label="Created at" sortKey="createdAt" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
+      <SortableGridHeader label="Enabled at" sortKey="enabledAt" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
+      <SortableGridHeader label="Modified at" sortKey="modifiedAt" sort={profileSort} itemCount={profiles.length} onSort={changeProfileSort} />
       <span aria-label="Actions" />
     </div>
     {orderedProfiles.map((profile) => {
       const activeBinding = mockProfileActiveBinding(environment, profile)
       const active = !!activeBinding
       const toggleAction = `${active ? 'disable' : 'enable'}:${profile.name}`
-      return <div className={`mock-profile-row${selectedProfile === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => onOpen(profile)}>
+      const menuOpen = profileMenu === profile.name
+      return <div className={`mock-profile-row${selectedProfile === profile.name ? ' is-selected' : ''}`} key={profile.name} onClick={() => { if (!busy) onOpen(profile) }}>
         <MockEnabledState enabled={active} />
-        <div className="mock-profile-row__name"><strong>{profile.name}</strong></div>
+        <div className="mock-profile-row__name"><button type="button" disabled={!!busy} aria-label={`Open ${profile.name} mock profile`} onClick={(event) => { event.stopPropagation(); onOpen(profile) }}><strong>{profile.name}</strong></button></div>
         <span>{profile.service}</span><span>{profile.routes.length}</span>
         <MockTimestamp className="mock-profile-row__created" value={profile.createdAt} />
         <MockTimestamp className="mock-profile-row__enabled" value={activeBinding?.modifiedAt} />
         <MockTimestamp className="mock-profile-row__modified" value={profile.modifiedAt} />
         <div className="mock-row-actions table-row-actions">
           <button type="button" disabled={!!busy || transitionBlocked} aria-label={`${active ? 'Disable' : 'Enable'} ${profile.name}`} onClick={(event) => { event.stopPropagation(); onToggle(profile, !active) }}>{busy === toggleAction ? active ? 'DISABLING…' : 'ENABLING…' : active ? 'DISABLE' : 'ENABLE'}</button>
-          <button type="button" disabled={!!busy} onClick={(event) => { event.stopPropagation(); onOpen(profile) }}>OPEN</button>
-          <button className={deleteName === profile.name ? 'is-confirming' : ''} type="button" disabled={!!busy} aria-label={deleteName === profile.name ? `Confirm delete ${profile.name}` : `Delete ${profile.name}`} onClick={(event) => { event.stopPropagation(); onDelete(profile) }}>{busy === `delete-profile:${profile.name}` ? 'DELETING…' : deleteName === profile.name ? 'CONFIRM' : 'DELETE'}</button>
+          <RowActionsMenu
+            label={`Mock profile actions for ${profile.name}`}
+            menuLabel={`${profile.name} mock profile actions`}
+            open={menuOpen}
+            disabled={!!busy}
+            onOpenChange={(open) => {
+              setProfileMenu(open ? profile.name : '')
+              if (!open || profileMenu !== profile.name) onDismissDelete()
+            }}
+          >
+            <button className={`is-danger${deleteName === profile.name ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === profile.name ? `Confirm delete ${profile.name}` : `Delete ${profile.name}`} onClick={() => onDelete(profile)}>{busy === `delete-profile:${profile.name}` ? 'DELETING…' : deleteName === profile.name ? 'CONFIRM' : 'DELETE'}</button>
+          </RowActionsMenu>
         </div>
       </div>
     })}
@@ -333,7 +356,7 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
   </section>
 }
 
-export function MockProfileDrawer({ environment, profile, active, busy, deleteName, error, onDismissError, onClose, onPreview, onAddRoute, onEditRoute, onDeleteRoute }: {
+export function MockProfileDrawer({ environment, profile, active, busy, deleteName, error, onDismissError, onClose, onPreview, onAddRoute, onEditRoute, onDeleteRoute, onDismissDelete }: {
   environment: Environment
   profile: MockProfile
   active: boolean
@@ -346,7 +369,14 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
   onAddRoute: () => void
   onEditRoute: (route: MockRoute) => void
   onDeleteRoute: (route: MockRoute) => void
+  onDismissDelete: () => void
 }) {
+  const [routeMenu, setRouteMenu] = useState('')
+
+  useEffect(() => {
+    setRouteMenu('')
+  }, [environment.project, environment.name, profile.name])
+
   return <DrawerShell
     label={`${profile.name} mock profile`}
     subject={`${profile.name} mock profile`}
@@ -365,7 +395,21 @@ export function MockProfileDrawer({ environment, profile, active, busy, deleteNa
           <div className="mock-route-row mock-route-row--header"><span>Route</span><span>Match</span><span>Response</span><span>Delay</span><span>State</span><span aria-hidden="true" /></div>
           {profile.routes.map((route) => <div className="mock-route-row" key={route.name}>
             <strong>{route.name}</strong><code>{route.method} {route.path}{formatQuerySummary(route.query)}</code><span>{route.status}{route.body ? ` · ${new Blob([route.body]).size} B` : ''}</span><span>{route.delayMs ? `${route.delayMs} ms` : '—'}</span><MockEnabledState enabled={route.enabled} />
-            <div className="mock-row-actions table-row-actions"><button type="button" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button><button className={deleteName === `delete-route:${route.name}` ? 'is-confirming' : ''} type="button" disabled={!!busy} onClick={() => onDeleteRoute(route)}>{deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button></div>
+            <div className="mock-row-actions table-row-actions">
+              <button type="button" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button>
+              <RowActionsMenu
+                label={`Route actions for ${route.name}`}
+                menuLabel={`${route.name} route actions`}
+                open={routeMenu === route.name}
+                disabled={!!busy}
+                onOpenChange={(open) => {
+                  setRouteMenu(open ? route.name : '')
+                  if (!open || routeMenu !== route.name) onDismissDelete()
+                }}
+              >
+                <button className={`is-danger${deleteName === `delete-route:${route.name}` ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === `delete-route:${route.name}` ? `Confirm delete ${route.name}` : `Delete ${route.name}`} onClick={() => onDeleteRoute(route)}>{busy === `delete-route:${route.name}` ? 'DELETING…' : deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button>
+              </RowActionsMenu>
+            </div>
           </div>)}
           {profile.routes.length === 0 && <div className="empty-row">This profile has no routes. Unmatched requests return 501 so missing behavior is visible.</div>}
         </section>
@@ -488,7 +532,7 @@ export function RouteModal({ draft, editing, busy, error, onDismissError, onChan
     closeLabel="Close route editor"
     closeBlocked={busy}
     initialFocusRef={nameInput}
-    header={<div><div className="eyebrow">CONFIGURE MOCK</div><h2 id="mock-route-title">{editing ? 'Edit mock route' : 'Add mock route'}</h2></div>}
+    header={<div><div className="eyebrow">CONFIGURE MOCK</div><h2 id="mock-route-title">{editing ? 'Edit mock route' : 'Create Route'}</h2></div>}
     onClose={onClose}
   >
     <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onSave() }}>

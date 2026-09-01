@@ -84,11 +84,14 @@ describe('FaultsPanel', () => {
     expect(html).toMatch(/class="faults-bulk-actions"><button[^>]*class="faults-disable-all-link"[^>]*disabled=""[^>]*>DISABLE ALL<\/button>/)
   })
 
-  it('requires a named second action before deleting a rule', () => {
+  it('keeps fault lifecycle visible and moves deletion into a named row menu', () => {
     const html = renderToStaticMarkup(<FaultsPanel environment={environment} faults={[fault('slow-orders', false)]} refresh={async () => undefined} />)
 
-    expect(html).toContain('aria-label="Delete slow-orders"')
-    expect(html).toContain('>DELETE</button>')
+    expect(html).toContain('>ENABLE</button>')
+    expect(html).toContain('aria-label="Fault actions for slow-orders"')
+    expect(html).toContain('aria-haspopup="menu"')
+    expect(html).not.toContain('aria-label="Delete slow-orders"')
+    expect(html).not.toContain('>DELETE</button>')
     expect(html).not.toContain('Confirm delete slow-orders')
   })
 

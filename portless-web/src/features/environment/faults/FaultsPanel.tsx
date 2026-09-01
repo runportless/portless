@@ -4,6 +4,7 @@ import type { Environment } from '../../../api/contracts/environments'
 import type { FaultRule } from '../../../api/contracts/experiments'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../../components/ActionError'
 import { FormDialog } from '../../../components/overlays/FormDialog'
+import { RowActionsMenu } from '../../../components/RowActionsMenu'
 import { SortableTableHeader, type TableSort } from '../../../components/SortableTableHeader'
 import { StatusMark } from '../../../components/Status'
 import { experimentScopes, preferredFaultScope } from '../../experimentScopes'
@@ -43,6 +44,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
   const [createName, setCreateName] = useState<string | null>(null)
   const [busy, setBusy] = useState('')
   const [deleteName, setDeleteName] = useState('')
+  const [menuFault, setMenuFault] = useState('')
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [faultSort, setFaultSort] = useState<TableSort<FaultSortField>>(defaultFaultSort)
   const orderedFaults = useMemo(() => sortFaults(faults, faultSort), [faults, faultSort])
@@ -51,6 +53,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
   useEffect(() => {
     setCreateName(null)
     setDeleteName('')
+    setMenuFault('')
     setError(null)
     setFaultSort(defaultFaultSort)
   }, [environment.project, environment.name])
@@ -72,6 +75,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
   const changeRule = async (fault: FaultRule, action: 'enable' | 'disable') => {
     setBusy(`${action}:${fault.name}`)
     setDeleteName('')
+    setMenuFault('')
     setError(null)
     try {
       await api(environmentPath(environment, `/faults/${encodeURIComponent(fault.name)}/${action}`), { method: 'POST' })
@@ -95,6 +99,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
       await api(environmentPath(environment, `/faults/${encodeURIComponent(fault.name)}`), { method: 'DELETE' })
       await refresh()
       setDeleteName('')
+      setMenuFault('')
     } catch (value) {
       setError(actionError("Fault wasn't deleted", value))
     } finally {
@@ -105,6 +110,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
   const clear = async () => {
     setBusy('disable-all')
     setDeleteName('')
+    setMenuFault('')
     setError(null)
     try {
       await api(environmentPath(environment, '/faults/disable-all'), { method: 'POST' })
@@ -114,6 +120,12 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
     } finally {
       setBusy('')
     }
+  }
+
+  const changeFaultSort = (sort: TableSort<FaultSortField>) => {
+    setFaultSort(sort)
+    setMenuFault('')
+    setDeleteName('')
   }
 
   return <div className="faults-page">
@@ -126,7 +138,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
             className="button button--primary button--small panel-create-button"
             type="button"
             disabled={!!busy}
-            onClick={() => { setCreateName(nextFaultName(faults)); setDeleteName(''); setError(null) }}
+            onClick={() => { setCreateName(nextFaultName(faults)); setDeleteName(''); setMenuFault(''); setError(null) }}
           >CREATE FAULT</button>
         </div>
       </div>
@@ -136,14 +148,14 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
       <div className="fault-table-scroll">
         <table className="fault-table">
           <thead><tr className={`sortable-header-row${faultSort.key === defaultFaultSort.key && faultSort.direction === defaultFaultSort.direction ? ' is-default-sort' : ''}`}>
-            <SortableTableHeader label="State" sortKey="state" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Name" sortKey="name" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Connection" sortKey="connection" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Fault" sortKey="fault" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Matches" sortKey="matches" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Lifetime" sortKey="lifetime" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Enabled at" sortKey="enabledAt" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
-            <SortableTableHeader label="Created at" sortKey="createdAt" sort={faultSort} itemCount={faults.length} onSort={setFaultSort} />
+            <SortableTableHeader label="State" sortKey="state" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Name" sortKey="name" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Connection" sortKey="connection" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Fault" sortKey="fault" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Matches" sortKey="matches" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Lifetime" sortKey="lifetime" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Enabled at" sortKey="enabledAt" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
+            <SortableTableHeader label="Created at" sortKey="createdAt" sort={faultSort} itemCount={faults.length} onSort={changeFaultSort} />
             <th aria-label="Actions" />
           </tr></thead>
           <tbody>
@@ -160,13 +172,18 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
                 <button type="button" disabled={!!busy} onClick={() => void changeRule(fault, fault.enabled ? 'disable' : 'enable')}>
                   {busy === `${fault.enabled ? 'disable' : 'enable'}:${fault.name}` ? fault.enabled ? 'DISABLING…' : 'ENABLING…' : fault.enabled ? 'DISABLE' : 'ENABLE'}
                 </button>
-                <button
-                  className={deleteName === fault.name ? 'is-confirming' : ''}
-                  type="button"
+                <RowActionsMenu
+                  label={`Fault actions for ${fault.name}`}
+                  menuLabel={`${fault.name} fault actions`}
+                  open={menuFault === fault.name}
                   disabled={!!busy}
-                  aria-label={deleteName === fault.name ? `Confirm delete ${fault.name}` : `Delete ${fault.name}`}
-                  onClick={() => void remove(fault)}
-                >{busy === `delete:${fault.name}` ? 'DELETING…' : deleteName === fault.name ? 'CONFIRM' : 'DELETE'}</button>
+                  onOpenChange={(open) => {
+                    setMenuFault(open ? fault.name : '')
+                    if (!open || menuFault !== fault.name) setDeleteName('')
+                  }}
+                >
+                  <button className={`is-danger${deleteName === fault.name ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === fault.name ? `Confirm delete ${fault.name}` : `Delete ${fault.name}`} onClick={() => void remove(fault)}>{busy === `delete:${fault.name}` ? 'DELETING…' : deleteName === fault.name ? 'CONFIRM' : 'DELETE'}</button>
+                </RowActionsMenu>
               </div></td>
             </tr>)}
             {faults.length === 0 && <tr><td className="fault-table__empty" colSpan={9}>No faults. Create one to simulate latency, errors, or dropped connections.</td></tr>}
