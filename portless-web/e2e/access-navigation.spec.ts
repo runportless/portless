@@ -28,7 +28,7 @@ test('keeps projects, environments, and breadcrumbs navigable', async ({ page })
   await expect(page).toHaveURL(new RegExp(`/projects/${state.project}$`))
   await expect(page.getByRole('heading', { name: state.project, exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: new RegExp(`${state.environment}.*healthy`) })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toBeVisible()
 
   await breadcrumbs.getByRole('link', { name: 'projects' }).click()
@@ -36,7 +36,7 @@ test('keeps projects, environments, and breadcrumbs navigable', async ({ page })
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: `Current project ${state.project}. Switch project` })).toBeVisible()
   await expect(page.getByRole('navigation', { name: `${state.project} environments` }).getByRole('button', { name: new RegExp(`${state.project}/${state.environment}`) })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'CREATE ENVIRONMENT', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'ADD SOURCE' })).toHaveCount(0)
 })
 
@@ -83,6 +83,52 @@ test('keeps environment panel title bars at one height across tabs', async ({ pa
     await expect(title).toBeVisible()
     expect(await title.evaluate((element) => Math.round(element.getBoundingClientRect().height)), `${tab} title bar height`).toBe(48)
   }
+})
+
+test('toggles persistent focus mode from the keyboard and command palette', async ({ page }) => {
+  await authenticate(page)
+
+  const shell = page.locator('.shell')
+  const stage = page.locator('.stage')
+  const sidebar = page.locator('.sidebar')
+  const heading = page.locator('.environment-page > .project-heading')
+  const normalStageLeft = await stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))
+  expect(normalStageLeft).toBeGreaterThan(0)
+
+  await page.keyboard.press('Control+Shift+F')
+  await expect(shell).toHaveClass(/shell--focus-mode/)
+  await expect(heading).toBeHidden()
+  await expect(page.locator('.topbar__context > .status')).toContainText('healthy')
+  await expect.poll(() => stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))).toBe(0)
+  await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().right))).toBeLessThanOrEqual(0)
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('portless.focus-mode'))).toBe('true')
+
+  const edge = page.getByRole('button', { name: 'Open navigation overlay' })
+  await edge.hover()
+  await expect(shell).toHaveClass(/shell--focus-navigation-open/)
+  await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().left))).toBe(0)
+  expect(await stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))).toBe(0)
+  await page.mouse.move(900, 400)
+  await expect(shell).not.toHaveClass(/shell--focus-navigation-open/)
+
+  await page.reload()
+  await expect(shell).toHaveClass(/shell--focus-mode/)
+  await expect(heading).toBeHidden()
+
+  await page.keyboard.press('Control+K')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  await palette.getByPlaceholder('jump to a project or environment').fill('Exit focus mode')
+  await palette.getByRole('button', { name: /Exit focus mode/ }).click()
+  await expect(shell).not.toHaveClass(/shell--focus-mode/)
+  await expect(heading).toBeVisible()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('portless.focus-mode'))).toBe('false')
+
+  await page.keyboard.press('Control+K')
+  await palette.getByPlaceholder('jump to a project or environment').fill('Enter focus mode')
+  await palette.getByRole('button', { name: /Enter focus mode/ }).click()
+  await expect(shell).toHaveClass(/shell--focus-mode/)
+  await page.keyboard.press('Control+Shift+F')
+  await expect(shell).not.toHaveClass(/shell--focus-mode/)
 })
 
 test('collapses the sidebar into a persistent icon navigation rail', async ({ page }) => {

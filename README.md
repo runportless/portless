@@ -216,6 +216,10 @@ environments are stopped and never deletes source checkouts from disk.
 Each environment page exposes the corresponding forget action in its header.
 The confirmation requires that environment to be stopped, removes its retained
 Portless state, and preserves source checkouts and managed data volumes.
+Focus mode, toggled with `Command-Shift-F`, `Control-Shift-F`, or the command
+palette, hides the environment heading and fixed sidebar while retaining status
+in the top bar. Moving to the left edge reveals the full navigation as a
+non-shifting overlay, and the browser remembers the mode across reloads.
 The sidebar's Environments heading also exposes a persistent create action. It
 clones the current environment by default and opens the new stopped environment.
 

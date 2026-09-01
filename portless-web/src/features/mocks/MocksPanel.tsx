@@ -14,27 +14,22 @@ import type { ComponentBinding } from '../../api/contracts/topology'
 import { defaultProviderBinding } from '../environment/bindings/bindingPresentation'
 import { waitForEnvironmentOperation } from '../environment/operationPolling'
 import { httpStatusGroups } from '../httpStatuses'
-
-type RouteDraft = Pick<MockRoute, 'name' | 'method' | 'path' | 'status' | 'body' | 'delayMs' | 'enabled'> & {
-  queryText: string
-  headersText: string
-}
+import { MockCreationWorkspace, MockRouteWorkspace, mockRouteDraft, type MockCreationInput, type MockCreationRouteDraft } from './MockCreationWorkspace'
 
 type MockProfileSortField = 'state' | 'name' | 'service' | 'routes' | 'createdAt' | 'enabledAt' | 'modifiedAt'
 
 const defaultMockProfileSort: TableSort<MockProfileSortField> = { key: 'state', direction: 'asc' }
 
-const emptyRoute = (): RouteDraft => ({
-  name: '', method: 'GET', path: '/', status: 200, body: '', delayMs: 0, enabled: true,
-  queryText: '', headersText: 'Content-Type: application/json',
-})
-
 export const mockHTTPStatusGroups = httpStatusGroups
 
-export function MocksPanel({ environment, project, selectedProfile, onSelectProfile, onChanged }: {
+export function MocksPanel({ environment, project, selectedProfile, workspace, workspaceRoute, onCreateWorkspace, onRouteWorkspace, onSelectProfile, onChanged }: {
   environment: Environment
   project?: Project
   selectedProfile?: string
+  workspace?: 'create' | 'route'
+  workspaceRoute?: string
+  onCreateWorkspace?: (open: boolean) => void
+  onRouteWorkspace?: (profile: string, route?: string) => void
   onSelectProfile: (profile?: string) => void
   onChanged: () => void | Promise<void>
 }) {
@@ -43,9 +38,6 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
-  const [createOpen, setCreateOpen] = useState(false)
-  const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null)
-  const [routeOriginalName, setRouteOriginalName] = useState('')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [deleteName, setDeleteName] = useState('')
   const [busy, setBusy] = useState('')
@@ -69,11 +61,8 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
   }, [environment.project, environment.name]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setRouteDraft(null)
-    setRouteOriginalName('')
     setPreviewOpen(false)
     setDeleteName('')
-    setError(null)
   }, [selectedProfile])
 
   const removeProfile = async (profile: MockProfile) => {
@@ -133,34 +122,25 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
     } finally { setBusy('') }
   }
 
-  const openRoute = (route?: MockRoute) => {
-    setRouteOriginalName(route?.name || '')
-    setRouteDraft(route ? {
-      name: route.name, method: route.method, path: route.path, status: route.status, body: route.body || '',
-      delayMs: route.delayMs || 0, enabled: route.enabled,
-      queryText: formatPairs(route.query, '='), headersText: formatPairs(route.headers, ': '),
-    } : emptyRoute())
-    setError(null)
-  }
-
-  const saveRoute = async () => {
-    if (!selected || !routeDraft) return
+  const saveRoute = async (draft: MockCreationRouteDraft, originalName?: string) => {
+    if (!selected) return
     setBusy('route'); setError(null)
     try {
-      const routeName = routeDraft.name.trim()
-      if (!routeName) throw new Error('Enter a route name.')
-      if (routeOriginalName && routeOriginalName.toLowerCase() !== routeName.toLowerCase()) {
+      const routeName = draft.name.trim()
+      if (originalName && originalName.toLowerCase() !== routeName.toLowerCase()) {
         throw new Error('Route names cannot be changed in place. Create a new route, then delete the old route.')
       }
+      const candidateDrafts = selected.routes
+        .filter((route) => route.name !== originalName)
+        .map((route, index) => mockRouteDraft(route, index + 1))
+      candidateDrafts.push(draft)
+      const route = mockCreationRoutes(candidateDrafts).find((item) => item.name.toLowerCase() === routeName.toLowerCase())
+      if (!route) throw new Error('The route could not be validated.')
       const updated = await api<MockProfile>(environmentPath(environment, `/mocks/${encodeURIComponent(selected.name)}/routes/${encodeURIComponent(routeName)}`), {
-        method: 'PUT', ...jsonBody({
-          name: routeName, method: routeDraft.method, path: routeDraft.path, status: Number(routeDraft.status),
-          query: parseMockPairs(routeDraft.queryText, '='), headers: parseMockPairs(routeDraft.headersText, ':'),
-          body: routeDraft.body, delayMs: Number(routeDraft.delayMs || 0), enabled: routeDraft.enabled,
-        }),
+        method: 'PUT', ...jsonBody(route),
       })
       setProfiles((current) => current.map((profile) => profile.name === updated.name ? updated : profile))
-      setRouteDraft(null)
+      onSelectProfile(updated.name)
     } catch (reason) { setError(actionError("Mock route wasn't saved", reason)) }
     finally { setBusy('') }
   }
@@ -178,8 +158,85 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
     finally { setBusy('') }
   }
 
+  const createMock = async (input: MockCreationInput) => {
+    setBusy('create'); setError(null)
+    let routes: MockRoute[]
+    try {
+      routes = input.routes.length ? mockCreationRoutes(input.routes) : []
+    } catch (reason) {
+      setError(actionError("Mock draft couldn't be created", reason))
+      setBusy('')
+      return
+    }
+
+    let result: Awaited<ReturnType<typeof createConfiguredMockProfile>>
+    try {
+      result = await createConfiguredMockProfile(
+        () => api<MockMutation>(environmentPath(environment, '/mocks'), { method: 'POST', ...jsonBody(input.profile) }),
+        routes,
+        (route) => api<MockProfile>(environmentPath(environment, `/mocks/${encodeURIComponent(input.profile.name)}/routes/${encodeURIComponent(route.name)}`), { method: 'PUT', ...jsonBody(route) }),
+        input.activate ? async (profile) => {
+          await replaceBinding({ service: profile.service, provider: 'mock', mock: { profile: profile.name } })
+          await onChanged()
+        } : undefined,
+      )
+    } catch (reason) {
+      setError(actionError("Mock wasn't created", reason))
+      setBusy('')
+      return
+    }
+
+    setWarnings(result.created.warnings || [])
+    setProfiles((current) => [...current.filter((profile) => profile.name.toLowerCase() !== result.profile.name.toLowerCase()), result.profile])
+    try {
+      await refresh()
+    } catch (reason) {
+      setError(actionError("Mock was created, but the mock list couldn't be refreshed", reason))
+      setBusy('')
+      onSelectProfile(result.profile.name)
+      return
+    }
+    setBusy('')
+    if (result.state === 'configuration-failed') {
+      setError(actionError(`Mock was created, but route ${result.failedRoute.name} wasn't saved`, result.configurationFailure))
+    } else if (result.state === 'activation-failed') {
+      setError(actionError("Mock was created but wasn't enabled", result.activationFailure))
+    }
+    onSelectProfile(result.profile.name)
+  }
+
+  if (workspace === 'create') return <div className="mocks-page">
+    <MockCreationWorkspace
+      environment={environment}
+      recordings={recordings}
+      busy={busy === 'create'}
+      activationBlocked={transitionBlocked}
+      error={error}
+      onDismissError={() => setError(null)}
+      onCancel={() => { if (!busy) { setError(null); onCreateWorkspace?.(false) } }}
+      onCreate={createMock}
+    />
+  </div>
+
+  if (workspace === 'route') return <div className="mocks-page">
+    {loading ? <section className="panel mock-route-workspace__loading">Loading route editor…</section> : selected ? <MockRouteWorkspace
+      key={`${selected.name}/${workspaceRoute || 'new'}`}
+      profile={selected}
+      routeName={workspaceRoute}
+      busy={busy === 'route'}
+      error={error}
+      onDismissError={() => setError(null)}
+      onCancel={() => { if (!busy) { setError(null); onSelectProfile(selected.name) } }}
+      onOpenRoute={(route) => { setError(null); onRouteWorkspace?.(selected.name, route) }}
+      onSave={saveRoute}
+    /> : <section className="panel mock-route-workspace__missing">
+      {error ? <ActionErrorNotice error={error} onDismiss={() => setError(null)} /> : <><strong>MOCK PROFILE NOT FOUND</strong><p>The selected profile is no longer available.</p></>}
+      <button className="button" type="button" onClick={() => onSelectProfile()}>BACK TO MOCKS</button>
+    </section>}
+  </div>
+
   return <div className="mocks-page">
-    {error && !createOpen && !routeDraft && !selected && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
+    {error && !selected && <ActionErrorNotice error={error} onDismiss={() => setError(null)} />}
     {warnings.length > 0 && <div className="mock-warning"><strong>IMPORT FINISHED WITH NOTES</strong><span>{warnings.join(' ')}</span><button type="button" onClick={() => setWarnings([])}>DISMISS</button></div>}
     <MockProfilesList
       environment={environment}
@@ -189,7 +246,7 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
       busy={busy}
       deleteName={deleteName}
       transitionBlocked={transitionBlocked}
-      onCreate={() => { setCreateOpen(true); setDeleteName(''); setError(null) }}
+      onCreate={() => { setDeleteName(''); setError(null); onCreateWorkspace?.(true) }}
       onOpen={(profile) => { setDeleteName(''); setError(null); onSelectProfile(profile.name) }}
       onToggle={(profile, enabled) => { void setProfileEnabled(profile, enabled) }}
       onDelete={(profile) => { void removeProfile(profile) }}
@@ -203,62 +260,82 @@ export function MocksPanel({ environment, project, selectedProfile, onSelectProf
       active={mockProfileIsActive(environment, selected)}
       busy={busy}
       deleteName={deleteName}
-      error={!createOpen && !routeDraft ? error : null}
+      error={error}
       onDismissError={() => setError(null)}
       onClose={() => { setDeleteName(''); onSelectProfile() }}
       onPreview={() => setPreviewOpen(true)}
-      onAddRoute={() => openRoute()}
-      onEditRoute={openRoute}
+      onAddRoute={() => onRouteWorkspace?.(selected.name)}
+      onEditRoute={(route) => onRouteWorkspace?.(selected.name, route.name)}
       onDeleteRoute={(route) => { void removeRoute(route) }}
       onDismissDelete={() => setDeleteName('')}
     />}
 
-    {createOpen && <CreateProfileModal environment={environment} recordings={recordings} busy={busy === 'create'} error={error} onDismissError={() => setError(null)} onClose={() => setCreateOpen(false)} onCreate={async (input) => {
-      setBusy('create'); setError(null)
-      let result: Awaited<ReturnType<typeof createAndEnableMockProfile>>
-      try {
-        result = await createAndEnableMockProfile(
-          () => api<MockMutation>(environmentPath(environment, '/mocks'), { method: 'POST', ...jsonBody(input) }),
-          async (profile) => {
-            await replaceBinding({ service: profile.service, provider: 'mock', mock: { profile: profile.name } })
-            await onChanged()
-          },
-        )
-      } catch (reason) {
-        setError(actionError("Mock profile wasn't created", reason))
-        setBusy('')
-        return
-      }
-      const { created } = result
-      setWarnings(created.warnings || [])
-      setCreateOpen(false)
-      try {
-        await refresh()
-      } catch (reason) {
-        setError(actionError("Mock profile was created, but the profile list couldn't be refreshed", reason))
-        setBusy('')
-        return
-      }
-      setBusy('')
-      if (!result.activated) {
-        setError(actionError("Mock profile was created but wasn't enabled", result.activationFailure))
-        return
-      }
-      onSelectProfile(created.mock.name)
-    }} />}
-    {routeDraft && <RouteModal draft={routeDraft} editing={!!routeOriginalName} busy={busy === 'route'} error={error} onDismissError={() => setError(null)} onChange={setRouteDraft} onClose={() => setRouteDraft(null)} onSave={saveRoute} />}
     {previewOpen && selected && <PreviewModal environment={environment} profile={selected} onClose={() => setPreviewOpen(false)} />}
   </div>
 }
 
-export async function createAndEnableMockProfile(create: () => Promise<MockMutation>, enable: (profile: MockProfile) => Promise<void>) {
+export async function createConfiguredMockProfile(create: () => Promise<MockMutation>, routes: MockRoute[], saveRoute: (route: MockRoute) => Promise<MockProfile>, activate?: (profile: MockProfile) => Promise<void>) {
   const created = await create()
-  try {
-    await enable(created.mock)
-    return { created, activated: true as const }
-  } catch (activationFailure) {
-    return { created, activated: false as const, activationFailure }
+  let profile = created.mock
+  for (const route of routes) {
+    try {
+      profile = await saveRoute(route)
+    } catch (configurationFailure) {
+      return { created, profile, state: 'configuration-failed' as const, failedRoute: route, configurationFailure }
+    }
   }
+  if (!activate) return { created, profile, state: 'inactive' as const }
+  try {
+    await activate(profile)
+    return { created, profile, state: 'activated' as const }
+  } catch (activationFailure) {
+    return { created, profile, state: 'activation-failed' as const, activationFailure }
+  }
+}
+
+export function mockCreationRoutes(drafts: MockCreationRouteDraft[]): MockRoute[] {
+  if (drafts.length === 0) throw new Error('Add at least one route.')
+  if (drafts.length > 1000) throw new Error('A mock cannot contain more than 1000 routes.')
+  const names = new Set<string>()
+  const registeredStatuses = new Set<number>(httpStatusGroups.flatMap((group) => group.statuses.map(([code]) => code)))
+  const encoder = new TextEncoder()
+  let totalBodyBytes = 0
+  const routes = drafts.map((draft) => {
+    const name = draft.name.trim()
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name)) throw new Error(`Route ${name || '(unnamed)'} must use a lowercase URL-safe name.`)
+    if (names.has(name.toLowerCase())) throw new Error(`Route name ${name} is duplicated.`)
+    names.add(name.toLowerCase())
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(draft.method)) throw new Error(`Route ${name} method must be an HTTP token.`)
+    if (!draft.path.startsWith('/') || /[?#]/.test(draft.path)) throw new Error(`Route ${name} path must be an absolute URL path without a query or fragment.`)
+    const parameters = new Set<string>()
+    for (const segment of draft.path.replace(/^\//, '').split('/')) {
+      if (!segment.startsWith('{') && !segment.endsWith('}')) continue
+      if (!/^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(segment)) throw new Error(`Route ${name} path segment ${segment} is not a valid {parameter}.`)
+      const parameter = segment.slice(1, -1).toLowerCase()
+      if (parameters.has(parameter)) throw new Error(`Route ${name} path parameter ${parameter} is duplicated.`)
+      parameters.add(parameter)
+    }
+    const delayMs = Number(draft.delayMs || 0)
+    if (delayMs < 0 || delayMs > 300_000) throw new Error(`Route ${name} delay must be between 0 and 300000 ms.`)
+    if (!registeredStatuses.has(Number(draft.status))) throw new Error(`Route ${name} status must be a registered final HTTP response status.`)
+    const bodyBytes = encoder.encode(draft.body).length
+    if (bodyBytes > 1_048_576) throw new Error(`Route ${name} response body exceeds 1048576 bytes.`)
+    totalBodyBytes += bodyBytes
+    if (totalBodyBytes > 8_388_608) throw new Error('Mock response bodies exceed 8388608 bytes.')
+    return {
+      name, method: draft.method, path: draft.path, status: Number(draft.status),
+      query: parseMockPairs(draft.queryText, '='), headers: parseMockResponseHeaderPairs(draft.headersText),
+      body: draft.body, delayMs, enabled: draft.enabled,
+    }
+  })
+  for (let left = 0; left < routes.length; left++) {
+    for (let right = left + 1; right < routes.length; right++) {
+      if (routes[left].enabled && routes[right].enabled && mockRoutesAreAmbiguous(routes[left], routes[right])) {
+        throw new Error(`Routes ${routes[left].name} and ${routes[right].name} are ambiguous; make one path or query matcher more specific.`)
+      }
+    }
+  }
+  return routes
 }
 
 export function mockProfileBindings(environment: Pick<Environment, 'bindings'>) {
@@ -308,7 +385,7 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
   }
 
   return <section className="panel mock-profiles-panel">
-    <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE PROFILE</button></div>
+    <div className="panel-title"><span>MOCK PROFILES</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE MOCK</button></div>
     {profiles.length > 0 && <div className="mock-profiles-bulk-actions">
       <button className="mock-profiles-disable-all-link" type="button" disabled={!!busy || transitionBlocked || activeBindings.length === 0} onClick={onDisableAll}>{busy === 'disable-all' ? 'DISABLING…' : 'DISABLE ALL'}</button>
     </div>}
@@ -351,7 +428,7 @@ export function MockProfilesList({ environment, profiles, selectedProfile, loadi
         </div>
       </div>
     })}
-    {!loading && profiles.length === 0 && <div className="empty-row">No mock profiles. Create one for a service you do not want to run locally.</div>}
+    {!loading && profiles.length === 0 && <div className="empty-row">No mocks. Create one for a service you do not want to run locally.</div>}
     {loading && <div className="empty-row">Loading mock profiles…</div>}
   </section>
 }
@@ -481,78 +558,6 @@ function compareMockEnabledAt(left?: string, right?: string) {
   return mockTimestampValue(left) - mockTimestampValue(right)
 }
 
-export function CreateProfileModal({ environment, recordings, busy, error, onDismissError, onClose, onCreate }: {
-  environment: Environment
-  recordings: Recording[]
-  busy: boolean
-  error: ActionErrorDetails | null
-  onDismissError: () => void
-  onClose: () => void
-  onCreate: (input: { name: string; service: string; description?: string; fromRecording?: string; openapiDocument?: string }) => Promise<void>
-}) {
-  const services = environment.services.filter((service) => service.kind === 'process')
-  const [name, setName] = useState('')
-  const [service, setService] = useState(services[0]?.name || '')
-  const [description, setDescription] = useState('')
-  const [source, setSource] = useState<'empty' | 'recording' | 'openapi'>('empty')
-  const [recording, setRecording] = useState('')
-  const [document, setDocument] = useState('')
-  const nameInput = useRef<HTMLInputElement>(null)
-  return <FormDialog
-    className="mock-form-modal"
-    titleID="create-mock-title"
-    closeLabel="Close create mock"
-    closeBlocked={busy}
-    initialFocusRef={nameInput}
-    header={<div><div className="eyebrow">HTTP MOCK</div><h2 id="create-mock-title">Create Mock Profile</h2></div>}
-    onClose={onClose}
-  >
-    <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onCreate({ name: name.trim(), service, description: description.trim(), ...(source === 'recording' ? { fromRecording: recording } : {}), ...(source === 'openapi' ? { openapiDocument: document } : {}) }) }}>
-      <p>A profile belongs to one service and can be selected as that service's provider in this environment.</p>
-      <div className="form-modal__fields">
-        <label><span>NAME</span><input ref={nameInput} name="portless-mock-profile-name" required autoComplete="off" spellCheck="false" placeholder="sold-out" value={name} disabled={busy} data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => setName(event.target.value)} /></label>
-        <label><span>SERVICE</span><select value={service} disabled={busy} onChange={(event) => setService(event.target.value)}>{services.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
-        <label className="provider-field--wide"><span>DESCRIPTION</span><input placeholder="Inventory has no available stock" value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} /></label>
-        <label className="provider-field--wide"><span>START WITH</span><select value={source} disabled={busy} onChange={(event) => setSource(event.target.value as typeof source)}><option value="empty">Empty profile</option><option value="recording">Retained recording</option><option value="openapi">OpenAPI document</option></select></label>
-        {source === 'recording' && <label className="provider-field--wide"><span>RECORDING</span><select value={recording} disabled={busy} onChange={(event) => setRecording(event.target.value)}><option value="">Choose a stopped recording</option>{recordings.filter((item) => item.status !== 'active').map((item) => <option key={item.name}>{item.name}</option>)}</select></label>}
-        {source === 'openapi' && <label className="provider-field--wide mock-file-field"><span>OPENAPI 3.0 OR 3.1</span><input type="file" accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then(setDocument) }} /><small>Local files only. External references are not fetched.</small></label>}
-      </div>
-      {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-      <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !name.trim() || !service || (source === 'recording' && !recording) || (source === 'openapi' && !document)}>{busy ? 'CREATING…' : 'CREATE PROFILE'}</button></footer>
-    </form>
-  </FormDialog>
-}
-
-export function RouteModal({ draft, editing, busy, error, onDismissError, onChange, onClose, onSave }: { draft: RouteDraft; editing: boolean; busy: boolean; error: ActionErrorDetails | null; onDismissError: () => void; onChange: (draft: RouteDraft) => void; onClose: () => void; onSave: () => Promise<void> }) {
-  const nameInput = useRef<HTMLInputElement>(null)
-  const change = <K extends keyof RouteDraft>(key: K, value: RouteDraft[K]) => onChange({ ...draft, [key]: value })
-  return <FormDialog
-    className="mock-form-modal"
-    titleID="mock-route-title"
-    closeLabel="Close route editor"
-    closeBlocked={busy}
-    initialFocusRef={nameInput}
-    header={<div><div className="eyebrow">CONFIGURE MOCK</div><h2 id="mock-route-title">{editing ? 'Edit mock route' : 'Create Route'}</h2></div>}
-    onClose={onClose}
-  >
-    <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); void onSave() }}>
-      <div className="form-modal__fields">
-        <label><span>NAME</span><input ref={nameInput} name="portless-mock-route-name" required autoComplete="off" spellCheck="false" value={draft.name} disabled={busy || editing} placeholder="get-product" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => change('name', event.target.value)} /></label>
-        <label><span>METHOD</span><select value={draft.method} disabled={busy} onChange={(event) => change('method', event.target.value)}>{['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((method) => <option key={method}>{method}</option>)}</select></label>
-        <label className="provider-field--wide"><span>PATH</span><input value={draft.path} disabled={busy} placeholder="/inventory/{sku}" onChange={(event) => change('path', event.target.value)} /></label>
-        <label className="provider-field--wide"><span>REQUIRED QUERY · ONE NAME=VALUE PER LINE</span><textarea value={draft.queryText} disabled={busy} placeholder={'warehouse=central\ninclude=availability'} onChange={(event) => change('queryText', event.target.value)} /></label>
-        <label><span>RESPONSE STATUS</span><select value={draft.status} disabled={busy} onChange={(event) => change('status', Number(event.target.value))}>{mockHTTPStatusGroups.map((group) => <optgroup label={group.label} key={group.label}>{group.statuses.map(([code, text]) => <option value={code} key={code}>{code} · {text}</option>)}</optgroup>)}</select></label>
-        <label><span>DELAY (MS)</span><input type="number" min="0" max="300000" value={draft.delayMs} disabled={busy} onChange={(event) => change('delayMs', Number(event.target.value))} /></label>
-        <label className="provider-field--wide"><span>RESPONSE HEADERS · ONE NAME: VALUE PER LINE</span><textarea value={draft.headersText} disabled={busy} onChange={(event) => change('headersText', event.target.value)} /></label>
-        <label className="provider-field--wide"><span>RESPONSE BODY</span><textarea className="mock-body-editor" value={draft.body} disabled={busy} placeholder={'{"available": false}'} onChange={(event) => change('body', event.target.value)} /></label>
-        <label className="mock-check-field provider-field--wide"><input type="checkbox" checked={draft.enabled} disabled={busy} onChange={(event) => change('enabled', event.target.checked)} /><span>ENABLED</span></label>
-      </div>
-      {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-      <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !draft.name.trim() || !draft.path.startsWith('/')}>{busy ? 'SAVING…' : 'SAVE ROUTE'}</button></footer>
-    </form>
-  </FormDialog>
-}
-
 function PreviewModal({ environment, profile, onClose }: { environment: Environment; profile: MockProfile; onClose: () => void }) {
   const [method, setMethod] = useState('GET')
   const [target, setTarget] = useState('/')
@@ -608,6 +613,23 @@ export function parseMockPairs(value: string, separator: ':' | '=') {
   return result
 }
 
+export function parseMockResponseHeaderPairs(value: string) {
+  const result: Record<string, string> = {}
+  const names = new Set<string>()
+  const managed = new Set(['connection', 'content-length', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
+  for (const line of value.split('\n').map((item) => item.trim()).filter(Boolean)) {
+    const index = line.indexOf(':')
+    const name = line.slice(0, index).trim()
+    if (index < 1 || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) throw new Error('Expected Name: value with a valid HTTP header name on every non-empty line.')
+    const canonical = name.toLowerCase()
+    if (names.has(canonical)) throw new Error(`Response header ${name} is duplicated.`)
+    if (managed.has(canonical)) throw new Error(`Response header ${name} is managed by the HTTP transport.`)
+    names.add(canonical)
+    result[name] = line.slice(index + 1).trim()
+  }
+  return result
+}
+
 export function parseMockHeaderPairs(value: string) {
   const result: Record<string, string[]> = {}
   for (const line of value.split('\n').map((item) => item.trim()).filter(Boolean)) {
@@ -624,8 +646,28 @@ export function mockRequestSupportsBody(method: string) {
   return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
 }
 
-function formatPairs(value: Record<string, string> | undefined, separator: string) {
-  return Object.entries(value || {}).map(([name, item]) => `${name}${separator}${item}`).join('\n')
+function mockRoutesAreAmbiguous(left: MockRoute, right: MockRoute) {
+  const leftSegments = splitMockRoutePath(left.path)
+  const rightSegments = splitMockRoutePath(right.path)
+  const leftLiteralCount = leftSegments.filter((segment) => !/^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(segment)).length
+  const rightLiteralCount = rightSegments.filter((segment) => !/^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(segment)).length
+  const leftQuery = left.query || {}
+  const rightQuery = right.query || {}
+  if (left.method.toUpperCase() !== right.method.toUpperCase() || leftSegments.length !== rightSegments.length || leftLiteralCount !== rightLiteralCount || Object.keys(leftQuery).length !== Object.keys(rightQuery).length) return false
+  for (let index = 0; index < leftSegments.length; index++) {
+    const leftParameter = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(leftSegments[index])
+    const rightParameter = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(rightSegments[index])
+    if (!leftParameter && !rightParameter && leftSegments[index] !== rightSegments[index]) return false
+  }
+  for (const [name, leftValue] of Object.entries(leftQuery)) {
+    const rightValue = rightQuery[name]
+    if (rightValue !== undefined && leftValue && rightValue && leftValue !== rightValue) return false
+  }
+  return true
+}
+
+function splitMockRoutePath(path: string) {
+  return path === '/' ? [] : path.replace(/^\//, '').split('/')
 }
 
 function formatQuerySummary(query?: Record<string, string>) {

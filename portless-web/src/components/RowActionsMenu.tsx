@@ -19,14 +19,16 @@ export function RowActionsMenu({ label, menuLabel, open, disabled = false, onOpe
     }
     const dismissWithEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
       onOpenChange(false)
       window.requestAnimationFrame(() => trigger.current?.focus())
     }
     document.addEventListener('mousedown', dismissOutside)
-    window.addEventListener('keydown', dismissWithEscape)
+    window.addEventListener('keydown', dismissWithEscape, true)
     return () => {
       document.removeEventListener('mousedown', dismissOutside)
-      window.removeEventListener('keydown', dismissWithEscape)
+      window.removeEventListener('keydown', dismissWithEscape, true)
     }
   }, [onOpenChange, open])
 

@@ -33,6 +33,35 @@ describe('application routes', () => {
       tab: 'mocks',
     })
     expect(parseRoute('/environments/store/local?tab=traffic&profile=ignored')).not.toHaveProperty('mockProfile')
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create')).toEqual({
+      project: 'store',
+      environment: 'local',
+      settings: false,
+      settingsTab: 'appearance',
+      mockWorkspace: 'create',
+      tab: 'mocks',
+    })
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create&profile=ignored')).not.toHaveProperty('mockProfile')
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&profile=sold-out')).toEqual({
+      project: 'store',
+      environment: 'local',
+      settings: false,
+      settingsTab: 'appearance',
+      mockProfile: 'sold-out',
+      mockWorkspace: 'route',
+      tab: 'mocks',
+    })
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&profile=sold-out&route=lookup')).toEqual({
+      project: 'store',
+      environment: 'local',
+      settings: false,
+      settingsTab: 'appearance',
+      mockProfile: 'sold-out',
+      mockWorkspace: 'route',
+      mockRoute: 'lookup',
+      tab: 'mocks',
+    })
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&route=ignored')).not.toHaveProperty('mockRoute')
   })
 
   it('toggles settings back to the exact previous route', () => {

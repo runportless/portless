@@ -124,7 +124,7 @@ The CLI E2E suite protects these product contracts:
 The Playwright suite protects these browser journeys:
 
 - browser authentication and one-use claim consumption;
-- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with direct configuration, hide, and safe forget workflows, the persistent collapsible icon rail, Settings return, and breadcrumbs;
+- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with direct configuration, hide, and safe forget workflows, the persistent collapsible icon rail, keyboard- and command-palette-driven focus mode with edge-revealed overlay navigation, Settings return, and breadcrumbs;
 - environment creation from the persistent sidebar through the modal without
   duplicating project sources,
   including visible clone provenance that does not displace status messaging,
@@ -138,10 +138,11 @@ The Playwright suite protects these browser journeys:
   and returning the service to normal mode;
 - captured request and response inspection with repeated headers, redacted
   credentials, and Portless-injected trace carriers kept out of header views;
-- recording, mock-provider, and fault workflows, including a URL-addressable,
-  maximizable mock-profile route drawer, complete header/body preview input,
-  and profile creation that hot-binds its service by default while keeping peer
-  service PIDs stable and preserving traffic attribution;
+- recording, mock-provider, and fault workflows, including URL-addressable mock
+  and route workspaces, a maximizable route builder with on-demand local
+  matching preview, explicit post-save activation, a maximizable mock-profile
+  drawer, complete header/body preview input, stable peer service PIDs, and
+  traffic attribution;
 - environment stop/start controls, project-page source add/delete, and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;

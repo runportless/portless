@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
 import type { ProjectNavigationPreferences } from '../features/projects/projectNavigation'
 import { DaemonDrawer } from './DaemonDrawer'
 import { ProjectContextNav } from './ProjectContextNav'
+import { StatusMark } from './Status'
 
 export interface Command { label: string; detail?: string; group: string; run: () => void }
 export type EnvironmentView = 'overview' | 'topology' | 'traffic' | 'mocks' | 'recordings' | 'faults' | 'bindings' | 'timeline'
 export type SettingsView = 'appearance' | 'runtime' | 'mcp'
 
 const sidebarCollapsedKey = 'portless.sidebar-collapsed'
+const focusModeKey = 'portless.focus-mode'
+const focusModeShortcut = '⌘⇧F / Ctrl+Shift+F'
+const focusNavigationCloseDelay = 320
 
 export function AppChrome({ projects, environments, activeProject, sidebarProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', navigation, runtime, daemon, diagnostics, controlPlaneHealth, relay, children, onNavigate, onSwitchProject, onEnvironmentChanged, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
@@ -43,6 +47,11 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [daemonOpen, setDaemonOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed)
+  const [focusMode, setFocusMode] = useState(readFocusMode)
+  const [focusNavigationOpen, setFocusNavigationOpen] = useState(false)
+  const sidebar = useRef<HTMLElement>(null)
+  const focusNavigationEdge = useRef<HTMLButtonElement>(null)
+  const focusNavigationCloseTimer = useRef<number | null>(null)
 
   useEffect(() => {
     try { window.localStorage.setItem(sidebarCollapsedKey, sidebarCollapsed ? 'true' : 'false') }
@@ -50,22 +59,75 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
   }, [sidebarCollapsed])
 
   useEffect(() => {
+    try { window.localStorage.setItem(focusModeKey, focusMode ? 'true' : 'false') }
+    catch { /* Focus mode still works for this page when storage is unavailable. */ }
+  }, [focusMode])
+
+  const toggleFocusMode = useCallback(() => {
+    setFocusNavigationOpen(false)
+    setFocusMode((value) => !value)
+  }, [])
+
+  useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault(); setPaletteOpen((value) => !value)
       }
-      if (event.key === 'Escape') setPaletteOpen(false)
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        setPaletteOpen(false)
+        toggleFocusMode()
+      }
+      if (event.key === 'Escape') {
+        setPaletteOpen(false)
+        setFocusNavigationOpen(false)
+      }
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
+  }, [toggleFocusMode])
+
+  useEffect(() => {
+    if (!focusMode || !focusNavigationOpen) return
+    const pointerdown = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (sidebar.current?.contains(target) || focusNavigationEdge.current?.contains(target)) return
+      setFocusNavigationOpen(false)
+    }
+    window.addEventListener('pointerdown', pointerdown)
+    return () => window.removeEventListener('pointerdown', pointerdown)
+  }, [focusMode, focusNavigationOpen])
+
+  useEffect(() => () => {
+    if (focusNavigationCloseTimer.current !== null) window.clearTimeout(focusNavigationCloseTimer.current)
   }, [])
+
+  const openFocusNavigation = () => {
+    if (focusNavigationCloseTimer.current !== null) window.clearTimeout(focusNavigationCloseTimer.current)
+    focusNavigationCloseTimer.current = null
+    setFocusNavigationOpen(true)
+  }
+  const closeFocusNavigation = () => {
+    if (focusNavigationCloseTimer.current !== null) window.clearTimeout(focusNavigationCloseTimer.current)
+    focusNavigationCloseTimer.current = null
+    setFocusNavigationOpen(false)
+  }
+  const scheduleFocusNavigationClose = () => {
+    if (focusNavigationCloseTimer.current !== null) window.clearTimeout(focusNavigationCloseTimer.current)
+    focusNavigationCloseTimer.current = window.setTimeout(() => {
+      focusNavigationCloseTimer.current = null
+      setFocusNavigationOpen(false)
+    }, focusNavigationCloseDelay)
+  }
+
   const allCommands = useMemo<Command[]>(() => [
     ...projects.map((project) => ({ group: 'Switch project', label: project.name, detail: `${project.environments?.length || 0} environments`, run: () => onSwitchProject(project) })),
     ...environments.map((environment) => ({ group: 'Environments', label: `${environment.project}/${environment.name}`, detail: environment.status, run: () => onNavigate(environmentRoute(environment)) })),
     ...commands,
+    { group: 'View', label: focusMode ? 'Exit focus mode' : 'Enter focus mode', detail: focusModeShortcut, run: toggleFocusMode },
     { group: 'System', label: 'Configure MCP', detail: activeEnvironment ? `${activeEnvironment.project}/${activeEnvironment.name}` : 'AI client access', run: () => onNavigate(mcpSettingsRoute(activeEnvironment)) },
     { group: 'System', label: 'Settings', detail: 'Appearance, runtime, and MCP', run: onSettingsToggle },
-  ], [activeEnvironment, commands, environments, onNavigate, onSettingsToggle, onSwitchProject, projects])
+  ], [activeEnvironment, commands, environments, focusMode, onNavigate, onSettingsToggle, onSwitchProject, projects, toggleFocusMode])
 
   const inspectDaemon = () => {
     setPaletteOpen(false)
@@ -76,36 +138,43 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
 
   const daemonStateLabel = live ? daemon?.state ?? 'connected' : 'reconnecting'
   const daemonLabel = `daemon ${daemonStateLabel}`
+  const compactSidebar = !focusMode && sidebarCollapsed
+  const shellClassName = focusMode
+    ? `shell shell--focus-mode${focusNavigationOpen ? ' shell--focus-navigation-open' : ''}`
+    : compactSidebar ? 'shell shell--sidebar-collapsed' : 'shell'
 
-  return <div className={sidebarCollapsed ? 'shell shell--sidebar-collapsed' : 'shell'}>
-    <aside className="sidebar">
+  return <div className={shellClassName}>
+    <aside ref={sidebar} className="sidebar" onMouseEnter={focusMode ? openFocusNavigation : undefined} onMouseLeave={focusMode ? scheduleFocusNavigationClose : undefined} onFocus={focusMode ? openFocusNavigation : undefined} onBlur={focusMode ? scheduleFocusNavigationClose : undefined}>
       <div className="sidebar__header">
-        <button className="brand" type="button" onClick={() => onNavigate('/projects')} aria-label="Portless projects" title={sidebarCollapsed ? 'Projects' : undefined}><span className="brand__signal"><i /><i /><i /></span><span className="brand__wordmark">portless</span></button>
-        <button className="sidebar__collapse" type="button" aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} aria-expanded={!sidebarCollapsed} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} onClick={() => setSidebarCollapsed((value) => !value)}><SidebarCollapseIcon collapsed={sidebarCollapsed} /></button>
+        <button className="brand" type="button" onClick={() => onNavigate('/projects')} aria-label="Portless projects" title={compactSidebar ? 'Projects' : undefined}><span className="brand__signal"><i /><i /><i /></span><span className="brand__wordmark">portless</span></button>
+        {focusMode
+          ? <button className="sidebar__collapse" type="button" aria-label="Close navigation overlay" title="Close navigation overlay" onClick={closeFocusNavigation}><SidebarCollapseIcon collapsed={false} /></button>
+          : <button className="sidebar__collapse" type="button" aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} aria-expanded={!sidebarCollapsed} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} onClick={() => setSidebarCollapsed((value) => !value)}><SidebarCollapseIcon collapsed={sidebarCollapsed} /></button>}
       </div>
       <div className="sidebar__body">
-        <ProjectContextNav projects={projects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} navigation={navigation} collapsed={sidebarCollapsed} onNavigate={onNavigate} onSwitchProject={onSwitchProject} onEnvironmentChanged={onEnvironmentChanged} />
+        <ProjectContextNav projects={projects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} navigation={navigation} collapsed={compactSidebar} onNavigate={onNavigate} onSwitchProject={onSwitchProject} onEnvironmentChanged={onEnvironmentChanged} />
         {activeEnvironment && <>
           <div className="sidebar__section-label sidebar__section-label--context"><span>Environment</span><small title={`${activeEnvironment.project}/${activeEnvironment.name}`}>{activeEnvironment.project}/{activeEnvironment.name}</small></div>
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>
-            <ViewButton label="Overview" view="overview" activeView={activeView} environment={activeEnvironment} icon={<GridIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Mocks" view="mocks" activeView={activeView} environment={activeEnvironment} icon={<MockIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
-            <ViewButton label="Timeline" view="timeline" activeView={activeView} environment={activeEnvironment} icon={<TimelineIcon />} compact={sidebarCollapsed} onNavigate={onNavigate} />
+            <ViewButton label="Overview" view="overview" activeView={activeView} environment={activeEnvironment} icon={<GridIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Topology" view="topology" activeView={activeView} environment={activeEnvironment} icon={<TopologyIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Traffic" view="traffic" activeView={activeView} environment={activeEnvironment} icon={<PulseIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Mocks" view="mocks" activeView={activeView} environment={activeEnvironment} icon={<MockIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Recordings" view="recordings" activeView={activeView} environment={activeEnvironment} icon={<RecordIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Faults" view="faults" activeView={activeView} environment={activeEnvironment} icon={<FaultIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Bindings" view="bindings" activeView={activeView} environment={activeEnvironment} icon={<LinkIcon />} compact={compactSidebar} onNavigate={onNavigate} />
+            <ViewButton label="Timeline" view="timeline" activeView={activeView} environment={activeEnvironment} icon={<TimelineIcon />} compact={compactSidebar} onNavigate={onNavigate} />
           </nav>
         </>}
       </div>
       <nav className="sidebar__utility" aria-label="Application">
-        <button type="button" className={settingsActive ? 'is-active' : ''} aria-label="Settings" aria-current={settingsActive ? 'page' : undefined} title={sidebarCollapsed ? 'Settings' : undefined} onClick={onSettingsToggle}><SettingsIcon /><span>Settings</span></button>
+        <button type="button" className={settingsActive ? 'is-active' : ''} aria-label="Settings" aria-current={settingsActive ? 'page' : undefined} title={compactSidebar ? 'Settings' : undefined} onClick={onSettingsToggle}><SettingsIcon /><span>Settings</span></button>
       </nav>
-      <button className="sidebar__footer" type="button" aria-label={`Daemon ${daemonStateLabel}`} aria-expanded={daemonOpen} title={sidebarCollapsed ? `Daemon ${daemonStateLabel}` : undefined} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span className={live ? undefined : 'daemon-state--reconnecting'}>{daemonStateLabel}</span><small>DETAILS ›</small></button>
+      <button className="sidebar__footer" type="button" aria-label={`Daemon ${daemonStateLabel}`} aria-expanded={daemonOpen} title={compactSidebar ? `Daemon ${daemonStateLabel}` : undefined} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /><span className={live ? undefined : 'daemon-state--reconnecting'}>{daemonStateLabel}</span><small>DETAILS ›</small></button>
     </aside>
+    {focusMode && <button ref={focusNavigationEdge} className="focus-navigation-edge" type="button" aria-label={`${focusNavigationOpen ? 'Close' : 'Open'} navigation overlay`} aria-expanded={focusNavigationOpen} title="Open navigation" onMouseEnter={openFocusNavigation} onMouseLeave={scheduleFocusNavigationClose} onFocus={openFocusNavigation} onClick={() => focusNavigationOpen ? closeFocusNavigation() : openFocusNavigation()}><span /></button>}
     <div className="stage">
-      <header className="topbar"><TopbarBreadcrumbs settingsActive={settingsActive} settingsView={settingsView} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} /><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
+      <header className="topbar"><div className="topbar__context"><TopbarBreadcrumbs settingsActive={settingsActive} settingsView={settingsView} activeProject={activeProject} activeEnvironment={activeEnvironment} onNavigate={onNavigate} />{focusMode && activeEnvironment && <StatusMark status={activeEnvironment.status} />}</div><div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div></header>
       <main>{children}</main>
     </div>
     {paletteOpen && <CommandPalette commands={allCommands} onClose={() => setPaletteOpen(false)} />}
@@ -181,6 +250,10 @@ function environmentViewRoute(environment: Pick<Environment, 'project' | 'name'>
 function mcpSettingsRoute(environment?: Pick<Environment, 'project' | 'name'>) { return environment ? `/settings?tab=mcp&env=${encodeURIComponent(`${environment.project}/${environment.name}`)}` : '/settings?tab=mcp' }
 function readSidebarCollapsed() {
   try { return window.localStorage.getItem(sidebarCollapsedKey) === 'true' }
+  catch { return false }
+}
+function readFocusMode() {
+  try { return window.localStorage.getItem(focusModeKey) === 'true' }
   catch { return false }
 }
 function SidebarCollapseIcon({ collapsed }: { collapsed: boolean }) { return <svg viewBox="0 0 16 16" aria-hidden="true"><path d={collapsed ? 'm6 3 5 5-5 5' : 'm10 3-5 5 5 5'} /></svg> }

@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment } from '../../api/contracts/environments'
 import type { MockProfile } from '../../api/contracts/mocks'
-import { createAndEnableMockProfile, CreateProfileModal, MockProfileDrawer, MockProfilesList, MocksPanel, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, RouteModal, sortMockProfiles } from './MocksPanel'
+import { createConfiguredMockProfile, MockProfileDrawer, MockProfilesList, MocksPanel, mockCreationRoutes, mockHTTPStatusGroups, mockProfileIsActive, mockRequestSupportsBody, parseMockHeaderPairs, parseMockPairs, parseMockResponseHeaderPairs, sortMockProfiles } from './MocksPanel'
+import { newMockRouteDraft } from './MockCreationWorkspace'
 
 const environment: Environment = {
   project: 'store', name: 'local', revision: 1, status: 'healthy', createdAt: '', updatedAt: '',
@@ -19,7 +20,7 @@ describe('MocksPanel', () => {
   it('starts with a clear environment-scoped profile workspace', () => {
     const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectProfile={() => undefined} onChanged={() => undefined} />)
     expect(html).toContain('MOCK PROFILES')
-    expect(html).toContain('CREATE PROFILE')
+    expect(html).toContain('CREATE MOCK')
     expect(html).toContain('class="mock-profile-row mock-profile-row--header sortable-header-row is-default-sort" role="row"')
     expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>State</span>')
     for (const label of ['Name', 'Service', 'Routes', 'Created at', 'Enabled at', 'Modified at']) {
@@ -66,7 +67,7 @@ describe('MocksPanel', () => {
 
     expect(html).toContain('class="mock-profiles-bulk-actions"')
     expect(html).toMatch(/class="mock-profiles-disable-all-link"[^>]*disabled=""[^>]*>DISABLE ALL<\/button>/)
-    expect(html.indexOf('CREATE PROFILE')).toBeLessThan(html.indexOf('DISABLE ALL'))
+    expect(html.indexOf('CREATE MOCK')).toBeLessThan(html.indexOf('DISABLE ALL'))
     expect(html).toContain('aria-label="Enable sold-out"')
     expect(html).toContain('>ENABLE</button>')
     expect(html).toContain('aria-label="Open sold-out mock profile"')
@@ -113,21 +114,43 @@ describe('MocksPanel', () => {
     expect(html).not.toContain('>bound</span>')
   })
 
-  it('enables a newly created profile by default and preserves it when activation fails', async () => {
-    const created = { mock: profile, warnings: [] }
-    let enabledProfile = ''
+  it('saves every drafted route before optional activation', async () => {
+    const created = { mock: { ...profile, routes: [] }, warnings: [] }
+    const routes = [
+      { ...profile.routes[0], name: 'lookup' },
+      { ...profile.routes[0], name: 'health', path: '/health' },
+    ]
+    const events: string[] = []
+    let saved: MockProfile = created.mock
 
-    await expect(createAndEnableMockProfile(
-      async () => created,
-      async (item) => { enabledProfile = item.name },
-    )).resolves.toEqual({ created, activated: true })
-    expect(enabledProfile).toBe('sold-out')
+    const result = await createConfiguredMockProfile(
+      async () => { events.push('create'); return created },
+      routes,
+      async (route) => { events.push(`save:${route.name}`); saved = { ...saved, routes: [...saved.routes, route] }; return saved },
+      async (item) => { events.push(`activate:${item.routes.length}`) },
+    )
 
-    const activationFailure = new Error('provider handoff failed')
-    await expect(createAndEnableMockProfile(
+    expect(result.state).toBe('activated')
+    expect(events).toEqual(['create', 'save:lookup', 'save:health', 'activate:2'])
+
+    events.length = 0
+    const inactive = await createConfiguredMockProfile(async () => created, routes.slice(0, 1), async (route) => ({ ...created.mock, routes: [route] }))
+    expect(inactive.state).toBe('inactive')
+    expect(events).toEqual([])
+
+    const configurationFailure = new Error('route rejected')
+    let activationAttempted = false
+    const partial = await createConfiguredMockProfile(
       async () => created,
-      async () => { throw activationFailure },
-    )).resolves.toEqual({ created, activated: false, activationFailure })
+      routes,
+      async (route) => {
+        if (route.name === 'health') throw configurationFailure
+        return { ...created.mock, routes: [route] }
+      },
+      async () => { activationAttempted = true },
+    )
+    expect(partial).toMatchObject({ state: 'configuration-failed', failedRoute: { name: 'health' }, configurationFailure })
+    expect(activationAttempted).toBe(false)
   })
 
   it('sorts profiles by every data column in either direction', () => {
@@ -165,8 +188,18 @@ describe('MocksPanel', () => {
     expect(parseMockPairs('warehouse=central\ninclude=stock+price', '=')).toEqual({ warehouse: 'central', include: 'stock+price' })
     expect(parseMockPairs('Content-Type: application/json\nX-Mode: sold-out', ':')).toEqual({ 'Content-Type': 'application/json', 'X-Mode': 'sold-out' })
     expect(parseMockHeaderPairs('Content-Type: application/json\nX-Trace: one\nx-trace: two')).toEqual({ 'Content-Type': ['application/json'], 'X-Trace': ['one', 'two'] })
+    expect(parseMockResponseHeaderPairs('Content-Type: application/json\nX-Mode: sold-out')).toEqual({ 'Content-Type': 'application/json', 'X-Mode': 'sold-out' })
     expect(() => parseMockPairs('invalid', '=')).toThrow(/name=value/)
     expect(() => parseMockHeaderPairs('Bad Header: value')).toThrow(/valid HTTP header name/)
+    expect(() => parseMockResponseHeaderPairs('X-Mode: one\nx-mode: two')).toThrow(/duplicated/)
+  })
+
+  it('validates the complete route draft before creating a profile', () => {
+    const first = { ...newMockRouteDraft(1), path: '/inventory/{sku}', queryText: 'warehouse=central' }
+    const second = { ...newMockRouteDraft(2), name: 'get-inventory-by-id', path: '/inventory/{id}', queryText: 'warehouse=central' }
+    expect(mockCreationRoutes([first])).toEqual([expect.objectContaining({ name: 'get-root', path: '/inventory/{sku}', query: { warehouse: 'central' }, headers: { 'Content-Type': 'application/json' } })])
+    expect(() => mockCreationRoutes([{ ...first, name: 'Bad Route' }])).toThrow(/lowercase URL-safe/)
+    expect(() => mockCreationRoutes([first, second])).toThrow(/ambiguous/)
   })
 
   it('offers request bodies only for methods that normally carry one', () => {
@@ -185,36 +218,4 @@ describe('MocksPanel', () => {
     expect(codes).not.toContain(599)
   })
 
-  it('keeps password managers away from the mock route name field', () => {
-    const html = renderToStaticMarkup(<RouteModal
-      draft={{ name: '', method: 'GET', path: '/', status: 200, body: '', delayMs: 0, enabled: true, queryText: '', headersText: '' }}
-      editing={false}
-      busy={false}
-      error={null}
-      onDismissError={() => undefined}
-      onChange={() => undefined}
-      onClose={() => undefined}
-      onSave={async () => undefined}
-    />)
-
-    expect(html).toContain('<h2 id="mock-route-title">Create Route</h2>')
-    expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
-    expect(html).toMatch(/<input(?=[^>]*name="portless-mock-route-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")[^>]*>/)
-  })
-
-  it('keeps password managers away from the mock profile name field', () => {
-    const html = renderToStaticMarkup(<CreateProfileModal
-      environment={environment}
-      recordings={[]}
-      busy={false}
-      error={null}
-      onDismissError={() => undefined}
-      onClose={() => undefined}
-      onCreate={async () => undefined}
-    />)
-
-    expect(html).toContain('<h2 id="create-mock-title">Create Mock Profile</h2>')
-    expect(html).toContain('<form autoComplete="off" data-1p-ignore="true"')
-    expect(html).toMatch(/<input(?=[^>]*name="portless-mock-profile-name")(?=[^>]*autoComplete="off")(?=[^>]*data-1p-ignore="true")(?=[^>]*data-lpignore="true")(?=[^>]*data-bwignore="true")[^>]*>/)
-  })
 })

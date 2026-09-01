@@ -124,6 +124,26 @@ describe('application navigation', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('restores focus mode with full overlay navigation and top-bar status', () => {
+    vi.stubGlobal('window', {
+      localStorage: { getItem: (key: string) => ['portless.focus-mode', 'portless.sidebar-collapsed'].includes(key) ? 'true' : null },
+    })
+
+    try {
+      const markup = renderChrome(environment, 'traffic')
+
+      expect(markup).toContain('<div class="shell shell--focus-mode">')
+      expect(markup).not.toContain('shell--sidebar-collapsed')
+      expect(markup).toContain('aria-label="Close navigation overlay" title="Close navigation overlay"')
+      expect(markup).toContain('class="focus-navigation-edge" type="button" aria-label="Open navigation overlay" aria-expanded="false"')
+      expect(markup).toContain('<div class="topbar__context"><nav class="crumbs"')
+      expect(markup).toContain('</nav><span class="status status--success" title="healthy">')
+      expect(markup).not.toContain('aria-label="Traffic" aria-current="page" title="Traffic"')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('command palette', () => {
