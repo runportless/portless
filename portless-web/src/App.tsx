@@ -257,7 +257,7 @@ export function App() {
     content = <SettingsPage tab={parsed.settingsTab} preference={themePreference} resolvedTheme={resolvedTheme} runtime={runtimeStatus} environments={environments} initialEnvironment={parsed.settingsEnvironment} onNavigate={navigate} onPreferenceChange={changeThemePreference} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} />
   } else if (parsed.environment) {
     content = activeEnvironment
-      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} tab={parsed.tab} mockProfile={parsed.mockProfile} mockWorkspace={parsed.mockWorkspace} mockRoute={parsed.mockRoute} onNavigate={navigate} onChanged={refresh} />
+      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} tab={parsed.tab} mockScenario={parsed.mockScenario} mockWorkspace={parsed.mockWorkspace} mockRoute={parsed.mockRoute} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="environment" name={`${parsed.project}/${parsed.environment}`} onNavigate={navigate} />
   } else if (parsed.project) {
     content = activeProject
@@ -282,7 +282,7 @@ export function settingsToggleDestination(currentRoute: string, returnRoute = '/
   return parseRoute(returnRoute).settings ? '/projects' : returnRoute
 }
 
-export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockProfile?: string; mockWorkspace?: 'create' | 'route'; mockRoute?: string; tab: Tab } {
+export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockScenario?: string; mockWorkspace?: 'route'; mockRoute?: string; tab: Tab } {
   const current = new URL(route, 'http://portless.localhost')
   const parts = current.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   let project: string | undefined
@@ -296,11 +296,11 @@ export function parseRoute(route: string): { project?: string; environment?: str
   const settingsTabs: SettingsTab[] = ['appearance', 'runtime', 'mcp']
   const settingsTab = settings && settingsTabs.includes(requested as SettingsTab) ? requested as SettingsTab : 'appearance'
   const requestedEnvironment = settings ? current.searchParams.get('env')?.trim() : undefined
+  const requestedMockScenario = tab === 'mocks' ? current.searchParams.get('scenario')?.trim() : undefined
   const workspace = current.searchParams.get('workspace')
-  const requestedMockWorkspace = tab === 'mocks' && (workspace === 'create' || workspace === 'route') ? workspace : undefined
-  const requestedMockProfile = tab === 'mocks' && requestedMockWorkspace !== 'create' ? current.searchParams.get('profile')?.trim() : undefined
-  const requestedMockRoute = tab === 'mocks' && requestedMockWorkspace === 'route' && requestedMockProfile ? current.searchParams.get('route')?.trim() : undefined
-  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), ...(requestedMockProfile ? { mockProfile: requestedMockProfile } : {}), ...(requestedMockWorkspace ? { mockWorkspace: requestedMockWorkspace } : {}), ...(requestedMockRoute ? { mockRoute: requestedMockRoute } : {}), tab }
+  const requestedMockWorkspace = tab === 'mocks' && workspace === 'route' && requestedMockScenario ? workspace : undefined
+  const requestedMockRoute = tab === 'mocks' && requestedMockWorkspace === 'route' && requestedMockScenario ? current.searchParams.get('route')?.trim() : undefined
+  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), ...(requestedMockScenario ? { mockScenario: requestedMockScenario } : {}), ...(requestedMockWorkspace ? { mockWorkspace: requestedMockWorkspace } : {}), ...(requestedMockRoute ? { mockRoute: requestedMockRoute } : {}), tab }
 }
 
 function environmentUIPath(environment: Pick<Environment, 'project' | 'name'>, tab: Tab) {

@@ -183,7 +183,7 @@ portless --env billing/qa-assisted up
 ```
 
 The clone records its direct source environment and copies its provider
-bindings, mock profiles, and routes. The resulting configuration is independent;
+bindings, mock scenarios, routes, and scenario restoration records. The resulting configuration is independent;
 later changes do not propagate between the source and clone.
 
 HTTP remote providers still pass through the source-aware proxy, so traffic,
@@ -197,6 +197,27 @@ Portless-managed resources, and mock providers return fixed local HTTP
 responses. See the decisions for
 [live provider handoffs](docs/architecture/decisions/0006-live-provider-handoffs.md)
 and [deterministic mocks](docs/architecture/decisions/0007-deterministic-http-mock-provider.md).
+
+Mock scenarios can replace several HTTP services together. A scenario has a
+name and description; each route selects its own target service:
+
+```bash
+portless mock create checkout-failure
+portless mock route set checkout-failure inventory-lookup \
+  --service inventory --path '/inventory/{sku}' --status 200 \
+  --body '{"available":false}'
+portless mock route set checkout-failure payment-attempt \
+  --service payments --method POST --path /payments --status 503
+portless mock enable checkout-failure
+portless mock disable checkout-failure
+```
+
+Enabling saves each target's exact provider configuration and switches all
+target services to the scenario. Disabling restores those saved providers.
+Scenarios may be active together only when they target different services.
+While active, route responses and enabled flags are editable, but changing the
+set of target services requires disabling the scenario first. An unmatched
+request returns `501`; it never falls through to the real service.
 
 ### Observe and experiment
 

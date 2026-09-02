@@ -23,12 +23,12 @@ import { useEnvironmentActivity } from './useEnvironmentActivity'
 
 const environmentTabs: EnvironmentTab[] = ['overview', 'topology', 'traffic', 'mocks', 'recordings', 'faults', 'bindings', 'timeline']
 
-export function EnvironmentPage({ environment, project, tab, mockProfile, mockWorkspace, mockRoute, onNavigate, onChanged }: {
+export function EnvironmentPage({ environment, project, tab, mockScenario, mockWorkspace, mockRoute, onNavigate, onChanged }: {
   environment: Environment
   project?: Project
   tab: EnvironmentTab
-  mockProfile?: string
-  mockWorkspace?: 'create' | 'route'
+  mockScenario?: string
+  mockWorkspace?: 'route'
   mockRoute?: string
   onNavigate: (path: string) => void
   onChanged: () => void
@@ -130,7 +130,7 @@ export function EnvironmentPage({ environment, project, tab, mockProfile, mockWo
     {tab === 'topology' && <TopologyPanel environment={environment} faults={activeFaults} onService={setSelectedService} onEdge={(edge) => navigateTab('traffic', { edge: `${edge.source}:${edge.target}`, protocol: edge.protocol === 'http' ? 'http' : 'tcp' })} />}
     {tab === 'bindings' && <BindingsPanel environment={environment} project={project} onNavigate={onNavigate} onChanged={onChanged} />}
     {tab === 'traffic' && <TrafficPanel environment={environment} />}
-    {tab === 'mocks' && <MocksPanel environment={environment} project={project} selectedProfile={mockProfile} workspace={mockWorkspace} workspaceRoute={mockRoute} onCreateWorkspace={(open) => navigateTab('mocks', open ? { workspace: 'create' } : undefined)} onRouteWorkspace={(profile, route) => navigateTab('mocks', { workspace: 'route', profile, route })} onSelectProfile={(profile) => navigateTab('mocks', { profile })} onChanged={onChanged} />}
+    {tab === 'mocks' && <MocksPanel environment={environment} selectedScenario={mockScenario} workspace={mockWorkspace} workspaceRoute={mockRoute} onRouteWorkspace={(scenario, route) => navigateTab('mocks', { workspace: 'route', scenario, route })} onSelectScenario={(scenario) => navigateTab('mocks', { scenario })} onChanged={onChanged} />}
     {tab === 'recordings' && <RecordingsPanel environment={environment} recordings={activity.recordings} refresh={activity.refresh} />}
     {tab === 'faults' && <FaultsPanel environment={environment} faults={activity.faults} refresh={activity.refresh} />}
     {tab === 'timeline' && <TimelinePanel key={`${environment.project}/${environment.name}`} timeline={activity.timeline} />}

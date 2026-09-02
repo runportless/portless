@@ -26,7 +26,7 @@ test('inspects captured request and response details in the exchange workbench',
   await page.route(exchangeDetailPattern, async (route) => {
     const response = await route.fetch()
     const exchange = await response.json() as Record<string, unknown>
-    await route.fulfill({ response, json: { ...exchange, fault: 'ui-fault', recording: 'ui-recording', mockProfile: 'ui-mock', mockRoute: 'checkout' } })
+    await route.fulfill({ response, json: { ...exchange, fault: 'ui-fault', recording: 'ui-recording', mockScenario: 'ui-mock', mockRoute: 'checkout' } })
   })
   await row.click()
 

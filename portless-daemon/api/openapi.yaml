@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 12.10.0
+  version: 13.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.10.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -385,8 +385,9 @@ paths:
       description: >-
         Removes a logical source from the project and atomically recompiles every environment.
         Every project environment must be stopped. Services owned by the source and resources
-        used only by those services are removed; obsolete mock profiles are deleted and affected
-        fault rules are disabled. A project must retain at least one source.
+        used only by those services are removed and affected fault rules are disabled.
+        Removal is rejected while mock scenario routes reference a removed service.
+        A project must retain at least one source.
       responses:
         '200':
           description: Updated project and environments with the removed services and connections
@@ -902,16 +903,16 @@ paths:
   /environments/{projectName}/{environmentName}/mocks:
     parameters: *environmentParameters
     get:
-      operationId: listMockProfiles
+      operationId: listMockScenarios
       responses:
         '200':
-          description: Environment-scoped HTTP mock profiles and their routes
+          description: Environment-scoped HTTP mock scenarios, service-scoped routes, and derived activation state
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockProfileList' }
+              schema: { $ref: '#/components/schemas/MockScenarioList' }
     post:
-      operationId: createMockProfile
-      description: Creates an empty profile or imports deterministic routes from one stopped recording or local OpenAPI 3.0/3.1 document.
+      operationId: createMockScenario
+      description: Creates an empty, disabled scenario. Services are selected on individual routes, not on the scenario.
       requestBody:
         required: true
         content:
@@ -919,40 +920,68 @@ paths:
             schema: { $ref: '#/components/schemas/CreateMockRequest' }
       responses:
         '201':
-          description: Created profile and non-fatal import warnings
+          description: Created scenario
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockMutation' }
+              schema: { $ref: '#/components/schemas/MockScenario' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /environments/{projectName}/{environmentName}/mocks/{mockName}:
-    parameters: &mockParameters
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}:
+    parameters: &mockScenarioParameters
       - { $ref: '#/components/parameters/ProjectName' }
       - { $ref: '#/components/parameters/EnvironmentName' }
-      - { $ref: '#/components/parameters/MockName' }
+      - { $ref: '#/components/parameters/MockScenarioName' }
     get:
-      operationId: getMockProfile
+      operationId: getMockScenario
       responses:
         '200':
-          description: One mock profile and its ordered routes
+          description: One mock scenario and its ordered routes
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockProfile' }
+              schema: { $ref: '#/components/schemas/MockScenario' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
-      operationId: deleteMockProfile
-      description: Deletes an unbound profile and all of its routes.
+      operationId: deleteMockScenario
+      description: Deletes a disabled scenario and all of its routes. Enabled and degraded scenarios must be disabled first.
       responses:
-        '204': { description: Profile deleted }
+        '204': { description: Scenario deleted }
         '409': { $ref: '#/components/responses/Conflict' }
-  /environments/{projectName}/{environmentName}/mocks/{mockName}/routes/{routeName}:
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}/activation:
+    parameters: *mockScenarioParameters
+    put:
+      operationId: setMockScenarioActivation
+      description: >-
+        Enables or disables the whole scenario as one tracked operation. Enabling saves
+        each target service's exact previous binding before switching it to mock. Disabling
+        restores those bindings. Target coverage includes disabled routes. Empty scenarios
+        cannot be enabled, and enabled scenarios cannot overlap on a service. A partial
+        transition is rolled back; if rollback fails, restoration records are retained and
+        activation is degraded. Disable a degraded scenario to retry restoration.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetMockScenarioActivationRequest' }
+      responses:
+        '202':
+          description: Durable scenario activation operation; inspect its terminal state for success or failure
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}/routes/{routeName}:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
       - { $ref: '#/components/parameters/EnvironmentName' }
-      - { $ref: '#/components/parameters/MockName' }
+      - { $ref: '#/components/parameters/MockScenarioName' }
       - { $ref: '#/components/parameters/MockRouteName' }
     put:
       operationId: putMockRoute
-      description: Creates or replaces one fixed-response route after validating the complete profile for ambiguous matches.
+      description: >-
+        Creates or replaces one fixed-response route. Service is required. Ambiguity is
+        checked only within the same service. While enabled, response edits and route
+        toggles reload active runtimes, but edits must not change the set of target services.
       requestBody:
         required: true
         content:
@@ -960,25 +989,27 @@ paths:
             schema: { $ref: '#/components/schemas/MockRoute' }
       responses:
         '200':
-          description: Updated profile; an active mock is reloaded atomically
+          description: Updated scenario; each active service matcher is swapped atomically
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockProfile' }
+              schema: { $ref: '#/components/schemas/MockScenario' }
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: deleteMockRoute
+      description: Deleting the final route for an active target service requires disabling the scenario first.
       responses:
         '200':
-          description: Updated profile
+          description: Updated scenario
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockProfile' }
+              schema: { $ref: '#/components/schemas/MockScenario' }
         '404': { $ref: '#/components/responses/NotFound' }
-  /environments/{projectName}/{environmentName}/mocks/{mockName}/preview:
-    parameters: *mockParameters
+        '409': { $ref: '#/components/responses/Conflict' }
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}/preview:
+    parameters: *mockScenarioParameters
     post:
       operationId: previewMockRequest
-      description: Evaluates the profile matcher without generating traffic or timeline history.
+      description: Evaluates routes for the requested service without generating traffic or timeline history.
       requestBody:
         required: true
         content:
@@ -990,6 +1021,40 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MockPreview' }
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}/imports/recording:
+    parameters: *mockScenarioParameters
+    post:
+      operationId: importMockScenarioRecording
+      description: Appends deterministic routes from a stopped recording to a disabled scenario. Preserves each exchange's target service. Omit services to import all eligible HTTP services.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportMockRecordingRequest' }
+      responses:
+        '200':
+          description: Updated scenario and import warnings; routes are validated and saved as one batch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockScenarioMutation' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}/imports/openapi:
+    parameters: *mockScenarioParameters
+    post:
+      operationId: importMockScenarioOpenAPI
+      description: Appends deterministic routes from a local OpenAPI 3.0/3.1 document to a disabled scenario, assigning them to the explicitly selected service. External references are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportMockOpenAPIRequest' }
+      responses:
+        '200':
+          description: Updated scenario and import warnings; routes are validated and saved as one batch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockScenarioMutation' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/recordings:
     parameters: *environmentParameters
     get:
@@ -1224,9 +1289,9 @@ components:
       name: faultName
       required: true
       schema: { $ref: '#/components/schemas/ArtifactName' }
-    MockName:
+    MockScenarioName:
       in: path
-      name: mockName
+      name: scenarioName
       required: true
       schema: { $ref: '#/components/schemas/ArtifactName' }
     MockRouteName:
@@ -1322,7 +1387,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '12.10.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.0.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1529,9 +1594,9 @@ components:
         healthPath: { type: string, pattern: '^/' }
     MockTarget:
       type: object
-      required: [profile]
+      required: [scenario]
       properties:
-        profile: { $ref: '#/components/schemas/ArtifactName' }
+        scenario: { $ref: '#/components/schemas/ArtifactName' }
     ComponentBinding:
       type: object
       required: [provider]
@@ -1544,13 +1609,15 @@ components:
         modifiedAt: { type: string, format: date-time, readOnly: true }
       description: >-
         local requires source, container is valid only for discovered managed
-        dependencies, remote requires remote configuration, and mock requires
-        an environment-scoped profile attached to the same service.
+        dependencies, and remote requires remote configuration. Mock bindings are
+        managed only through scenario activation, never through individual binding changes.
+        A mock binding identifies the environment-scoped scenario owning that service.
     MockRoute:
       type: object
-      required: [name, method, path, status, enabled]
+      required: [name, service, method, path, status, enabled]
       properties:
         name: { $ref: '#/components/schemas/ArtifactName' }
+        service: { $ref: '#/components/schemas/ServiceName' }
         method: { type: string, pattern: '^[!#$%&''*+.^_`|~0-9A-Za-z-]+$', example: GET }
         path: { type: string, pattern: '^/', example: '/inventory/{sku}' }
         query:
@@ -1566,43 +1633,65 @@ components:
         enabled: { type: boolean }
         createdAt: { type: string, format: date-time, readOnly: true }
         modifiedAt: { type: string, format: date-time, readOnly: true }
-    MockProfile:
+    MockScenario:
       type: object
-      required: [project, environment, name, service, routes, createdAt, modifiedAt]
+      required: [project, environment, name, routes, activation, createdAt, modifiedAt]
       properties:
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         name: { $ref: '#/components/schemas/ArtifactName' }
-        service: { $ref: '#/components/schemas/ServiceName' }
         description: { type: string }
         routes: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/MockRoute' } }
+        activation: { $ref: '#/components/schemas/MockScenarioActivation' }
         createdAt: { type: string, format: date-time }
         modifiedAt: { type: string, format: date-time }
-    MockProfileList:
+    MockScenarioActivation:
       type: object
-      required: [mocks]
+      required: [state, targetServices, activeServices]
       properties:
-        mocks: { type: array, items: { $ref: '#/components/schemas/MockProfile' } }
+        state: { type: string, enum: [disabled, enabled, degraded], description: Derived from scenario ownership and current service bindings, not service health. }
+        targetServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' }, description: Unique sorted service names from all routes, including disabled routes. }
+        activeServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' }, description: Services currently bound to this scenario. }
+        enabledAt: { type: string, format: date-time }
+    MockScenarioList:
+      type: object
+      required: [scenarios]
+      properties:
+        scenarios: { type: array, items: { $ref: '#/components/schemas/MockScenario' } }
     CreateMockRequest:
       type: object
-      required: [name, service]
+      required: [name]
       properties:
         name: { $ref: '#/components/schemas/ArtifactName' }
-        service: { $ref: '#/components/schemas/ServiceName' }
         description: { type: string }
-        fromRecording: { $ref: '#/components/schemas/ArtifactName' }
-        openapiDocument: { type: string, maxLength: 1048576, description: Complete local OpenAPI 3.0 or 3.1 JSON/YAML document. External references are rejected. }
-      description: fromRecording and openapiDocument are mutually exclusive; omit both for an empty profile.
-    MockMutation:
+    MockScenarioMutation:
       type: object
-      required: [mock, warnings]
+      required: [scenario, warnings]
       properties:
-        mock: { $ref: '#/components/schemas/MockProfile' }
+        scenario: { $ref: '#/components/schemas/MockScenario' }
         warnings: { type: array, items: { type: string } }
+    SetMockScenarioActivationRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+    ImportMockRecordingRequest:
+      type: object
+      required: [recording]
+      properties:
+        recording: { $ref: '#/components/schemas/ArtifactName' }
+        services: { type: array, items: { $ref: '#/components/schemas/ServiceName' } }
+    ImportMockOpenAPIRequest:
+      type: object
+      required: [service, document]
+      properties:
+        service: { $ref: '#/components/schemas/ServiceName' }
+        document: { type: string, maxLength: 1048576, description: Complete local OpenAPI 3.0 or 3.1 JSON/YAML document. }
     MockRequest:
       type: object
-      required: [method, path]
+      required: [service, method, path]
       properties:
+        service: { $ref: '#/components/schemas/ServiceName' }
         method: { type: string }
         path: { type: string, pattern: '^/' }
         query:
@@ -1618,8 +1707,9 @@ components:
           description: Optional request body used only for the side-effect-free preview. Request bodies are not route matchers.
     MockPreview:
       type: object
-      required: [matched, status]
+      required: [service, matched, status]
       properties:
+        service: { $ref: '#/components/schemas/ServiceName' }
         matched: { type: boolean }
         route: { type: string }
         status: { $ref: '#/components/schemas/HTTPFinalStatusCode' }
@@ -1824,7 +1914,7 @@ components:
         responseCapturedBytes: { type: integer, format: int64, minimum: 0 }
         fault: { type: string }
         recording: { type: string }
-        mockProfile: { type: string, description: Mock profile that served this exchange. }
+        mockScenario: { type: string, description: Mock scenario that served this exchange. }
         mockRoute: { type: string, description: Mock route that matched this exchange. }
         error: { type: string }
         traceId: { type: string, pattern: '^[0-9a-f]{32}$', description: Normalized trace identifier extracted from W3C/OpenTelemetry, B3, or Datadog context, or generated by Portless. }

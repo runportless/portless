@@ -104,7 +104,7 @@ export interface RemoteTarget {
 }
 
 export interface MockTarget {
-  profile: string
+	scenario: string
 }
 
 export interface ComponentBinding {

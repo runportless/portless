@@ -33,7 +33,7 @@ export function ProviderBindingsTable({ environment, onConfigure }: { environmen
       {providers.items.map((binding) => <div className={`experiment-row provider-row ${binding.provider === 'remote' ? 'is-warning' : ''}`} role="row" key={binding.service}>
         <div className="provider-service" role="cell"><StatusMark status={environment.services.find((item) => item.name === binding.service)?.status || 'planned'} label={false} /><strong>{binding.service}</strong></div>
         <div className="provider-kind" role="cell">{providerDisplayName(binding.provider)}</div>
-        <div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <code>{binding.remote?.url}</code> : binding.provider === 'local' ? <code>{binding.source}</code> : binding.provider === 'mock' ? <code>{binding.mock?.profile}</code> : <span>Portless managed</span>}</div>
+		<div className="provider-configuration" role="cell">{binding.provider === 'remote' ? <code>{binding.remote?.url}</code> : binding.provider === 'local' ? <code>{binding.source}</code> : binding.provider === 'mock' ? <code>{binding.mock?.scenario}</code> : <span>Portless managed</span>}</div>
         {binding.modifiedAt ? <time role="cell" dateTime={binding.modifiedAt} title={new Date(binding.modifiedAt).toLocaleString()}>{formatBindingTimestamp(binding.modifiedAt)}</time> : <time role="cell">—</time>}
         <div className="provider-actions table-row-actions" role="cell"><button type="button" onClick={() => onConfigure(binding.service)}>EDIT</button></div>
       </div>)}
@@ -71,7 +71,7 @@ export function sortProviderBindings(bindings: ComponentBinding[], sort: TableSo
 function providerConfigurationValue(binding: ComponentBinding) {
   if (binding.provider === 'remote') return binding.remote?.url || ''
   if (binding.provider === 'local') return binding.source || ''
-  if (binding.provider === 'mock') return binding.mock?.profile || ''
+	if (binding.provider === 'mock') return binding.mock?.scenario || ''
   return 'Portless managed'
 }
 

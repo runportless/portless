@@ -119,13 +119,18 @@ portless
 │   └── clear
 ├── mock
 │   ├── list (ls)
-│   ├── show <profile>
-│   ├── create <profile>
-│   ├── delete <profile>
+│   ├── show <scenario>
+│   ├── create <scenario>
+│   ├── enable <scenario>
+│   ├── disable <scenario>
+│   ├── delete <scenario>
 │   ├── route
-│   │   ├── set <profile> <route>
-│   │   └── delete <profile> <route>
-│   └── preview <profile>
+│   │   ├── set <scenario> <route>
+│   │   └── delete <scenario> <route>
+│   ├── preview <scenario>
+│   └── import
+│       ├── recording <scenario> <recording>
+│       └── openapi <scenario> <file>
 ├── config
 │   ├── color [auto|always|never]
 │   └── reset
@@ -157,7 +162,7 @@ portless
 ```
 
 Invoking `service`, `connection`, `traffic`, `project`, `project source`,
-`env`, `env checkout`, `record`, `fault`, `mock`, `mock route`, `config`,
+`env`, `env checkout`, `record`, `fault`, `mock`, `mock route`, `mock import`, `config`,
 `relay`, `daemon`, `runtime`, `mcp`, or `completion` without a required child
 displays that group's help.
 
@@ -300,8 +305,8 @@ portless up
 | `portless env current` | Show the effective environment, current source path, and whether selection came from a flag, saved selection, or inference. |
 | `portless env clear` | Clear only the saved selection for the current checkout. This command rejects `--env`. |
 | `portless env list [project]` | List environments, optionally for one project. `--limit <n>` defaults to `100`. |
-| `portless env clone <name>` | Clone environment configuration and record its direct source as provenance. `--from <environment>` selects the source environment; otherwise the selected environment is used. Provider bindings, mock profiles, and routes are copied independently. |
-| `portless env bind <service>` | Choose exactly one provider with `--local <source>`, `--container`, `--remote <url>`, or `--mock <profile>`. See provider options below. |
+| `portless env clone <name>` | Clone environment configuration and record its direct source as provenance. `--from <environment>` selects the source environment; otherwise the selected environment is used. Provider bindings, mock scenarios, routes, and restoration records are copied independently. |
+| `portless env bind <service>` | Choose exactly one provider with `--local <source>`, `--container`, or `--remote <url>`. A scenario-owned service must first be released with `mock disable`. See provider options below. |
 | `portless env checkout list` | List source checkout paths configured for the selected environment. |
 | `portless env checkout set <source>` | Discover `--path <checkout>` and configure it for the selected environment. The environment must be stopped. |
 | `portless env checkout remove <source>` | Remove only the selected environment's checkout path. Requires `--yes`; the environment must be stopped and no local provider may use the checkout. |
@@ -315,7 +320,6 @@ Provider binding options:
 | `--local <source>` | Run the service from the named checkout source. |
 | `--container` | Use a Portless-managed container. |
 | `--remote <HTTP(S)-URL>` | Route the service to a remote HTTP endpoint. |
-| `--mock <profile>` | Serve the service from a deterministic mock profile. |
 | `--classification <development|qa|staging|unknown>` | Classify a remote provider; default `unknown`. Valid only with `--remote`. |
 | `--write-policy <read-only|read-write>` | Enforce a remote write policy; default `read-only`. Valid only with `--remote`. |
 | `--health-path <path>` | Probe this readiness path before switching to a remote provider. Valid only with `--remote`. |
@@ -374,18 +378,26 @@ one effect: latency, jitter, synthetic status, or connection abort.
 
 ### Deterministic mocks
 
-`portless mock` displays mock-command help, and `portless mock route` displays
-route-command help.
+`portless mock`, `portless mock route`, and `portless mock import` display
+their respective command help. A scenario groups routes across HTTP services;
+service selection belongs to each route. Activation is all-target, with durable
+restoration of the exact previous providers. Overlapping active scenarios are
+rejected. Disable a scenario before changing its target-service set or importing
+routes. Route toggles do not release their service or enable passthrough.
 
 | Command | Usage |
 | --- | --- |
-| `portless mock list` | List mock profiles. Alias: `mock ls`. |
-| `portless mock show <profile>` | Show a profile and all of its routes. |
-| `portless mock create <profile>` | Create a profile for required `--service <service>`. `--description <text>` adds context. Import routes with either `--from-recording <name>` or `--from-openapi <path>`; those options are mutually exclusive. OpenAPI 3.0/3.1 input is read from a local file and is limited to `1048576` bytes. |
-| `portless mock delete <profile>` | Delete an unbound profile. Requires `--yes`. |
-| `portless mock route set <profile> <route>` | Create or replace a route. Match with `--method <method>` (default `GET`), `--path <pattern>` (default `/`), and repeatable `--query <name=value>`. Respond with `--status <code>` (default `200`), repeatable `--header <name=value>`, either `--body <text>` or `--body-file <path>`, and `--delay <milliseconds>`. `--disabled` saves the route without matching it. |
-| `portless mock route delete <profile> <route>` | Permanently delete a route. Requires `--yes`. |
-| `portless mock preview <profile>` | Resolve a request without sending traffic or changing state. Request options are `--method <method>` (default `GET`), `--path <path>` (default `/`), repeatable `--query <name=value>` and `--header <name=value>`, and either `--body <text>` or `--body-file <path>`. |
+| `portless mock list` | List scenarios, target services, route counts, and activation state. Alias: `mock ls`. |
+| `portless mock show <scenario>` | Show a scenario and all service-scoped routes. |
+| `portless mock create <scenario>` | Create an empty, disabled scenario. `--description <text>` adds context. |
+| `portless mock enable <scenario>` | Activate every target service and wait for completion. Empty scenarios cannot be enabled. |
+| `portless mock disable <scenario>` | Restore the saved provider bindings and wait for completion. Also retries restoration of a degraded scenario. |
+| `portless mock delete <scenario>` | Delete a disabled scenario. Requires `--yes`. |
+| `portless mock route set <scenario> <route>` | Create or replace a route for required `--service <service>`. Match with `--method <method>` (default `GET`), `--path <pattern>` (default `/`), and repeatable `--query <name=value>`. Respond with `--status <code>` (default `200`), repeatable `--header <name=value>`, either `--body <text>` or `--body-file <path>`, and `--delay <milliseconds>`. `--disabled` saves the route without matching it. |
+| `portless mock route delete <scenario> <route>` | Permanently delete a route. Requires `--yes`; deleting the last route for an active service requires disabling the scenario first. |
+| `portless mock preview <scenario>` | Resolve a request for required `--service <service>` without sending traffic or changing state. Request options are `--method <method>` (default `GET`), `--path <path>` (default `/`), repeatable `--query <name=value>` and `--header <name=value>`, and either `--body <text>` or `--body-file <path>`. |
+| `portless mock import recording <scenario> <recording>` | Append routes from a stopped recording, preserving target services. Optional repeatable `--service <service>` limits the import. |
+| `portless mock import openapi <scenario> <file>` | Append routes for required `--service <service>` from a local OpenAPI 3.0/3.1 document, limited to `1048576` bytes. External references are rejected. |
 
 Examples:
 
@@ -397,13 +409,15 @@ portless fault add slow-orders checkout:orders \
   --latency 1500 \
   --probability 0.5 \
   --duration 10m
-portless mock create sold-out --service inventory
+portless mock create sold-out
 portless mock route set sold-out lookup \
+  --service inventory \
   --path '/inventory/{sku}' \
   --status 404 \
   --body '{"error":"sold out"}'
-portless mock preview sold-out --path /inventory/coffee-mug
-portless env bind inventory --mock sold-out
+portless mock preview sold-out --service inventory --path /inventory/coffee-mug
+portless mock enable sold-out
+portless mock disable sold-out
 ```
 
 ## Administration

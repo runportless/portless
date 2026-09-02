@@ -128,7 +128,7 @@ func TestCLIServiceLifecycleOnlyMutatesTheSelectedService(t *testing.T) {
 	}
 }
 
-func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
+func TestCLIMockScenarioHotSwapKeepsPeerServicesRunning(t *testing.T) {
 	binary := e2eBinary(t)
 	home, checkout := isolatedFixture(t, "store-lite")
 	defer cleanupInstallation(t, binary, home, checkout)
@@ -144,22 +144,28 @@ func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
 		t.Fatalf("environment sources = %#v, want one local source", before.Sources)
 	}
 
-	if output, err := runCLIAt(binary, home, checkout, "mock", "create", "sold-out", "--service", "inventory", "--description", "Inventory has no available stock"); err != nil {
-		t.Fatalf("create mock profile: %v\n%s", err, output)
+	if output, err := runCLIAt(binary, home, checkout, "mock", "create", "sold-out", "--description", "Inventory has no available stock"); err != nil {
+		t.Fatalf("create mock scenario: %v\n%s", err, output)
 	}
-	if output, err := runCLIAt(binary, home, checkout, "mock", "route", "set", "sold-out", "lookup", "--method", "GET", "--path", "/inventory/{sku}", "--status", "200", "--header", "Content-Type=application/json", "--body", `{"available":false,"reason":"mocked sold out"}`); err != nil {
+	if output, err := runCLIAt(binary, home, checkout, "mock", "route", "set", "sold-out", "lookup", "--service", "inventory", "--method", "GET", "--path", "/inventory/{sku}", "--status", "200", "--header", "Content-Type=application/json", "--body", `{"available":false,"reason":"mocked sold out"}`); err != nil {
 		t.Fatalf("create mock route: %v\n%s", err, output)
 	}
-	if output, err := runCLIAt(binary, home, checkout, "mock", "preview", "sold-out", "--path", "/inventory/coffee-mug", "--query", "quantity=1"); err != nil || !strings.Contains(output, "matched lookup") {
+	if output, err := runCLIAt(binary, home, checkout, "mock", "route", "set", "sold-out", "orders-health", "--service", "orders", "--path", "/health", "--status", "200"); err != nil {
+		t.Fatalf("create orders mock route: %v\n%s", err, output)
+	}
+	if output, err := runCLIAt(binary, home, checkout, "mock", "preview", "sold-out", "--service", "inventory", "--path", "/inventory/coffee-mug", "--query", "quantity=1"); err != nil || !strings.Contains(output, "matched lookup") {
 		t.Fatalf("preview mock route: %v\n%s", err, output)
 	}
-	if output, err := runCLIAt(binary, home, checkout, "env", "bind", "inventory", "--mock", "sold-out"); err != nil {
-		t.Fatalf("bind mock provider: %v\n%s", err, output)
+	if output, err := runCLIAt(binary, home, checkout, "mock", "enable", "sold-out"); err != nil {
+		t.Fatalf("enable mock scenario: %v\n%s", err, output)
 	}
 
 	mocked := environmentStatus(t, binary, home, checkout)
 	assertSameServiceProcess(t, checkoutBefore, requireService(t, mocked, "checkout"))
-	assertSameServiceProcess(t, ordersBefore, requireService(t, mocked, "orders"))
+	ordersMocked := requireService(t, mocked, "orders")
+	if ordersMocked.Status != model.ServiceReady || ordersMocked.PID != 0 || ordersMocked.Generation != ordersBefore.Generation {
+		t.Fatalf("orders mock runtime = %#v, before=%#v", ordersMocked, ordersBefore)
+	}
 	inventoryMocked := requireService(t, mocked, "inventory")
 	if inventoryMocked.Status != model.ServiceReady || inventoryMocked.PID != 0 || inventoryMocked.Generation != inventoryBefore.Generation {
 		t.Fatalf("inventory mock runtime = %#v, before=%#v", inventoryMocked, inventoryBefore)
@@ -171,7 +177,7 @@ func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
 			break
 		}
 	}
-	if inventoryBinding == nil || inventoryBinding.Provider != model.ProviderMock || inventoryBinding.Mock == nil || inventoryBinding.Mock.Profile != "sold-out" {
+	if inventoryBinding == nil || inventoryBinding.Provider != model.ProviderMock || inventoryBinding.Mock == nil || inventoryBinding.Mock.Scenario != "sold-out" {
 		t.Fatalf("inventory binding = %#v, want mock sold-out", inventoryBinding)
 	}
 
@@ -191,7 +197,7 @@ func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
 	if err := json.Unmarshal([]byte(trafficOutput), &traffic); err != nil {
 		t.Fatalf("decode mock traffic: %v\n%s", err, trafficOutput)
 	}
-	if len(traffic.Exchanges) != 1 || traffic.Exchanges[0].TargetProvider != model.ProviderMock || traffic.Exchanges[0].MockProfile != "sold-out" || traffic.Exchanges[0].MockRoute != "lookup" {
+	if len(traffic.Exchanges) != 1 || traffic.Exchanges[0].TargetProvider != model.ProviderMock || traffic.Exchanges[0].MockScenario != "sold-out" || traffic.Exchanges[0].MockRoute != "lookup" {
 		t.Fatalf("mock attribution = %#v", traffic.Exchanges)
 	}
 	ordersTraffic, err := runCLIAt(binary, home, checkout, "--json", "traffic", "list", "--edge", "checkout:orders", "--limit", "20")
@@ -203,12 +209,15 @@ func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
 		t.Fatalf("orders should not be called after inventory rejects checkout: err=%v output=%s", err, ordersTraffic)
 	}
 
-	if output, err := runCLIAt(binary, home, checkout, "env", "bind", "inventory", "--local", before.Sources[0].Name); err != nil {
-		t.Fatalf("restore local inventory: %v\n%s", err, output)
+	if output, err := runCLIAt(binary, home, checkout, "mock", "disable", "sold-out"); err != nil {
+		t.Fatalf("disable mock scenario: %v\n%s", err, output)
 	}
 	restored := environmentStatus(t, binary, home, checkout)
 	assertSameServiceProcess(t, checkoutBefore, requireService(t, restored, "checkout"))
-	assertSameServiceProcess(t, ordersBefore, requireService(t, restored, "orders"))
+	ordersRestored := requireService(t, restored, "orders")
+	if ordersRestored.Status != model.ServiceReady || ordersRestored.PID == 0 || ordersRestored.Generation != ordersBefore.Generation+1 {
+		t.Fatalf("restored orders = %#v, before=%#v", ordersRestored, ordersBefore)
+	}
 	inventoryRestored := requireService(t, restored, "inventory")
 	if inventoryRestored.Status != model.ServiceReady || inventoryRestored.PID == 0 || inventoryRestored.Generation != inventoryBefore.Generation+1 {
 		t.Fatalf("restored inventory = %#v, before=%#v", inventoryRestored, inventoryBefore)
@@ -219,7 +228,7 @@ func TestCLIMockProviderHotSwapKeepsPeerServicesRunning(t *testing.T) {
 		t.Fatalf("checkout did not recover after restoring inventory: %s", recovered.Status)
 	}
 	if output, err := runCLIAt(binary, home, checkout, "mock", "delete", "sold-out", "--yes"); err != nil {
-		t.Fatalf("delete mock profile: %v\n%s", err, output)
+		t.Fatalf("delete mock scenario: %v\n%s", err, output)
 	}
 }
 

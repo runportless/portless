@@ -116,9 +116,10 @@ The CLI E2E suite protects these product contracts:
   including traffic attribution, local enforcement of its read-only write
   policy, and active local/remote provider handoffs that preserve unrelated
   service PIDs and generations;
-- deterministic mock profile and route creation, matcher preview, active
-  local/mock provider handoff, mock traffic attribution, dependency short
-  circuiting, peer-process preservation, and restoration of the real service;
+- deterministic multi-service scenario and route creation, service-specific
+  matcher preview, whole-scenario activation, mock traffic attribution,
+  dependency short circuiting, peer-process preservation, and restoration of
+  every target provider;
 - forced reset when ordinary lifecycle state is from an incompatible model.
 
 The Playwright suite protects these browser journeys:
@@ -138,11 +139,12 @@ The Playwright suite protects these browser journeys:
   and returning the service to normal mode;
 - captured request and response inspection with repeated headers, redacted
   credentials, and Portless-injected trace carriers kept out of header views;
-- recording, mock-provider, and fault workflows, including URL-addressable mock
-  and route workspaces, a maximizable route builder with on-demand local
-  matching preview, explicit post-save activation, a maximizable mock-profile
-  drawer, complete header/body preview input, stable peer service PIDs, and
-  traffic attribution;
+- recording, mock-provider, and fault workflows, including scenario-table-first
+  navigation, empty service-independent scenario creation, URL-addressable
+  scenario and single-route workspaces, a service-selecting maximizable route
+  editor that respects focus mode, clickable and sortable routes paginated at
+  ten rows, whole-scenario activation, stable peer service PIDs, and traffic
+  attribution;
 - environment stop/start controls, project-page source add/delete, and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;

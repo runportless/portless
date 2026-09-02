@@ -235,7 +235,7 @@ describe('environment topology', () => {
     ] })).toEqual({ value: 'REMOTE', detail: '2 remote services', tone: 'warning' })
     expect(summarizeEnvironmentBindings({ ...environment, bindings: [
       { service: 'checkout', provider: 'local' },
-      { service: 'orders', provider: 'mock', mock: { profile: 'sold-out' } },
+      { service: 'orders', provider: 'mock', mock: { scenario: 'sold-out' } },
       { service: 'postgres', provider: 'container' },
     ] })).toEqual({ value: 'LOCAL', detail: '2 local · 1 mocked' })
   })
@@ -244,7 +244,7 @@ describe('environment topology', () => {
     const inventory = { name: 'inventory', kind: 'process', launchMode: 'managed' } as Service
     const environment = {
       services: [inventory],
-      bindings: [{ service: 'inventory', provider: 'mock', mock: { profile: 'sold-out' } }],
+      bindings: [{ service: 'inventory', provider: 'mock', mock: { scenario: 'sold-out' } }],
     } as Environment
 
     expect(displayLaunchMode(environment, inventory)).toBe('mock')
@@ -401,7 +401,7 @@ describe('environment topology', () => {
     expect(defaultProviderBinding(project, environment, checkout)).toEqual({ service: 'checkout', provider: 'local', source: 'checkout' })
     expect(defaultProviderBinding(project, environment, postgres)).toEqual({ service: 'postgres', provider: 'container' })
     expect(providerBindingMatches({ service: 'checkout', provider: 'local', source: 'checkout' }, { service: 'checkout', provider: 'local', source: 'CHECKOUT' })).toBe(true)
-    expect(providerBindingMatches({ service: 'checkout', provider: 'mock', mock: { profile: 'sold-out' } }, { service: 'checkout', provider: 'mock', mock: { profile: 'SOLD-OUT' } })).toBe(true)
+    expect(providerBindingMatches({ service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } }, { service: 'checkout', provider: 'mock', mock: { scenario: 'SOLD-OUT' } })).toBe(true)
     expect(providerBindingMatches({ service: 'checkout', provider: 'remote' }, { service: 'checkout', provider: 'local', source: 'checkout' })).toBe(false)
   })
 

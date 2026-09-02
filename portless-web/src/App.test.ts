@@ -24,44 +24,38 @@ describe('application routes', () => {
       settingsTab: 'appearance',
       tab: 'traffic',
     })
-    expect(parseRoute('/environments/store/local?tab=mocks&profile=sold-out')).toEqual({
+    expect(parseRoute('/environments/store/local?tab=mocks&scenario=sold-out')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      mockProfile: 'sold-out',
+      mockScenario: 'sold-out',
       tab: 'mocks',
     })
-    expect(parseRoute('/environments/store/local?tab=traffic&profile=ignored')).not.toHaveProperty('mockProfile')
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create')).toEqual({
+    expect(parseRoute('/environments/store/local?tab=traffic&scenario=ignored')).not.toHaveProperty('mockScenario')
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&scenario=sold-out')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      mockWorkspace: 'create',
-      tab: 'mocks',
-    })
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create&profile=ignored')).not.toHaveProperty('mockProfile')
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&profile=sold-out')).toEqual({
-      project: 'store',
-      environment: 'local',
-      settings: false,
-      settingsTab: 'appearance',
-      mockProfile: 'sold-out',
+      mockScenario: 'sold-out',
       mockWorkspace: 'route',
       tab: 'mocks',
     })
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&profile=sold-out&route=lookup')).toEqual({
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&scenario=sold-out&route=lookup')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      mockProfile: 'sold-out',
+      mockScenario: 'sold-out',
       mockWorkspace: 'route',
       mockRoute: 'lookup',
       tab: 'mocks',
     })
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&route=ignored')).not.toHaveProperty('mockRoute')
+    const orphanedRoute = parseRoute('/environments/store/local?tab=mocks&workspace=route&route=ignored')
+    expect(orphanedRoute).not.toHaveProperty('mockWorkspace')
+    expect(orphanedRoute).not.toHaveProperty('mockRoute')
+    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create')).not.toHaveProperty('mockWorkspace')
   })
 
   it('toggles settings back to the exact previous route', () => {

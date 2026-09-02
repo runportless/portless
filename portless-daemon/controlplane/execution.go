@@ -114,12 +114,12 @@ func (s *Service) runUp(scope string, operation model.Operation, options UpOptio
 				s.failOperation(scope, operation, fmt.Errorf("%s mock provider has no profile", binding.Service))
 				return
 			}
-			_ = s.serviceEvent(scope, operation, binding.Service, "starting", "Loading mock profile "+binding.Mock.Profile)
+			_ = s.serviceEvent(scope, operation, binding.Service, "starting", "Loading mock scenario "+binding.Mock.Scenario)
 			if err := s.activateMock(ctx, scope, binding, runtimeFor(environment, binding.Service)); err != nil {
 				s.failOperation(scope, operation, fmt.Errorf("%s mock provider: %w", binding.Service, err))
 				return
 			}
-			_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is served by mock profile "+binding.Mock.Profile)
+			_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is served by mock scenario "+binding.Mock.Scenario)
 		}
 	}
 	order, err := executionOrder(definition, environment.Bindings)
@@ -544,7 +544,7 @@ func (s *Service) prepareServiceDependencies(ctx context.Context, scope string, 
 			if err := s.activateMock(ctx, scope, binding, runtimeFor(environment, connection.Target)); err != nil {
 				return fmt.Errorf("%s mock provider: %w", connection.Target, err)
 			}
-			_ = s.serviceEvent(scope, operation, connection.Target, "ready", connection.Target+" is served by mock profile "+binding.Mock.Profile)
+			_ = s.serviceEvent(scope, operation, connection.Target, "ready", connection.Target+" is served by mock scenario "+binding.Mock.Scenario)
 			continue
 		}
 		if binding.Provider != model.ProviderRemote {

@@ -15,7 +15,7 @@ import { orderedTraceExchanges, WaterfallTraceDrawer } from './WaterfallTraceDra
 
 const exchange = {
   project: 'billing', environment: 'local', sequence: 7, protocol: 'http',
-  source: 'checkout', target: 'orders', background: false, targetProvider: 'mock', mockProfile: 'sold-out', mockRoute: 'reject-order',
+  source: 'checkout', target: 'orders', background: false, targetProvider: 'mock', mockScenario: 'sold-out', mockRoute: 'reject-order',
   startedAt: '2026-08-13T12:00:00.123Z', completedAt: '2026-08-13T12:00:00.147Z',
   method: 'POST', host: 'orders.local.billing.localhost', path: '/orders', status: 201,
   durationMs: 24, requestBytes: 42, responseBytes: 118,
@@ -274,7 +274,7 @@ describe('TrafficDetail', () => {
   })
 
   it('shows the target binding configuration with its provider type', () => {
-    const local = { ...exchange, targetProvider: 'local', mockProfile: undefined, mockRoute: undefined } as TrafficExchange
+    const local = { ...exchange, targetProvider: 'local', mockScenario: undefined, mockRoute: undefined } as TrafficExchange
     const markup = renderToStaticMarkup(createElement(TrafficDetail, {
       exchange: local,
       targetBinding: { service: 'orders', provider: 'local', source: 'checkout' },
@@ -282,7 +282,7 @@ describe('TrafficDetail', () => {
     }))
 
     expect(markup).toContain('<span>TARGET BINDING</span><strong>checkout · local</strong>')
-    expect(trafficTargetBinding(exchange, { service: 'orders', provider: 'mock', mock: { profile: 'sold-out' } })).toBe('sold-out · mock')
+    expect(trafficTargetBinding(exchange, { service: 'orders', provider: 'mock', mock: { scenario: 'sold-out' } })).toBe('sold-out · mock')
     expect(trafficTargetBinding({ ...exchange, targetProvider: 'container' }, { service: 'orders', provider: 'container' })).toBe('Portless managed · container')
     expect(trafficTargetBinding({ ...exchange, targetProvider: 'remote', remoteClassification: 'qa' }, { service: 'orders', provider: 'remote', remote: { url: 'https://orders.qa.test', classification: 'qa', writePolicy: 'read-only' } })).toBe('https://orders.qa.test · remote')
   })
@@ -301,7 +301,7 @@ describe('TrafficDetail', () => {
     expect(active).toContain('<b>MOCK</b><span>sold-out / reject-order</span>')
 
     const inactive = renderToStaticMarkup(createElement(TrafficDetail, {
-      exchange: { ...exchange, mockProfile: undefined, mockRoute: undefined },
+      exchange: { ...exchange, mockScenario: undefined, mockRoute: undefined },
       onClose: () => undefined,
     }))
     expect(inactive).not.toContain('aria-label="Exchange interventions"')

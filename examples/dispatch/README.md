@@ -179,14 +179,14 @@ portless --env dispatch/local fault disable slow-routing-geocoder
 
 ## Replace routing with a deterministic mock
 
-Create a profile that reports a planned maintenance failure:
+Create a scenario that reports a planned maintenance failure:
 
 ```bash
 portless --env dispatch/local mock create routing-maintenance \
-  --service routing \
   --description 'Routing maintenance window'
 
 portless --env dispatch/local mock route set routing-maintenance estimates \
+  --service routing \
   --method GET \
   --path /estimates \
   --status 503 \
@@ -194,8 +194,8 @@ portless --env dispatch/local mock route set routing-maintenance estimates \
   --body '{"error":{"code":"ROUTING_MAINTENANCE","message":"Routing is temporarily unavailable"}}'
 
 portless --env dispatch/local mock preview routing-maintenance \
-  --path /estimates
-portless --env dispatch/local env bind routing --mock routing-maintenance
+  --service routing --path /estimates
+portless --env dispatch/local mock enable routing-maintenance
 ```
 
 The dashboard now receives the controlled failure through `api:routing`, and
@@ -203,11 +203,12 @@ no request reaches `routing:geocoder`. Restore the local implementation without
 restarting unrelated services:
 
 ```bash
-portless --env dispatch/local env bind routing --local maps
+portless --env dispatch/local mock disable routing-maintenance
 ```
 
-The OpenAPI 3.1 contracts in `contracts/` can also seed mock profiles with
-`mock create --from-openapi`.
+The OpenAPI 3.1 contracts in `contracts/` can also seed routes with
+`mock import openapi <scenario> <file> --service <service>` after creating an
+empty scenario. Routes for different services can coexist in one scenario.
 
 ## Substitute a read-only QA API
 

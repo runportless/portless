@@ -75,6 +75,7 @@ func (s *Service) publish(scope, eventType string, data any) {
 }
 
 func (s *Service) projectLock(project string) *sync.Mutex {
+	project = strings.ToLower(project)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	lock := s.projectLocks[project]

@@ -14,7 +14,7 @@ export function trafficTargetBinding(exchange: TrafficExchange, binding?: Compon
   if (provider === 'local') configuration = matchingBinding?.source || exchange.target
   if (provider === 'container') configuration = 'Portless managed'
   if (provider === 'remote') configuration = matchingBinding?.remote?.url || (exchange.remoteClassification ? `${exchange.remoteClassification} target` : exchange.target)
-  if (provider === 'mock') configuration = matchingBinding?.mock?.profile || exchange.mockProfile || exchange.target
+	if (provider === 'mock') configuration = matchingBinding?.mock?.scenario || exchange.mockScenario || exchange.target
   return [configuration, provider].filter(Boolean).join(' · ') || 'not reported'
 }
 
@@ -43,7 +43,7 @@ export function TrafficOverview({ exchange, targetBinding }: { exchange: Traffic
 }
 
 export function TrafficInterventionBadges({ exchange }: { exchange: TrafficExchange }) {
-  const mock = [exchange.mockProfile, exchange.mockRoute].filter(Boolean).join(' / ')
+	const mock = [exchange.mockScenario, exchange.mockRoute].filter(Boolean).join(' / ')
   if (!exchange.fault && !exchange.recording && !mock) return null
   return <div className="traffic-intervention-badges" role="list" aria-label="Exchange interventions">
     {exchange.fault && <span className="traffic-intervention-badge traffic-intervention-badge--fault" role="listitem" aria-label={`FAULT ${exchange.fault}`}><b>FAULT</b><span>{exchange.fault}</span></span>}

@@ -34,15 +34,22 @@ Current topics:
 carry compact state or tombstone payloads; clients should reload the fault list
 after any fault event.
 
-`mock.state` carries the current profile after a profile or route change, or a
-small `{name, deleted}` tombstone after deletion. Clients should reload the
-mock collection after receiving it because active profiles are recompiled and
-swapped atomically.
+`mock.state` carries the current scenario after a scenario, route, or activation
+change, or a small `{name, deleted}` tombstone after deletion. Scenario payloads
+include service-scoped routes and derived activation (`disabled`, `enabled`, or
+`degraded`) with target and active service names. Clients should reload the mock
+collection after receiving it. Each active service matcher is recompiled and
+swapped atomically; whole-scenario activation is a tracked operation, not an
+instantaneous cross-service traffic switch. Follow `operation.state` to its
+terminal state and reload the environment after a transition. Restoration
+bindings remain private and are never included in events.
 
 `traffic.exchange` carries a completed HTTP request, decoded TCP operation, or
 opaque TCP session summary. HTTP headers and bodies and decoded TCP message
 fields/content are omitted from this notification; clients load the full
-exchange on demand. The TCP summary retains its declared application protocol,
+exchange on demand. Mock-served HTTP exchanges identify `mockScenario` and
+`mockRoute`; the existing source and target still identify the service edge.
+The TCP summary retains its declared application protocol,
 operation, inspection state, outcome, and message counts. `traffic.trace`
 carries an updated trace summary whenever a newly completed exchange changes
 that projection. Exchange summaries explicitly classify successful browser and

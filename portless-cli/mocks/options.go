@@ -1,6 +1,7 @@
 package mocks
 
 type routeOptions struct {
+	service  string
 	method   string
 	path     string
 	query    []string
@@ -13,6 +14,7 @@ type routeOptions struct {
 }
 
 type previewOptions struct {
+	service  string
 	method   string
 	path     string
 	query    []string

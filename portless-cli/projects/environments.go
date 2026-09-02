@@ -69,8 +69,6 @@ func (c *Commands) bindProvider(ctx context.Context, service string, options bin
 	remote := model.RemoteTarget{URL: options.remoteURL, Classification: options.classification, WritePolicy: options.writePolicy, HealthPath: options.healthPath}
 	if options.provider == model.ProviderRemote {
 		binding.Remote = &remote
-	} else if options.provider == model.ProviderMock {
-		binding.Mock = &model.MockTarget{Profile: options.mockProfile}
 	}
 	idempotencyKey, err := command.InvocationKey("cli-change-provider")
 	if err != nil {
@@ -97,8 +95,6 @@ func (c *Commands) bindProvider(ctx context.Context, service string, options bin
 		detail += " source " + options.source
 	} else if options.provider == model.ProviderRemote {
 		detail += " " + remote.URL + " (" + string(remote.Classification) + ", " + string(remote.WritePolicy) + ")"
-	} else if options.provider == model.ProviderMock {
-		detail += " profile " + options.mockProfile
 	}
 	fmt.Fprintf(c.Out, "%s now uses %s for %s\n", model.EnvironmentSelector(environment.Project, environment.Name), detail, service)
 	return nil

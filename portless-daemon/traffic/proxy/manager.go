@@ -47,7 +47,7 @@ type target struct {
 	classification model.RemoteClassification
 	writePolicy    model.WritePolicy
 	healthPath     string
-	mockProfile    string
+	mockScenario   string
 	mockRoute      string
 }
 
@@ -441,9 +441,9 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	defer response.Body.Close()
 	removeHopHeaders(response.Header)
 	if upstream.provider == model.ProviderMock {
-		upstream.mockProfile = response.Header.Get(mocks.ProfileHeader)
+		upstream.mockScenario = response.Header.Get(mocks.ScenarioHeader)
 		upstream.mockRoute = response.Header.Get(mocks.RouteHeader)
-		response.Header.Del(mocks.ProfileHeader)
+		response.Header.Del(mocks.ScenarioHeader)
 		response.Header.Del(mocks.RouteHeader)
 	}
 	copyHeaders(writer.Header(), response.Header)
@@ -474,7 +474,7 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 	exchange := model.TrafficExchange{
 		Project: project, Environment: environment, Protocol: model.ProtocolHTTP, Source: source, Target: targetName,
 		TargetProvider: upstream.provider, RemoteClassification: upstream.classification,
-		MockProfile: upstream.mockProfile, MockRoute: upstream.mockRoute,
+		MockScenario: upstream.mockScenario, MockRoute: upstream.mockRoute,
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
 		Path: request.URL.Path, RequestTarget: exactRequestTarget(request.URL), RequestKind: classifyRequest(source, request),
 		Status: status, DurationMS: completed.Sub(started).Milliseconds(),

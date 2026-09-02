@@ -5,8 +5,8 @@ export type EnvironmentTab = 'overview' | 'topology' | 'traffic' | 'mocks' | 're
 export type EnvironmentNavigationOptions = {
   edge?: string
   protocol?: 'http' | 'tcp'
-  profile?: string
-  workspace?: 'create' | 'route'
+  scenario?: string
+  workspace?: 'route'
   route?: string
 }
 
@@ -16,11 +16,12 @@ export function environmentUIPath(environment: Pick<Environment, 'project' | 'na
   const query = new URLSearchParams({ tab })
   if (options.edge) query.set('edge', options.edge)
   if (options.protocol) query.set('protocol', options.protocol)
-  if (tab === 'mocks' && options.workspace === 'create') query.set('workspace', 'create')
-  else if (tab === 'mocks') {
-    if (options.workspace === 'route') query.set('workspace', 'route')
-    if (options.profile) query.set('profile', options.profile)
-    if (options.workspace === 'route' && options.profile && options.route) query.set('route', options.route)
+  if (tab === 'mocks') {
+	if (options.scenario) query.set('scenario', options.scenario)
+	if (options.workspace === 'route' && options.scenario) {
+      query.set('workspace', 'route')
+      if (options.route) query.set('route', options.route)
+    }
   }
   return `${base}?${query}`
 }

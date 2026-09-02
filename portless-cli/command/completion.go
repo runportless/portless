@@ -23,8 +23,8 @@ const (
 	CompletionConnections = "connections"
 	// CompletionRecordings identifies recording-name completion candidates.
 	CompletionRecordings = "recordings"
-	// CompletionMocks identifies mock-profile-name completion candidates.
-	CompletionMocks = "mocks"
+	// CompletionMockScenarios identifies mock-scenario-name completion candidates.
+	CompletionMockScenarios = "mock-scenarios"
 	// CompletionFaults identifies fault-rule-name completion candidates.
 	CompletionFaults = "faults"
 	// CompletionTraffic identifies captured-traffic-sequence completion candidates.
@@ -125,12 +125,12 @@ func (c *Context) CompletionValues(parent context.Context, resource string) []st
 			for _, item := range response.Recordings {
 				values = append(values, item.Name)
 			}
-		case CompletionMocks:
-			response, listErr := client.ListMocks(ctx, environment.Project, environment.Name)
+		case CompletionMockScenarios:
+			response, listErr := client.ListMockScenarios(ctx, environment.Project, environment.Name)
 			if listErr != nil {
 				return nil
 			}
-			for _, item := range response.Mocks {
+			for _, item := range response.Scenarios {
 				values = append(values, item.Name)
 			}
 		case CompletionFaults:
