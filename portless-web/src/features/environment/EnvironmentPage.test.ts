@@ -44,17 +44,20 @@ describe('environment content notices', () => {
     }
   })
 
-  it('includes only active recordings and enabled faults in the Overview heading', () => {
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, actions, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+  it('keeps activity in the status cards without duplicate Overview controls', () => {
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment: { ...environment, bindings: [{ service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } }] }, actions, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
       activity: { ...activity,
         recordings: [{ name: 'completed-capture', status: 'completed' }, { name: 'live-capture', status: 'active' }] as Recording[],
         faults: [{ name: 'disabled-fault', enabled: false }, { name: 'enabled-fault', enabled: true }] as FaultRule[],
       },
     }))
-    expect(markup).toContain('aria-label="Recording live-capture. Open recordings"')
-    expect(markup).toContain('aria-label="1 active fault. Open faults"')
-    expect(markup).not.toContain('Recording completed-capture')
-    expect(markup).not.toContain('2 active faults')
+    expect(markup).not.toContain('environment-activity-indicators')
+    expect(markup).not.toContain('recording-indicator')
+    expect(markup).not.toContain('fault-indicator')
+    expect(markup).not.toContain('mock-indicator')
+    expect(markup).toContain('live-capture')
+    expect(markup).toContain('affecting local traffic')
+    expect(markup).not.toContain('completed-capture')
   })
 
   it.each([
@@ -75,11 +78,14 @@ describe('environment content notices', () => {
     expect(markup).toContain('Waiting for orders to become ready')
     expect(markup).toContain('Orders checkout is missing.')
     expect(markup).toContain('Attach the orders checkout in Bindings.')
+    expect(markup.match(/class="action-error" role="alert"/g)).toHaveLength(2)
+    expect(markup).not.toContain('class="alert')
   })
 
   it.each(['failed', 'unknown'] as const)('keeps %s explanations visible', (status) => {
     const markup = render({ ...environment, status, reason: 'Orders runtime could not be verified.' })
-    expect(markup).toContain('environment-status-reason')
+    expect(markup).toContain('class="action-error" role="alert"')
+    expect(markup).not.toContain('environment-status-reason')
     expect(markup).toContain('Orders runtime could not be verified.')
   })
 
@@ -88,6 +94,62 @@ describe('environment content notices', () => {
     expect(markup).not.toContain('environment-status-reason')
     expect(markup).toContain('Configuration needs attention')
     expect(markup).toContain('Attach the orders checkout in Bindings.')
+    expect(markup).toContain('class="action-error" role="alert"')
+  })
+})
+
+describe('overview services lifecycle controls', () => {
+  const render = (status: Environment['status'], statuses: readonly Service['status'][], actionOverrides: Partial<EnvironmentActions> = {}) => {
+    const environment: Environment = {
+      project: 'billing', name: 'local', status, revision: 1, createdAt: '', updatedAt: '', connections: [],
+      services: statuses.map((state, index): Service => ({ name: `service-${index}`, kind: 'process', status: state, launchMode: 'managed', generation: 1, required: true, health: { kind: 'tcp', timeout: 0, interval: 0 }, restartCount: 0, recentRequests: 0, endpoints: [] })),
+    }
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, activity, actions: { ...actions, ...actionOverrides }, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+    return { markup, button: markup.match(/<button class="button button--small services-lifecycle[^>]*>[^<]*<\/button>/)?.[0] }
+  }
+
+  it.each([
+    ['stopped', ['stopped', 'stopped'], 'Start All'],
+    ['stopped', ['planned', 'planned'], 'Start All'],
+    ['healthy', ['ready', 'ready'], 'Stop All'],
+  ] as const)('offers the bulk action for a %s environment without a workload count', (status, statuses, label) => {
+    const { markup, button } = render(status, statuses)
+    expect(button).toContain(`>${label}</button>`)
+    expect(button).not.toContain('disabled=""')
+    expect(markup).not.toContain('workloads')
+  })
+
+  it.each([
+    ['stopped', []],
+    ['healthy', []],
+    ['degraded', ['ready', 'stopped']],
+    ['degraded', ['ready', 'unhealthy']],
+    ['failed', ['failed', 'failed']],
+    ['unknown', ['ready', 'unknown']],
+  ] as const)('omits the bulk action for mixed, empty, or unverified services in %s state', (status, statuses) => {
+    expect(render(status, statuses).button).toBeUndefined()
+  })
+
+  it.each([
+    ['healthy', ['ready', 'ready'], 'up', 'Starting…'],
+    ['stopped', ['stopped', 'stopped'], 'down', 'Stopping…'],
+    ['starting', ['ready', 'stopped'], null, 'Starting…'],
+    ['stopping', ['ready', 'stopped'], null, 'Stopping…'],
+    ['degraded', ['ready', 'stopped'], 'up', 'Starting…'],
+    ['degraded', ['ready', 'stopped'], 'down', 'Stopping…'],
+  ] as const)('keeps confirmed progress disabled during %s, including mixed service snapshots', (status, statuses, busy, label) => {
+    const { markup, button } = render(status, statuses, { busy, disabled: true })
+    expect(button).toContain(`>${label}</button>`)
+    expect(button).toContain('disabled=""')
+    const serviceMenus = markup.match(/<button class="service-row__menu-trigger"[^>]*>/g)
+    expect(serviceMenus).toHaveLength(2)
+    for (const menu of serviceMenus!) expect(menu).toContain('disabled=""')
+  })
+
+  it('disables the bulk action while the daemon is disconnected', () => {
+    const { button } = render('healthy', ['ready', 'ready'], { disabled: true })
+    expect(button).toContain('>Stop All</button>')
+    expect(button).toContain('disabled=""')
   })
 })
 
@@ -180,6 +242,21 @@ describe('environment topology', () => {
     expect(markup).not.toContain('>DETAILS</button>')
     expect(markup).not.toContain('>INSPECT</button>')
     expect(markup).not.toContain('sortable-column-sort-control')
+  })
+
+  it('uses the same endpoint cell for mock explanations without a copy action', () => {
+    const checkout = { name: 'checkout', kind: 'process', status: 'ready', reason: 'mock scenario sold-out', endpoints: [{ kind: 'public', protocol: 'http', host: 'checkout.local.billing.localhost', port: 80, url: 'http://checkout.local.billing.localhost' }], restartCount: 0, recentRequests: 0 } as Service
+    const environment = {
+      project: 'billing', name: 'local', status: 'healthy', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [checkout], connections: [], bindings: [{ service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } }],
+    } as Environment
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions, environment, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+
+    expect(markup).toContain('<span class="service-list-endpoint"><span class="truncate muted" title="mock scenario sold-out">mock scenario sold-out</span></span>')
+    expect(markup).not.toContain('aria-label="Copy checkout endpoint"')
+    expect(markup).not.toContain('service-list-endpoint--copyable')
+    expect(markup).toContain('aria-label="View checkout details"')
   })
 
   it('sorts overview services and renders controls when multiple rows can move', () => {

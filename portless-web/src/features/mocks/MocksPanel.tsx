@@ -445,7 +445,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
           <span className="mock-scenario-toggle__track" aria-hidden="true"><span /></span>
         </label>
     </header>
-    {scenario.activation.state === 'degraded' && <div className="alert alert--danger"><strong>Scenario is partially active</strong><span>{scenario.activation.activeServices.length} of {scenario.activation.targetServices.length} services currently use this scenario. Disable it to restore the saved providers.</span></div>}
+    {scenario.activation.state === 'degraded' && <ActionErrorNotice error={{ title: 'Scenario is partially active', message: `${scenario.activation.activeServices.length} of ${scenario.activation.targetServices.length} services currently use this scenario. Disable it to restore the saved providers.` }} />}
     {error && !draftKey && <div className="mock-workspace-error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
     <div className="mock-scenario-split">
       <section className="mock-route-browser" aria-label={`${scenario.name} routes`}>

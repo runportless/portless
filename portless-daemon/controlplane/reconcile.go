@@ -43,6 +43,9 @@ func (s *Service) environmentRuntimeVerified(ctx context.Context, environment mo
 		}
 	}
 	for _, connection := range environment.Connections {
+		if !sourceUsesDependencyProxies(environment, connection.Source) {
+			continue
+		}
 		runtime, err := s.database.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)
 		if err != nil || runtime.OwnerInstanceID != s.daemonInstanceID || runtime.State != "ready" ||
 			!s.proxy.HasEdgeAtAddress(scope, connection.Source, connection.Target, connectionRuntimeAddress(runtime)) {
@@ -258,7 +261,7 @@ func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environm
 	for _, connection := range current.Connections {
 		targetDefinition, _ := serviceDefinitionForEnvironment(current, connection.Target)
 		source := runtimeFor(current, connection.Source)
-		if source.Status != model.ServiceReady {
+		if source.Status != model.ServiceReady || !sourceUsesDependencyProxies(current, connection.Source) {
 			continue
 		}
 		if err := s.restoreDependencyProxy(ctx, scope, connection, targetDefinition, source.Generation); err != nil {
@@ -305,6 +308,14 @@ func runBoundedServiceRecoveries(definitions []model.ServiceDefinition, limit in
 		}()
 	}
 	wait.Wait()
+}
+
+func sourceUsesDependencyProxies(environment model.Environment, source string) bool {
+	// Logical topology retains outgoing edges when a service is mocked or
+	// remote, but those providers have no local caller using the saved listeners.
+	// Incoming edges from real callers still require normal ownership checks.
+	provider := bindingForEnvironment(environment, source).Provider
+	return provider != model.ProviderMock && provider != model.ProviderRemote
 }
 
 func (s *Service) restoreDependencyProxiesForSource(ctx context.Context, scope string, definition model.ProjectModel, source string, generation int64) error {
@@ -382,7 +393,7 @@ func (s *Service) acquireRecoveredSourceLeases(scope string, environment model.E
 		if _, used := activeSources[source.Name]; !used {
 			continue
 		}
-		if owner := s.sourceLeases[source.Path]; owner != "" && owner != scope {
+		if owner := s.sourceLeaseOwner(scope, source.Path); owner != "" {
 			return fmt.Errorf("source %s is already running in %s; bind a Git worktree to run both environments concurrently", source.Path, owner)
 		}
 	}
@@ -645,7 +656,7 @@ func (s *Service) CanHandoff(ctx context.Context) (bool, []string) {
 		}
 		for _, connection := range environment.Connections {
 			source := runtimeFor(environment, connection.Source)
-			if source.Status != model.ServiceReady {
+			if source.Status != model.ServiceReady || !sourceUsesDependencyProxies(environment, connection.Source) {
 				continue
 			}
 			persisted, runtimeErr := s.database.ConnectionRuntime(ctx, scope, connection.Source, connection.Target)

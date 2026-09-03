@@ -166,6 +166,12 @@ func validateRemovableInstallationRoot(root string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect data directory Git marker: %w", err)
 	}
+	checkouts := filepath.Join(root, "worktrees")
+	if entries, err := os.ReadDir(checkouts); err == nil && len(entries) > 0 {
+		return fmt.Errorf("environment checkouts are retained in %s and may contain local edits; move or remove those checkouts before uninstalling Portless", checkouts)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect retained environment checkouts: %w", err)
+	}
 	if workingDirectory, err := os.Getwd(); err == nil {
 		workingDirectory, _ = filepath.Abs(workingDirectory)
 		relative, relativeErr := filepath.Rel(root, workingDirectory)

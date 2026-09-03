@@ -5,7 +5,7 @@ import { DAEMON_RESTART_SLA_MS } from './daemonRestart'
 import { EnvironmentPage } from './features/environment/EnvironmentPage'
 import { EnvironmentHeaderActions, EnvironmentHeaderContext } from './features/environment/EnvironmentHeader'
 import { environmentUIPath, environmentViews, parseEnvironmentView, type EnvironmentView } from './features/environment/navigation'
-import { useEnvironmentActivity } from './features/environment/useEnvironmentActivity'
+import { boundMockScenarios, useEnvironmentActivity } from './features/environment/useEnvironmentActivity'
 import { useEnvironmentActions } from './features/environment/useEnvironmentActions'
 import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
 import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
@@ -264,7 +264,11 @@ export function App() {
   } else {
     content = <ProjectsIndexPage projects={projects} environments={environments} focusedProject={sidebarProject?.name} navigation={projectNavigation} onOpenProject={switchProject} onConfigureProject={configureProject} onProjectHiddenChange={changeProjectHidden} onForgetProject={forgetProject} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.view} headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={navigate} />} headerActions={activeEnvironment && <EnvironmentHeaderActions key={environmentIdentity} environment={activeEnvironment} activity={activity} actions={environmentActions} live={live} onNavigate={navigate} />} viewCounts={activeEnvironment && !activity.loading ? { recordings: activity.recordings.length, faults: activity.faults.filter((fault) => fault.enabled).length } : undefined} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
+  const viewCounts = activeEnvironment ? {
+    mocks: boundMockScenarios(activeEnvironment).length,
+    ...(!activity.loading ? { recordings: activity.recordings.some((recording) => recording.status === 'active') ? 1 : 0, faults: activity.faults.filter((fault) => fault.enabled).length } : {}),
+  } : undefined
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.view} headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={navigate} />} headerActions={activeEnvironment && <EnvironmentHeaderActions key={environmentIdentity} environment={activeEnvironment} activity={activity} actions={environmentActions} onNavigate={navigate} />} viewCounts={viewCounts} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

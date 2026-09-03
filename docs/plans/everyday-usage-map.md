@@ -441,9 +441,11 @@ the prepared worktree. Stop the baseline and start the clone.
 geocoder, so this changes that source's checkout binding.
 
 **Content use:** A branch-comparison guide using Dispatch's existing tested
-patch. Git/the example helper creates the worktree; Portless binds it. Cloning
-copies environment configuration, not working trees or database contents.
-These particular environments share other checkout paths and run one at a time.
+patch. The example helper prepares the particular branch being compared and
+Portless binds it. Cloning copies configuration without database contents.
+Ordinary starts automatically prepare independent worktrees for shared
+Git-backed sources; this explicit branch-comparison sequence still runs one
+environment at a time.
 
 ## S11 — Assemble an application across repositories
 

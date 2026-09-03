@@ -15,7 +15,7 @@ test('creates, captures, exports, repeats, and deletes recordings', async ({ pag
   await expect(activeRecording).toContainText('checkout → orders')
   const recordingLink = environmentHeader(page).getByRole('link', { name: 'Recording ui-recording. Open recordings', exact: true })
   await expect(recordingLink).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Recordings', exact: true })).toHaveAccessibleDescription('1 recording')
+  await expect(page.getByRole('button', { name: 'Recordings', exact: true })).toHaveAccessibleDescription('1 active recording')
   await page.keyboard.press('Control+Shift+F')
   await expect(recordingLink).toBeVisible()
   await environmentHeader(page).getByRole('link', { name: /health:/ }).click()
@@ -379,14 +379,14 @@ async function watchMockPanelLayout(panel: Locator) {
   const observer = await panel.evaluateHandle((element) => {
     const original = element.getBoundingClientRect()
     const page = element.closest('.environment-page')!
-    const changes = { top: 0, height: 0, statusNotice: false }
+    const changes = { top: 0, height: 0, errorNotice: false }
     const sample = () => {
       const current = element.getBoundingClientRect()
       changes.top = Math.max(changes.top, Math.abs(current.top - original.top))
       changes.height = Math.max(changes.height, Math.abs(current.height - original.height))
-      changes.statusNotice ||= !!page.querySelector('.environment-status-reason')
+      changes.errorNotice ||= !!page.querySelector('.environment-notices')
     }
-    // Observe every render, including a status notice that disappears before the action settles.
+    // Observe every render, including an error notice that disappears before the action settles.
     const observer = new MutationObserver(sample)
     observer.observe(page, { subtree: true, childList: true, attributes: true, characterData: true })
     return { finish: () => { sample(); observer.disconnect(); return changes } }
@@ -394,6 +394,6 @@ async function watchMockPanelLayout(panel: Locator) {
   return async () => {
     const changes = await observer.evaluate((value) => value.finish())
     await observer.dispose()
-    expect(changes).toEqual({ top: 0, height: 0, statusNotice: false })
+    expect(changes).toEqual({ top: 0, height: 0, errorNotice: false })
   }
 }

@@ -22,6 +22,12 @@ type ActivitySnapshot = Omit<EnvironmentActivity, 'refresh' | 'dismissError'>
 type ActivitySession = { identity: string; controller: AbortController; revision: number; recordingRevision: number }
 const emptyActivity: ActivitySnapshot = { timeline: [], recordings: [], faults: [], error: null, loading: true }
 
+export function boundMockScenarios(environment: Pick<Environment, 'bindings'>) {
+  return [...new Set((environment.bindings || []).flatMap((binding) =>
+    binding.provider === 'mock' && binding.mock?.scenario ? [binding.mock.scenario] : [],
+  ))].sort((left, right) => left.localeCompare(right))
+}
+
 export function advanceRecordingCount(recordings: Recording[], exchange: Pick<TrafficExchange, 'recording'>) {
   if (!exchange.recording) return recordings
   const recordingName = exchange.recording.toLocaleLowerCase()

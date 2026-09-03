@@ -125,6 +125,7 @@ type Service struct {
 	projectLocks         map[string]*sync.Mutex
 	containerEnvironment map[string]map[string]string
 	sourceLeases         map[string]string
+	sourcePreparation    sync.Mutex
 	discoverer           discovery.Discoverer
 	resources            *providers.Registry
 }

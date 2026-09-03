@@ -147,6 +147,14 @@ describe('MocksPanel', () => {
     expect(html.indexOf('role="alert"')).toBeLessThan(html.indexOf('class="mock-route-form"'))
   })
 
+  it('uses the shared red notice when a scenario is only partially active', () => {
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, activation: { state: 'degraded', targetServices: ['inventory', 'payments'], activeServices: ['inventory'] } }} />)
+    expect(html).toContain('class="action-error action-error--persistent" role="alert"')
+    expect(html).toContain('Scenario is partially active')
+    expect(html).toContain('1 of 2 services currently use this scenario.')
+    expect(html).not.toContain('class="alert')
+  })
+
   it('derives activation controls from scenario state rather than one service binding', () => {
     const enabled = { ...scenario, activation: { state: 'enabled' as const, targetServices: ['inventory', 'payments'], activeServices: ['inventory', 'payments'], enabledAt: '2026-08-18T14:30:00Z' } }
     const degraded = { ...scenario, name: 'partial', activation: { state: 'degraded' as const, targetServices: ['inventory', 'payments'], activeServices: ['inventory'] } }

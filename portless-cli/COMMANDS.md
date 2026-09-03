@@ -301,7 +301,7 @@ portless up
 
 | Command | Usage |
 | --- | --- |
-| `portless env select <project/environment>` | Save an environment selection for the current checkout. Pass the selector positionally; this command rejects `--env`. |
+| `portless env select <project/environment>` | Save an environment selection from any checkout belonging to its project. Selection survives automatic checkout preparation. Pass the selector positionally; this command rejects `--env`. |
 | `portless env current` | Show the effective environment, current source path, and whether selection came from a flag, saved selection, or inference. |
 | `portless env clear` | Clear only the saved selection for the current checkout. This command rejects `--env`. |
 | `portless env list [project]` | List environments, optionally for one project. `--limit <n>` defaults to `100`. |
@@ -325,8 +325,23 @@ Provider binding options:
 | `--health-path <path>` | Probe this readiness path before switching to a remote provider. Valid only with `--remote`. |
 
 Provider changes may occur while an environment is active and preserve the
-source-aware proxy edge. Checkout changes and rescans are stopped-only because
-they can recompile several services.
+source-aware proxy edge. Manual checkout changes and rescans are stopped-only
+because they can recompile several services.
+
+Starting an environment or a local service automatically creates and binds an
+independent Git worktree when its checkout is already in use by another
+environment. Switching a running service back to a local provider uses the same
+preparation. No worktree flag or setup command is needed. The copy includes
+current uncommitted files and installed local dependencies, preserves nested
+source paths, and is reused on later starts. Preparation appears in the normal
+operation progress and JSON operation events. Git and an existing commit are
+required; nested Git repositories need separate source checkouts. Copying is
+bounded to five minutes, one million entries, and 10 GiB per repository.
+
+Automatic worktrees are retained under `$PORTLESS_HOME/worktrees` after stop,
+forget, and reset. Full uninstall requires moving or removing those checkouts
+first. Use `env checkout set` when you want to choose a particular branch or
+existing checkout yourself.
 
 Examples:
 

@@ -352,6 +352,7 @@ func forbiddenProductImport(source, target string) string {
 	controlplane := daemonRoot + "/controlplane"
 	database := daemonRoot + "/database"
 	installation := daemonRoot + "/system/installation"
+	worktrees := daemonRoot + "/projects/worktrees"
 	mcpSDK := "github.com/modelcontextprotocol/go-sdk"
 	if target == relayRoot && source != cliRoot+"/cmd/portless" {
 		return "the relay root is private-command composition; import its owning installation, health, or runtime package"
@@ -390,6 +391,12 @@ func forbiddenProductImport(source, target string) string {
 	}
 	if source == installation && (strings.HasPrefix(target, modulePath+"/") || isThirdPartyImport(target)) {
 		return "daemon installation safety primitives use only the Go standard library"
+	}
+	if source == worktrees && (strings.HasPrefix(target, modulePath+"/") || isThirdPartyImport(target)) {
+		return "checkout preparation owns Git and filesystem operations and depends only on the standard library"
+	}
+	if target == worktrees && source != controlplane && source != worktrees {
+		return "only the control plane prepares environment worktrees; discovery and clients remain read-only consumers of source bindings"
 	}
 	if isDaemonFeature(source) && (matchesAny(target, cliRoot, server, relayRoot) || target == daemonRoot) {
 		return "daemon feature packages cannot depend on process adapters"

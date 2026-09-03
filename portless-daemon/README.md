@@ -47,7 +47,7 @@ Adjacent products keep separate responsibilities:
 | `controlplane` | Application behavior for projects, environments, lifecycle operations, provider changes, observability, and reconciliation. |
 | `daemonlog` | Bounded, fixed-path inspection and known-secret redaction for the private daemon log. |
 | `database` | SQLite persistence for topology, operations, ownership, runtime state, traffic artifacts, mocks, and faults. |
-| `projects` | Project compilation and bounded, root-confined static discovery. |
+| `projects` | Project compilation, bounded static discovery, and independent checkout preparation in `worktrees`. Only the control plane invokes worktree preparation; discovery remains read-only. |
 | `providers` | Managed-resource plugin contracts, bounded discovery, declarative container plans, and safe bindings. |
 | `runtime` | Process supervisors, containers, debugging, health checks, and log storage. |
 | `networking`, `dns` | Stable endpoint allocation, fixed localhost answers, and authoritative `portless.test` DNS data. |
@@ -197,5 +197,6 @@ separate explicit authorization.
 - [Single local daemon decision](../docs/architecture/decisions/0001-single-local-daemon.md)
 - [Public names and private ownership keys](../docs/architecture/decisions/0002-names-public-keys-private.md)
 - [Source-aware edge proxy decision](../docs/architecture/decisions/0003-edge-proxy.md)
+- [Automatic environment checkouts](../docs/architecture/decisions/0008-automatic-environment-checkouts.md)
 - [Package ownership and dependency direction](../docs/plans/package-structure-refactor.md)
 - [MCP boundary](../portless-mcp/README.md)

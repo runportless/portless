@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { applicationRequest, authenticate, environmentHeader, controlAPI, environmentPath } from './helpers'
+import { applicationRequest, authenticate, environmentHeader, controlAPI, environmentPath, openCommandPalette } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -223,19 +223,151 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
   await expect(checkout).toContainText('managed')
 })
 
-test('stops and starts the environment from the UI', async ({ page }) => {
+test('replaces Open with Start in the same header slot and starts the environment', async ({ page }, testInfo) => {
+  const state = readE2EState()
+  const startPattern = `**/api/v1/environments/${state.project}/${state.environment}/up`
   await authenticate(page)
   const header = environmentHeader(page)
+  const open = header.getByRole('link', { name: 'OPEN APP', exact: true })
+  const start = header.getByRole('button', { name: 'Start', exact: true })
+  await expect(open).toBeVisible()
+  const openBounds = await open.boundingBox()
+  expect(openBounds).toMatchObject({ width: 100, height: 32 })
   const initialHeaderHeight = await header.evaluate((element) => Math.round(element.getBoundingClientRect().height))
-  await page.getByRole('button', { name: 'STOP ALL' }).click()
-  await expect(page.getByRole('button', { name: 'START ALL' })).toBeVisible({ timeout: 30_000 })
-  await expect(environmentHeader(page)).toContainText('stopped')
+  await header.screenshot({ path: testInfo.outputPath('header-open.png') })
+  await (await openCommandPalette(page, 'Stop environment')).getByRole('textbox', { name: 'Search', exact: true }).press('Enter')
+  await expect(start).toBeEnabled({ timeout: 30_000 })
+  await expect(start).toHaveText('Start')
+  await expect(open).toHaveCount(0)
+  await expect(header).toContainText('stopped')
+  expect(await start.boundingBox()).toEqual(openBounds)
   expect(await header.evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBe(initialHeaderHeight)
+  await header.screenshot({ path: testInfo.outputPath('header-start.png') })
 
-  await page.getByRole('button', { name: 'START ALL' }).click()
-  await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
-  await expect(environmentHeader(page)).toContainText('healthy')
+  let startRequests = 0
+  let releaseStart!: () => void
+  const gate = new Promise<void>((resolve) => { releaseStart = resolve })
+  await page.route(startPattern, async (route) => {
+    startRequests++
+    expect(route.request().method()).toBe('POST')
+    const response = await route.fetch()
+    await gate
+    await route.fulfill({ response })
+  })
+  try {
+    await start.evaluate((button: HTMLButtonElement) => { button.click(); button.click() })
+    const starting = header.getByRole('button', { name: 'Starting…', exact: true })
+    await expect(starting).toBeDisabled()
+    await expect(open).toHaveCount(0)
+    await expect(header.locator('.environment-header-actions > .button')).toHaveCount(1)
+    expect(await starting.boundingBox()).toEqual(openBounds)
+    await expect.poll(() => startRequests).toBe(1)
+    const palette = await openCommandPalette(page, 'environment')
+    await expect(palette.getByRole('button', { name: /^(Start|Stop) environment/ })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    releaseStart()
+    await expect(open).toBeVisible({ timeout: 30_000 })
+    await expect(header.getByRole('link', { name: /health: healthy/ })).toBeVisible()
+    await expect(start).toHaveCount(0)
+    expect(await open.boundingBox()).toEqual(openBounds)
+    expect(startRequests).toBe(1)
+  } finally {
+    releaseStart()
+    await page.unroute(startPattern)
+  }
+  await expect((await openCommandPalette(page, 'Stop environment')).getByRole('button', { name: /Stop environment/ })).toBeEnabled()
+  await page.keyboard.press('Escape')
   expect(await header.evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBe(initialHeaderHeight)
+  expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
+})
+
+test('starts and stops all services from the Overview table without moving its header', async ({ page }, testInfo) => {
+  const state = readE2EState()
+  const base = `/api/v1/environments/${state.project}/${state.environment}`
+  await authenticate(page)
+  const header = environmentHeader(page)
+  const title = page.locator('.services-panel > .panel-title')
+  const stopAll = title.getByRole('button', { name: 'Stop All', exact: true })
+  const startAll = title.getByRole('button', { name: 'Start All', exact: true })
+  await expect(title.locator('small')).toHaveCount(0)
+  await expect(title).not.toContainText('workloads')
+  await expect(stopAll).toBeEnabled()
+  await expect(startAll).toHaveCount(0)
+
+  const inventoryRow = page.locator('.service-row--interactive').filter({ has: page.getByRole('button', { name: 'View inventory details', exact: true }) })
+  await inventoryRow.getByRole('button', { name: 'Service actions for inventory' }).click()
+  await page.getByRole('menu', { name: 'inventory actions' }).getByRole('menuitem', { name: 'STOP', exact: true }).click()
+  await expect(inventoryRow).toContainText('stopped', { timeout: 30_000 })
+  await expect(title.getByRole('button')).toHaveCount(0)
+  await expect(title).toHaveCSS('min-height', '48px')
+  await inventoryRow.getByRole('button', { name: 'Service actions for inventory' }).click()
+  await page.getByRole('menu', { name: 'inventory actions' }).getByRole('menuitem', { name: 'START', exact: true }).click()
+  await expect(stopAll).toBeEnabled({ timeout: 30_000 })
+
+  for (const theme of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: theme })
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await expect(stopAll).toBeVisible()
+      expect(await stopAll.boundingBox()).toMatchObject({ width: 100, height: 29 })
+      expect((await title.boundingBox())?.height).toBe(48)
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+      if (width === 1280) await title.screenshot({ path: testInfo.outputPath(`services-stop-all-${theme}.png`) })
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.keyboard.press('Control+Shift+F')
+  await expect(page.locator('.shell')).toHaveClass(/shell--focus-mode/)
+  const titleBounds = await title.boundingBox()
+  const buttonBounds = await stopAll.boundingBox()
+
+  for (const action of ['down', 'up'] as const) {
+    const pattern = `**${base}/${action}`
+    let requests = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    await page.route(pattern, async (route) => {
+      requests++
+      expect(route.request().method()).toBe('POST')
+      if (action === 'down') expect(route.request().postDataJSON()).toEqual({ removeVolumes: false })
+      const response = await route.fetch()
+      await gate
+      await route.fulfill({ response })
+    })
+    try {
+      const button = action === 'down' ? stopAll : startAll
+      await button.focus()
+      await page.keyboard.press('Tab')
+      await page.keyboard.press('Shift+Tab')
+      await expect(button).toBeFocused()
+      await expect(button).toHaveCSS('outline-style', 'solid')
+      if (action === 'down') await button.press('Enter')
+      else await button.evaluate((element: HTMLButtonElement) => { element.click(); element.click() })
+      const pending = title.getByRole('button', { name: action === 'down' ? 'Stopping…' : 'Starting…', exact: true })
+      await expect(pending).toBeDisabled()
+      expect(await pending.boundingBox()).toEqual(buttonBounds)
+      expect(await title.boundingBox()).toEqual(titleBounds)
+      await expect(page.locator('.services-panel .service-row__menu-trigger:not(:disabled)')).toHaveCount(0)
+      const palette = await openCommandPalette(page, 'environment')
+      await expect(palette.getByRole('button', { name: /^(Start|Stop) environment/ })).toHaveCount(0)
+      await page.keyboard.press('Escape')
+      if (action === 'up') await expect(header.getByRole('button', { name: 'Starting…', exact: true })).toBeDisabled()
+      await expect.poll(async () => (await controlAPI<{ status: string }>(base)).status, { timeout: 30_000 }).toBe(action === 'down' ? 'stopped' : 'healthy')
+      await expect(pending).toBeDisabled()
+      release()
+      const next = action === 'down' ? startAll : stopAll
+      await expect(next).toBeEnabled({ timeout: 30_000 })
+      expect(await next.boundingBox()).toEqual(buttonBounds)
+      expect(await title.boundingBox()).toEqual(titleBounds)
+      expect(requests).toBe(1)
+      if (action === 'down') await title.screenshot({ path: testInfo.outputPath('services-start-all-focus.png') })
+    } finally {
+      release()
+      await page.unroute(pattern)
+    }
+  }
+  await expect(header.getByRole('link', { name: /health: healthy/ })).toBeVisible()
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })
 

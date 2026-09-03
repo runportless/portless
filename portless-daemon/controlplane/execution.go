@@ -21,6 +21,7 @@ func (s *Service) runUp(scope string, operation model.Operation, options UpOptio
 	lock := s.projectLock(scope)
 	lock.Lock()
 	defer lock.Unlock()
+	defer s.releaseUnusedSourceLeases(scope)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	environment, err := s.database.EnvironmentBySelector(ctx, scope)
@@ -71,12 +72,13 @@ func (s *Service) runUp(scope string, operation model.Operation, options UpOptio
 	for _, serviceName := range options.DebugServices {
 		targetModes[strings.ToLower(serviceName)] = model.LaunchDebug
 	}
-	if err := s.acquireSourceLeases(scope, environment); err != nil {
+	_ = s.database.SetEnvironmentStatus(ctx, environment.Project, environment.Name, model.EnvironmentStarting, "services are starting")
+	s.publish(scope, "environment.state", map[string]any{"status": model.EnvironmentStarting})
+	environment, err = s.prepareSourceCheckouts(ctx, environment, environment.Bindings, operation)
+	if err != nil {
 		s.failOperation(scope, operation, err)
 		return
 	}
-	_ = s.database.SetEnvironmentStatus(ctx, environment.Project, environment.Name, model.EnvironmentStarting, "services are starting")
-	s.publish(scope, "environment.state", map[string]any{"status": model.EnvironmentStarting})
 	definition, err := s.database.EnvironmentModel(ctx, environment.Project, environment.Name)
 	if err != nil {
 		s.failOperation(scope, operation, err)

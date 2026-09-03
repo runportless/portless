@@ -101,21 +101,21 @@ func (s *Service) acquireSourceLeases(scope string, environment model.Environmen
 	used := make(map[string]struct{})
 	for _, binding := range environment.Bindings {
 		if binding.Provider == model.ProviderLocal {
-			used[binding.Source] = struct{}{}
+			used[strings.ToLower(binding.Source)] = struct{}{}
 		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, source := range environment.Sources {
-		if _, ok := used[source.Name]; !ok {
+		if _, ok := used[strings.ToLower(source.Name)]; !ok {
 			continue
 		}
-		if owner := s.sourceLeases[source.Path]; owner != "" && owner != scope {
+		if owner := s.sourceLeaseOwner(scope, source.Path); owner != "" {
 			return fmt.Errorf("source %s is already running in %s; bind a Git worktree to run both environments concurrently", source.Path, owner)
 		}
 	}
 	for _, source := range environment.Sources {
-		if _, ok := used[source.Name]; ok {
+		if _, ok := used[strings.ToLower(source.Name)]; ok {
 			s.sourceLeases[source.Path] = scope
 		}
 	}

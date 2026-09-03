@@ -3,7 +3,7 @@
 package contract
 
 // APIVersion is the semantic version of the daemon HTTP contract.
-const APIVersion = "13.0.0"
+const APIVersion = "13.1.0"
 
 // ClientKindHeader identifies the authenticated Portless client category.
 const ClientKindHeader = "Portless-Client-Kind"

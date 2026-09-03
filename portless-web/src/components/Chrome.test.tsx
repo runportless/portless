@@ -26,7 +26,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       activeView={activeView}
       headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={() => undefined} />}
       headerActions={activeEnvironment && <span>Environment actions</span>}
-      viewCounts={{ recordings: 3, faults: 2 }}
+      viewCounts={{ mocks: 2, recordings: 1, faults: 2 }}
       settingsActive={settingsActive}
       settingsView={settingsView}
       navigation={emptyProjectNavigationPreferences()}
@@ -86,7 +86,10 @@ describe('application navigation', () => {
     expect(markup).toContain('<h1 id="environment-view-title" tabindex="-1" aria-current="page">Topology</h1>')
     expect(markup).toContain('billing/local health: healthy; No services. Open service overview')
     expect(markup).toContain('id="view-count-faults">2 active faults')
-    expect(markup).toContain('id="view-count-recordings">3 recordings')
+    expect(markup).toContain('<span>Recordings</span><small class="view-nav__count" aria-hidden="true">1</small>')
+    expect(markup).toContain('id="view-count-recordings">1 active recording')
+    expect(markup).toContain('<span>Mocks</span><small class="view-nav__count" aria-hidden="true">2</small>')
+    expect(markup).toContain('id="view-count-mocks">2 active mocks')
     expect(markup).toContain('<button class="is-active" aria-label="Topology" aria-current="page"')
     expect(markup.indexOf('<span>Faults</span>')).toBeLessThan(markup.indexOf('<span>Bindings</span>'))
     expect(markup.indexOf('<span>Bindings</span>')).toBeLessThan(markup.indexOf('<span>Timeline</span>'))
@@ -176,6 +179,14 @@ describe('application navigation', () => {
 })
 
 describe('command palette', () => {
+  it('labels its trigger Search and retains the keyboard shortcut', () => {
+    for (const markup of [renderChrome(), renderChrome(environment)]) {
+      expect(markup).toContain('class="key-button" aria-label="Search" title="Search (⌘K / Ctrl+K)"')
+      expect(markup).toContain('<span>⌘</span><span>K</span><em>Search</em>')
+      expect(markup).not.toContain('jump or run')
+    }
+  })
+
   it('scrolls the selected command to the nearest visible position', () => {
     const scrollIntoView = vi.fn()
 

@@ -26,4 +26,12 @@ describe('action error notice', () => {
       message: 'Choose a connection.',
     })
   })
+
+  it('uses the same red notice for persistent errors without a dismiss action', () => {
+    const markup = renderToStaticMarkup(<ActionErrorNotice error={{ title: 'Request error', message: 'The upstream connection failed.' }} />)
+    expect(markup).toContain('class="action-error action-error--persistent" role="alert"')
+    expect(markup).toContain('class="action-error__mark"')
+    expect(markup).toContain('The upstream connection failed.')
+    expect(markup).not.toContain('aria-label="Dismiss error"')
+  })
 })

@@ -11,13 +11,15 @@ import type { EnvironmentNavigationOptions, EnvironmentView } from './navigation
 import { serviceActionOptions, useServiceActions } from './service/serviceActions'
 import { displayLaunchMode, openableServiceURL, overviewServiceEndpoint } from './service/servicePresentation'
 import { TopologyPreview } from './topology/TopologyPanel'
+import { environmentLifecycleLabel, type EnvironmentActions } from './useEnvironmentActions'
 
 const overviewPageSize = 8
 type OverviewServiceSortField = 'name' | 'mode' | 'state' | 'restarts' | 'requests' | 'p95' | 'endpoint'
 const defaultOverviewServiceSort: TableSort<OverviewServiceSortField> = { key: 'name', direction: 'asc' }
 
-export function OverviewPanel({ environment, timeline, ready, faults, activeRecording, trafficCount, onService, onNavigate, onChanged }: {
+export function OverviewPanel({ environment, actions, timeline, ready, faults, activeRecording, trafficCount, onService, onNavigate, onChanged }: {
   environment: Environment
+  actions: EnvironmentActions
   timeline: TimelineEvent[]
   ready: number
   faults: FaultRule[]
@@ -39,6 +41,13 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
   const services = paginateItems(orderedServices, servicePage, overviewPageSize)
   const activities = paginateItems(timeline, activityPage, overviewPageSize)
   const bindingSummary = summarizeEnvironmentBindings(environment)
+  const lifecycleDisabled = actions.disabled || !!serviceActions.busy
+  const pendingLifecycle = actions.busy === 'up' || actions.busy === 'down' ? actions.busy
+    : environment.status === 'starting' ? 'up' : environment.status === 'stopping' ? 'down' : null
+  const servicesAction = environment.services.length === 0 ? null
+    : pendingLifecycle ?? (environment.status === 'stopped' ? 'up' : ready === environment.services.length ? 'down' : null)
+  const servicesActionLabel = pendingLifecycle ? environmentLifecycleLabel(environment, pendingLifecycle)
+    : servicesAction === 'up' ? 'Start All' : 'Stop All'
 
   useEffect(() => {
     setServicePage(0)
@@ -87,7 +96,10 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
       <StatePanel title="BINDINGS" value={bindingSummary.value} tone={bindingSummary.tone} detail={bindingSummary.detail} />
     </div>
     <section className="panel services-panel">
-      <div className="panel-title"><span>SERVICES</span><small>{environment.services.length} workloads</small></div>
+      <div className="panel-title">
+        <span>SERVICES</span>
+        {servicesAction && <button className={`button button--small services-lifecycle ${servicesAction === 'up' ? 'button--primary' : 'button--danger'}`} type="button" disabled={lifecycleDisabled} title={`${servicesAction === 'up' ? 'Start' : 'Stop'} all services in ${environment.project}/${environment.name}`} onClick={() => { setMenuService(''); void actions.run(servicesAction) }}>{servicesActionLabel}</button>}
+      </div>
       {serviceActions.error && <ActionErrorNotice error={serviceActions.error} onDismiss={serviceActions.dismissError} />}
       <div className={`table-row table-row--header service-row sortable-header-row${serviceSort.key === defaultOverviewServiceSort.key && serviceSort.direction === defaultOverviewServiceSort.direction ? ' is-default-sort' : ''}`} role="row">
         <span aria-hidden="true" />
@@ -103,10 +115,10 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
       {services.items.map((service) => {
         const endpoint = overviewServiceEndpoint(environment, service)
         const openURL = openableServiceURL(environment, service)
-        const actions = serviceActionOptions(environment, service)
+        const rowActions = serviceActionOptions(environment, service)
         const copied = copiedEndpoint === service.name
         const menuOpen = menuService === service.name
-        const hasMenu = !!openURL || actions.length > 0
+        const hasMenu = !!openURL || rowActions.length > 0
         return <div className="table-row service-row service-row--interactive" key={service.name} onClick={() => onService(service)}>
           <StatusMark status={service.status} label={false} />
           <button className="service-row__details" type="button" aria-label={`View ${service.name} details`} onClick={(event) => { event.stopPropagation(); onService(service) }}><strong>{service.name}</strong></button>
@@ -128,10 +140,10 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
               </button>
             : <span className="service-list-endpoint"><span className="truncate muted" title={service.reason || 'not running'}>{service.reason || 'not running'}</span></span>}
           <div ref={menuOpen ? serviceMenu : undefined} className="service-row__actions">
-            {hasMenu && <button className="service-row__menu-trigger" type="button" aria-label={`Service actions for ${service.name}`} aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!serviceActions.busy} onClick={(event) => { event.stopPropagation(); setMenuService(menuOpen ? '' : service.name) }}><MoreActionsIcon /></button>}
+            {hasMenu && <button className="service-row__menu-trigger" type="button" aria-label={`Service actions for ${service.name}`} aria-haspopup="menu" aria-expanded={menuOpen} disabled={lifecycleDisabled} onClick={(event) => { event.stopPropagation(); setMenuService(menuOpen ? '' : service.name) }}><MoreActionsIcon /></button>}
             {menuOpen && <div className="service-row__menu" role="menu" aria-label={`${service.name} actions`} onClick={(event) => event.stopPropagation()}>
               {openURL && <a href={openURL} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setMenuService('')}>OPEN ↗</a>}
-              {actions.map((item) => <button className={item.danger ? 'is-danger' : undefined} type="button" role="menuitem" key={item.action} onClick={() => { setMenuService(''); void serviceActions.run(service, item.action) }}>{item.label}</button>)}
+              {rowActions.map((item) => <button className={item.danger ? 'is-danger' : undefined} type="button" role="menuitem" key={item.action} disabled={lifecycleDisabled} onClick={() => { setMenuService(''); void serviceActions.run(service, item.action) }}>{item.label}</button>)}
             </div>}
           </div>
         </div>

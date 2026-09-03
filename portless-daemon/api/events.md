@@ -29,6 +29,16 @@ Current topics:
 - `traffic.cleared`
 - `traffic.tcp.activity`
 
+Startup and local-provider operations report automatic checkout preparation
+through the existing `operation.state` payload. Ordered operation events use
+`source.preparing` and `source.prepared`, with the readable source name as
+`subject` and a progress message. Once the independent paths are saved,
+`environment.state` carries the updated source bindings and revision. The
+timeline records `environment.checkout_prepared`. File contents, local
+configuration values, and Git administration data are never included in these
+preparation events. Clients do not need a second request or confirmation to
+continue startup.
+
 `fault.state` carries the full fault rule after creation or activation, including
 `enabledAt`, the most recent activation time. Disable and delete notifications
 carry compact state or tombstone payloads; clients should reload the fault list

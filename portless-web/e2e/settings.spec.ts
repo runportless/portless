@@ -73,7 +73,7 @@ test('generates scoped MCP client configuration without persisting elevated acce
   await expect(environmentHeader(page).getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   await page.keyboard.press('Control+K')
   const palette = page.getByRole('dialog', { name: 'Command palette' })
-  const input = palette.getByPlaceholder('jump to a project or environment')
+  const input = palette.getByPlaceholder('Search')
   await input.fill('Configure MCP')
   await input.press('Enter')
   await expect(page).toHaveURL(new RegExp(`/settings\\?tab=mcp&env=${state.project}%2F${state.environment}$`))
@@ -83,4 +83,3 @@ test('generates scoped MCP client configuration without persisting elevated acce
   await expect(page.getByRole('checkbox', { name: /^Lifecycle/ })).not.toBeChecked()
   await expect(page.getByRole('checkbox', { name: /^Sensitive traffic/ })).not.toBeChecked()
 })
-

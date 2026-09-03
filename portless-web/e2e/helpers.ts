@@ -37,6 +37,14 @@ export function environmentHeader(page: Page, project = readE2EState().project, 
   return page.getByRole('banner', { name: `${project}/${environment} environment`, exact: true })
 }
 
+export async function openCommandPalette(page: Page, query = '') {
+  const palette = page.getByRole('dialog', { name: 'Command palette', exact: true })
+  if (!await palette.isVisible()) await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(palette).toBeVisible()
+  await palette.getByRole('textbox', { name: 'Search', exact: true }).fill(query)
+  return palette
+}
+
 export function environmentPath(view?: string) {
   const state = readE2EState()
   const base = `/environments/${encodeURIComponent(state.project)}/${encodeURIComponent(state.environment)}`

@@ -1,7 +1,7 @@
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { authenticate, environmentHeader, controlAPI, environmentPath } from './helpers'
+import { authenticate, environmentHeader, controlAPI, environmentPath, openCommandPalette } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -35,45 +35,7 @@ test('creates a cloned environment from the sidebar without duplicating sources'
   await expect(page.getByRole('button', { name: /qa-ui.*stopped/ })).toBeVisible()
   await expect(page.locator('.project-source-row:not(.table-row--header)')).toHaveCount(1)
   await expect(page.locator('.project-sources-panel')).not.toContainText('local, qa-ui')
-})
-
-test('forgets a stopped environment from its page header and blocks a running environment', async ({ page }) => {
-  const state = readE2EState()
-  await authenticate(page)
-
-  const localActions = page.getByRole('button', { name: `Environment actions for ${state.project}/${state.environment}` })
-  await localActions.click()
-  await page.getByRole('menuitem', { name: 'FORGET ENVIRONMENT' }).click()
-  let dialog = page.getByRole('alertdialog', { name: `Forget ${state.project}/${state.environment}?` })
-  await expect(dialog).toContainText('Stop this environment before forgetting it.')
-  await expect(dialog.getByRole('button', { name: 'FORGET ENVIRONMENT', exact: true })).toBeDisabled()
-  await dialog.getByRole('button', { name: 'CANCEL' }).click()
-  await expect(localActions).toBeFocused()
-
-  const cloneName = 'qa-ui'
-  const clonePath = `/environments/${state.project}/${cloneName}`
-  await page.getByRole('navigation', { name: `${state.project} environments` }).getByRole('button', { name: new RegExp(`${cloneName}.*stopped`) }).click()
-  await expect(page).toHaveURL(new RegExp(`${clonePath}$`))
-
-  const cloneActions = page.getByRole('button', { name: `Environment actions for ${state.project}/${cloneName}` })
-  await cloneActions.click()
-  const actionMenu = page.getByRole('menu', { name: `${state.project}/${cloneName} actions` })
-  await actionMenu.getByRole('menuitem', { name: 'FORGET ENVIRONMENT' }).press('Escape')
-  await expect(actionMenu).toHaveCount(0)
-  await expect(cloneActions).toBeFocused()
-
-  await cloneActions.click()
-  await page.getByRole('menuitem', { name: 'FORGET ENVIRONMENT' }).click()
-  dialog = page.getByRole('alertdialog', { name: `Forget ${state.project}/${cloneName}?` })
-  await expect(dialog).toContainText('Source files and checkouts on disk are not deleted.')
-  await expect(dialog).toContainText('Source checkouts and managed data volumes')
-  const confirm = dialog.getByRole('button', { name: 'FORGET ENVIRONMENT', exact: true })
-  await expect(confirm).toBeEnabled()
-  await confirm.click()
-
-  await expect(page).toHaveURL(/\/projects$/)
-  await expect(page.getByRole('navigation', { name: `${state.project} environments` }).getByRole('button', { name: new RegExp(cloneName) })).toHaveCount(0)
-  await expect(controlAPI(`/api/v1/environments/${state.project}/${cloneName}`)).rejects.toThrow('404')
+  await controlAPI(`/api/v1/environments/${state.project}/qa-ui`, { method: 'DELETE' })
 })
 
 test('stops one or every running environment from the project page', async ({ page }) => {
@@ -152,8 +114,8 @@ test('manages project sources separately from environment checkouts', async ({ p
   })
 
   await authenticate(page, environmentPath('bindings'))
-  await page.getByRole('button', { name: 'STOP ALL' }).click()
-  await expect(page.getByRole('button', { name: 'START ALL' })).toBeVisible({ timeout: 30_000 })
+  await (await openCommandPalette(page, 'Stop environment')).getByRole('button', { name: /Stop environment/ }).click()
+  await expect(environmentHeader(page).getByRole('button', { name: 'Start', exact: true })).toBeVisible({ timeout: 30_000 })
 
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
   await expect(page).toHaveURL(new RegExp(`/projects/${state.project}$`))
@@ -232,9 +194,8 @@ test('manages project sources separately from environment checkouts', async ({ p
   expect(project.sources.length).toBeGreaterThan(0)
 
   await page.goto(`${state.baseURL}${environmentPath()}`)
-  await page.getByRole('button', { name: 'START ALL' }).click()
-  await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
-  await expect(environmentHeader(page)).toContainText('healthy')
+  await environmentHeader(page).getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(environmentHeader(page).getByRole('link', { name: /health: healthy/ })).toBeVisible({ timeout: 30_000 })
 })
 
 test('focuses the sidebar on one project while retaining searchable project history', async ({ page }) => {

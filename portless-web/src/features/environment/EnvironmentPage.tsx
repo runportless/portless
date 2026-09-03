@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { ActionErrorNotice } from '../../components/ActionError'
 import type { Environment } from '../../api/contracts/environments'
 import type { Project } from '../../api/contracts/projects'
 import type { Service } from '../../api/contracts/topology'
@@ -7,6 +6,7 @@ import { MocksPanel } from '../mocks'
 import { TrafficPanel } from '../traffic'
 import { BindingsPanel } from './bindings/BindingsPanel'
 import { EnvironmentOverviewHeading } from './EnvironmentHeader'
+import { EnvironmentNotices } from './EnvironmentNotices'
 import { FaultsPanel } from './faults/FaultsPanel'
 import { environmentUIPath, type EnvironmentNavigationOptions, type EnvironmentView } from './navigation'
 import { OverviewPanel } from './OverviewPanel'
@@ -42,22 +42,12 @@ export function EnvironmentPage({ environment, project, view, activity, actions,
   const activeFaults = activity.faults.filter((fault) => fault.enabled)
   const ready = environment.services.filter((service) => service.status === 'ready').length
   const trafficCount = environment.services.reduce((sum, service) => sum + (service.recentRequests || 0), 0)
-  const reason = environment.reason?.trim()
-  // Routine progress belongs in the persistent header, without displacing the current workspace.
-  const transitioning = ['starting', 'recovering', 'stopping'].includes(environment.status)
-  const showReason = !transitioning && reason && reason !== 'not running' && reason !== environment.status
   const workspace = view === 'topology' || (view === 'mocks' && mockScenario)
 
   return <div className={`page project-page environment-page${workspace ? ' environment-page--workspace' : ''}${view === 'mocks' && mockScenario ? ' environment-page--mock-workspace' : ''}`}>
-    {view === 'overview' && <EnvironmentOverviewHeading environment={environment} activeRecording={activeRecording} activeFaultCount={activeFaults.length} onNavigate={onNavigate} />}
-    {(showReason || !!environment.issues?.length || actions.error || activity.error || actions.trackingInterrupted) && <div className="environment-notices">
-      {showReason && <section className="alert environment-status-reason" role="status"><strong>{environment.status}</strong><span>{reason}</span></section>}
-      {!!environment.issues?.length && <section className="alert alert--danger" role="alert"><strong>Configuration needs attention</strong><div>{environment.issues.map((issue, index) => <p key={`${issue.code}:${index}`}>{issue.message}{issue.remediation && <span> {issue.remediation}</span>}</p>)}</div></section>}
-      {actions.error && <ActionErrorNotice error={actions.error} onDismiss={actions.dismissError} />}
-      {actions.trackingInterrupted && <button className="button" onClick={actions.resumeTracking}>RESUME TRACKING</button>}
-      {activity.error && <ActionErrorNotice error={activity.error} onDismiss={activity.dismissError} />}
-    </div>}
-    {view === 'overview' && <OverviewPanel environment={environment} timeline={activity.timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onNavigate={navigateView} onChanged={onChanged} />}
+    {view === 'overview' && <EnvironmentOverviewHeading environment={environment} />}
+    <EnvironmentNotices environment={environment} actions={actions} activity={activity} />
+    {view === 'overview' && <OverviewPanel environment={environment} actions={actions} timeline={activity.timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onNavigate={navigateView} onChanged={onChanged} />}
     {view === 'topology' && <TopologyPanel environment={environment} faults={activeFaults} onService={setSelectedService} onEdge={(edge) => navigateView('traffic', { edge: `${edge.source}:${edge.target}`, protocol: edge.protocol === 'http' ? 'http' : 'tcp' })} />}
     {view === 'bindings' && <BindingsPanel environment={environment} project={project} onNavigate={onNavigate} onChanged={onChanged} />}
     {view === 'traffic' && <TrafficPanel environment={environment} />}

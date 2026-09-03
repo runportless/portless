@@ -13,9 +13,9 @@ const actions: EnvironmentActions = { identity: 'billing/local', busy: null, err
 const service: Service = { name: 'checkout', kind: 'process', launchMode: 'managed', required: true, health: { kind: 'http', timeout: 0, interval: 0 }, status: 'ready', generation: 1, restartCount: 0, recentRequests: 0, endpoints: [{ kind: 'public', protocol: 'http', host: 'checkout.local.billing.localhost', port: 80, url: 'http://checkout.local.billing.localhost' }] }
 
 describe('overview environment heading', () => {
-  it('shows the environment name and clone provenance without inactive indicators', () => {
-    const render = (value: Environment) => renderToStaticMarkup(<EnvironmentOverviewHeading environment={value} activeFaultCount={0} onNavigate={() => undefined} />)
-    const markup = render({ ...environment, name: 'qa-preview', clonedFrom: 'local' })
+  it.each(['healthy', 'stopped'] as const)('shows the environment name and clone provenance when %s', (status) => {
+    const render = (value: Environment) => renderToStaticMarkup(<EnvironmentOverviewHeading environment={value} />)
+    const markup = render({ ...environment, status, name: 'qa-preview', clonedFrom: 'local' })
 
     expect(markup).toContain('aria-label="billing/qa-preview overview summary"')
     expect(markup).toContain('<h2>qa-preview</h2>')
@@ -25,61 +25,107 @@ describe('overview environment heading', () => {
     expect(render(environment)).not.toContain('environment-clone-origin')
   })
 
-  it('links live activity and lists each bound mock scenario once', () => {
+  it('does not duplicate activity controls when mock scenarios are active', () => {
     const value: Environment = { ...environment, bindings: [
       { service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } },
       { service: 'orders', provider: 'mock', mock: { scenario: 'sold-out' } },
       { service: 'inventory', provider: 'mock', mock: { scenario: 'slow-inventory' } },
       { service: 'restored', provider: 'local', mock: { scenario: 'old-scenario' } },
     ] }
-    const markup = renderToStaticMarkup(<EnvironmentOverviewHeading environment={value} activeRecording={{ name: 'checkout-flow', status: 'active' } as Recording} activeFaultCount={2} onNavigate={() => undefined} />)
+    const markup = renderToStaticMarkup(<EnvironmentOverviewHeading environment={value} />)
 
-    expect(markup).toContain('aria-label="Recording checkout-flow. Open recordings"')
-    expect(markup).toContain('aria-label="2 active faults. Open faults"')
-    expect(markup).toContain('href="/environments/billing/local?tab=mocks&amp;scenario=sold-out"')
-    expect(markup.match(/aria-label="Active mock scenario sold-out\. Open scenario"/g)).toHaveLength(1)
-    expect(markup).toContain('aria-label="Active mock scenario slow-inventory. Open scenario"')
-    expect(markup.indexOf('scenario=slow-inventory')).toBeLessThan(markup.indexOf('scenario=sold-out'))
-    expect(markup).not.toContain('old-scenario')
-    expect(markup).toContain('REC <span class="recording-indicator__name">checkout-flow</span>')
-    expect(markup).toContain('<span class="fault-indicator__active">ACTIVE </span>FAULTS')
-    expect(markup).toContain('MOCK <span class="mock-indicator__name">sold-out</span>')
-    expect(markup).not.toContain('environment-activity-indicators--icons')
+    expect(markup).toContain('<h2>local</h2>')
+    expect(markup).not.toContain('environment-activity-indicators')
+    expect(markup).not.toContain('<a ')
+    expect(markup).not.toContain('<button')
   })
 })
 
 describe('persistent environment header', () => {
-  it.each(['healthy', 'starting', 'recovering', 'stopping', 'degraded', 'failed', 'stopped', 'unknown'] as const)('preserves authoritative %s health and counts all services', (status) => {
-    const markup = renderToStaticMarkup(<EnvironmentHeaderContext environment={{ ...environment, status, services: [service, { ...service, name: 'optional', required: false, status: 'stopped' }] }} live onNavigate={() => undefined} />)
+  it.each(['healthy', 'starting', 'recovering', 'stopping', 'degraded', 'failed', 'stopped', 'unknown'] as const)('preserves authoritative %s health and service counts without clone provenance', (status) => {
+    const markup = renderToStaticMarkup(<EnvironmentHeaderContext environment={{ ...environment, status, clonedFrom: 'qa', services: [service, { ...service, name: 'optional', required: false, status: 'stopped' }] }} live onNavigate={() => undefined} />)
     expect(markup).toContain(`health: ${status}; 1/2 ready. Open service overview`)
     expect(markup).toContain(`title="${status}"`)
     expect(markup).toContain('href="/environments/billing/local"')
+    expect(markup).not.toContain('environment-clone-origin')
+    expect(markup).not.toContain('FROM')
   })
 
-  it('marks a stale empty snapshot and preserves clone provenance', () => {
+  it('marks a stale empty snapshot without clone provenance', () => {
     const markup = renderToStaticMarkup(<EnvironmentHeaderContext environment={{ ...environment, clonedFrom: 'qa' }} live={false} onNavigate={() => undefined} />)
     expect(markup).toContain('health: reconnecting, last known healthy; No services.')
     expect(markup).toContain('>RECONNECTING</span>')
     expect(markup).not.toContain('0/0 ready')
-    expect(markup).toContain('title="Created by cloning billing/qa; changes are independent."')
+    expect(markup).not.toContain('environment-clone-origin')
+    expect(markup).not.toContain('FROM')
   })
 
   it('opens only the primary public HTTP endpoint', () => {
-    const render = (value: Environment) => renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={actions} live onNavigate={() => undefined} />)
+    const render = (value: Environment) => renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
     expect(render({ ...environment, primaryService: 'checkout', services: [service] })).toContain('aria-label="OPEN APP" href="http://checkout.local.billing.localhost" target="_blank" rel="noreferrer"')
     expect(render({ ...environment, services: [service] })).not.toContain('OPEN APP')
     expect(render({ ...environment, primaryService: 'worker', services: [service] })).not.toContain('OPEN APP')
     expect(render({ ...environment, primaryService: 'checkout', services: [{ ...service, endpoints: [] }] })).not.toContain('OPEN APP')
     expect(render({ ...environment, primaryService: 'checkout', services: [{ ...service, endpoints: [{ kind: 'public', protocol: 'tcp', host: 'db.local.billing.localhost', port: 5432, url: 'tcp://db.local.billing.localhost:5432' }] }] })).not.toContain('OPEN APP')
+    const markup = render({ ...environment, primaryService: 'checkout', services: [service] })
+    expect(markup).toContain('<a class="button environment-open-app"')
+    expect(markup).toContain('title="Open checkout in a new tab">Open <span aria-hidden="true">↗</span></a>')
+    expect(markup).not.toContain('environment-heading-actions')
+    expect(markup).not.toContain('aria-haspopup="menu"')
+  })
+
+  it('replaces Open with Start when the environment is stopped, even with retained public endpoints', () => {
+    const value: Environment = { ...environment, status: 'stopped', primaryService: 'checkout', services: [{ ...service, status: 'stopped' }] }
+    const render = (disabled = false) => renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={{ ...actions, disabled }} onNavigate={() => undefined} />)
+    expect(render()).toContain('class="button environment-lifecycle button--primary" type="button" aria-label="Start"')
+    expect(render()).toContain('title="Start billing/local">Start</button>')
+    expect(render()).not.toContain('OPEN APP')
+    expect(render().match(/class="button /g)).toHaveLength(1)
+    expect(render(true)).toContain('aria-label="Start" disabled=""')
+  })
+
+  it('can start a stopped environment without a public HTTP endpoint', () => {
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status: 'stopped' }} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
+    expect(markup).toContain('aria-label="Start"')
+    expect(markup).not.toContain('OPEN APP')
+  })
+
+  it('keeps Open when only some services are stopped', () => {
+    const value: Environment = { ...environment, status: 'degraded', primaryService: 'checkout', services: [service, { ...service, name: 'optional', status: 'stopped' }] }
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
+    expect(markup).toContain('aria-label="OPEN APP"')
+    expect(markup).not.toContain('environment-lifecycle')
+    expect(markup.match(/class="button /g)).toHaveLength(1)
   })
 
   it('uses the pending operation label even before the environment snapshot changes', () => {
-    expect(environmentLifecycleLabel(environment, 'down')).toBe('STOPPING…')
-    expect(environmentLifecycleLabel({ status: 'stopped' }, 'up')).toBe('STARTING…')
-    expect(environmentLifecycleLabel({ status: 'recovering' }, null)).toBe('RECOVERING…')
-    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={environment} activity={{ recordings: [], faults: [] }} actions={{ ...actions, busy: 'down', disabled: true }} live onNavigate={() => undefined} />)
-    expect(markup).toContain('aria-label="STOPPING…" disabled=""')
-    expect(markup).toContain('aria-expanded="false" disabled=""')
+    expect(environmentLifecycleLabel(environment, 'down')).toBe('Stopping…')
+    expect(environmentLifecycleLabel({ status: 'stopped' }, 'up')).toBe('Starting…')
+    expect(environmentLifecycleLabel({ status: 'recovering' }, null)).toBe('Recovering…')
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={environment} activity={{ recordings: [], faults: [] }} actions={{ ...actions, busy: 'down', disabled: true }} onNavigate={() => undefined} />)
+    expect(markup).toContain('role="status">Stopping…</span>')
+    expect(markup).not.toContain('class="button environment-lifecycle')
+    expect(markup).not.toContain('environment-heading-actions')
+  })
+
+  it('does not offer Start until shutdown has been confirmed', () => {
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status: 'stopped' }} activity={{ recordings: [], faults: [] }} actions={{ ...actions, busy: 'down', disabled: true }} onNavigate={() => undefined} />)
+    expect(markup).not.toContain('aria-label="Start"')
+    expect(markup).toContain('role="status">Stopping…</span>')
+  })
+
+  it.each(['stopped', 'starting', 'healthy'] as const)('keeps a pending Start action disabled while the snapshot is %s', (status) => {
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status, primaryService: 'checkout', services: [service] }} activity={{ recordings: [], faults: [] }} actions={{ ...actions, busy: 'up', disabled: true }} onNavigate={() => undefined} />)
+    expect(markup).toContain('aria-label="Starting…" disabled=""')
+    expect(markup).toContain('role="status">Starting…</span>')
+    expect(markup).not.toContain('OPEN APP')
+    expect(markup.match(/class="button /g)).toHaveLength(1)
+  })
+
+  it('shows startup progress when another client starts the environment', () => {
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status: 'starting', primaryService: 'checkout', services: [service] }} activity={{ recordings: [], faults: [] }} actions={{ ...actions, disabled: true }} onNavigate={() => undefined} />)
+    expect(markup).toContain('aria-label="Starting…" disabled=""')
+    expect(markup).not.toContain('OPEN APP')
   })
 
   it('links active recording and fault indicators to their environment views', () => {
@@ -101,18 +147,18 @@ describe('persistent environment header', () => {
       recordings: [{ name: 'old-capture', status: 'completed' }, { name: 'checkout-flow', status: 'active' }] as Recording[],
       faults: [{ enabled: true }, { enabled: false }] as FaultRule[],
     }
-    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={activity} actions={actions} live onNavigate={() => undefined} />)
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={activity} actions={actions} onNavigate={() => undefined} />)
     const links = [...markup.matchAll(/<a class="(?:recording|fault|mock)-indicator"[^>]*>(.*?)<\/a>/g)]
 
-    expect(markup).toContain('environment-activity-indicators--icons')
+    expect(markup).toContain('environment-activity-indicators')
     expect(links).toHaveLength(3)
     for (const [, content] of links) {
       expect(content).toContain('<svg viewBox="0 0 16 16" aria-hidden="true">')
       expect(content.replace(/<[^>]+>/g, '')).toBe('')
     }
-    expect(markup).toContain('aria-label="Recording checkout-flow. Open recordings" title="Recording checkout-flow"')
-    expect(markup).toContain('aria-label="1 active fault. Open faults" title="1 active fault"')
-    expect(markup).toContain('href="/environments/billing/local?tab=mocks&amp;scenario=sold-out" aria-label="Active mock scenario sold-out. Open scenario" title="Active mock scenario: sold-out"')
+    expect(markup).toContain('aria-label="Recording checkout-flow. Open recordings" title="Recording"')
+    expect(markup).toContain('aria-label="1 active fault. Open faults" title="1 Active Fault"')
+    expect(markup).toContain('href="/environments/billing/local?tab=mocks" aria-label="Active mock scenario sold-out. Open mocks" title="1 Active Mock"')
     expect(markup).not.toContain('old-capture')
   })
 
@@ -123,35 +169,37 @@ describe('persistent environment header', () => {
       { service: 'inventory', provider: 'mock', mock: { scenario: 'slow-inventory' } },
       { service: 'restored', provider: 'local', mock: { scenario: 'old-scenario' } },
     ] }
-    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={actions} live onNavigate={() => undefined} />)
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
 
     expect(markup.match(/class="mock-indicator"/g)).toHaveLength(1)
     expect(markup).toContain('href="/environments/billing/local?tab=mocks" aria-label="2 active mock scenarios. Open mocks"')
-    expect(markup).toContain('title="2 active mock scenarios: slow-inventory, sold-out"')
+    expect(markup).toContain('title="2 Active Mocks"')
     expect(markup).not.toContain('old-scenario')
   })
 
-  it.each([1, 2])('keeps the active fault count (%i) in its icon label and tooltip', (count) => {
-    const markup = renderToStaticMarkup(<EnvironmentActivityIndicators environment={environment} activeFaultCount={count} appearance="icons" onNavigate={() => undefined} />)
-    const summary = `${count} active ${count === 1 ? 'fault' : 'faults'}`
-    expect(markup).toContain(`aria-label="${summary}. Open faults" title="${summary}"`)
+  it.each([
+    [1, '1 active fault', '1 Active Fault'],
+    [2, '2 active faults', '2 Active Faults'],
+  ] as const)('keeps the active fault count (%i) in its icon label and tooltip', (count, summary, title) => {
+    const markup = renderToStaticMarkup(<EnvironmentActivityIndicators environment={environment} activeFaultCount={count} onNavigate={() => undefined} />)
+    expect(markup).toContain(`aria-label="${summary}. Open faults" title="${title}"`)
     expect(markup).not.toContain('fault-indicator__active')
   })
 
   it('omits inactive recording, fault, and restored mock icons', () => {
     const value: Environment = { ...environment, bindings: [{ service: 'orders', provider: 'local', mock: { scenario: 'old-scenario' } }] }
-    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [{ status: 'completed' } as Recording], faults: [{ enabled: false } as FaultRule] }} actions={actions} live onNavigate={() => undefined} />)
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [{ status: 'completed' } as Recording], faults: [{ enabled: false } as FaultRule] }} actions={actions} onNavigate={() => undefined} />)
     expect(markup).not.toContain('environment-activity-indicators')
     expect(markup).not.toContain('old-scenario')
   })
 
   it('keeps forgetting behind an impact preview and blocks it when running or disconnected', () => {
     const props = { busy: false, error: null, restoreFocusRef: createRef<HTMLElement>(), onDismissError: () => undefined, onClose: () => undefined, onForget: async () => undefined }
-    const header = renderToStaticMarkup(<EnvironmentHeaderActions environment={environment} activity={{ recordings: [], faults: [] }} actions={actions} live onNavigate={() => undefined} />)
+    const header = renderToStaticMarkup(<EnvironmentHeaderActions environment={environment} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
     const stopped = renderToStaticMarkup(<ForgetEnvironmentDialog {...props} environment={{ ...environment, status: 'stopped' }} />)
     const running = renderToStaticMarkup(<ForgetEnvironmentDialog {...props} environment={environment} />)
     const disconnected = renderToStaticMarkup(<ForgetEnvironmentDialog {...props} environment={{ ...environment, status: 'stopped' }} unavailable />)
-    expect(header).toContain('aria-label="Environment actions for billing/local" aria-haspopup="menu" aria-expanded="false"')
+    expect(header).not.toContain('aria-label="Environment actions for billing/local"')
     expect(header).not.toContain('>FORGET ENVIRONMENT</button>')
     expect(stopped).toContain('Source files and checkouts on disk are not deleted.')
     expect(stopped).toContain('Source checkouts and managed data volumes')

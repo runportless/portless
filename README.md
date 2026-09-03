@@ -186,13 +186,30 @@ The clone records its direct source environment and copies its provider
 bindings, mock scenarios, routes, and scenario restoration records. The resulting configuration is independent;
 later changes do not propagate between the source and clone.
 
+Start the clone normally, from the UI or with `portless up`. When another
+environment is using the same Git checkout, Portless automatically prepares and
+binds an independent worktree before starting local services. It copies the
+current files, including uncommitted changes and installed local dependencies,
+and preserves nested source directories. Sources in the same repository share
+one worktree per environment. Subsequent starts reuse it and keep any edits
+made there; later edits in the original checkout do not propagate to the copy.
+An explicitly selected CLI environment remains selected from the original path.
+
+Automatic preparation requires Git and a repository with a commit. Non-Git
+sources and nested repositories still require a separate checkout or stopping
+the environment using them. Prepared checkouts live under
+`$PORTLESS_HOME/worktrees` (normally `~/.portless/worktrees`) and remain after
+stop, forget, or reset. Full uninstall asks you to move or remove them first so
+local edits are not erased. The paths remain visible in **Bindings → Checkouts**
+and `portless env checkout list`.
+
 HTTP remote providers still pass through the source-aware proxy, so traffic,
 recordings, and faults keep working. A read-only binding blocks mutating HTTP
 methods locally before the request leaves the machine. Active provider changes
 handoff only the selected service and roll back if the replacement cannot
 become ready.
 
-Local providers can point at a different Git worktree, container providers use
+Local providers can also be bound explicitly to a chosen Git worktree; container providers use
 Portless-managed resources, and mock providers return fixed local HTTP
 responses. See the decisions for
 [live provider handoffs](docs/architecture/decisions/0006-live-provider-handoffs.md)
@@ -218,6 +235,11 @@ Scenarios may be active together only when they target different services.
 While active, route responses and enabled flags are editable, but changing the
 set of target services requires disabling the scenario first. An unmatched
 request returns `501`; it never falls through to the real service.
+
+Daemon restarts recover active mock and remote providers without requiring
+outgoing dependency proxies for those services. Incoming connections from
+local callers retain their verified proxy endpoints. Scenarios remain editable
+and can be disabled after recovery to restore their original providers.
 
 In the browser, selecting a mock scenario opens a split workspace: a sortable,
 ten-per-page route list on the left and the selected route's configuration on
@@ -246,25 +268,40 @@ from the recent list. Its project action menu opens configuration for creating
 environments and managing sources, hides the project from the recent list, or
 safely forgets it. Forgetting is available only after all of the project's
 environments are stopped and never deletes source checkouts from disk.
-Each environment page exposes the corresponding forget action in its header.
-The confirmation requires that environment to be stopped, removes its retained
-Portless state, and preserves source checkouts and managed data volumes.
 The sidebar selects Overview, Topology, Traffic, Mocks, Recordings, Faults,
-Bindings, and Timeline. A compact persistent header shows the project,
-environment, current view, health and ready-service count, Open App, Start/Stop,
+Bindings, and Timeline. Its badges count active mock scenarios and faults.
+Recordings shows `1` only while a recording is running; all badges update live
+and hide when inactive.
+A compact persistent header shows the project,
+environment, current view, health and ready-service count, an Open button,
 and minimalist colored activity icons: red for recordings, amber for faults,
-and purple for mocks. Hover reveals activity details; clicking opens the matching
-view (or the scenario directly when only one mock scenario is active).
-The health link opens Overview; Open App
-uses the primary service's public HTTP URL. Lifecycle controls and command-palette
-actions share pending operation state until its outcome is confirmed.
-Overview starts with the environment name and clone-origin chip, with links to
-the active recording, enabled faults, and each mock scenario currently bound to
-a service. These details update live and remain visible in focus mode.
+and purple for mocks. Tooltips show Recording or the active fault and mock
+counts; clicking opens the corresponding list of recordings, faults, or mock
+scenarios.
+The health link opens Overview; Open uses the primary service's public HTTP URL.
+When stopped, Open is replaced by a Start button that starts the entire
+environment. Both share a fixed width, including disabled Starting… progress,
+so the action does not resize during startup. Stop environment is available
+through Search (`Command-K` or `Control-K`). The header has no environment action menu, and
+Search keeps its visible label beside the keyboard shortcut at every screen size.
+Overview's Services header offers Start All when the environment is stopped or
+Stop All when every service is ready; mixed and empty states show neither action.
+Lifecycle controls and command-palette actions share pending operation state
+until its outcome is confirmed, with live header health and accessible progress
+announcements.
+Overview starts with the environment name, its current health indicator, and the
+clone-origin chip. Clone provenance stays in Overview and is not repeated in the
+persistent header.
+Recording, fault, and mock shortcuts stay in the persistent header rather than
+being repeated in Overview, and remain available in focus mode.
 Routine start, recovery, and stop progress stays in the header instead of
 inserting a page banner, so mock activation and restoration do not shift the
-scenario table or route workspace. Failures and configuration issues remain
-visible in the page.
+scenario table or route workspace. Failures and configuration issues use the
+same red, structured error notice throughout the control plane, including
+daemon diagnostics, mock scenarios, and captured traffic errors. Matching
+operation errors and saved environment failure reasons appear only once.
+Dismissing that notice hides both copies until the failure clears; a fresh page
+load still shows an unresolved saved failure.
 Focus mode, toggled with `Command-Shift-F`, `Control-Shift-F`, or the command
 palette, keeps the header while hiding the fixed sidebar and its header navigation
 button. Hover over the left edge to preview navigation, or activate the edge

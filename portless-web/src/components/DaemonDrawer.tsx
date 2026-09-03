@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { APIError } from '../api'
+import { ActionErrorNotice } from './ActionError'
 import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from '../daemonRestart'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
 import { DaemonLogs } from './logs/DaemonLogs'
@@ -422,7 +423,7 @@ function StoragePanel({ storage, phase, error }: { storage: DaemonDiagnostics['s
 }
 
 function Unavailable({ title, message }: { title: string; message: string }) {
-  return <section className="daemon-restart-error daemon-log-unavailable" role="alert"><span className="eyebrow">{title}</span><p>{message}</p><pre><span>$</span> portless doctor</pre></section>
+  return <ActionErrorNotice error={{ title, message, remediation: [{ label: 'Inspect the local daemon.', command: 'portless doctor' }] }} />
 }
 
 function Detail({ label, value, title, detail }: { label: string; value: string; title?: string; detail?: string }) {

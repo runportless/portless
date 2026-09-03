@@ -26,10 +26,10 @@ type ActionState = {
 const idleState = { busy: null, error: null, forgetError: null, trackingInterrupted: false }
 
 export function environmentLifecycleLabel(environment: Pick<Environment, 'status'>, busy: EnvironmentAction | null) {
-  if (busy === 'up' || environment.status === 'starting') return 'STARTING…'
-  if (busy === 'down' || environment.status === 'stopping') return 'STOPPING…'
-  if (environment.status === 'recovering') return 'RECOVERING…'
-  return environment.status === 'stopped' ? 'START ALL' : 'STOP ALL'
+  if (busy === 'up' || environment.status === 'starting') return 'Starting…'
+  if (busy === 'down' || environment.status === 'stopping') return 'Stopping…'
+  if (environment.status === 'recovering') return 'Recovering…'
+  return environment.status === 'stopped' ? 'Start' : 'Stop'
 }
 
 export function useEnvironmentActions(environment: Environment | undefined, identity: string, live: boolean, latestOperation: Operation | undefined, onChanged: () => Promise<void>, onNavigate: (path: string) => void) {

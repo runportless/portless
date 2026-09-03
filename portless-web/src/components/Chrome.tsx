@@ -225,7 +225,7 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
         </div>
         <div className="topbar__actions">
           {headerActions}
-          <div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" aria-label="Open command palette" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>jump or run</em></button></div>
+          <div className="topbar__tools"><button className="topbar__daemon" type="button" aria-label={daemonLabel} onClick={inspectDaemon}><span className={live ? 'live-dot' : 'live-dot live-dot--off'} /></button><button className="key-button" aria-label="Search" title="Search (⌘K / Ctrl+K)" onClick={() => setPaletteOpen(true)}><span>⌘</span><span>K</span><em>Search</em></button></div>
         </div>
       </header>
       <main aria-labelledby={activeEnvironment ? 'environment-view-title' : undefined} tabIndex={-1}>{children}</main>
@@ -270,7 +270,8 @@ function ViewButton({ label, view, activeView, environment, icon, compact, count
   onNavigate: (path: string) => void
 }) {
   const active = activeView === view
-  const description = count ? `${count} ${view === 'faults' ? `active fault${count === 1 ? '' : 's'}` : `recording${count === 1 ? '' : 's'}`}` : undefined
+  const countLabel = view === 'faults' ? 'active fault' : view === 'mocks' ? 'active mock' : 'active recording'
+  const description = count ? `${count} ${countLabel}${count === 1 ? '' : 's'}` : undefined
   return <button className={active ? 'is-active' : ''} aria-label={label} aria-describedby={description ? `view-count-${view}` : undefined} aria-current={active ? 'page' : undefined} title={compact ? label : undefined} onClick={() => onNavigate(environmentUIPath(environment, view))}>{icon}<span>{label}</span>{description && <><small className="view-nav__count" aria-hidden="true">{count}</small><span className="sr-only" id={`view-count-${view}`}>{description}</span></>}</button>
 }
 
@@ -287,7 +288,7 @@ function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: (
   const execute = (command?: Command) => { if (!command) return; onClose(); command.run() }
   return <div className="modal-backdrop" role="presentation" onMouseDown={onBackdropMouseDown}>
     <section ref={container} className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(event) => event.stopPropagation()}>
-      <div className="command-palette__input"><span>›</span><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="jump to a project or environment" onKeyDown={(event) => {
+      <div className="command-palette__input"><span>›</span><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search" placeholder="Search" onKeyDown={(event) => {
         if (event.key === 'ArrowDown') { event.preventDefault(); setSelected((value) => Math.min(value + 1, filtered.length - 1)) }
         if (event.key === 'ArrowUp') { event.preventDefault(); setSelected((value) => Math.max(value - 1, 0)) }
         if (event.key === 'Enter') execute(filtered[selected])

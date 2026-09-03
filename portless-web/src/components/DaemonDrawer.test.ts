@@ -112,8 +112,8 @@ describe('daemon diagnostics', () => {
       protocolVersion: '4.0.0', apiVersion: '12.2.0', recoveryProblems: [], activeEnvironments: ['store/local'],
     }
     const handoff: DaemonHandoffStatus = { state: 'ready', verifiedAt: '2026-08-25T12:00:01Z', problems: [], activeEnvironments: ['store/local'] }
-    const markup = renderToStaticMarkup(createElement(DaemonDrawer, {
-      status, diagnostics, controlPlaneHealth, runtime, relay, live: true,
+    const render = (currentStatus: DaemonStatus | null) => renderToStaticMarkup(createElement(DaemonDrawer, {
+      status: currentStatus, diagnostics, controlPlaneHealth, runtime, relay, live: true,
       onClose: () => undefined,
       onRefresh: async () => status,
       onRefreshDiagnostics: async () => diagnostics,
@@ -121,6 +121,13 @@ describe('daemon diagnostics', () => {
       onRestart: async (instanceId: string) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', handoff: true, activeEnvironments: [] }),
       onReconnected: async () => undefined,
     }))
+    const markup = render(status)
+    const unavailable = render(null)
+
+    expect(unavailable).toContain('class="action-error action-error--persistent" role="alert"')
+    expect(unavailable).toContain('DAEMON STATUS UNAVAILABLE')
+    expect(unavailable).toContain('portless doctor')
+    expect(unavailable).not.toContain('daemon-restart-error')
 
     expect(markup).toContain('role="dialog" aria-modal="true" aria-label="Portless System"')
     expect(markup).toContain('<h2>Portless System</h2>')

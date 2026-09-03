@@ -5,7 +5,7 @@ import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { ExchangeTraceDrawer as TrafficDetail } from './ExchangeTraceDrawer'
 import { databaseResultCSV, databaseResultRows, DatabaseResultTable } from './detail/DatabaseResultTable'
 import { defaultTrafficDetailView } from './detail/TrafficDrawerShell'
-import { trafficStartedTime, trafficTargetBinding } from './detail/TrafficOverview'
+import { TrafficOverview, trafficStartedTime, trafficTargetBinding } from './detail/TrafficOverview'
 import { genericTcpTrafficPresentation } from './protocols/GenericTcpTrafficDetail'
 import { defaultTrafficPayloadView, formatTrafficBody, formattedTrafficHeaders, rawTrafficMessage } from './protocols/HttpTrafficDetail'
 import { postgresTrafficPresentation } from './protocols/PostgreSQLTrafficDetail'
@@ -32,6 +32,14 @@ const exchange = {
 } as TrafficExchange
 
 describe('TrafficDetail', () => {
+  it.each(['http', 'tcp'] as const)('uses the shared red notice for a captured %s error', (protocol) => {
+    const markup = renderToStaticMarkup(createElement(TrafficOverview, { exchange: { ...exchange, protocol, error: 'The upstream connection failed.' } }))
+    expect(markup).toContain('class="action-error action-error--persistent" role="alert"')
+    expect(markup).toContain(protocol === 'http' ? 'Request error' : 'Operation error')
+    expect(markup).toContain('The upstream connection failed.')
+    expect(markup).not.toContain('traffic-detail__error')
+  })
+
   it('opens HTTP exchanges with overview context above request and response tabs', () => {
     const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange, onClose: () => undefined }))
 

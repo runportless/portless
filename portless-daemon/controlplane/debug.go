@@ -73,8 +73,15 @@ func (s *Service) beginServiceModeChange(ctx context.Context, projectName, envir
 		lock := s.projectLock(scope)
 		lock.Lock()
 		defer lock.Unlock()
-		background := context.Background()
+		defer s.releaseUnusedSourceLeases(scope)
+		background, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
 		latest, modeErr := s.database.Environment(background, projectName, environmentName)
+		if modeErr != nil {
+			s.failOperation(scope, operation, modeErr)
+			return
+		}
+		latest, modeErr = s.prepareSourceCheckouts(background, latest, latest.Bindings, operation)
 		if modeErr != nil {
 			s.failOperation(scope, operation, modeErr)
 			return
@@ -90,10 +97,6 @@ func (s *Service) beginServiceModeChange(ctx context.Context, projectName, envir
 			return
 		}
 		if modeErr = s.prepareServiceDependencies(background, scope, latest, serviceName, operation); modeErr != nil {
-			s.failOperation(scope, operation, modeErr)
-			return
-		}
-		if modeErr = s.acquireSourceLeases(scope, latest); modeErr != nil {
 			s.failOperation(scope, operation, modeErr)
 			return
 		}

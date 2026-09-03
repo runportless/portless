@@ -189,6 +189,21 @@ func (s *Service) runBindingChangeLocked(ctx context.Context, scope string, oper
 		s.failBindingChange(scope, operation, fmt.Errorf("environment is %s; wait for the current lifecycle transition before changing a provider", plan.environment.Status))
 		return
 	}
+	if plan.binding.Provider == model.ProviderLocal {
+		prepared, prepareErr := s.prepareSourceCheckouts(ctx, plan.environment, plan.bindings, operation)
+		if prepareErr != nil {
+			s.failBindingChange(scope, operation, prepareErr)
+			return
+		}
+		defer s.releaseUnusedSourceLeases(scope)
+		if prepared.Revision != plan.environment.Revision {
+			plan, err = s.prepareBindingChange(ctx, projectName, environmentName, plan.binding.Service, plan.binding)
+			if err != nil {
+				s.failBindingChange(scope, operation, err)
+				return
+			}
+		}
+	}
 	if plan.binding.Provider == model.ProviderRemote {
 		probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
 		err = s.proxy.CheckRemoteTarget(probeCtx, *plan.binding.Remote)
@@ -220,15 +235,6 @@ func (s *Service) runBindingChangeLocked(ctx context.Context, scope string, oper
 		}
 	}
 	activeDefinition := mergeActiveDefinition(oldDefinition, plan.definition, plan.binding.Service)
-	candidate := plan.environment
-	candidate.Bindings = replaceBinding(candidate.Bindings, plan.binding)
-	candidate.Connections = activeDefinition.Connections
-	if plan.binding.Provider == model.ProviderLocal {
-		if err := s.acquireSourceLeases(scope, candidate); err != nil {
-			s.failBindingChange(scope, operation, err)
-			return
-		}
-	}
 	stoppedOld := false
 	applied := false
 	fail := func(changeErr error) {

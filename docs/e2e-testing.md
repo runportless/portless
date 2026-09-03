@@ -109,6 +109,10 @@ The CLI E2E suite protects these product contracts:
   including automatic restart by one `portless up` and direct forced reset;
 - `down --all` from an ambiguous checkout and across multiple simultaneously
   active worktrees;
+- automatic worktree preparation when starting a cloned Git-backed environment,
+  including current uncommitted code, retained CLI selection, independent live
+  responses, reuse after stop/start, and daemon handoff without restarting the
+  original processes;
 - several source repositories compiled into one project, environment cloning,
   adding a source after cloning, explicit remediation of the other
   environment, and project-wide source deletion;
@@ -133,19 +137,28 @@ The Playwright suite protects these browser journeys:
   Open App links, shared lifecycle state with the command palette, and a single
   activity subscription that discards responses from a previous environment;
 - compact recording, fault, and mock icons in that header, with themed colors,
-  descriptive tooltips, keyboard navigation, and live activation state;
-- an Overview heading with environment identity and clone provenance, live
-  recording/fault/mock links, and readable wrapping in focus mode and on narrow
-  screens;
+  descriptive tooltips, keyboard navigation, and live activation state; the mock
+  icon opens the scenarios list even when only one scenario is active;
+- an Overview heading with environment identity and clone provenance kept out
+  of the persistent header, no duplicate recording/fault/mock controls, and
+  readable wrapping in focus mode and on narrow screens, plus sidebar badges
+  that count each active mock scenario once and show `1` only while recording,
+  disappearing when those activities end;
+- one shared red error notice for a failed environment start and its saved
+  failure reason across all eight views, dismissal without a duplicate
+  reappearing, persisted errors after reload, and a new failure after recovery;
 - keyboard- and command-palette-driven focus mode, desktop hover navigation,
   explicit overlay navigation on narrow screens, nested dialog dismissal,
   focus restoration, and viewport-sized topology;
 - environment creation from the persistent sidebar through the modal without
   duplicating project sources,
-  including visible clone provenance that does not displace status messaging,
-  plus stopped-only forgetting from the current environment header;
+  including visible clone provenance that does not displace status messaging;
+- starting a clone directly from its header while the original remains healthy,
+  with automatic checkout preparation, nested source paths, preserved local
+  files, unchanged original processes, and checkout reuse on a later start;
 - browser theme persistence;
-- services, copyable endpoints, hover- and focus-driven topology service
+- services with aligned URLs and mock explanations in both themes and focus
+  mode, copyable endpoints, hover- and focus-driven topology service
   previews with connected-edge emphasis, service details, and default-on live
   logs with a plain-text raw tab and pause/resume controls;
 - live mock-binding badges on topology cards, scenario identification on hover
@@ -164,7 +177,18 @@ The Playwright suite protects these browser journeys:
   and sortable routes paginated at ten rows, whole-scenario activation, stable
   peer service PIDs, stationary tables and route panes throughout activation
   and restoration, and traffic attribution;
-- environment stop/start controls, project-page source add/delete, and
+- normal daemon restart with a mocked caller that has no outgoing proxy ports,
+  healthy recovery without restarting peer processes, and browser-driven
+  scenario disabling, original-provider restoration, and deletion afterward;
+- a fixed-width Open button replaced by Start for stopped environments, with
+  disabled startup progress in the same slot and no environment action menu;
+  visible Search text across desktop, narrow, and focus-mode headers,
+  Stop environment through Search, shared pending state with the command palette,
+  and keyboard-accessible, disabled-while-pending lifecycle controls;
+- Services-table Start All and Stop All controls without a workload count,
+  mixed-state suppression, stable header geometry, and shared pending state
+  with the top header, Search, and per-service actions;
+- project-page source add/delete and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;
 - active service-scoped provider handoff with unrelated runtime preservation,
@@ -351,8 +375,9 @@ coverage.
 ## Failures and artifacts
 
 The Playwright suite is split into focused access/navigation, settings,
-projects, environment, experiments, topology-mocks, traffic-list, traffic-inspection,
-traffic-waterfall, and daemon journey specs. The specs still run with one
+projects, environment, environment-errors, experiments, mock-recovery,
+topology-mocks, traffic-list, traffic-inspection, traffic-waterfall, and daemon
+journey specs. The specs still run with one
 worker and stop after the first failure because they share one real isolated
 Portless stack. To run one journey while developing:
 

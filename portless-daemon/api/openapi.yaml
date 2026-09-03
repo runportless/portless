@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 13.0.0
+  version: 13.1.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -30,7 +30,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.1.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -468,6 +468,9 @@ paths:
   /environments/select:
     put:
       operationId: selectEnvironmentForPath
+      description: >-
+        Selects an environment from a checkout belonging to its project. The
+        selection survives automatic worktree preparation during startup.
       requestBody:
         required: true
         content:
@@ -525,6 +528,16 @@ paths:
     parameters: *environmentParameters
     post:
       operationId: up
+      description: >-
+        Starts the environment and automatically prepares independent Git
+        worktrees for local sources already used by another environment. Current
+        files and installed local dependencies are copied, nested source paths
+        are preserved, and the resulting bindings are persisted for reuse.
+        Preparation is part of the durable operation and requires a committed
+        Git checkout without nested repositories. It never relocates an active
+        or unverified local runtime. Non-Git sources require a separate checkout
+        or stopping the other environment. Existing request and response shapes
+        are unchanged.
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
@@ -1387,7 +1400,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.1.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:

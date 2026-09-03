@@ -274,7 +274,11 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	if _, err := tx.ExecContext(ctx, `
 DELETE FROM context_selections
 WHERE environment_key = ?
-  AND path NOT IN (SELECT path FROM environment_sources WHERE environment_key = ?)`, key, key); err != nil {
+  AND path NOT IN (
+    SELECT source.path FROM environment_sources source
+    JOIN environments e ON e.private_key = source.environment_key
+    WHERE e.project_key = (SELECT project_key FROM environments WHERE private_key = ?)
+  )`, key, key); err != nil {
 		return model.Environment{}, err
 	}
 	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
@@ -691,7 +695,10 @@ func (s *Store) SetContextSelection(ctx context.Context, path, projectName, envi
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT path FROM environment_sources WHERE environment_key = ?`, key)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT source.path FROM environment_sources source
+JOIN environments e ON e.private_key = source.environment_key
+WHERE e.project_key = (SELECT project_key FROM environments WHERE private_key = ?)`, key)
 	if err != nil {
 		return err
 	}
@@ -710,7 +717,7 @@ func (s *Store) SetContextSelection(ctx context.Context, path, projectName, envi
 		return err
 	}
 	if selectionPath == "" {
-		return errors.New("the selected environment does not use this source path")
+		return errors.New("the selected environment's project does not use this source path")
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO context_selections(path, environment_key, selected_at) VALUES(?, ?, ?)
@@ -728,7 +735,6 @@ func (s *Store) ContextSelection(ctx context.Context, path string) (model.Enviro
 SELECT c.path, p.name, e.name FROM context_selections c
 JOIN environments e ON e.private_key = c.environment_key
 JOIN projects p ON p.private_key = e.project_key
-JOIN environment_sources source ON source.environment_key = c.environment_key AND source.path = c.path
 	ORDER BY length(c.path) DESC`)
 	if err != nil {
 		return model.Environment{}, err
