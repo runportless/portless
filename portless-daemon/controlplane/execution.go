@@ -111,7 +111,7 @@ func (s *Service) runUp(scope string, operation model.Operation, options UpOptio
 			_ = s.serviceEvent(scope, operation, binding.Service, "ready", binding.Service+" is routed to "+string(binding.Remote.Classification))
 		case model.ProviderMock:
 			if binding.Mock == nil {
-				s.failOperation(scope, operation, fmt.Errorf("%s mock provider has no profile", binding.Service))
+				s.failOperation(scope, operation, fmt.Errorf("%s mock provider has no scenario", binding.Service))
 				return
 			}
 			_ = s.serviceEvent(scope, operation, binding.Service, "starting", "Loading mock scenario "+binding.Mock.Scenario)
@@ -539,7 +539,7 @@ func (s *Service) prepareServiceDependencies(ctx context.Context, scope string, 
 		binding := bindingForEnvironment(environment, connection.Target)
 		if binding.Provider == model.ProviderMock {
 			if binding.Mock == nil {
-				return fmt.Errorf("mock dependency %s has no profile", connection.Target)
+				return fmt.Errorf("mock dependency %s has no scenario", connection.Target)
 			}
 			if err := s.activateMock(ctx, scope, binding, runtimeFor(environment, connection.Target)); err != nil {
 				return fmt.Errorf("%s mock provider: %w", connection.Target, err)

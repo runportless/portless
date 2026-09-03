@@ -4,10 +4,6 @@ import type { Environment, Operation } from '../../api/contracts/environments'
 export type EnvironmentAction = 'up' | 'down' | 'restart'
 type DirectEnvironmentAction = Exclude<EnvironmentAction, 'restart'>
 
-export function environmentRoute(environment: Pick<Environment, 'project' | 'name'>) {
-  return `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}`
-}
-
 export function projectRoute(project: string) {
   return `/projects/${encodeURIComponent(project)}`
 }

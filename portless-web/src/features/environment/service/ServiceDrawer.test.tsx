@@ -32,7 +32,7 @@ describe('service drawer', () => {
       services: [service], connections: [], bindings: [{ service: 'checkout', provider: 'local' }],
     } as Environment
 
-    const markup = renderToStaticMarkup(<ServiceDrawer environment={environment} service={service} onClose={() => undefined} onChanged={() => undefined} />)
+    const markup = renderToStaticMarkup(<ServiceDrawer environment={environment} service={service} onClose={() => undefined} onChanged={() => undefined} onNavigate={() => undefined} />)
 
     expect(markup).toContain('class="drawer service-drawer"')
     expect(markup).toContain('class="drawer-content service-drawer-content service-drawer-content--details"')
@@ -44,6 +44,28 @@ describe('service drawer', () => {
     expect(markup).toContain('class="drawer-section service-health"')
     expect(markup).toContain('class="service-health-summary"')
     expect(markup).toContain('http://checkout.local.store.localhost')
+    expect(markup).not.toContain('VIEW SCENARIO')
+  })
+
+  it('links the bound mock scenario beside unchanged public endpoint details', () => {
+    const service: Service = {
+      name: 'inventory', kind: 'process', framework: 'spring-boot', launchMode: 'managed', required: true,
+      health: { kind: 'http', timeout: 5, interval: 2 }, status: 'ready', generation: 1, restartCount: 0, recentRequests: 0,
+      endpoints: [{ kind: 'public', protocol: 'http', host: 'inventory.local.store.localhost', port: 80, url: 'http://inventory.local.store.localhost' }],
+    }
+    const environment: Environment = {
+      project: 'store', name: 'local', revision: 1, status: 'healthy', createdAt: '', updatedAt: '', services: [service], connections: [],
+      bindings: [{ service: 'inventory', provider: 'mock', mock: { scenario: 'sold-out' } }],
+    }
+    const render = (value: Environment) => renderToStaticMarkup(<ServiceDrawer environment={value} service={service} onClose={() => undefined} onChanged={() => undefined} onNavigate={() => undefined} />)
+    const markup = render(environment)
+
+    expect(markup).toContain('Mock scenario: <strong title="sold-out">sold-out</strong>')
+    expect(markup).toContain('href="/environments/store/local?tab=mocks&amp;scenario=sold-out">VIEW SCENARIO →</a>')
+    expect(markup).toContain('href="http://inventory.local.store.localhost"')
+    expect(markup).toContain('class="status status--success" title="ready"')
+    expect(render({ ...environment, bindings: [{ service: 'inventory', provider: 'local', mock: { scenario: 'sold-out' } }] })).not.toContain('VIEW SCENARIO')
+    expect(render({ ...environment, bindings: [{ service: 'orders', provider: 'mock', mock: { scenario: 'sold-out' } }] })).not.toContain('VIEW SCENARIO')
   })
 
   it('offers only state-appropriate row actions and web endpoints', () => {

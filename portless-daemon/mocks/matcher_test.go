@@ -85,12 +85,18 @@ func TestCompileRejectsAmbiguousRoutes(t *testing.T) {
 }
 
 func TestCompileAllowsEquivalentRoutesForDifferentServices(t *testing.T) {
-	_, err := Compile(model.MockScenario{Name: "degraded-checkout", Routes: []model.MockRoute{
+	compiled, err := Compile(model.MockScenario{Name: "degraded-checkout", Routes: []model.MockRoute{
 		{Name: "inventory-health", Service: "inventory", Method: "GET", Path: "/health", Status: 200, Enabled: true},
 		{Name: "payments-health", Service: "payments", Method: "GET", Path: "/health", Status: 503, Enabled: true},
 	}})
 	if err != nil {
 		t.Fatalf("equivalent cross-service routes were rejected: %v", err)
+	}
+	for service, status := range map[string]int{"inventory": 200, "payments": 503, "checkout": 501} {
+		preview, err := compiled.Preview(model.MockRequest{Service: service, Method: "GET", Path: "/health"})
+		if err != nil || preview.Service != service || preview.Status != status {
+			t.Fatalf("%s preview = %#v, %v; want status %d", service, preview, err, status)
+		}
 	}
 }
 

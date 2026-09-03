@@ -14,6 +14,8 @@ import (
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
+var errMockScenarioConflict = errors.New("mock scenario state conflict")
+
 // MockScenarios lists the mock scenarios owned by one environment.
 func (s *Service) MockScenarios(ctx context.Context, project, environment string) ([]model.MockScenario, error) {
 	return s.database.MockScenarios(ctx, project, environment)
@@ -76,7 +78,14 @@ func (s *Service) ImportMockScenarioRecording(ctx context.Context, project, envi
 	allowed := map[string]string{}
 	if len(services) == 0 {
 		for _, service := range definition.Services {
-			if service.Kind == model.ServiceProcess {
+			eligible := service.Kind == model.ServiceProcess
+			for _, connection := range definition.Connections {
+				if strings.EqualFold(connection.Target, service.Name) && connection.Protocol != model.ProtocolHTTP {
+					eligible = false
+					break
+				}
+			}
+			if eligible {
 				allowed[strings.ToLower(service.Name)] = service.Name
 			}
 		}
@@ -106,7 +115,7 @@ func (s *Service) importMockRoutes(ctx context.Context, project, environment, sc
 		return model.MockScenario{}, warnings, err
 	}
 	if scenario.Activation.State != model.MockScenarioDisabled {
-		return model.MockScenario{}, warnings, errors.New("disable the mock scenario before importing routes that can change its service coverage")
+		return model.MockScenario{}, warnings, fmt.Errorf("%w: disable the mock scenario before importing routes that can change its service coverage", errMockScenarioConflict)
 	}
 	used := map[string]struct{}{}
 	for _, route := range scenario.Routes {
@@ -140,7 +149,7 @@ func (s *Service) DeleteMockScenario(ctx context.Context, project, environment, 
 		return err
 	}
 	if scenario.Activation.State != model.MockScenarioDisabled {
-		return fmt.Errorf("mock scenario %s is %s; disable it before deleting it", scenario.Name, scenario.Activation.State)
+		return fmt.Errorf("%w: mock scenario %s is %s; disable it before deleting it", errMockScenarioConflict, scenario.Name, scenario.Activation.State)
 	}
 	if err := s.database.DeleteMockScenario(ctx, project, environment, scenario.Name); err != nil {
 		return err
@@ -180,7 +189,7 @@ func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenar
 		scenario.Routes = append(scenario.Routes, route)
 	}
 	if scenario.Activation.State != model.MockScenarioDisabled && !sameMockServices(beforeServices, mockScenarioServices(scenario.Routes)) {
-		return model.MockScenario{}, errors.New("disable the mock scenario before changing which services it covers")
+		return model.MockScenario{}, fmt.Errorf("%w: disable the mock scenario before changing which services it covers", errMockScenarioConflict)
 	}
 	if _, err := mocks.Compile(scenario); err != nil {
 		return model.MockScenario{}, err
@@ -221,7 +230,7 @@ func (s *Service) DeleteMockRoute(ctx context.Context, project, environment, sce
 		return model.MockScenario{}, database.ErrNotFound
 	}
 	if scenario.Activation.State != model.MockScenarioDisabled && !sameMockServices(beforeServices, mockScenarioServices(remaining)) {
-		return model.MockScenario{}, errors.New("disable the mock scenario before deleting the final route for a service")
+		return model.MockScenario{}, fmt.Errorf("%w: disable the mock scenario before deleting the final route for a service", errMockScenarioConflict)
 	}
 	updated, err := s.database.DeleteMockRoute(ctx, project, environment, scenario.Name, routeName)
 	if err != nil {
@@ -301,6 +310,9 @@ func (s *Service) refreshActiveMockScenario(ctx context.Context, scenario model.
 }
 
 func (s *Service) validateMockService(ctx context.Context, project, requested string) (string, error) {
+	if err := model.ValidateServiceName(requested); err != nil {
+		return "", fmt.Errorf("mock route service: %w", err)
+	}
 	definition, err := s.database.ProjectModel(ctx, project)
 	if err != nil {
 		return "", err

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { authenticate, environmentPath } from './helpers'
+import { authenticate, environmentHeader, environmentPath } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -70,7 +70,7 @@ test('generates scoped MCP client configuration without persisting elevated acce
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(await preview.textContent())
 
   await page.goto(`${state.baseURL}${environmentPath()}`)
-  await expect(page.getByRole('heading', { name: state.environment, exact: true })).toBeVisible()
+  await expect(environmentHeader(page).getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   await page.keyboard.press('Control+K')
   const palette = page.getByRole('dialog', { name: 'Command palette' })
   const input = palette.getByPlaceholder('jump to a project or environment')

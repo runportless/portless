@@ -7,7 +7,7 @@ import { StatePanel, StatusMark } from '../../components/Status'
 import type { Environment, TimelineEvent } from '../../api/contracts/environments'
 import type { FaultRule, Recording } from '../../api/contracts/experiments'
 import type { Service } from '../../api/contracts/topology'
-import type { EnvironmentNavigationOptions, EnvironmentTab } from './navigation'
+import type { EnvironmentNavigationOptions, EnvironmentView } from './navigation'
 import { serviceActionOptions, useServiceActions } from './service/serviceActions'
 import { displayLaunchMode, openableServiceURL, overviewServiceEndpoint } from './service/servicePresentation'
 import { TopologyPreview } from './topology/TopologyPanel'
@@ -24,7 +24,7 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
   activeRecording?: Recording
   trafficCount: number
   onService: (service: Service) => void
-  onNavigate: (tab: EnvironmentTab, options?: EnvironmentNavigationOptions) => void
+  onNavigate: (view: EnvironmentView, options?: EnvironmentNavigationOptions) => void
   onChanged: () => void
 }) {
   const [servicePage, setServicePage] = useState(0)
@@ -80,7 +80,7 @@ export function OverviewPanel({ environment, timeline, ready, faults, activeReco
 
   return <>
     <div className="state-grid">
-      <StatePanel title="READY" value={`${ready}/${environment.services.length}`} detail="required services" />
+      <StatePanel title="READY" value={`${ready}/${environment.services.length}`} detail="all services" />
       <StatePanel title="TRAFFIC" value={trafficCount} detail="recent requests" />
       <StatePanel title="RECORDING" value={activeRecording ? 'ON' : 'OFF'} tone={activeRecording ? 'danger' : undefined} detail={activeRecording?.name || 'capture disabled'} />
       <StatePanel title="FAULTS" value={faults.length} tone={faults.length ? 'warning' : undefined} detail={faults.length ? 'affecting local traffic' : 'none active'} />

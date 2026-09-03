@@ -27,7 +27,7 @@ func (s *Service) SetMockScenarioEnabled(ctx context.Context, project, environme
 			return model.Operation{}, errors.New("add at least one route before enabling the mock scenario")
 		}
 		if scenario.Activation.State == model.MockScenarioDegraded {
-			return model.Operation{}, errors.New("disable the partially active mock scenario before enabling it again")
+			return model.Operation{}, fmt.Errorf("%w: disable the partially active mock scenario before enabling it again", errMockScenarioConflict)
 		}
 		if _, err := mocks.Compile(scenario); err != nil {
 			return model.Operation{}, err
@@ -236,7 +236,8 @@ func (s *Service) rollbackMockScenarioBindings(ctx context.Context, scope string
 }
 
 func (s *Service) failMockScenarioActivation(scope string, operation model.Operation, scenario string, err error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	_, _ = s.database.AddOperationEvent(ctx, scope, operation.Number, model.OperationEvent{Type: "operation.failed", Subject: scenario, Message: err.Error()})
 	_ = s.database.CompleteOperation(ctx, scope, operation.Number, "failed", err.Error())
 	failed, _ := s.database.Operation(ctx, scope, operation.Number)

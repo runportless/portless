@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { applicationRequest, authenticate, controlAPI, environmentPath } from './helpers'
+import { applicationRequest, authenticate, environmentHeader, controlAPI, environmentPath } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -42,7 +42,7 @@ test('renders real services, endpoints, topology, and service details', async ({
   await expect(actionMenu.getByRole('menuitem', { name: 'RESTART' })).toBeVisible()
   await expect(actionMenu.getByRole('menuitem', { name: 'DEBUG' })).toHaveCount(0)
   await expect(actionMenu.getByRole('menuitem', { name: 'STOP' })).toBeVisible()
-  await page.getByRole('heading', { name: state.environment, exact: true }).click()
+  await environmentHeader(page).getByRole('heading', { name: 'Overview', exact: true }).click()
   await expect(actionMenu).toHaveCount(0)
 
   await checkoutActions.click()
@@ -185,7 +185,7 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
   expect(debugService).toMatchObject({ launchMode: 'debug', debugger: { host: '127.0.0.1', state: 'listening' } })
   expect(debugService?.pid).toBeGreaterThan(0)
   expect(debugService?.debugger?.port).toBeGreaterThan(0)
-  await expect(page.getByRole('heading', { name: state.environment, exact: true }).locator('..')).toContainText('healthy')
+  await expect(environmentHeader(page, state.debugProject)).toContainText('healthy')
   await expect(page.locator('body')).not.toContainText('development')
   await expect(page.locator('body')).not.toContainText('debug services are ready')
 
@@ -225,17 +225,17 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
 
 test('stops and starts the environment from the UI', async ({ page }) => {
   await authenticate(page)
-  const tabs = page.getByRole('navigation', { name: 'Environment views' })
-  const initialTabsTop = await tabs.evaluate((element) => Math.round(element.getBoundingClientRect().top))
+  const header = environmentHeader(page)
+  const initialHeaderHeight = await header.evaluate((element) => Math.round(element.getBoundingClientRect().height))
   await page.getByRole('button', { name: 'STOP ALL' }).click()
   await expect(page.getByRole('button', { name: 'START ALL' })).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByRole('heading', { name: 'local', exact: true }).locator('..')).toContainText('stopped')
-  expect(await tabs.evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(initialTabsTop)
+  await expect(environmentHeader(page)).toContainText('stopped')
+  expect(await header.evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBe(initialHeaderHeight)
 
   await page.getByRole('button', { name: 'START ALL' }).click()
   await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByRole('heading', { name: 'local', exact: true }).locator('..')).toContainText('healthy')
-  expect(await tabs.evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(initialTabsTop)
+  await expect(environmentHeader(page)).toContainText('healthy')
+  expect(await header.evaluate((element) => Math.round(element.getBoundingClientRect().height))).toBe(initialHeaderHeight)
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })
 
@@ -359,8 +359,8 @@ test('switches one active provider and persists stopped-environment bindings', a
   const clonePath = `/environments/${state.project}/${cloneName}?tab=bindings`
   await page.goto(`${state.baseURL}${clonePath}`)
   await expect(page).toHaveURL(new RegExp(`${clonePath.replace('?', '\\?')}$`))
-  await expect(page.getByRole('heading', { name: cloneName, exact: true })).toBeVisible()
-  await expect(page.getByRole('heading', { name: cloneName, exact: true }).locator('..')).toContainText('stopped')
+  await expect(environmentHeader(page, state.project, cloneName).getByRole('heading', { name: 'Bindings', exact: true })).toBeVisible()
+  await expect(environmentHeader(page, state.project, cloneName)).toContainText('stopped')
 
   const inventoryRow = page.locator('.configured-providers-panel .provider-row:not(.provider-row--header)').filter({ hasText: 'inventory' })
   await inventoryRow.getByRole('button', { name: 'EDIT', exact: true }).click()

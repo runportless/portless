@@ -138,6 +138,73 @@ func TestMockScenarioInterruptedActivationRetainsRestorationState(t *testing.T) 
 	}
 }
 
+func TestMockScenarioPartialFailureRollsBackOrKeepsRecoverableState(t *testing.T) {
+	for _, blockRollback := range []bool{false, true} {
+		name := "rollback"
+		if blockRollback {
+			name = "degraded"
+		}
+		t.Run(name, func(t *testing.T) {
+			app, store := mockScenarioTestService(t)
+			ctx := context.Background()
+			createTestMockScenario(t, app, name, "inventory", "payments")
+			before, err := store.Environment(ctx, "store", "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.DB().ExecContext(ctx, `CREATE TRIGGER fail_payments_mock BEFORE INSERT ON environment_bindings
+WHEN NEW.service_name = 'payments' AND NEW.provider = 'mock'
+BEGIN SELECT RAISE(FAIL, 'injected payment binding failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if blockRollback {
+				if _, err := store.DB().ExecContext(ctx, `CREATE TRIGGER fail_inventory_restore BEFORE INSERT ON environment_bindings
+WHEN NEW.service_name = 'inventory' AND NEW.provider = 'local' AND EXISTS(SELECT 1 FROM mock_scenario_activations)
+BEGIN SELECT RAISE(FAIL, 'injected restoration failure'); END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			operation, err := app.SetMockScenarioEnabled(ctx, "store", "local", name, true, "test", "injected-enable")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation = waitForOperation(t, app, operation); operation.State != "failed" || !strings.Contains(operation.Error, "injected payment binding failure") {
+				t.Fatalf("injected activation = %#v", operation)
+			}
+			scenario, err := app.MockScenario(ctx, "store", "local", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if blockRollback {
+				if scenario.Activation.State != model.MockScenarioDegraded || !reflect.DeepEqual(scenario.Activation.ActiveServices, []string{"inventory"}) {
+					t.Fatalf("failed rollback lost active coverage: %#v", scenario.Activation)
+				}
+				if _, err := store.DB().ExecContext(ctx, `DROP TRIGGER fail_inventory_restore`); err != nil {
+					t.Fatal(err)
+				}
+				operation, err = app.SetMockScenarioEnabled(ctx, "store", "local", name, false, "test", "recover-injected-failure")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
+					t.Fatalf("recovery = %#v", operation)
+				}
+			} else if scenario.Activation.State != model.MockScenarioDisabled {
+				t.Fatalf("successful rollback left activation: %#v", scenario.Activation)
+			}
+			after, err := store.Environment(ctx, "store", "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, binding := range before.Bindings {
+				if !sameProviderBinding(binding, bindingForEnvironment(after, binding.Service)) {
+					t.Fatalf("%s not restored: %#v", binding.Service, after.Bindings)
+				}
+			}
+		})
+	}
+}
+
 func mockScenarioTestService(t *testing.T) (*Service, *database.Store) {
 	t.Helper()
 	ctx := context.Background()

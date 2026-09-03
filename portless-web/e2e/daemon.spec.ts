@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { applicationRequest, authenticate, controlAPI } from './helpers'
+import { applicationRequest, authenticate, controlAPI, environmentHeader } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -18,10 +18,14 @@ test('surfaces a failed control-plane refresh and reconnects automatically', asy
   await expect(reconnecting).toHaveText('reconnecting', { timeout: 8_000 })
   await expect(reconnecting).toHaveCSS('animation-name', 'daemon-reconnecting-pulse')
   await expect(reconnecting).toHaveCSS('animation-duration', '1.4s')
+  await expect(environmentHeader(page).getByRole('link', { name: /health: reconnecting, last known healthy/ })).toBeVisible()
+  await expect(environmentHeader(page).getByRole('button', { name: 'STOP ALL' })).toBeDisabled()
+  await expect(environmentHeader(page).getByRole('link', { name: 'OPEN APP' })).toBeVisible()
   await expect.poll(() => reconnecting.evaluate((element) => getComputedStyle(element).color === getComputedStyle(element.previousElementSibling as HTMLElement).backgroundColor)).toBe(true)
   await page.unroute(environmentsEndpoint)
   await expect(page.locator('.sidebar__footer')).toContainText('ready', { timeout: 8_000 })
   await expect(reconnecting).toHaveCount(0)
+  await expect(environmentHeader(page).getByRole('button', { name: 'STOP ALL' })).toBeEnabled()
   expect((await applicationRequest('/checkout?sku=reconnected&quantity=1')).status).toBe(200)
 })
 
@@ -159,5 +163,8 @@ test('shows Portless system details and reconnects after a daemon restart', asyn
   await expect.poll(async () => (await controlAPI<{ instanceId: string }>('/api/v1/daemon')).instanceId).not.toBe(before.instanceId)
   const afterEnvironment = await controlAPI<{ services: Array<{ name: string; pid: number }> }>('/api/v1/environments/ui-e2e/local')
   expect(afterEnvironment.services.map(({ name, pid }) => ({ name, pid }))).toEqual(beforeEnvironment.services.map(({ name, pid }) => ({ name, pid })))
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await expect(environmentHeader(page).getByRole('link', { name: /health: healthy; 3\/3 ready/ })).toBeVisible()
+  await expect(environmentHeader(page).getByRole('button', { name: 'STOP ALL' })).toBeEnabled()
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })

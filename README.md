@@ -219,6 +219,18 @@ While active, route responses and enabled flags are editable, but changing the
 set of target services requires disabling the scenario first. An unmatched
 request returns `501`; it never falls through to the real service.
 
+In the browser, selecting a mock scenario opens a split workspace: a sortable,
+ten-per-page route list on the left and the selected route's configuration on
+the right. Adding and saving routes stays in that workspace. Unsaved drafts
+are retained while switching between routes in the scenario; Save applies a
+draft, and Discard restores its saved values. The panes scroll independently,
+adapt to focus mode, and the route editor can also be maximized.
+
+Topology service cards show a compact `MOCK` badge when their endpoint is bound
+to a mock scenario. Hovering or focusing a card identifies the scenario; the
+service's endpoint details link directly to its route workspace. Readiness and
+traffic indicators retain their independent meanings.
+
 ### Observe and experiment
 
 The embedded control plane and CLI share the same authenticated daemon API.
@@ -237,10 +249,29 @@ environments are stopped and never deletes source checkouts from disk.
 Each environment page exposes the corresponding forget action in its header.
 The confirmation requires that environment to be stopped, removes its retained
 Portless state, and preserves source checkouts and managed data volumes.
+The sidebar selects Overview, Topology, Traffic, Mocks, Recordings, Faults,
+Bindings, and Timeline. A compact persistent header shows the project,
+environment, current view, health and ready-service count, Open App, Start/Stop,
+and minimalist colored activity icons: red for recordings, amber for faults,
+and purple for mocks. Hover reveals activity details; clicking opens the matching
+view (or the scenario directly when only one mock scenario is active).
+The health link opens Overview; Open App
+uses the primary service's public HTTP URL. Lifecycle controls and command-palette
+actions share pending operation state until its outcome is confirmed.
+Overview starts with the environment name and clone-origin chip, with links to
+the active recording, enabled faults, and each mock scenario currently bound to
+a service. These details update live and remain visible in focus mode.
+Routine start, recovery, and stop progress stays in the header instead of
+inserting a page banner, so mock activation and restoration do not shift the
+scenario table or route workspace. Failures and configuration issues remain
+visible in the page.
 Focus mode, toggled with `Command-Shift-F`, `Control-Shift-F`, or the command
-palette, hides the environment heading and fixed sidebar while retaining status
-in the top bar. Moving to the left edge reveals the full navigation as a
-non-shifting overlay, and the browser remembers the mode across reloads.
+palette, keeps the header while hiding the fixed sidebar and its header navigation
+button. Hover over the left edge to preview navigation, or activate the edge
+button with a click, Enter, or Space to keep the overlay open. On narrow screens
+outside focus mode, Open navigation in the header opens the same sidebar overlay.
+The browser remembers focus mode and the desktop sidebar's collapse preference
+across reloads.
 The sidebar's Environments heading also exposes a persistent create action. It
 clones the current environment by default and opens the new stopped environment.
 

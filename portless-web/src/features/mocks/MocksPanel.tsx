@@ -10,7 +10,7 @@ import { SortableGridHeader, type TableSort } from '../../components/SortableTab
 import { StatusMark } from '../../components/Status'
 import { waitForEnvironmentOperation } from '../environment/operationPolling'
 import { httpStatusGroups } from '../httpStatuses'
-import { MockRouteEditor, mockRouteDraft, type MockRouteDraft } from './MockRouteEditor'
+import { MockRouteEditor, mockRouteDraft, mockRouteDraftHasChanges, newMockRouteDraft, type MockRouteDraft } from './MockRouteEditor'
 
 type MockScenarioSortField = 'state' | 'name' | 'services' | 'routes' | 'modifiedAt'
 type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'delay' | 'state'
@@ -21,12 +21,13 @@ const mockRoutePageSize = 10
 
 export const mockHTTPStatusGroups = httpStatusGroups
 
-export function MocksPanel({ environment, selectedScenario, workspace, workspaceRoute, onRouteWorkspace, onSelectScenario, onChanged }: {
+export function MocksPanel({ environment, selectedScenario, creatingRoute, selectedRoute, onSelectRoute, onCreateRoute, onSelectScenario, onChanged }: {
   environment: Environment
   selectedScenario?: string
-  workspace?: 'route'
-  workspaceRoute?: string
-  onRouteWorkspace?: (scenario: string, route?: string) => void
+  creatingRoute?: boolean
+  selectedRoute?: string
+  onSelectRoute: (scenario: string, route?: string) => void
+  onCreateRoute: (scenario: string) => void
   onSelectScenario: (scenario?: string) => void
   onChanged: () => void | Promise<void>
 }) {
@@ -97,7 +98,7 @@ export function MocksPanel({ environment, selectedScenario, workspace, workspace
   }
 
   const saveRoute = async (draft: MockRouteDraft, originalName?: string) => {
-    if (!selected) return
+    if (!selected || busy) return false
     setBusy('route'); setError(null)
     try {
       const routeName = draft.name.trim()
@@ -112,26 +113,27 @@ export function MocksPanel({ environment, selectedScenario, workspace, workspace
         method: 'PUT', ...jsonBody(route),
       })
       setScenarios((current) => current.map((scenario) => scenario.name === updated.name ? updated : scenario))
-      onSelectScenario(updated.name)
-    } catch (reason) { setError(actionError("Mock route wasn't saved", reason)) }
+      return true
+    } catch (reason) { setError(actionError("Mock route wasn't saved", reason)); return false }
     finally { setBusy('') }
   }
 
   const removeRoute = async (route: MockRoute) => {
-    if (!selected) return
+    if (!selected || busy) return false
     const key = `delete-route:${route.name}`
-    if (deleteName !== key) { setDeleteName(key); return }
+    if (deleteName !== key) { setDeleteName(key); return false }
     setBusy(key); setError(null)
     try {
       const updated = await api<MockScenario>(environmentPath(environment, `/mocks/${encodeURIComponent(selected.name)}/routes/${encodeURIComponent(route.name)}`), { method: 'DELETE' })
       setScenarios((current) => current.map((scenario) => scenario.name === updated.name ? updated : scenario))
       setDeleteName('')
-    } catch (reason) { setError(actionError("Mock route wasn't deleted", reason)) }
+      return true
+    } catch (reason) { setError(actionError("Mock route wasn't deleted", reason)); return false }
     finally { setBusy('') }
   }
 
   const setRouteEnabled = async (route: MockRoute, enabled: boolean) => {
-    if (!selected || route.enabled === enabled) return
+    if (!selected || busy || route.enabled === enabled) return false
     const action = `toggle-route:${route.name}`
     setBusy(action); setDeleteName(''); setError(null)
     try {
@@ -142,33 +144,24 @@ export function MocksPanel({ environment, selectedScenario, workspace, workspace
         method: 'PUT', ...jsonBody(updatedRoute),
       })
       setScenarios((current) => current.map((scenario) => scenario.name === updated.name ? updated : scenario))
-    } catch (reason) { setError(actionError(`Mock route wasn't ${enabled ? 'enabled' : 'disabled'}`, reason)) }
+      return true
+    } catch (reason) { setError(actionError(`Mock route wasn't ${enabled ? 'enabled' : 'disabled'}`, reason)); return false }
     finally { setBusy('') }
   }
 
-  const processServices = environment.services.filter((service) => service.kind === 'process').map((service) => service.name)
+  const processServices = environment.services.filter((service) => service.kind === 'process' && !environment.connections.some((connection) => connection.target.toLowerCase() === service.name.toLowerCase() && connection.protocol !== 'http')).map((service) => service.name)
   const routeEditorServices = selected && mockScenarioIsActive(selected)
     ? processServices.filter((service) => selected.activation.targetServices.some((target) => target.toLowerCase() === service.toLowerCase()))
     : processServices
 
-  if (workspace === 'route') return <div className="mocks-page">
-    {loading ? <section className="panel mock-workspace-loading">Loading route editor…</section> : selected ? <MockRouteEditor
-      key={`${selected.name}/${workspaceRoute || 'new'}`}
-      scenario={selected}
-      services={routeEditorServices}
-      routeName={workspaceRoute}
-      busy={busy === 'route'}
-      error={error}
-      onDismissError={() => setError(null)}
-      onCancel={() => { if (!busy) { setError(null); onSelectScenario(selected.name) } }}
-      onSave={saveRoute}
-    /> : <MockWorkspaceMissing error={error} subject="MOCK SCENARIO" onDismissError={() => setError(null)} onBack={() => onSelectScenario()} />}
-  </div>
-
-  if (selectedScenario) return <div className="mocks-page">
+  if (selectedScenario) return <div className="mocks-page mocks-page--workspace">
     {loading ? <section className="panel mock-workspace-loading">Loading mock scenario…</section> : selected ? <MockScenarioWorkspace
+      key={`${environment.project}/${environment.name}/${selected.name}`}
       environment={environment}
       scenario={selected}
+      services={routeEditorServices}
+      selectedRoute={selectedRoute}
+      creatingRoute={creatingRoute}
       busy={busy}
       deleteName={deleteName}
       transitionBlocked={transitionBlocked}
@@ -176,10 +169,11 @@ export function MocksPanel({ environment, selectedScenario, workspace, workspace
       onDismissError={() => setError(null)}
       onBack={() => { setDeleteName(''); setError(null); onSelectScenario() }}
       onToggle={(enabled) => { void setScenarioEnabled(selected, enabled) }}
-      onAddRoute={() => onRouteWorkspace?.(selected.name)}
-      onEditRoute={(route) => onRouteWorkspace?.(selected.name, route.name)}
-      onToggleRoute={(route, enabled) => { void setRouteEnabled(route, enabled) }}
-      onDeleteRoute={(route) => { void removeRoute(route) }}
+      onAddRoute={() => onCreateRoute(selected.name)}
+      onSelectRoute={(route) => onSelectRoute(selected.name, route)}
+      onSaveRoute={saveRoute}
+      onToggleRoute={setRouteEnabled}
+      onDeleteRoute={removeRoute}
       onDismissDelete={() => setDeleteName('')}
     /> : <MockWorkspaceMissing error={error} subject="MOCK SCENARIO" onDismissError={() => setError(null)} onBack={() => onSelectScenario()} />}
   </div>
@@ -247,10 +241,10 @@ export function MockScenarioCreateDialog({ busy, error, onDismissError, onClose,
       if (!ready) return
       void onCreate({ name: name.trim(), ...(description.trim() ? { description: description.trim() } : {}) })
     }}>
-      <p id="mock-scenario-create-description">Create the scenario, then add one or more service routes. It remains disabled until you enable it.</p>
+      <p id="mock-scenario-create-description">Create the scenario, then add one or more service routes.</p>
       <div className="form-modal__fields">
-        <label><span>NAME</span><input ref={nameInput} aria-label="NAME" name="portless-mock-scenario-name" required pattern="[a-z0-9][a-z0-9._-]{0,63}" maxLength={64} autoComplete="off" spellCheck="false" placeholder="checkout-failure" value={name} disabled={busy} title="Use a lowercase URL-safe name." data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); onDismissError() }} /></label>
-        <label className="provider-field--wide"><span>DESCRIPTION <small>OPTIONAL</small></span><input aria-label="DESCRIPTION" placeholder="Inventory is empty and payments are unavailable" value={description} disabled={busy} onChange={(event) => { setDescription(event.target.value); onDismissError() }} /></label>
+        <label><span>NAME</span><input ref={nameInput} aria-label="NAME" name="portless-mock-scenario-name" required pattern="[a-z0-9][a-z0-9._-]{0,63}" maxLength={64} autoComplete="off" spellCheck="false" value={name} disabled={busy} title="Use a lowercase URL-safe name." data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); onDismissError() }} /></label>
+        <label className="provider-field--wide"><span>DESCRIPTION <small>OPTIONAL</small></span><input aria-label="DESCRIPTION" value={description} disabled={busy} onChange={(event) => { setDescription(event.target.value); onDismissError() }} /></label>
       </div>
       {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
       <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !ready}>{busy ? 'CREATING…' : 'CREATE SCENARIO'}</button></footer>
@@ -281,7 +275,7 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
   }
 
   return <section className="panel mock-scenarios-panel">
-    <div className="panel-title"><span>MOCK SCENARIOS</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE SCENARIO</button></div>
+    <div className="panel-title"><span>SCENARIOS</span><button className="button button--primary button--small panel-create-button" type="button" disabled={!!busy} onClick={onCreate}>CREATE SCENARIO</button></div>
     <div className={`mock-scenario-row mock-scenario-row--header sortable-header-row${scenarioSort.key === defaultMockScenarioSort.key && scenarioSort.direction === defaultMockScenarioSort.direction ? ' is-default-sort' : ''}`} role="row">
       <SortableGridHeader label="State" sortKey="state" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
       <SortableGridHeader label="Scenario" sortKey="name" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
@@ -324,9 +318,12 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
   </section>
 }
 
-export function MockScenarioWorkspace({ environment, scenario, busy, deleteName, transitionBlocked, error, onDismissError, onBack, onToggle, onAddRoute, onEditRoute, onToggleRoute, onDeleteRoute, onDismissDelete }: {
+export function MockScenarioWorkspace({ scenario, services, selectedRoute, creatingRoute = false, busy, deleteName, transitionBlocked, error, onDismissError, onBack, onToggle, onAddRoute, onSelectRoute, onSaveRoute, onToggleRoute, onDeleteRoute, onDismissDelete }: {
   environment: Environment
   scenario: MockScenario
+  services: string[]
+  selectedRoute?: string
+  creatingRoute?: boolean
   busy: string
   deleteName: string
   transitionBlocked: boolean
@@ -335,32 +332,95 @@ export function MockScenarioWorkspace({ environment, scenario, busy, deleteName,
   onBack: () => void
   onToggle: (enabled: boolean) => void
   onAddRoute: () => void
-  onEditRoute: (route: MockRoute) => void
-  onToggleRoute: (route: MockRoute, enabled: boolean) => void
-  onDeleteRoute: (route: MockRoute) => void
+  onSelectRoute: (route?: string) => void
+  onSaveRoute: (route: MockRouteDraft, originalName?: string) => Promise<boolean>
+  onToggleRoute: (route: MockRoute, enabled: boolean) => Promise<boolean>
+  onDeleteRoute: (route: MockRoute) => Promise<boolean>
   onDismissDelete: () => void
 }) {
   const [routeMenu, setRouteMenu] = useState('')
   const [routePage, setRoutePage] = useState(0)
   const [routeSort, setRouteSort] = useState<TableSort<MockRouteSortField>>(defaultMockRouteSort)
+  const [drafts, setDrafts] = useState<Record<string, MockRouteDraft>>({})
+  const [leaveOpen, setLeaveOpen] = useState(false)
   const active = mockScenarioIsActive(scenario)
   const enableBlocked = !active && scenario.routes.length === 0
   const toggleBusy = busy === `${active ? 'disable' : 'enable'}:${scenario.name}`
   const toggleDisabled = !!busy || transitionBlocked || enableBlocked
   const orderedRoutes = useMemo(() => sortMockRoutes(scenario.routes, routeSort), [scenario.routes, routeSort])
   const routePagination = useMemo(() => paginateItems(orderedRoutes, routePage, mockRoutePageSize), [orderedRoutes, routePage])
-  const services = scenario.activation.targetServices
+  const defaultRoute = useMemo(() => sortMockRoutes(scenario.routes, defaultMockRouteSort)[0]?.name, [scenario.routes])
+  const routeName = creatingRoute ? undefined : selectedRoute || defaultRoute
+  const existing = scenario.routes.find((route) => route.name === routeName)
+  const draftKey = creatingRoute ? 'new' : routeName ? `route:${routeName}` : undefined
+  const draft = draftKey && drafts[draftKey] || (existing ? mockRouteDraft(existing) : newMockRouteDraft(scenario.routes.length + 1, services[0] || ''))
+  const dirty = !!draftKey && !!drafts[draftKey]
+  const hasDrafts = Object.keys(drafts).length > 0
+  const selectedPage = Math.max(0, Math.floor(orderedRoutes.findIndex((route) => route.name === routeName) / mockRoutePageSize))
 
   useEffect(() => {
     setRouteMenu('')
-    setRoutePage(0)
-    setRouteSort(defaultMockRouteSort)
-  }, [environment.project, environment.name, scenario.name])
+    setRoutePage(selectedPage)
+  }, [routeName, creatingRoute, selectedPage])
 
   useEffect(() => {
     setRoutePage((current) => Math.min(current, Math.max(0, Math.ceil(scenario.routes.length / mockRoutePageSize) - 1)))
   }, [scenario.routes.length])
 
+  useEffect(() => {
+    if (!hasDrafts) return
+    const warnOnUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warnOnUnload)
+    return () => window.removeEventListener('beforeunload', warnOnUnload)
+  }, [hasDrafts])
+
+  const clearDraft = (key: string) => setDrafts((current) => {
+    const next = { ...current }
+    delete next[key]
+    return next
+  })
+  const changeDraft = (next: MockRouteDraft) => {
+    if (!draftKey) return
+    onDismissError()
+    if (existing && !mockRouteDraftHasChanges(next, existing)) clearDraft(draftKey)
+    else setDrafts((current) => ({ ...current, [draftKey]: next }))
+  }
+  const selectRoute = (name?: string) => {
+    if (busy) return
+    setRouteMenu('')
+    onDismissDelete()
+    onDismissError()
+    if (creatingRoute || name !== selectedRoute) onSelectRoute(name)
+  }
+  const saveDraft = async (next: MockRouteDraft, originalName?: string) => {
+    if (!draftKey || !await onSaveRoute(next, originalName)) return
+    clearDraft(draftKey)
+    if (creatingRoute || selectedRoute !== next.name.trim()) onSelectRoute(next.name.trim())
+  }
+  const discardDraft = () => {
+    if (busy || !draftKey) return
+    clearDraft(draftKey)
+    onDismissError()
+    if (creatingRoute || !existing) onSelectRoute()
+  }
+  const toggleRoute = async (route: MockRoute, enabled: boolean) => {
+    if (!await onToggleRoute(route, enabled)) return
+    setDrafts((current) => {
+      const key = `route:${route.name}`
+      if (!current[key]) return current
+      const updated = { ...current[key], enabled }
+      const next = { ...current }
+      if (mockRouteDraftHasChanges(updated, { ...route, enabled })) next[key] = updated
+      else delete next[key]
+      return next
+    })
+  }
+  const deleteRoute = async (route: MockRoute) => {
+    if (!await onDeleteRoute(route)) return
+    clearDraft(`route:${route.name}`)
+    setRouteMenu('')
+    if (route.name === routeName) onSelectRoute()
+  }
   const changeRouteSort = (sort: TableSort<MockRouteSortField>) => {
     setRouteSort(sort)
     setRoutePage(0)
@@ -369,75 +429,72 @@ export function MockScenarioWorkspace({ environment, scenario, busy, deleteName,
   }
 
   return <section className="panel mock-scenario-workspace" role="region" aria-label={`${scenario.name} mock scenario`}>
-    <header className="mock-workspace-header">
-      <div>
-        <button className="mock-workspace-back" type="button" disabled={!!busy} aria-label="Back to mock scenarios" onClick={onBack}>
+    <header className="mock-scenario-header">
+      <button className="mock-workspace-back" type="button" disabled={!!busy} aria-label="Back to mock scenarios" onClick={() => { if (hasDrafts) setLeaveOpen(true); else onBack() }}>
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M7 3 2 8l5 5" /><path d="M2 8h12" /></svg>
           <span>BACK</span>
-        </button>
-        <div className="eyebrow mock-scenario-service-eyebrow">{services.length ? `SERVICES / ${services.join(' · ')}` : 'NO SERVICES YET'}</div>
-        <div className="mock-workspace-title"><h2 id="mock-scenario-workspace-title">{scenario.name}</h2></div>
-        {scenario.description && <p>{scenario.description}</p>}
+      </button>
+      <div className="mock-scenario-heading">
+        {scenario.activation.targetServices.length > 0 && <div className="eyebrow mock-scenario-service-eyebrow">SERVICES / {scenario.activation.targetServices.join(' · ')}</div>}
+        <h2 id="mock-scenario-workspace-title">{scenario.name}</h2>
+        {scenario.description && <p title={scenario.description}>{scenario.description}</p>}
       </div>
-      <div className="mock-workspace-header__actions">
         <label className={`mock-scenario-toggle${active ? ' is-active' : ''}${toggleDisabled ? ' is-disabled' : ''}`} title={enableBlocked ? 'Add a route before enabling this scenario.' : undefined}>
           <span className="mock-scenario-toggle__label">{toggleBusy ? active ? 'DISABLING…' : 'ENABLING…' : scenario.activation.state.toUpperCase()}</span>
           <input className="sr-only" type="checkbox" role="switch" checked={active} disabled={toggleDisabled} aria-label={`${scenario.name} enabled`} onChange={(event) => onToggle(event.target.checked)} />
           <span className="mock-scenario-toggle__track" aria-hidden="true"><span /></span>
         </label>
-      </div>
     </header>
     {scenario.activation.state === 'degraded' && <div className="alert alert--danger"><strong>Scenario is partially active</strong><span>{scenario.activation.activeServices.length} of {scenario.activation.targetServices.length} services currently use this scenario. Disable it to restore the saved providers.</span></div>}
-    {error && <div className="mock-workspace-error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
-    <section className="mock-route-table" aria-label={`${scenario.name} routes`}>
-      <div className="mock-route-table__title">
-        <div><span>ROUTES</span></div>
-        <button className="button button--primary button--small" type="button" disabled={!!busy} onClick={onAddRoute}>ADD ROUTE</button>
-      </div>
-      <div className={`mock-route-row mock-route-row--header sortable-header-row${routeSort.key === defaultMockRouteSort.key && routeSort.direction === defaultMockRouteSort.direction ? ' is-default-sort' : ''}`} role="row">
-        <SortableGridHeader label="Service" sortKey="service" sort={routeSort} itemCount={scenario.routes.length} onSort={changeRouteSort} />
-        <SortableGridHeader label="Route" sortKey="route" sort={routeSort} itemCount={scenario.routes.length} onSort={changeRouteSort} />
-        <SortableGridHeader label="Match" sortKey="match" sort={routeSort} itemCount={scenario.routes.length} onSort={changeRouteSort} />
-        <SortableGridHeader label="Response" sortKey="response" sort={routeSort} itemCount={scenario.routes.length} onSort={changeRouteSort} />
-        <SortableGridHeader label="Delay" sortKey="delay" sort={routeSort} itemCount={scenario.routes.length} onSort={changeRouteSort} />
-        <SortableGridHeader label="State" sortKey="state" sort={routeSort} itemCount={scenario.routes.length} onSort={changeRouteSort} />
-        <span aria-label="Actions" />
-      </div>
-      {routePagination.items.map((route) => <div className="mock-route-row mock-route-row--interactive" key={route.name} onClick={() => {
-        if (!busy) onEditRoute(route)
-      }}>
-        <strong className="mock-route-service">{route.service}</strong><strong>{route.name}</strong><code>{route.method} {route.path}{formatQuerySummary(route.query)}</code><span>{route.status}{route.body ? ` · ${new TextEncoder().encode(route.body).length} B` : ''}</span><span>{route.delayMs ? `${route.delayMs} ms` : '—'}</span><MockRouteEnabledToggle route={route} busy={busy === `toggle-route:${route.name}`} disabled={!!busy} onToggle={(enabled) => onToggleRoute(route, enabled)} />
-        <div className="mock-row-actions table-row-actions">
-          <RowActionsMenu
-            label={`Route actions for ${route.name}`}
-            menuLabel={`${route.name} route actions`}
-            open={routeMenu === route.name}
-            disabled={!!busy}
-            onOpenChange={(open) => {
-              setRouteMenu(open ? route.name : '')
-              if (!open || routeMenu !== route.name) onDismissDelete()
-            }}
-          >
-            <button type="button" role="menuitem" disabled={!!busy} onClick={() => onEditRoute(route)}>EDIT</button>
-            <button className={`is-danger${deleteName === `delete-route:${route.name}` ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === `delete-route:${route.name}` ? `Confirm delete ${route.name}` : `Delete ${route.name}`} onClick={() => onDeleteRoute(route)}>{busy === `delete-route:${route.name}` ? 'DELETING…' : deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button>
-          </RowActionsMenu>
+    {error && !draftKey && <div className="mock-workspace-error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
+    <div className="mock-scenario-split">
+      <section className="mock-route-browser" aria-label={`${scenario.name} routes`}>
+        <div className="mock-route-browser__title">
+          <span>ROUTES</span>
+          <button className="button button--primary button--small" type="button" disabled={!!busy || creatingRoute} onClick={() => { onDismissError(); onDismissDelete(); onAddRoute() }}>ADD ROUTE</button>
         </div>
-      </div>)}
-      {scenario.routes.length === 0 && <div className="mock-scenario-empty"><strong>NO ROUTES YET</strong><p>Add a request and response for any service. The scenario stays disabled until you enable it.</p><button className="button button--primary" type="button" disabled={!!busy} onClick={onAddRoute}>ADD FIRST ROUTE</button></div>}
-      <PanelPagination label="routes" pagination={routePagination} onPage={(page) => {
-        setRoutePage(page)
-        setRouteMenu('')
-        onDismissDelete()
-      }} />
-    </section>
+        {scenario.routes.length > 0 && <div className="mock-route-sort">
+          <label><span>SORT BY</span><select aria-label="Sort routes by" value={routeSort.key} onChange={(event) => changeRouteSort({ key: event.target.value as MockRouteSortField, direction: 'asc' })}>
+            <option value="service">Service</option><option value="route">Route</option><option value="match">Match</option><option value="response">Response</option><option value="delay">Delay</option><option value="state">State</option>
+          </select></label>
+          <button type="button" aria-label={`Sort routes ${routeSort.direction === 'asc' ? 'descending' : 'ascending'}`} onClick={() => changeRouteSort({ ...routeSort, direction: routeSort.direction === 'asc' ? 'desc' : 'asc' })}>{routeSort.direction === 'asc' ? '↑' : '↓'}</button>
+        </div>}
+        {(creatingRoute || drafts.new) && <button className={`mock-route-new${creatingRoute ? ' is-selected' : ''}`} type="button" disabled={!!busy} aria-current={creatingRoute ? 'true' : undefined} onClick={() => { if (!creatingRoute) onAddRoute() }}>NEW ROUTE <span>{drafts.new ? 'UNSAVED' : 'DRAFT'}</span></button>}
+        <div className="mock-route-browser__scroll">
+          <div className="mock-route-list" role="list" aria-label="Routes">
+            {routePagination.items.map((route) => <div className={`mock-route-item${route.name === routeName ? ' is-selected' : ''}`} role="listitem" key={route.name} onClick={() => selectRoute(route.name)}>
+              <button className="mock-route-select" type="button" disabled={!!busy} aria-label={`Edit ${route.name} route`} aria-current={route.name === routeName ? 'true' : undefined} onClick={(event) => { event.stopPropagation(); selectRoute(route.name) }}>
+                <span className="mock-route-select__name"><strong>{route.name}</strong>{drafts[`route:${route.name}`] && <small>UNSAVED</small>}</span>
+                <code title={`${route.method} ${route.path}${formatQuerySummary(route.query)}`}>{route.method} {route.path}{formatQuerySummary(route.query)}</code>
+                <span className="mock-route-select__meta"><span>{route.service}</span><span>{route.status}{route.delayMs ? ` · ${route.delayMs} ms` : ''}</span></span>
+              </button>
+              <div className="mock-route-item__actions table-row-actions">
+                <RowActionsMenu label={`Route actions for ${route.name}`} menuLabel={`${route.name} route actions`} open={routeMenu === route.name} disabled={!!busy} onOpenChange={(open) => { setRouteMenu(open ? route.name : ''); if (!open || routeMenu !== route.name) onDismissDelete() }}>
+                  <button type="button" role="menuitem" disabled={!!busy} onClick={() => selectRoute(route.name)}>EDIT</button>
+                  <button className={`is-danger${deleteName === `delete-route:${route.name}` ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === `delete-route:${route.name}` ? `Confirm delete ${route.name}` : `Delete ${route.name}`} onClick={() => { void deleteRoute(route) }}>{busy === `delete-route:${route.name}` ? 'DELETING…' : deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button>
+                </RowActionsMenu>
+                <MockRouteEnabledToggle route={route} busy={busy === `toggle-route:${route.name}`} disabled={!!busy} onToggle={(enabled) => { void toggleRoute(route, enabled) }} />
+              </div>
+            </div>)}
+          </div>
+          {scenario.routes.length === 0 && <div className="empty-row">No routes. Add one to define a request and response for a service.</div>}
+        </div>
+        <PanelPagination label="routes" pagination={routePagination} onPage={(page) => { setRoutePage(page); setRouteMenu(''); onDismissDelete() }} />
+      </section>
+      {draftKey ? <MockRouteEditor key={draftKey} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} /> : <div className="mock-route-editor-empty"><span>Add a route to configure its request and response.</span></div>}
+    </div>
+    {leaveOpen && <FormDialog className="mock-scenario-leave-dialog" titleID="mock-scenario-leave-title" descriptionID="mock-scenario-leave-description" closeLabel="Keep editing routes" onClose={() => setLeaveOpen(false)} header={<h2 id="mock-scenario-leave-title">Discard unsaved changes?</h2>}>
+      <p id="mock-scenario-leave-description">Your route drafts will be discarded when you leave this scenario.</p>
+      <footer><button className="button button--quiet" type="button" onClick={() => setLeaveOpen(false)}>KEEP EDITING</button><button className="button button--primary" type="button" onClick={onBack}>DISCARD AND LEAVE</button></footer>
+    </FormDialog>}
   </section>
 }
 
 function MockRouteEnabledToggle({ route, busy, disabled, onToggle }: { route: MockRoute; busy: boolean; disabled: boolean; onToggle: (enabled: boolean) => void }) {
-  return <label className={`mock-route-toggle${route.enabled ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`} onClick={(event) => event.stopPropagation()}>
+  return <label className={`mock-route-toggle${route.enabled ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`} title={`${route.name}: ${route.enabled ? 'enabled' : 'disabled'}`} onClick={(event) => event.stopPropagation()}>
     <input className="sr-only" type="checkbox" role="switch" checked={route.enabled} disabled={disabled} aria-label={`${route.name} route enabled`} onChange={(event) => onToggle(event.target.checked)} />
     <span className="mock-route-toggle__track" aria-hidden="true"><span /></span>
-    <span>{busy ? route.enabled ? 'DISABLING…' : 'ENABLING…' : route.enabled ? 'ENABLED' : 'DISABLED'}</span>
+    <span className="sr-only">{busy ? route.enabled ? 'DISABLING…' : 'ENABLING…' : route.enabled ? 'ENABLED' : 'DISABLED'}</span>
   </label>
 }
 
@@ -471,6 +528,13 @@ export function mockRoutesFromDrafts(drafts: MockRouteDraft[]): MockRoute[] {
     if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(service)) throw new Error(`Route ${name} must target a valid service.`)
     if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(draft.method)) throw new Error(`Route ${name} method must be an HTTP token.`)
     if (!draft.path.startsWith('/') || /[?#]/.test(draft.path)) throw new Error(`Route ${name} path must be an absolute URL path without a query or fragment.`)
+    const parameters = new Set<string>()
+    for (const segment of draft.path.split('/')) {
+      if (!/[{}]/.test(segment)) continue
+      if (!/^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(segment)) throw new Error(`Route ${name} path parameters must use a whole segment such as {id}.`)
+      if (parameters.has(segment)) throw new Error(`Route ${name} path parameter ${segment} is duplicated.`)
+      parameters.add(segment)
+    }
     const delayMs = Number(draft.delayMs)
     if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 300_000) throw new Error(`Route ${name} delay must be between 0 and 300000 ms.`)
     if (!registeredStatuses.has(Number(draft.status))) throw new Error(`Route ${name} status must be a registered final HTTP response status.`)

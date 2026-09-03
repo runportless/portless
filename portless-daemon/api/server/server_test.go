@@ -104,6 +104,14 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if createdMock.Code != http.StatusCreated || !strings.Contains(createdMock.Body.String(), `"project":"billing","environment":"local","name":"checkout-empty"`) || !strings.Contains(createdMock.Body.String(), `"state":"disabled"`) {
 		t.Fatalf("mock create response code=%d body=%s", createdMock.Code, createdMock.Body.String())
 	}
+	emptyActivation := request(server, authManager, http.MethodPut, mockBase+"/activation", `{"enabled":true}`, true)
+	if emptyActivation.Code != http.StatusBadRequest {
+		t.Fatalf("empty scenario activation code=%d body=%s", emptyActivation.Code, emptyActivation.Body.String())
+	}
+	missingService := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"method":"GET","path":"/health","status":200,"enabled":true}`, true)
+	if missingService.Code != http.StatusBadRequest {
+		t.Fatalf("service-less route code=%d body=%s", missingService.Code, missingService.Body.String())
+	}
 	updatedMock := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"service":"checkout","method":"GET","path":"/health","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"ready\":true}","enabled":true}`, true)
 	if updatedMock.Code != http.StatusOK || !strings.Contains(updatedMock.Body.String(), `"name":"health"`) || !strings.Contains(updatedMock.Body.String(), `"service":"checkout"`) || !strings.Contains(updatedMock.Body.String(), `"method":"GET"`) {
 		t.Fatalf("mock route response code=%d body=%s", updatedMock.Code, updatedMock.Body.String())
@@ -116,9 +124,43 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if listedMocks.Code != http.StatusOK || !strings.Contains(listedMocks.Body.String(), `"scenarios":[`) || !strings.Contains(listedMocks.Body.String(), `"checkout-empty"`) {
 		t.Fatalf("mock list response code=%d body=%s", listedMocks.Code, listedMocks.Body.String())
 	}
+	for _, enabled := range []bool{true, false} {
+		activation := request(server, authManager, http.MethodPut, mockBase+"/activation", `{"enabled":`+strconv.FormatBool(enabled)+`}`, true)
+		if activation.Code != http.StatusAccepted {
+			t.Fatalf("scenario activation code=%d body=%s", activation.Code, activation.Body.String())
+		}
+		var operation model.Operation
+		if err := json.Unmarshal(activation.Body.Bytes(), &operation); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for operation.State == "running" && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			operation, err = app.Operation(context.Background(), "billing", "local", operation.Number)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if operation.State != "succeeded" {
+			t.Fatalf("scenario activation operation = %#v", operation)
+		}
+		if enabled {
+			for _, target := range []string{mockBase, mockBase + "/routes/health"} {
+				blocked := request(server, authManager, http.MethodDelete, target, "", true)
+				if blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "MOCK_SCENARIO_CONFLICT") {
+					t.Fatalf("active scenario mutation code=%d body=%s", blocked.Code, blocked.Body.String())
+				}
+			}
+		}
+	}
 	deletedMockRoute := request(server, authManager, http.MethodDelete, mockBase+"/routes/health", "", true)
 	if deletedMockRoute.Code != http.StatusOK || !strings.Contains(deletedMockRoute.Body.String(), `"routes":[]`) {
 		t.Fatalf("mock route delete response code=%d body=%s", deletedMockRoute.Code, deletedMockRoute.Body.String())
+	}
+	openAPIDocument := `{"openapi":"3.1.0","info":{"title":"checkout","version":"1"},"paths":{"/health":{"get":{"responses":{"200":{"description":"ready"}}}}}}`
+	importedMock := request(server, authManager, http.MethodPost, mockBase+"/imports/openapi", `{"service":"checkout","document":`+strconv.Quote(openAPIDocument)+`}`, true)
+	if importedMock.Code != http.StatusOK || !strings.Contains(importedMock.Body.String(), `"scenario":`) || !strings.Contains(importedMock.Body.String(), `"service":"checkout"`) || !strings.Contains(importedMock.Body.String(), `"warnings":["Response 200 has no example body`) {
+		t.Fatalf("mock import code=%d body=%s", importedMock.Code, importedMock.Body.String())
 	}
 	deletedMock := request(server, authManager, http.MethodDelete, mockBase, "", true)
 	if deletedMock.Code != http.StatusNoContent {

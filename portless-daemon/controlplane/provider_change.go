@@ -56,7 +56,7 @@ func (s *Service) validateDirectProviderChange(ctx context.Context, project, env
 	if scenario, active, err := s.database.ActiveMockScenarioForService(ctx, project, environment, service); err != nil {
 		return err
 	} else if active {
-		return fmt.Errorf("service %s is controlled by mock scenario %s; disable that scenario before changing its provider", service, scenario)
+		return fmt.Errorf("%w: service %s is controlled by mock scenario %s; disable that scenario before changing its provider", errMockScenarioConflict, service, scenario)
 	}
 	return nil
 }

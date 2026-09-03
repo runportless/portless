@@ -1,7 +1,7 @@
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { authenticate, controlAPI, environmentPath } from './helpers'
+import { authenticate, environmentHeader, controlAPI, environmentPath } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -23,11 +23,14 @@ test('creates a cloned environment from the sidebar without duplicating sources'
   await create.click()
 
   await expect(page).toHaveURL(new RegExp(`/environments/${state.project}/qa-ui$`))
-  await expect(page.getByRole('heading', { name: 'qa-ui', exact: true })).toBeVisible()
-  const cloneOrigin = page.locator('.environment-clone-origin')
+  await expect(environmentHeader(page, state.project, 'qa-ui').getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+  const summary = page.getByRole('region', { name: `${state.project}/qa-ui overview summary` })
+  await expect(summary.getByRole('heading', { name: 'qa-ui', level: 2, exact: true })).toBeVisible()
+  const cloneOrigin = summary.locator('.environment-clone-origin')
   await expect(cloneOrigin).toHaveText('FROM local')
   await expect(cloneOrigin).toHaveAttribute('title', `Created by cloning ${state.project}/local; changes are independent.`)
-  await expect(page.locator('.environment-heading__message')).toHaveText('not running')
+  await expect(environmentHeader(page, state.project, 'qa-ui').getByRole('link', { name: /health: stopped/ })).toBeVisible()
+  await expect(page.locator('.environment-notices')).toHaveCount(0)
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
   await expect(page.getByRole('button', { name: /qa-ui.*stopped/ })).toBeVisible()
   await expect(page.locator('.project-source-row:not(.table-row--header)')).toHaveCount(1)
@@ -231,7 +234,7 @@ test('manages project sources separately from environment checkouts', async ({ p
   await page.goto(`${state.baseURL}${environmentPath()}`)
   await page.getByRole('button', { name: 'START ALL' }).click()
   await expect(page.getByRole('button', { name: 'STOP ALL' })).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByRole('heading', { name: state.environment, exact: true }).locator('..')).toContainText('healthy')
+  await expect(environmentHeader(page)).toContainText('healthy')
 })
 
 test('focuses the sidebar on one project while retaining searchable project history', async ({ page }) => {

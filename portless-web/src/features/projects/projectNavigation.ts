@@ -1,6 +1,7 @@
+import { environmentUIPath } from '../environment/navigation'
 import type { Environment } from '../../api/contracts/environments'
 import type { Project } from '../../api/contracts/projects'
-import { environmentRoute, projectRoute } from './projectOperations'
+import { projectRoute } from './projectOperations'
 
 export const projectNavigationStorageKey = 'portless.project-navigation.v1'
 export const recentProjectLimit = 5
@@ -103,11 +104,11 @@ export function projectDestination(project: Project, environments: Environment[]
   const owned = environments.filter((environment) => environment.project === project.name)
   const remembered = preferences.lastEnvironmentByProject[project.name]
   const rememberedEnvironment = remembered ? owned.find((environment) => environment.name === remembered) : undefined
-  if (rememberedEnvironment) return environmentRoute(rememberedEnvironment)
+  if (rememberedEnvironment) return environmentUIPath(rememberedEnvironment)
   const firstRunning = [...owned].filter((environment) => environment.status !== 'stopped').sort(compareEnvironmentNames)[0]
-  if (firstRunning) return environmentRoute(firstRunning)
+  if (firstRunning) return environmentUIPath(firstRunning)
   const firstEnvironment = [...owned].sort(compareEnvironmentNames)[0]
-  return firstEnvironment ? environmentRoute(firstEnvironment) : projectRoute(project.name)
+  return firstEnvironment ? environmentUIPath(firstEnvironment) : projectRoute(project.name)
 }
 
 export function initialProjectDestination(projects: Project[], environments: Environment[], preferences: ProjectNavigationPreferences) {

@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, APIError, environmentPath, eventStreamHealth, jsonBody, projectPath, setCSRF, subscribeEventStreamHealth } from './api'
-import { AppChrome, type Command, type EnvironmentView } from './components/Chrome'
+import { api, APIError, eventStreamHealth, jsonBody, projectPath, setCSRF, subscribeEventStreamHealth } from './api'
+import { AppChrome, type Command } from './components/Chrome'
 import { DAEMON_RESTART_SLA_MS } from './daemonRestart'
 import { EnvironmentPage } from './features/environment/EnvironmentPage'
+import { EnvironmentHeaderActions, EnvironmentHeaderContext } from './features/environment/EnvironmentHeader'
+import { environmentUIPath, environmentViews, parseEnvironmentView, type EnvironmentView } from './features/environment/navigation'
+import { useEnvironmentActivity } from './features/environment/useEnvironmentActivity'
+import { useEnvironmentActions } from './features/environment/useEnvironmentActions'
 import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
 import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
 import { initialProjectDestination, projectDestination, pruneProjectNavigationPreferences, readProjectNavigationPreferences, recordProjectVisit, removeProjectNavigationPreferences, setProjectHidden, sidebarProjectFor, writeProjectNavigationPreferences } from './features/projects/projectNavigation'
 import { projectRoute } from './features/projects/projectOperations'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
-import type { Environment, EnvironmentList, Operation } from './api/contracts/environments'
+import type { Environment, EnvironmentList } from './api/contracts/environments'
 import type { Project, ProjectList } from './api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus, Session } from './api/contracts/system'
 
-type Tab = EnvironmentView
 
 export function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -168,6 +171,10 @@ export function App() {
     ? environments.find((environment) => environment.project === parsed.project && environment.name === parsed.environment)
     : undefined
   const sidebarProject = sidebarProjectFor(projects, activeProject, projectNavigation)
+  const environmentScope = session && !authRequired && daemonStatus?.instanceId ? activeEnvironment : undefined
+  const environmentIdentity = environmentScope ? environmentSessionKey(environmentScope, daemonStatus) : ''
+  const activity = useEnvironmentActivity(environmentScope, environmentIdentity, refresh)
+  const environmentActions = useEnvironmentActions(environmentScope, environmentIdentity, live, activity.latestOperation, refresh, navigate)
 
   useEffect(() => {
     if (loading) return
@@ -213,11 +220,6 @@ export function App() {
     setProjectNavigation((current) => removeProjectNavigationPreferences(current, project))
     await refreshCore()
   }, [refreshCore])
-  const mutateEnvironment = useCallback(async (action: 'up' | 'down') => {
-    if (!activeEnvironment) return
-    await api<Operation>(environmentPath(activeEnvironment, `/${action}`), { method: 'POST', ...(action === 'down' ? jsonBody({ removeVolumes: false }) : {}) })
-    await refresh()
-  }, [activeEnvironment, refresh])
   const changeRuntime = useCallback(async (preference: RuntimeStatus['preference']) => {
     const status = await api<RuntimeStatus>('/runtime', { method: 'PUT', ...jsonBody({ preference }) })
     setRuntimeStatus(status)
@@ -239,15 +241,11 @@ export function App() {
     }
   }, [])
   const verifyDaemonHandoff = useCallback(async () => api<DaemonHandoffStatus>('/daemon/handoff'), [])
+  const { disabled: environmentActionsDisabled, run: runEnvironmentAction } = environmentActions
   const commands = useMemo<Command[]>(() => activeEnvironment ? [
-    ...(activeEnvironment.status === 'recovering' ? [] : [{ group: 'Actions', label: activeEnvironment.status === 'stopped' ? 'Start environment' : 'Stop environment', detail: `${activeEnvironment.project}/${activeEnvironment.name}`, run: () => void mutateEnvironment(activeEnvironment.status === 'stopped' ? 'up' : 'down') } as Command]),
-    { group: 'Views', label: 'Open topology', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'topology')) },
-    { group: 'Views', label: 'Configure providers', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'bindings')) },
-    { group: 'Views', label: 'Inspect live traffic', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'traffic')) },
-    { group: 'Views', label: 'Manage mock responses', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'mocks')) },
-    { group: 'Views', label: 'Introduce a fault', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'faults')) },
-    { group: 'Views', label: 'Start a recording', detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, 'recordings')) },
-  ] : [], [activeEnvironment, mutateEnvironment, navigate])
+    ...(environmentActionsDisabled ? [] : [{ group: 'Actions', label: activeEnvironment.status === 'stopped' ? 'Start environment' : 'Stop environment', detail: `${activeEnvironment.project}/${activeEnvironment.name}`, run: () => void runEnvironmentAction(activeEnvironment.status === 'stopped' ? 'up' : 'down') } as Command]),
+    ...environmentViews.map((view) => ({ group: 'Views', label: view.command, detail: activeEnvironment.name, run: () => navigate(environmentUIPath(activeEnvironment, view.name)) })),
+  ] : [], [activeEnvironment, environmentActionsDisabled, runEnvironmentAction, navigate])
 
   if (loading) return <LoadingScreen />
   if (authRequired || !session) return <AuthenticationScreen />
@@ -257,7 +255,7 @@ export function App() {
     content = <SettingsPage tab={parsed.settingsTab} preference={themePreference} resolvedTheme={resolvedTheme} runtime={runtimeStatus} environments={environments} initialEnvironment={parsed.settingsEnvironment} onNavigate={navigate} onPreferenceChange={changeThemePreference} onRuntimeChange={changeRuntime} onRuntimeStart={startRuntime} />
   } else if (parsed.environment) {
     content = activeEnvironment
-      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} tab={parsed.tab} mockScenario={parsed.mockScenario} mockWorkspace={parsed.mockWorkspace} mockRoute={parsed.mockRoute} onNavigate={navigate} onChanged={refresh} />
+      ? <EnvironmentPage key={environmentSessionKey(activeEnvironment, daemonStatus)} environment={activeEnvironment} project={activeProject} view={parsed.view} activity={activity} actions={environmentActions} mockScenario={parsed.mockScenario} mockCreateRoute={parsed.mockCreateRoute} mockRoute={parsed.mockRoute} onNavigate={navigate} onChanged={refresh} />
       : <NotFound kind="environment" name={`${parsed.project}/${parsed.environment}`} onNavigate={navigate} />
   } else if (parsed.project) {
     content = activeProject
@@ -266,7 +264,7 @@ export function App() {
   } else {
     content = <ProjectsIndexPage projects={projects} environments={environments} focusedProject={sidebarProject?.name} navigation={projectNavigation} onOpenProject={switchProject} onConfigureProject={configureProject} onProjectHiddenChange={changeProjectHidden} onForgetProject={forgetProject} />
   }
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.tab} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
+  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.view} headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={navigate} />} headerActions={activeEnvironment && <EnvironmentHeaderActions key={environmentIdentity} environment={activeEnvironment} activity={activity} actions={environmentActions} live={live} onNavigate={navigate} />} viewCounts={activeEnvironment && !activity.loading ? { recordings: activity.recordings.length, faults: activity.faults.filter((fault) => fault.enabled).length } : undefined} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {
@@ -282,7 +280,7 @@ export function settingsToggleDestination(currentRoute: string, returnRoute = '/
   return parseRoute(returnRoute).settings ? '/projects' : returnRoute
 }
 
-export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockScenario?: string; mockWorkspace?: 'route'; mockRoute?: string; tab: Tab } {
+export function parseRoute(route: string): { project?: string; environment?: string; settings: boolean; settingsTab: SettingsTab; settingsEnvironment?: string; mockScenario?: string; mockCreateRoute?: boolean; mockRoute?: string; view: EnvironmentView } {
   const current = new URL(route, 'http://portless.localhost')
   const parts = current.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   let project: string | undefined
@@ -291,21 +289,14 @@ export function parseRoute(route: string): { project?: string; environment?: str
   if (parts[0] === 'environments' && parts[1] && parts[2]) { project = parts[1]; environment = parts[2] }
   const settings = parts[0] === 'settings'
   const requested = current.searchParams.get('tab')
-  const tabs: Tab[] = ['overview', 'topology', 'traffic', 'mocks', 'recordings', 'faults', 'bindings', 'timeline']
-  const tab = tabs.includes(requested as Tab) ? requested as Tab : 'overview'
+  const view = parseEnvironmentView(requested)
   const settingsTabs: SettingsTab[] = ['appearance', 'runtime', 'mcp']
   const settingsTab = settings && settingsTabs.includes(requested as SettingsTab) ? requested as SettingsTab : 'appearance'
   const requestedEnvironment = settings ? current.searchParams.get('env')?.trim() : undefined
-  const requestedMockScenario = tab === 'mocks' ? current.searchParams.get('scenario')?.trim() : undefined
-  const workspace = current.searchParams.get('workspace')
-  const requestedMockWorkspace = tab === 'mocks' && workspace === 'route' && requestedMockScenario ? workspace : undefined
-  const requestedMockRoute = tab === 'mocks' && requestedMockWorkspace === 'route' && requestedMockScenario ? current.searchParams.get('route')?.trim() : undefined
-  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), ...(requestedMockScenario ? { mockScenario: requestedMockScenario } : {}), ...(requestedMockWorkspace ? { mockWorkspace: requestedMockWorkspace } : {}), ...(requestedMockRoute ? { mockRoute: requestedMockRoute } : {}), tab }
-}
-
-function environmentUIPath(environment: Pick<Environment, 'project' | 'name'>, tab: Tab) {
-  const base = `/environments/${encodeURIComponent(environment.project)}/${encodeURIComponent(environment.name)}`
-  return tab === 'overview' ? base : `${base}?tab=${tab}`
+  const requestedMockScenario = view === 'mocks' ? current.searchParams.get('scenario')?.trim() : undefined
+  const requestedMockRoute = requestedMockScenario ? current.searchParams.get('route')?.trim() : undefined
+  const mockCreateRoute = !!requestedMockScenario && !requestedMockRoute && current.searchParams.get('create') === 'route'
+  return { project, environment, settings, settingsTab, ...(requestedEnvironment ? { settingsEnvironment: requestedEnvironment } : {}), ...(requestedMockScenario ? { mockScenario: requestedMockScenario } : {}), ...(mockCreateRoute ? { mockCreateRoute: true } : {}), ...(requestedMockRoute ? { mockRoute: requestedMockRoute } : {}), view }
 }
 
 export function LoadingScreen() {

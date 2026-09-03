@@ -1,6 +1,7 @@
+import { environmentUIPath } from '../environment/navigation'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Environment } from '../../api/contracts/environments'
-import { environmentCanRestart, environmentCanStop, environmentKey, environmentRoute, projectRoute, runEnvironmentOperation } from './projectOperations'
+import { environmentCanRestart, environmentCanStop, environmentKey, projectRoute, runEnvironmentOperation } from './projectOperations'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -9,7 +10,7 @@ describe('project operations', () => {
     const environment = { project: 'Store Demo', name: 'QA / local' }
 
     expect(projectRoute(environment.project)).toBe('/projects/Store%20Demo')
-    expect(environmentRoute(environment)).toBe('/environments/Store%20Demo/QA%20%2F%20local')
+    expect(environmentUIPath(environment)).toBe('/environments/Store%20Demo/QA%20%2F%20local')
     expect(environmentKey(environment)).toBe('Store Demo/QA / local')
   })
 

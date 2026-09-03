@@ -125,7 +125,21 @@ The CLI E2E suite protects these product contracts:
 The Playwright suite protects these browser journeys:
 
 - browser authentication and one-use claim consumption;
-- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with direct configuration, hide, and safe forget workflows, the persistent collapsible icon rail, keyboard- and command-palette-driven focus mode with edge-revealed overlay navigation, Settings return, and breadcrumbs;
+- focused per-browser-tab project and environment navigation, the running/recent
+  project switcher with remembered environments, the searchable project registry
+  with direct configuration, hide, and safe forget workflows, the persistent
+  collapsible icon rail, Settings return, and breadcrumbs;
+- a persistent environment header across all eight views, health and public
+  Open App links, shared lifecycle state with the command palette, and a single
+  activity subscription that discards responses from a previous environment;
+- compact recording, fault, and mock icons in that header, with themed colors,
+  descriptive tooltips, keyboard navigation, and live activation state;
+- an Overview heading with environment identity and clone provenance, live
+  recording/fault/mock links, and readable wrapping in focus mode and on narrow
+  screens;
+- keyboard- and command-palette-driven focus mode, desktop hover navigation,
+  explicit overlay navigation on narrow screens, nested dialog dismissal,
+  focus restoration, and viewport-sized topology;
 - environment creation from the persistent sidebar through the modal without
   duplicating project sources,
   including visible clone provenance that does not displace status messaging,
@@ -134,6 +148,9 @@ The Playwright suite protects these browser journeys:
 - services, copyable endpoints, hover- and focus-driven topology service
   previews with connected-edge emphasis, service details, and default-on live
   logs with a plain-text raw tab and pause/resume controls;
+- live mock-binding badges on topology cards, scenario identification on hover
+  and keyboard focus, and service-endpoint links into the scenario workspace,
+  with stable card geometry in both themes and indicator removal on restoration;
 - starting a real Portless-owned Node debugger from the service drawer,
   displaying its attach endpoint, preserving healthy environment semantics,
   and returning the service to normal mode;
@@ -141,10 +158,12 @@ The Playwright suite protects these browser journeys:
   credentials, and Portless-injected trace carriers kept out of header views;
 - recording, mock-provider, and fault workflows, including scenario-table-first
   navigation, empty service-independent scenario creation, URL-addressable
-  scenario and single-route workspaces, a service-selecting maximizable route
-  editor that respects focus mode, clickable and sortable routes paginated at
-  ten rows, whole-scenario activation, stable peer service PIDs, and traffic
-  attribution;
+  scenario split workspaces with URL-addressable route selection, a
+  service-selecting right-hand editor that respects focus mode, retained drafts
+  while switching routes, save/discard and selected-route deletion, clickable
+  and sortable routes paginated at ten rows, whole-scenario activation, stable
+  peer service PIDs, stationary tables and route panes throughout activation
+  and restoration, and traffic attribution;
 - environment stop/start controls, project-page source add/delete, and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;
@@ -332,7 +351,7 @@ coverage.
 ## Failures and artifacts
 
 The Playwright suite is split into focused access/navigation, settings,
-projects, environment, experiments, traffic-list, traffic-inspection,
+projects, environment, experiments, topology-mocks, traffic-list, traffic-inspection,
 traffic-waterfall, and daemon journey specs. The specs still run with one
 worker and stop after the first failure because they share one real isolated
 Portless stack. To run one journey while developing:

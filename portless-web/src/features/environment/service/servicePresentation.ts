@@ -7,6 +7,11 @@ export function bindingFor(environment: Pick<Environment, 'bindings'>, service: 
   return environment.bindings?.find((binding) => binding.service === service)
 }
 
+export function mockScenarioFor(environment: Pick<Environment, 'bindings'>, service: string) {
+  const binding = bindingFor(environment, service)
+  return binding?.provider === 'mock' ? binding.mock?.scenario : undefined
+}
+
 export function publicEndpoint(service: Service, protocol?: Protocol) {
   return (service.endpoints || []).find((endpoint) => endpoint.kind === 'public' && (!protocol || endpoint.protocol === protocol))
 }

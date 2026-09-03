@@ -1,10 +1,10 @@
+import { environmentUIPath } from '../environment/navigation'
 import { useRef, useState } from 'react'
 import { api, jsonBody } from '../../api'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { FormDialog } from '../../components/overlays/FormDialog'
 import type { Environment } from '../../api/contracts/environments'
 import type { Project } from '../../api/contracts/projects'
-import { environmentRoute } from './projectOperations'
 
 export function CreateEnvironmentDialog({ project, environments, initialCloneFrom, onClose, onNavigate, onChanged }: {
   project: Project
@@ -43,7 +43,7 @@ export function CreateEnvironmentDialog({ project, environments, initialCloneFro
       await api('/environments', { method: 'POST', ...jsonBody({ project: project.name, name: trimmedName, from: cloneFrom }) })
       await onChanged()
       onClose()
-      onNavigate(environmentRoute({ project: project.name, name: trimmedName }))
+      onNavigate(environmentUIPath({ project: project.name, name: trimmedName }))
     } catch (reason) {
       setError(actionError("Environment wasn't created", reason))
     } finally {

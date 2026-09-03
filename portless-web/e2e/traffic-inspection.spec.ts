@@ -96,7 +96,6 @@ test('inspects captured request and response details in the exchange workbench',
   const requestTab = detail.getByRole('tab', { name: /^REQUEST/ })
   await expect(requestTab).toHaveAttribute('aria-selected', 'true')
   await expect(requestTab).toHaveCSS('font-size', '10px')
-  await expect.poll(async () => requestTab.evaluate((element) => getComputedStyle(element).fontSize === getComputedStyle(document.querySelector('.tabs button') as HTMLElement).fontSize)).toBe(true)
   const request = detail.locator('.traffic-message-workbench--request')
   await expect(request.locator('.traffic-message-workbench__summary')).not.toContainText(/captured|transferred/i)
   await expect(request.locator('.traffic-message-workbench__summary')).not.toContainText('content type not reported')

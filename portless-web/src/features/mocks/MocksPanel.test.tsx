@@ -35,6 +35,7 @@ const listProps = {
 
 const workspaceProps = {
   environment,
+  services: ['inventory', 'payments'],
   busy: '',
   deleteName: '',
   transitionBlocked: false,
@@ -43,16 +44,17 @@ const workspaceProps = {
   onBack: () => undefined,
   onToggle: () => undefined,
   onAddRoute: () => undefined,
-  onEditRoute: () => undefined,
-  onToggleRoute: () => undefined,
-  onDeleteRoute: () => undefined,
+  onSelectRoute: () => undefined,
+  onSaveRoute: async () => true,
+  onToggleRoute: async () => true,
+  onDeleteRoute: async () => true,
   onDismissDelete: () => undefined,
 }
 
 describe('MocksPanel', () => {
   it('starts with a compact environment-scoped scenario table', () => {
-    const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectScenario={() => undefined} onChanged={() => undefined} />)
-    expect(html).toContain('MOCK SCENARIOS')
+    const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectScenario={() => undefined} onSelectRoute={() => undefined} onCreateRoute={() => undefined} onChanged={() => undefined} />)
+    expect(html).toContain('<span>SCENARIOS</span>')
     expect(html).toContain('CREATE SCENARIO')
     expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>State</span>')
     for (const label of ['Scenario', 'Services', 'Routes', 'Modified']) expect(html).toContain(`<span>${label}</span>`)
@@ -64,45 +66,85 @@ describe('MocksPanel', () => {
   it('creates only scenario identity in the modal', () => {
     const html = renderToStaticMarkup(<MockScenarioCreateDialog busy={false} error={null} onDismissError={() => undefined} onClose={() => undefined} onCreate={async () => undefined} />)
     expect(html).toContain('<h2 id="mock-scenario-create-title">Create Mock Scenario</h2>')
-    expect(html).toContain('aria-label="NAME"')
-    expect(html).toContain('aria-label="DESCRIPTION"')
+    expect(html).toContain('<p id="mock-scenario-create-description">Create the scenario, then add one or more service routes.</p>')
+    expect(html).not.toContain('It remains disabled until you enable it.')
+    expect(html).toMatch(/<input[^>]*aria-label="NAME"[^>]*value=""/)
+    expect(html).toMatch(/<input[^>]*aria-label="DESCRIPTION"[^>]*value=""/)
+    expect(html).not.toContain('placeholder=')
     expect(html).not.toContain('aria-label="SERVICE"')
     expect(html).toContain('>CREATE SCENARIO</button>')
   })
 
-  it('summarizes multi-service coverage above an empty route workspace', () => {
+  it('renders compact help and no service eyebrow for an empty route table', () => {
     const empty = { ...scenario, activation: { state: 'disabled' as const, targetServices: [], activeServices: [] }, routes: [] }
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={empty} />)
     expect(html).toContain('aria-label="checkout-failure mock scenario"')
     expect(html).toContain('aria-label="Back to mock scenarios"')
-    expect(html).toContain('NO SERVICES YET')
-    expect(html).toContain('NO ROUTES YET')
-    expect(html).toContain('ADD FIRST ROUTE')
+    expect(html).not.toContain('NO SERVICES YET')
+    expect(html).not.toContain('mock-scenario-service-eyebrow')
+    expect(html).toContain('<div class="empty-row">No routes. Add one to define a request and response for a service.</div>')
+    expect(html).not.toContain('mock-scenario-empty')
+    expect(html).not.toContain('ADD FIRST ROUTE')
+    expect(html.match(/>ADD ROUTE<\/button>/g)).toHaveLength(1)
     expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*disabled="")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
   })
 
-  it('renders service-owned routes with sortable columns and row navigation', () => {
+  it('renders a compact route list beside the first route configuration', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} />)
     expect(html).toContain('SERVICES / inventory · payments')
-    expect(html).toContain('class="mock-route-row mock-route-row--interactive"')
-    expect(html).toContain('inventory</strong><strong>lookup</strong><code>GET /inventory/{sku}</code>')
-    expect(html).toContain('payments</strong><strong>decline</strong>')
-    expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>Service</span>')
-    for (const label of ['Route', 'Match', 'Response', 'Delay', 'State']) expect(html).toContain(`<span>${label}</span>`)
-    expect(html.match(/class="sortable-grid-header/g)).toHaveLength(6)
+    expect(html).not.toContain('class="empty-row"')
+    expect(html).toContain('class="mock-scenario-split"')
+    expect(html).toContain('class="mock-route-browser"')
+    expect(html).toContain('class="mock-route-item is-selected"')
+    expect(html).toContain('aria-label="Edit lookup route"')
+    expect(html).toContain('aria-label="Edit lookup route" aria-current="true"')
+    expect(html).toContain('aria-label="Edit decline route"')
+    expect(html).toContain('aria-label="Sort routes by"')
+    for (const label of ['Service', 'Route', 'Match', 'Response', 'Delay', 'State']) expect(html).toContain(`>${label}</option>`)
     expect(html).toContain('aria-label="Route actions for lookup"')
+    expect(html).toContain('aria-label="Edit Route"')
+    expect(html).toContain('value="/inventory/{sku}"')
   })
 
   it('paginates routes after ten entries', () => {
     const routes = Array.from({ length: 11 }, (_, index) => ({ ...route, name: `route-${String(index + 1).padStart(2, '0')}`, path: `/route-${index + 1}` }))
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, activation: { ...scenario.activation, targetServices: ['inventory'] }, routes }} />)
     const tenRouteHTML = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, activation: { ...scenario.activation, targetServices: ['inventory'] }, routes: routes.slice(0, 10) }} />)
-    expect(html.match(/class="mock-route-row mock-route-row--interactive"/g)).toHaveLength(10)
+    expect(html.match(/class="mock-route-item(?: is-selected)?"/g)).toHaveLength(10)
     expect(html).toContain('route-10')
     expect(html).not.toContain('route-11')
     expect(html).toContain('aria-label="routes pagination"')
     expect(html).toContain('<span>1–10 of 11</span>')
     expect(tenRouteHTML).not.toContain('aria-label="routes pagination"')
+  })
+
+  it('selects a linked route while retaining the route list', () => {
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} selectedRoute="decline" />)
+    expect(html).toContain('aria-label="Edit decline route" aria-current="true"')
+    expect(html).toContain('value="/payments"')
+    expect(html).toContain('class="mock-route-browser"')
+  })
+
+  it('creates routes in the right pane without replacing the saved route list', () => {
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} creatingRoute />)
+    expect(html).toContain('aria-label="Create Route"')
+    expect(html).toContain('class="mock-route-new is-selected"')
+    expect(html).toContain('aria-label="Edit lookup route"')
+    expect(html).toContain('aria-label="Edit decline route"')
+    expect(html).not.toContain('class="mock-route-item is-selected"')
+  })
+
+  it('keeps the route list available for a missing route selection', () => {
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} selectedRoute="missing" />)
+    expect(html).toContain('ROUTE NOT FOUND')
+    expect(html).toContain('aria-label="Edit lookup route"')
+  })
+
+  it('keeps operation errors inside the editor above its scrolling form', () => {
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} error={{ title: 'Route was not saved', message: 'Check the request path.' }} />)
+    expect(html.match(/role="alert"/g)).toHaveLength(1)
+    expect(html.indexOf('class="mock-route-workspace"')).toBeLessThan(html.indexOf('role="alert"'))
+    expect(html.indexOf('role="alert"')).toBeLessThan(html.indexOf('class="mock-route-form"'))
   })
 
   it('derives activation controls from scenario state rather than one service binding', () => {
@@ -154,6 +196,8 @@ describe('MocksPanel', () => {
     expect(() => mockRoutesFromDrafts([{ ...first, service: '' }])).toThrow(/valid service/)
     expect(() => mockRoutesFromDrafts([first, sameService])).toThrow(/ambiguous for inventory/)
     expect(mockRoutesFromDrafts([first, otherService])).toHaveLength(2)
+    expect(() => mockRoutesFromDrafts([{ ...first, path: '/inventory/{id}/{id}' }])).toThrow(/duplicated/)
+    expect(() => mockRoutesFromDrafts([{ ...first, path: '/inventory/item-{id}' }])).toThrow(/whole segment/)
   })
 
   it('parses route fields and exposes only registered final statuses', () => {
