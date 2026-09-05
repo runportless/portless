@@ -22,6 +22,11 @@ The Homebrew formula must always be addressed as
 `runportless/tap/portless`. Homebrew Core contains an unrelated formula named
 `portless`, so do not shorten the install or uninstall name.
 
+CI renders the formula into a temporary `runportless/formula-audit` tap's
+`Formula` directory and runs both `brew style --formula` and `brew audit --formula`
+against its fully qualified name. This applies Homebrew's formula-specific lint
+rules, which account for identically named classes in different taps.
+
 ## Choose the release type
 
 | Release type | Tag format | Example | Homebrew decision |

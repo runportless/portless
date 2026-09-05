@@ -236,10 +236,11 @@ jobs:
 
       - name: Render and lint formula
         run: |
-          scripts/render-homebrew-formula.sh 0.0.0 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef "$GITHUB_SHA" /tmp/portless.rb
-          ruby -c /tmp/portless.rb
-          brew style /tmp/portless.rb
+          # Render inside a tap so Homebrew applies its formula-specific lint rules.
           brew tap-new --no-git runportless/formula-audit
           trap 'brew untap runportless/formula-audit' EXIT
-          cp /tmp/portless.rb "$(brew --repository runportless/formula-audit)/Formula/portless.rb"
+          formula="$(brew --repository runportless/formula-audit)/Formula/portless.rb"
+          scripts/render-homebrew-formula.sh 0.0.0 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef "$GITHUB_SHA" "$formula"
+          ruby -c "$formula"
+          brew style --formula runportless/formula-audit/portless
           brew audit --formula runportless/formula-audit/portless
