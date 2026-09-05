@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { authenticate, environmentHeader, environmentPath, issueBrowserClaim } from './helpers'
+import { applicationRequest, authenticate, environmentHeader, environmentPath, issueBrowserClaim } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -10,6 +10,11 @@ test('requires and consumes a one-use browser claim', async ({ page, request }) 
   await expect(page.getByRole('heading', { name: 'Open this control plane from the CLI.' })).toBeVisible()
 
   const claim = await issueBrowserClaim()
+  const application = await applicationRequest(new URL(claim).pathname)
+  expect(application.status).toBe(404)
+  expect(application.body).toBe('404 page not found\n')
+  expect(application.headers['set-cookie']).toBeUndefined()
+
   await page.goto(claim)
   await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
   await expect(environmentHeader(page).getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()

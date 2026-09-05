@@ -6,6 +6,10 @@ Environment live events are exposed at:
 GET /api/v1/environments/{projectName}/{environmentName}/stream?topic=service.state&topic=traffic.exchange&topic=traffic.trace&topic=traffic.cleared
 ```
 
+These URLs use the Portless control origin, `http://portless.localhost`, or a
+supported loopback control host. The same paths on an application hostname
+belong to that application and do not open Portless event streams.
+
 The endpoint uses the browser session cookie or CLI bearer token. Topic filters
 are optional. Each message has a daemon-local SSE `id`, a typed `event`, and a
 JSON domain payload:

@@ -120,6 +120,15 @@ http://checkout.local.billing.localhost
 http://orders.local.billing.localhost
 ```
 
+The hostname selects the application. Paths such as `/api/orders` and
+`/auth/login` reach that application, including paths that match Portless
+control routes. Portless's own `/api/v1/` API and `/auth/claim/` browser login
+live on `portless.localhost`.
+
+Applications also control their own browser security policies. Portless
+preserves those response headers and applies its own browser restrictions
+only to its control UI and API.
+
 TCP services retain conventional ports while receiving distinct loopback
 identities:
 

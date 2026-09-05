@@ -45,15 +45,18 @@ test('shows one red failure across views, dismissal, reload, and a repeated fail
           shadow: getComputedStyle(element).boxShadow,
         }))
         expect(colors.shadow).toContain(colors.marker)
-        const layout = await error.evaluate((element) => ({
-          left: element.getBoundingClientRect().left,
-          right: element.getBoundingClientRect().right,
-          width: element.clientWidth,
-          contentWidth: element.scrollWidth,
-        }))
-        expect(layout.left).toBeGreaterThanOrEqual(0)
-        expect(layout.right).toBeLessThanOrEqual(width)
-        expect(layout.contentWidth).toBeLessThanOrEqual(layout.width)
+        // Resizing changes navigation mode and animates the available width.
+        await expect(async () => {
+          const layout = await error.evaluate((element) => ({
+            left: element.getBoundingClientRect().left,
+            right: element.getBoundingClientRect().right,
+            width: element.clientWidth,
+            contentWidth: element.scrollWidth,
+          }))
+          expect(layout.left).toBeGreaterThanOrEqual(0)
+          expect(layout.right).toBeLessThanOrEqual(width)
+          expect(layout.contentWidth).toBeLessThanOrEqual(layout.width)
+        }).toPass({ timeout: 15_000 })
       }
       await notices.screenshot({ path: testInfo.outputPath(`environment-error-${theme}.png`) })
     }

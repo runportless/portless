@@ -418,10 +418,6 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("browser claim did not use clean control origin: %d %s", browserClaim.Code, browserClaim.Body.String())
 	}
 
-	applicationAPI := requestHost(server, authManager, http.MethodGet, "/api/v1/projects", "", false, "checkout.local.billing.localhost")
-	if applicationAPI.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("application host reached control API: %d", applicationAPI.Code)
-	}
 	unknown := requestHost(server, authManager, http.MethodGet, "/api/v1/health", "", false, "malicious.example")
 	if unknown.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("unknown host returned %d", unknown.Code)
@@ -452,6 +448,7 @@ type fakeDaemonControl struct {
 	logCalls           int
 	handoff            contract.DaemonHandoffStatus
 	handoffCalls       int
+	restartCalls       int
 	restartedInstance  string
 	restartedReason    string
 	restartedForce     bool
@@ -482,6 +479,7 @@ func (f *fakeDaemonControl) HandoffStatus(context.Context) (contract.DaemonHando
 }
 
 func (f *fakeDaemonControl) Restart(_ context.Context, instanceID, reason string, force bool) (contract.DaemonRestart, error) {
+	f.restartCalls++
 	if instanceID != f.identity.InstanceID {
 		return contract.DaemonRestart{}, &contract.DaemonControlError{Code: "DAEMON_INSTANCE_CHANGED", Message: "daemon instance changed"}
 	}

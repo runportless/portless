@@ -118,6 +118,20 @@ The daemon's public wire boundary lives under `api`:
 - `api/client` owns native HTTP transport.
 - `api/server` adapts requests to daemon capabilities.
 
+The request hostname separates application ingress from control routes.
+Application hosts forward `/api/` and `/auth/` paths to the selected service,
+even when a path matches a Portless API or browser claim. Unavailable services
+return an ingress failure without falling back to control handlers. Portless's
+`/api/v1/` and `/auth/claim/` handlers are served only on `portless.localhost`
+and the supported loopback control hosts (`localhost`, `127.0.0.1`, and `::1`).
+Unknown hosts are rejected. Private `/_portless/daemon/v1/...` lifecycle routes
+retain their separate authenticated, control-host-only handler.
+
+The API server adds its browser security headers only after validating a control
+host. Application Content-Security-Policy, frame, referrer, and content-type
+options pass through unchanged, including repeated policy values. An application
+that supplies no such headers does not inherit the control plane's policies.
+
 For a contract change, update the contract first, then the typed client,
 server adapters and behavior, CLI and web consumers, OpenAPI or event
 documentation, and the relevant tests. Increment the semantic API version

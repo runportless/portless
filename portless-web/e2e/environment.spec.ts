@@ -1,8 +1,29 @@
 import { expect, test } from '@playwright/test'
+import type { Environment, Operation } from '../src/api/contracts/environments'
 import { applicationRequest, authenticate, environmentHeader, controlAPI, environmentPath, openCommandPalette } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
+
+test.afterEach(async () => {
+  // These journeys share the fixture with later spec files. Finish any pending
+  // lifecycle operation before restoring services, including after a failure.
+  const state = readE2EState()
+  const base = `/api/v1/environments/${state.project}/${state.environment}`
+  await expect.poll(async () => {
+    const { operations } = await controlAPI<{ operations: Operation[] }>(`${base}/operations`)
+    return operations.filter((operation) => operation.state === 'running')
+  }, { timeout: 30_000 }).toEqual([])
+  if ((await controlAPI<Environment>(base)).status === 'healthy') return
+
+  let operation = await controlAPI<Operation>(`${base}/up`, { method: 'POST' })
+  await expect.poll(async () => {
+    operation = await controlAPI<Operation>(`${base}/operations/${operation.number}`)
+    return operation.state
+  }, { timeout: 30_000 }).not.toBe('running')
+  expect(operation, operation.error).toMatchObject({ state: 'succeeded' })
+  expect((await controlAPI<Environment>(base)).status).toBe('healthy')
+})
 
 test('renders real services, endpoints, topology, and service details', async ({ page }) => {
   const state = readE2EState()
@@ -273,7 +294,7 @@ test('replaces Open with Start in the same header slot and starts the environmen
     expect(startRequests).toBe(1)
   } finally {
     releaseStart()
-    await page.unroute(startPattern)
+    await page.unrouteAll({ behavior: 'wait' })
   }
   await expect((await openCommandPalette(page, 'Stop environment')).getByRole('button', { name: /Stop environment/ })).toBeEnabled()
   await page.keyboard.press('Escape')
@@ -319,6 +340,8 @@ test('starts and stops all services from the Overview table without moving its h
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.keyboard.press('Control+Shift+F')
   await expect(page.locator('.shell')).toHaveClass(/shell--focus-mode/)
+  // The class changes before the sidebar transition finishes moving the stage.
+  await expect(page.locator('.stage')).toHaveCSS('margin-left', '0px')
   const titleBounds = await title.boundingBox()
   const buttonBounds = await stopAll.boundingBox()
 
@@ -364,7 +387,7 @@ test('starts and stops all services from the Overview table without moving its h
       if (action === 'down') await title.screenshot({ path: testInfo.outputPath('services-start-all-focus.png') })
     } finally {
       release()
-      await page.unroute(pattern)
+      await page.unrouteAll({ behavior: 'wait' })
     }
   }
   await expect(header.getByRole('link', { name: /health: healthy/ })).toBeVisible()

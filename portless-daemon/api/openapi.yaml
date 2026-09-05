@@ -10,6 +10,12 @@ info:
     Authenticated native clients may send Portless-Client-Kind as `cli` or
     `mcp`; the daemon records that fixed actor category on durable operations.
     Browser sessions cannot claim a native client kind.
+    Control routes are served only on portless.localhost and the supported
+    loopback control hosts (localhost, 127.0.0.1, and ::1). On application
+    hosts, /api/ and /auth/ paths are forwarded to the selected application,
+    including paths that match this API or a Portless browser claim.
+    The control API's browser security headers apply only on control hosts;
+    application response policies are preserved without adding control policies.
 servers:
   - url: http://portless.localhost/api/v1
 security:

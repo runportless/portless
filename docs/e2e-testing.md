@@ -82,6 +82,10 @@ The CLI E2E suite protects these product contracts:
 
 - zero-configuration discovery and a complete `up`, request, inspect, logs,
   `down` lifecycle;
+- application `/api/` and `/auth/` ingress with preserved query strings, POST
+  bodies, application headers, and source-to-target traffic attribution;
+  control-shaped paths remain application requests and do not inherit control
+  browser security headers;
 - framework-plugin discovery for Spring Boot with Gradle and Maven, NestJS,
   Express, Fastify, Next.js, Go, and FastAPI, including commands, port
   contracts, statically proven HTTP readiness paths with TCP fallback, evidence,
@@ -128,7 +132,11 @@ The CLI E2E suite protects these product contracts:
 
 The Playwright suite protects these browser journeys:
 
-- browser authentication and one-use claim consumption;
+- browser authentication and one-use claim consumption, including proof that
+  requesting a claim path on an application host neither consumes the claim
+  nor issues a Portless session cookie;
+- application-defined browser policies, with inline scripts and same-origin
+  frames working through the real application host without extra control policies;
 - focused per-browser-tab project and environment navigation, the running/recent
   project switcher with remembered environments, the searchable project registry
   with direct configuration, hide, and safe forget workflows, the persistent
@@ -232,6 +240,13 @@ modules so it exercises project compilation rather than a monorepo shortcut.
 The `tests/fixtures/debug-node` workspace provides two small NestJS-shaped Node
 services with safe direct-node launch commands. It verifies real inspector
 listeners and process ownership without installing application dependencies.
+
+The browser fixture is shared across spec files. Environment journeys wait for
+pending lifecycle operations and restore stopped services in `afterEach`, so a
+failed assertion does not leave later recording or fault journeys without an
+application. Intercepted lifecycle responses finish before their routes are
+removed. Header positions are measured after the focus-mode transition finishes;
+responsive overflow assertions retry while the viewport layout settles.
 
 ## Managed-resource integration
 

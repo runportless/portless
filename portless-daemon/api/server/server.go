@@ -78,13 +78,8 @@ func New(dependencies Dependencies) (*Server, error) {
 // ServeHTTP dispatches control hosts to the UI and API and application hosts to
 // the environment ingress proxy.
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	setSecurityHeaders(writer.Header())
 	host := normalizedHost(request.Host)
 	if service, environment, project, ok := applicationHost(host); ok {
-		if strings.HasPrefix(request.URL.Path, "/api/") || strings.HasPrefix(request.URL.Path, "/auth/") {
-			writeAPIError(writer, http.StatusMisdirectedRequest, contract.APIError{Code: "CONTROL_HOST_REQUIRED", Message: "control routes are not served on application hosts"})
-			return
-		}
 		s.app.ServeIngress(writer, request, model.EnvironmentSelector(project, environment), service)
 		return
 	}
@@ -92,6 +87,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeAPIError(writer, http.StatusMisdirectedRequest, contract.APIError{Code: "UNKNOWN_HOST", Message: "request host is not a Portless control or application host"})
 		return
 	}
+	setControlSecurityHeaders(writer.Header())
 	if request.URL.Path == "/api/v1/health" {
 		if request.Method != http.MethodGet {
 			methodNotAllowed(writer, http.MethodGet)
