@@ -111,8 +111,12 @@ test('toggles persistent focus mode from the keyboard and command palette', asyn
   const normalStageLeft = await stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))
   expect(normalStageLeft).toBeGreaterThan(0)
 
+  // A pointer at the browser's origin would hover the newly mounted reveal edge.
+  await page.mouse.move(900, 400)
   await page.keyboard.press('Control+Shift+F')
   await expect(shell).toHaveClass(/shell--focus-mode/)
+  await expect(shell).not.toHaveClass(/shell--navigation-open/)
+  await expect(sidebar).toHaveAttribute('inert', '')
   await expect(header.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
   await expect(header.getByRole('link', { name: /health: healthy/ })).toBeVisible()
   await expect(header.getByRole('link', { name: 'OPEN APP' })).toBeVisible()
@@ -286,7 +290,7 @@ test('supports keyboard topology inspection and command palette navigation', asy
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByRole('radiogroup', { name: 'Theme' })).toBeVisible()
   await page.getByRole('tab', { name: 'RUNTIME' }).click()
-  await expect(page.getByText('CONTAINER RUNTIME')).toBeVisible()
+  await expect(page.getByText('CONTAINER RUNTIME', { exact: true })).toBeVisible()
   await expect(page.locator('.runtime-candidate')).toHaveCount(2)
 
   await page.keyboard.press('Control+K')

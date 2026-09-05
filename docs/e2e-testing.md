@@ -247,6 +247,10 @@ failed assertion does not leave later recording or fault journeys without an
 application. Intercepted lifecycle responses finish before their routes are
 removed. Header positions are measured after the focus-mode transition finishes;
 responsive overflow assertions retry while the viewport layout settles.
+Keyboard focus-mode checks place the pointer away from the navigation reveal
+edge before toggling; otherwise a pointer at the browser's origin can immediately
+reopen the sidebar through its hover behavior. Hover navigation is exercised
+explicitly after verifying that keyboard entry hides the sidebar.
 
 ## Managed-resource integration
 
