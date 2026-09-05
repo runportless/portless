@@ -1,3 +1,4 @@
+import { environmentUIPath } from '../environment/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { MoreActionsIcon } from '../../components/MoreActionsIcon'
@@ -6,7 +7,7 @@ import { StatusMark } from '../../components/Status'
 import type { Environment } from '../../api/contracts/environments'
 import type { Project } from '../../api/contracts/projects'
 import { CreateEnvironmentDialog } from './CreateEnvironmentDialog'
-import { environmentCanRestart, environmentCanStop, environmentKey, environmentRoute, runEnvironmentOperation, type EnvironmentAction } from './projectOperations'
+import { environmentCanRestart, environmentCanStop, environmentKey, runEnvironmentOperation, type EnvironmentAction } from './projectOperations'
 import { formatTimestamp, statusCounts } from './projectPresentation'
 
 export function ProjectEnvironmentsPanel({ project, environments, onNavigate, onChanged }: {
@@ -142,7 +143,7 @@ export function ProjectEnvironmentsPanel({ project, environments, onNavigate, on
         const startAction = stopped || starting
         const actionDisabled = stoppingAll || !!pendingAction || starting || stopping || restarting || recovering
         const menuOpen = menuEnvironment === environment.name
-        const openEnvironment = () => { setMenuEnvironment(''); onNavigate(environmentRoute(environment)) }
+        const openEnvironment = () => { setMenuEnvironment(''); onNavigate(environmentUIPath(environment)) }
         return <div className="environment-row-shell environment-row-shell--interactive" key={`${environment.project}/${environment.name}`} onClick={openEnvironment}>
           <button className="table-row environment-row" onClick={(event) => { event.stopPropagation(); openEnvironment() }}>
             <span><StatusMark status={environment.status} /></span><strong title={environment.name}>{environment.name}</strong><span>{ready}/{environment.services.length}</span><span className={remote ? 'warning-text' : ''}>{remote || '—'}</span><time dateTime={environment.updatedAt} title={new Date(environment.updatedAt).toLocaleString()}>{formatTimestamp(environment.updatedAt)}</time><span className={environment.issues?.length ? 'warning-text truncate' : 'muted truncate'}>{environment.reason || environment.issues?.[0]?.message || (environment.status === 'stopped' ? 'not running' : environment.status === 'healthy' ? 'all required services are ready' : 'state is being reconciled')}</span>

@@ -10,7 +10,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
-func setSecurityHeaders(headers http.Header) {
+func setControlSecurityHeaders(headers http.Header) {
 	headers.Set("X-Content-Type-Options", "nosniff")
 	headers.Set("Referrer-Policy", "no-referrer")
 	headers.Set("X-Frame-Options", "DENY")

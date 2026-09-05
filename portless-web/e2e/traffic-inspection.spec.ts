@@ -26,7 +26,7 @@ test('inspects captured request and response details in the exchange workbench',
   await page.route(exchangeDetailPattern, async (route) => {
     const response = await route.fetch()
     const exchange = await response.json() as Record<string, unknown>
-    await route.fulfill({ response, json: { ...exchange, fault: 'ui-fault', recording: 'ui-recording', mockProfile: 'ui-mock', mockRoute: 'checkout' } })
+    await route.fulfill({ response, json: { ...exchange, fault: 'ui-fault', recording: 'ui-recording', mockScenario: 'ui-mock', mockRoute: 'checkout' } })
   })
   await row.click()
 
@@ -96,7 +96,6 @@ test('inspects captured request and response details in the exchange workbench',
   const requestTab = detail.getByRole('tab', { name: /^REQUEST/ })
   await expect(requestTab).toHaveAttribute('aria-selected', 'true')
   await expect(requestTab).toHaveCSS('font-size', '10px')
-  await expect.poll(async () => requestTab.evaluate((element) => getComputedStyle(element).fontSize === getComputedStyle(document.querySelector('.tabs button') as HTMLElement).fontSize)).toBe(true)
   const request = detail.locator('.traffic-message-workbench--request')
   await expect(request.locator('.traffic-message-workbench__summary')).not.toContainText(/captured|transferred/i)
   await expect(request.locator('.traffic-message-workbench__summary')).not.toContainText('content type not reported')

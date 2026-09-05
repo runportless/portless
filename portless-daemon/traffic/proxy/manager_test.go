@@ -204,7 +204,7 @@ func TestMockProviderMetadataIsCapturedButNotExposed(t *testing.T) {
 	defer controlStore.Close()
 	scope := model.EnvironmentSelector("billing", "local")
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set(mocks.ProfileHeader, "sold-out")
+		writer.Header().Set(mocks.ScenarioHeader, "sold-out")
 		writer.Header().Set(mocks.RouteHeader, "lookup")
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"available":false}`))
@@ -219,11 +219,11 @@ func TestMockProviderMetadataIsCapturedButNotExposed(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	manager.ServeIngress(response, httptest.NewRequest(http.MethodGet, "http://inventory.local.billing.localhost/inventory/coffee", nil), scope, "inventory")
-	if response.Code != http.StatusOK || response.Header().Get(mocks.ProfileHeader) != "" || response.Header().Get(mocks.RouteHeader) != "" {
+	if response.Code != http.StatusOK || response.Header().Get(mocks.ScenarioHeader) != "" || response.Header().Get(mocks.RouteHeader) != "" {
 		t.Fatalf("public response = %d %#v", response.Code, response.Header())
 	}
 	exchanges := trafficStore.RecentExchanges(scope, 1)
-	if len(exchanges) != 1 || exchanges[0].TargetProvider != model.ProviderMock || exchanges[0].MockProfile != "sold-out" || exchanges[0].MockRoute != "lookup" {
+	if len(exchanges) != 1 || exchanges[0].TargetProvider != model.ProviderMock || exchanges[0].MockScenario != "sold-out" || exchanges[0].MockRoute != "lookup" {
 		t.Fatalf("exchange = %#v", exchanges)
 	}
 }

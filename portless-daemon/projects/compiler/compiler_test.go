@@ -161,7 +161,7 @@ func TestCompileAllowsMockHTTPProviderAndPrunesItsPrivateDependencies(t *testing
 	sources := []model.SourceBinding{{Name: "store", Definition: model.ProjectModel{Services: []model.ServiceDefinition{{Name: "checkout", Kind: model.ServiceProcess}}}}}
 	result := Compile(project, sources, []model.ComponentBinding{
 		{Service: "checkout", Provider: model.ProviderLocal, Source: "store"},
-		{Service: "inventory", Provider: model.ProviderMock, Mock: &model.MockTarget{Profile: "sold-out"}},
+		{Service: "inventory", Provider: model.ProviderMock, Mock: &model.MockTarget{Scenario: "sold-out"}},
 		{Service: "inventory-db", Provider: model.ProviderContainer},
 	})
 	if len(result.Issues) != 0 {

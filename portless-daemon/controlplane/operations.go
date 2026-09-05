@@ -15,7 +15,8 @@ import (
 	"github.com/runportless/portless/portless-daemon/projects/compiler"
 )
 
-// Up validates and asynchronously starts an environment.
+// Up validates and asynchronously starts an environment, preparing independent
+// source checkouts when another environment already uses its local sources.
 func (s *Service) Up(ctx context.Context, projectName, environmentName, actor, idempotencyKey string, options UpOptions) (model.Operation, error) {
 	s.resetGate.RLock()
 	defer s.resetGate.RUnlock()
@@ -281,10 +282,18 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 		lock := s.projectLock(scope)
 		lock.Lock()
 		defer lock.Unlock()
+		defer s.releaseUnusedSourceLeases(scope)
 		current, currentErr := s.database.Environment(context.Background(), projectName, environmentName)
 		if currentErr != nil {
 			s.failOperation(scope, operation, currentErr)
 			return
+		}
+		if bindingForEnvironment(current, serviceName).Provider == model.ProviderLocal {
+			current, currentErr = s.prepareSourceCheckouts(context.Background(), current, current.Bindings, operation)
+			if currentErr != nil {
+				s.failOperation(scope, operation, currentErr)
+				return
+			}
 		}
 		currentDefinition, exists := serviceDefinitionForEnvironment(current, serviceName)
 		if !exists {
@@ -300,12 +309,6 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 		if currentErr = s.prepareServiceDependencies(context.Background(), scope, current, serviceName, operation); currentErr != nil {
 			s.failOperation(scope, operation, currentErr)
 			return
-		}
-		if currentBinding.Provider == model.ProviderLocal && currentDefinition.Kind == model.ServiceProcess {
-			if currentErr = s.acquireSourceLeases(scope, current); currentErr != nil {
-				s.failOperation(scope, operation, currentErr)
-				return
-			}
 		}
 		if restart {
 			_ = s.database.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceStopping, "")

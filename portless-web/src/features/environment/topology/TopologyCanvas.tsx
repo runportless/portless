@@ -5,7 +5,7 @@ import type { Environment } from '../../../api/contracts/environments'
 import type { FaultRule } from '../../../api/contracts/experiments'
 import type { Service } from '../../../api/contracts/topology'
 import type { TrafficExchangeList } from '../../../api/contracts/traffic'
-import { bindingFor, displayLaunchMode, overviewServiceEndpoint, publicEndpoint } from '../service/servicePresentation'
+import { bindingFor, displayLaunchMode, mockScenarioFor, overviewServiceEndpoint, publicEndpoint } from '../service/servicePresentation'
 import {
   buildTopology,
   mergeTopologySignal,
@@ -257,6 +257,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
       const previewClass = !previewServiceName ? '' : item.key === previewServiceName ? ' is-preview-active' : previewRelatedItems.has(item.key) ? ' is-preview-related' : ' is-preview-dimmed'
       if (item.kind === 'client') return <div key={item.key} className={`topology__external topology__item${previewClass}`} style={{ left: position.x, top: position.y }}><span>INGRESS</span><strong>browser / client</strong><small>localhost</small></div>
       const service = item.service
+      const mockScenario = mockScenarioFor(environment, service.name)
       return <button
         key={item.key}
         data-service={service.name}
@@ -269,7 +270,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
         onBlur={() => setFocusedPreview((current) => current?.name === service.name ? undefined : current)}
         onClick={() => selectService(service)}
       >
-        <span><StatusMark status={service.status} label={false} />{service.kind === 'resource' ? service.resource?.type : service.framework}</span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
+        <span className="topology-node__heading"><span className="topology-node__kind"><StatusMark status={service.status} label={false} /><span className="topology-node__framework">{service.kind === 'resource' ? service.resource?.type : service.framework}</span></span>{mockScenario && <span className="topology-node__mock">MOCK</span>}</span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
       </button>
     })}
     {previewService && previewDetails && previewTarget && <aside
@@ -281,10 +282,11 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
       <div className="topology-service-preview__heading"><strong>{previewService.name}</strong><StatusMark status={previewService.status} /></div>
       <div className="topology-service-preview__mode">{previewDetails.type} · {previewDetails.mode}</div>
       {previewDetails.endpoint && <><span className="topology-service-preview__label">ENDPOINT</span><span className="topology-service-preview__endpoint" title={previewDetails.endpoint}>{previewDetails.endpoint}</span></>}
+      {previewDetails.mockScenario && <div className="topology-service-preview__mock">Mock scenario: <strong>{previewDetails.mockScenario}</strong></div>}
       <div className="topology-service-preview__metrics"><span>{previewService.recentRequests} recent requests</span><span>{previewService.p95Millis ? `${previewService.p95Millis}ms p95` : '— p95'}</span>{previewService.restartCount > 0 && <span className="warning-text">{previewService.restartCount} restarts</span>}</div>
       <div className="topology-service-preview__connections">{previewDetails.inbound} inbound · {previewDetails.outbound} outbound</div>
-      {previewService.reason && <div className="topology-service-preview__notice topology-service-preview__notice--danger">{previewService.reason}</div>}
-      {!previewService.reason && previewDetails.fault && <div className="topology-service-preview__notice">▲ {previewDetails.fault}</div>}
+      {previewDetails.reason && <div className="topology-service-preview__notice topology-service-preview__notice--danger">{previewDetails.reason}</div>}
+      {!previewDetails.reason && previewDetails.fault && <div className="topology-service-preview__notice">▲ {previewDetails.fault}</div>}
       <div className="topology-service-preview__footer">Click node for full details →</div>
     </aside>}
   </div></div></div>
@@ -301,6 +303,9 @@ export function topologyServicePreviewDetails(environment: Environment, service:
     type: service.kind === 'resource' ? service.resource?.type || 'resource' : service.framework || 'process',
     mode: displayedMode === '—' ? provider || service.launchMode || service.kind : displayedMode,
     endpoint: overviewServiceEndpoint(environment, service),
+    mockScenario: mockScenarioFor(environment, service.name),
+    // Ready providers can use the reason for descriptive metadata, not a failure.
+    reason: service.status === 'ready' ? undefined : service.reason,
     inbound: edges.filter((edge) => edge.target === service.name).length,
     outbound: edges.filter((edge) => edge.source === service.name).length,
     fault,

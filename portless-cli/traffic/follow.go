@@ -105,8 +105,8 @@ func (c *Commands) printTraffic(event model.TrafficExchange) {
 		fault = " fault=" + event.Fault
 	}
 	mock := ""
-	if event.MockProfile != "" {
-		mock = " mock=" + event.MockProfile
+	if event.MockScenario != "" {
+		mock = " mock=" + event.MockScenario
 		if event.MockRoute != "" {
 			mock += "/" + event.MockRoute
 		}
@@ -163,8 +163,8 @@ func (c *Commands) printTrafficDetail(event model.TrafficExchange) {
 	fmt.Fprintf(c.Out, "%s #%d\n\n", c.Heading(c.Out, title+" exchange"), event.Sequence)
 	fmt.Fprintf(c.Out, "  %-18s %s → %s\n", "Edge:", event.Source, event.Target)
 	fmt.Fprintf(c.Out, "  %-18s %s\n", "Provider:", command.EmptyAs(string(event.TargetProvider), "unknown"))
-	if event.MockProfile != "" {
-		fmt.Fprintf(c.Out, "  %-18s %s\n", "Mock profile:", event.MockProfile)
+	if event.MockScenario != "" {
+		fmt.Fprintf(c.Out, "  %-18s %s\n", "Mock scenario:", event.MockScenario)
 	}
 	if event.MockRoute != "" {
 		fmt.Fprintf(c.Out, "  %-18s %s\n", "Mock route:", event.MockRoute)

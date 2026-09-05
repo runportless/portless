@@ -182,13 +182,13 @@ func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
 	checkoutBefore := scopedServiceSnapshot(t, app, "store", "local", "checkout")
 	ordersBefore := scopedServiceSnapshot(t, app, "store", "local", "orders")
 	inventoryBefore := scopedServiceSnapshot(t, app, "store", "local", "inventory")
-	if _, err := app.CreateMockProfile(ctx, "store", "local", model.MockProfile{Name: "sold-out", Service: "inventory"}, "test"); err != nil {
+	if _, err := app.CreateMockScenario(ctx, "store", "local", model.MockScenario{Name: "sold-out"}, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusConflict, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false}`, Enabled: true}, "test"); err != nil {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusConflict, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false}`, Enabled: true}, "test"); err != nil {
 		t.Fatal(err)
 	}
-	operation, err = app.ChangeBinding(ctx, "store", "local", "inventory", model.ComponentBinding{Provider: model.ProviderMock, Mock: &model.MockTarget{Profile: "sold-out"}}, "test", "inventory-mock")
+	operation, err = app.SetMockScenarioEnabled(ctx, "store", "local", "sold-out", true, "test", "inventory-mock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
 		t.Fatalf("mock ingress = %d %q", response.Code, response.Body.String())
 	}
 	exchanges := app.TrafficExchanges("store", "local", 1)
-	if len(exchanges) != 1 || exchanges[0].TargetProvider != model.ProviderMock || exchanges[0].MockProfile != "sold-out" || exchanges[0].MockRoute != "lookup" {
+	if len(exchanges) != 1 || exchanges[0].TargetProvider != model.ProviderMock || exchanges[0].MockScenario != "sold-out" || exchanges[0].MockRoute != "lookup" {
 		t.Fatalf("mock exchange = %#v", exchanges)
 	}
 	operation, err = app.StopService(ctx, "store", "local", "inventory", "test", "stop-mock-inventory")
@@ -220,7 +220,7 @@ func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
 	if _, active := app.mocks.Address("store/local", "inventory"); active {
 		t.Fatal("mock listener remained active after stopping the service")
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusGone, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false,"updated":true}`, Enabled: true}, "test"); err != nil {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusGone, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false,"updated":true}`, Enabled: true}, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if stopped := scopedServiceSnapshot(t, app, "store", "local", "inventory"); stopped.Status != model.ServiceStopped {
@@ -241,7 +241,7 @@ func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
 	if response.Code != http.StatusGone || response.Body.String() != `{"available":false,"updated":true}` {
 		t.Fatalf("restarted mock ingress = %d %q", response.Code, response.Body.String())
 	}
-	operation, err = app.ChangeBinding(ctx, "store", "local", "inventory", model.ComponentBinding{Provider: model.ProviderLocal, Source: "store"}, "test", "inventory-local")
+	operation, err = app.SetMockScenarioEnabled(ctx, "store", "local", "sold-out", false, "test", "inventory-local")
 	if err != nil {
 		t.Fatal(err)
 	}

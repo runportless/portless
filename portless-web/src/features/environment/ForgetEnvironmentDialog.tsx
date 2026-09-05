@@ -3,9 +3,10 @@ import { ActionErrorNotice, type ActionErrorDetails } from '../../components/Act
 import { FormDialog } from '../../components/overlays/FormDialog'
 import type { Environment } from '../../api/contracts/environments'
 
-export function ForgetEnvironmentDialog({ environment, busy, error, restoreFocusRef, onDismissError, onClose, onForget }: {
+export function ForgetEnvironmentDialog({ environment, busy, unavailable = false, error, restoreFocusRef, onDismissError, onClose, onForget }: {
   environment: Environment
   busy: boolean
+  unavailable?: boolean
   error: ActionErrorDetails | null
   restoreFocusRef: RefObject<HTMLElement | null>
   onDismissError: () => void
@@ -36,8 +37,9 @@ export function ForgetEnvironmentDialog({ environment, busy, error, restoreFocus
         <div><span className="eyebrow">PRESERVED</span><strong>Source checkouts and managed data volumes</strong></div>
       </div>
       {blocked && <p className="source-modal-note source-modal-note--danger">Stop this environment before forgetting it.</p>}
+      {unavailable && <p className="source-modal-note">Wait for the control plane to reconnect before forgetting this environment.</p>}
     </div>
     {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
-    <footer><button ref={cancelButton} className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--danger" type="button" disabled={busy || blocked} onClick={() => void onForget()}>{busy ? 'FORGETTING…' : 'FORGET ENVIRONMENT'}</button></footer>
+    <footer><button ref={cancelButton} className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--danger" type="button" disabled={busy || blocked || unavailable} onClick={() => void onForget()}>{busy ? 'FORGETTING…' : 'FORGET ENVIRONMENT'}</button></footer>
   </FormDialog>
 }

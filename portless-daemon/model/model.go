@@ -104,7 +104,7 @@ const (
 	ProviderContainer ProviderKind = "container"
 	// ProviderRemote routes the service to an external environment.
 	ProviderRemote ProviderKind = "remote"
-	// ProviderMock routes the service to an environment-scoped mock profile.
+	// ProviderMock routes the service to its environment-scoped mock scenario.
 	ProviderMock ProviderKind = "mock"
 )
 
@@ -307,9 +307,9 @@ type RemoteTarget struct {
 	HealthPath     string               `json:"healthPath,omitempty"`
 }
 
-// MockTarget selects an environment-scoped mock profile for a service.
+// MockTarget selects an environment-scoped mock scenario for a service.
 type MockTarget struct {
-	Profile string `json:"profile"`
+	Scenario string `json:"scenario"`
 }
 
 // ComponentBinding selects a provider and source for one environment service.
@@ -322,21 +322,43 @@ type ComponentBinding struct {
 	ModifiedAt time.Time     `json:"modifiedAt,omitzero"`
 }
 
-// MockProfile groups deterministic HTTP routes for one environment service.
-type MockProfile struct {
-	Project     string      `json:"project"`
-	Environment string      `json:"environment"`
-	Name        string      `json:"name"`
-	Service     string      `json:"service"`
-	Description string      `json:"description,omitempty"`
-	Routes      []MockRoute `json:"routes"`
-	CreatedAt   time.Time   `json:"createdAt"`
-	ModifiedAt  time.Time   `json:"modifiedAt"`
+// MockScenarioActivationState describes whether every service targeted by a
+// scenario is currently bound to it.
+type MockScenarioActivationState string
+
+const (
+	// MockScenarioDisabled means none of the scenario's target services are activated.
+	MockScenarioDisabled MockScenarioActivationState = "disabled"
+	// MockScenarioEnabled means every target service is activated by the scenario.
+	MockScenarioEnabled MockScenarioActivationState = "enabled"
+	// MockScenarioDegraded means the durable activation and observed bindings disagree.
+	MockScenarioDegraded MockScenarioActivationState = "degraded"
+)
+
+// MockScenarioActivation is the server-derived activation view for a mock scenario.
+type MockScenarioActivation struct {
+	State          MockScenarioActivationState `json:"state"`
+	TargetServices []string                    `json:"targetServices"`
+	ActiveServices []string                    `json:"activeServices"`
+	EnabledAt      time.Time                   `json:"enabledAt,omitzero"`
+}
+
+// MockScenario groups deterministic HTTP routes across environment services.
+type MockScenario struct {
+	Project     string                 `json:"project"`
+	Environment string                 `json:"environment"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Routes      []MockRoute            `json:"routes"`
+	Activation  MockScenarioActivation `json:"activation"`
+	CreatedAt   time.Time              `json:"createdAt"`
+	ModifiedAt  time.Time              `json:"modifiedAt"`
 }
 
 // MockRoute matches one HTTP request and returns a fixed response.
 type MockRoute struct {
 	Name       string            `json:"name"`
+	Service    string            `json:"service"`
 	Method     string            `json:"method"`
 	Path       string            `json:"path"`
 	Query      map[string]string `json:"query,omitempty"`
@@ -352,6 +374,7 @@ type MockRoute struct {
 // MockRequest is a request used to preview matching without sending traffic.
 // Headers and Body model the complete request but are not persisted or emitted as traffic.
 type MockRequest struct {
+	Service string              `json:"service"`
 	Method  string              `json:"method"`
 	Path    string              `json:"path"`
 	Query   map[string][]string `json:"query,omitempty"`
@@ -361,6 +384,7 @@ type MockRequest struct {
 
 // MockPreview describes the route and fixed response selected for a request.
 type MockPreview struct {
+	Service string            `json:"service"`
 	Matched bool              `json:"matched"`
 	Route   string            `json:"route,omitempty"`
 	Status  int               `json:"status"`
@@ -628,7 +652,7 @@ type TrafficExchange struct {
 	Target                string                    `json:"target"`
 	Background            bool                      `json:"background"`
 	TargetProvider        ProviderKind              `json:"targetProvider,omitempty"`
-	MockProfile           string                    `json:"mockProfile,omitempty"`
+	MockScenario          string                    `json:"mockScenario,omitempty"`
 	MockRoute             string                    `json:"mockRoute,omitempty"`
 	RemoteClassification  RemoteClassification      `json:"remoteClassification,omitempty"`
 	StartedAt             time.Time                 `json:"startedAt"`

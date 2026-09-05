@@ -123,7 +123,7 @@ function publishEventStreamHealth() {
   for (const listener of eventHealthSubscribers) listener(health)
 }
 
-export function connectEvents(environment: Pick<Environment, 'project' | 'name'>, topics: string[], onEvent: (type: string, value: unknown) => void) {
+export function connectEvents(environment: Pick<Environment, 'project' | 'name'>, topics: string[], onEvent: (type: string, value: unknown) => void, onConnected?: () => void) {
   const query = topics.map((topic) => `topic=${encodeURIComponent(topic)}`).join('&')
   const source = new EventSource(`/api/v1${environmentPath(environment, '/stream')}?${query}`)
   const identifier = ++nextEventStream
@@ -134,6 +134,7 @@ export function connectEvents(environment: Pick<Environment, 'project' | 'name'>
     eventStreams.set(identifier, 'connected')
     lastEventStreamConnection = new Date().toISOString()
     publishEventStreamHealth()
+    onConnected?.()
   }
   source.onerror = () => {
     if (!eventStreams.has(identifier)) return

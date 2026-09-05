@@ -6,6 +6,10 @@ Environment live events are exposed at:
 GET /api/v1/environments/{projectName}/{environmentName}/stream?topic=service.state&topic=traffic.exchange&topic=traffic.trace&topic=traffic.cleared
 ```
 
+These URLs use the Portless control origin, `http://portless.localhost`, or a
+supported loopback control host. The same paths on an application hostname
+belong to that application and do not open Portless event streams.
+
 The endpoint uses the browser session cookie or CLI bearer token. Topic filters
 are optional. Each message has a daemon-local SSE `id`, a typed `event`, and a
 JSON domain payload:
@@ -29,20 +33,37 @@ Current topics:
 - `traffic.cleared`
 - `traffic.tcp.activity`
 
+Startup and local-provider operations report automatic checkout preparation
+through the existing `operation.state` payload. Ordered operation events use
+`source.preparing` and `source.prepared`, with the readable source name as
+`subject` and a progress message. Once the independent paths are saved,
+`environment.state` carries the updated source bindings and revision. The
+timeline records `environment.checkout_prepared`. File contents, local
+configuration values, and Git administration data are never included in these
+preparation events. Clients do not need a second request or confirmation to
+continue startup.
+
 `fault.state` carries the full fault rule after creation or activation, including
 `enabledAt`, the most recent activation time. Disable and delete notifications
 carry compact state or tombstone payloads; clients should reload the fault list
 after any fault event.
 
-`mock.state` carries the current profile after a profile or route change, or a
-small `{name, deleted}` tombstone after deletion. Clients should reload the
-mock collection after receiving it because active profiles are recompiled and
-swapped atomically.
+`mock.state` carries the current scenario after a scenario, route, or activation
+change, or a small `{name, deleted}` tombstone after deletion. Scenario payloads
+include service-scoped routes and derived activation (`disabled`, `enabled`, or
+`degraded`) with target and active service names. Clients should reload the mock
+collection after receiving it. Each active service matcher is recompiled and
+swapped atomically; whole-scenario activation is a tracked operation, not an
+instantaneous cross-service traffic switch. Follow `operation.state` to its
+terminal state and reload the environment after a transition. Restoration
+bindings remain private and are never included in events.
 
 `traffic.exchange` carries a completed HTTP request, decoded TCP operation, or
 opaque TCP session summary. HTTP headers and bodies and decoded TCP message
 fields/content are omitted from this notification; clients load the full
-exchange on demand. The TCP summary retains its declared application protocol,
+exchange on demand. Mock-served HTTP exchanges identify `mockScenario` and
+`mockRoute`; the existing source and target still identify the service edge.
+The TCP summary retains its declared application protocol,
 operation, inspection state, outcome, and message counts. `traffic.trace`
 carries an updated trace summary whenever a newly completed exchange changes
 that projection. Exchange summaries explicitly classify successful browser and

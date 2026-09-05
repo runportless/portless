@@ -16,12 +16,12 @@ import (
 var pathParameter = regexp.MustCompile(`^\{[A-Za-z_][A-Za-z0-9_]*\}$`)
 
 const (
-	// MaxRoutesPerProfile bounds matcher compilation and persisted profile size.
-	MaxRoutesPerProfile = 1000
+	// MaxRoutesPerScenario bounds matcher compilation and persisted scenario size.
+	MaxRoutesPerScenario = 1000
 	// MaxResponseBodyBytes bounds one fixed mock response.
 	MaxResponseBodyBytes = 1 << 20
-	// MaxProfileBodyBytes bounds all fixed response bodies retained by one profile.
-	MaxProfileBodyBytes = 8 << 20
+	// MaxScenarioBodyBytes bounds all fixed response bodies retained by one scenario.
+	MaxScenarioBodyBytes = 8 << 20
 	// MaxPreviewRequestBodyBytes bounds a side-effect-free preview request body.
 	MaxPreviewRequestBodyBytes = 256 << 10
 )
@@ -36,34 +36,34 @@ type compiledRoute struct {
 	queryCount   int
 }
 
-// CompiledProfile is an immutable, validated matcher ready for concurrent use.
-type CompiledProfile struct {
-	profile model.MockProfile
-	routes  []compiledRoute
+// CompiledScenario is an immutable, validated matcher ready for concurrent use.
+type CompiledScenario struct {
+	scenario model.MockScenario
+	routes   []compiledRoute
 }
 
-// Compile validates a profile and orders its routes by deterministic specificity.
-func Compile(profile model.MockProfile) (*CompiledProfile, error) {
-	if err := model.ValidateArtifactName(profile.Name); err != nil {
-		return nil, fmt.Errorf("invalid mock profile name: %w", err)
+// Compile validates a scenario and orders its routes by deterministic specificity.
+func Compile(scenario model.MockScenario) (*CompiledScenario, error) {
+	if err := model.ValidateArtifactName(scenario.Name); err != nil {
+		return nil, fmt.Errorf("invalid mock scenario name: %w", err)
 	}
-	if err := model.ValidateServiceName(profile.Service); err != nil {
-		return nil, fmt.Errorf("invalid mock service: %w", err)
+	if len(scenario.Routes) > MaxRoutesPerScenario {
+		return nil, fmt.Errorf("mock scenarios cannot contain more than %d routes", MaxRoutesPerScenario)
 	}
-	if len(profile.Routes) > MaxRoutesPerProfile {
-		return nil, fmt.Errorf("mock profiles cannot contain more than %d routes", MaxRoutesPerProfile)
-	}
-	profile = cloneProfile(profile)
-	result := &CompiledProfile{profile: profile}
+	scenario = cloneScenario(scenario)
+	result := &CompiledScenario{scenario: scenario}
 	seen := map[string]struct{}{}
 	totalBodyBytes := 0
-	for _, route := range profile.Routes {
+	for _, route := range scenario.Routes {
+		if err := model.ValidateServiceName(route.Service); err != nil {
+			return nil, fmt.Errorf("route %s has invalid service: %w", route.Name, err)
+		}
 		if len(route.Body) > MaxResponseBodyBytes {
 			return nil, fmt.Errorf("route %s response body exceeds %d bytes", route.Name, MaxResponseBodyBytes)
 		}
 		totalBodyBytes += len(route.Body)
-		if totalBodyBytes > MaxProfileBodyBytes {
-			return nil, fmt.Errorf("mock profile response bodies exceed %d bytes", MaxProfileBodyBytes)
+		if totalBodyBytes > MaxScenarioBodyBytes {
+			return nil, fmt.Errorf("mock scenario response bodies exceed %d bytes", MaxScenarioBodyBytes)
 		}
 		compiled, err := compileRoute(route)
 		if err != nil {
@@ -84,7 +84,7 @@ func Compile(profile model.MockProfile) (*CompiledProfile, error) {
 			if !result.routes[right].route.Enabled {
 				continue
 			}
-			if routesAreAmbiguous(result.routes[left], result.routes[right]) {
+			if strings.EqualFold(result.routes[left].route.Service, result.routes[right].route.Service) && routesAreAmbiguous(result.routes[left], result.routes[right]) {
 				return nil, fmt.Errorf("routes %s and %s are ambiguous; make one path or query matcher more specific",
 					result.routes[left].route.Name, result.routes[right].route.Name)
 			}
@@ -106,17 +106,17 @@ func Compile(profile model.MockProfile) (*CompiledProfile, error) {
 	return result, nil
 }
 
-// Profile returns a copy of the profile represented by the matcher.
-func (c *CompiledProfile) Profile() model.MockProfile {
-	return cloneProfile(c.profile)
+// Scenario returns a copy of the scenario represented by the matcher.
+func (c *CompiledScenario) Scenario() model.MockScenario {
+	return cloneScenario(c.scenario)
 }
 
 // Match returns the most specific route that accepts the request.
-func (c *CompiledProfile) Match(method, path string, query url.Values) (model.MockRoute, error) {
+func (c *CompiledScenario) Match(service, method, path string, query url.Values) (model.MockRoute, error) {
 	method = strings.ToUpper(method)
 	segments := splitPath(path)
 	for _, candidate := range c.routes {
-		if !candidate.route.Enabled || candidate.route.Method != method || len(candidate.segments) != len(segments) {
+		if !strings.EqualFold(candidate.route.Service, service) || !candidate.route.Enabled || candidate.route.Method != method || len(candidate.segments) != len(segments) {
 			continue
 		}
 		matched := true
@@ -142,7 +142,7 @@ func (c *CompiledProfile) Match(method, path string, query url.Values) (model.Mo
 }
 
 // Preview validates and evaluates a request and returns the response that would be served.
-func (c *CompiledProfile) Preview(request model.MockRequest) (model.MockPreview, error) {
+func (c *CompiledScenario) Preview(request model.MockRequest) (model.MockPreview, error) {
 	if err := validatePreviewRequest(request); err != nil {
 		return model.MockPreview{}, err
 	}
@@ -150,14 +150,17 @@ func (c *CompiledProfile) Preview(request model.MockRequest) (model.MockPreview,
 	for key, values := range request.Query {
 		query[key] = append([]string{}, values...)
 	}
-	route, err := c.Match(request.Method, request.Path, query)
+	route, err := c.Match(request.Service, request.Method, request.Path, query)
 	if err != nil {
-		return model.MockPreview{Status: http.StatusNotImplemented}, nil
+		return model.MockPreview{Service: request.Service, Status: http.StatusNotImplemented}, nil
 	}
-	return model.MockPreview{Matched: true, Route: route.Name, Status: route.Status, Headers: cloneStringMap(route.Headers), Body: route.Body, DelayMS: route.DelayMS}, nil
+	return model.MockPreview{Service: request.Service, Matched: true, Route: route.Name, Status: route.Status, Headers: cloneStringMap(route.Headers), Body: route.Body, DelayMS: route.DelayMS}, nil
 }
 
 func validatePreviewRequest(request model.MockRequest) error {
+	if err := model.ValidateServiceName(request.Service); err != nil {
+		return fmt.Errorf("preview service is invalid: %w", err)
+	}
 	method := strings.TrimSpace(request.Method)
 	if method == "" || !validHTTPToken(method) {
 		return errors.New("preview method must be an HTTP token")
@@ -319,12 +322,14 @@ func routesAreAmbiguous(left, right compiledRoute) bool {
 	return true
 }
 
-func cloneProfile(profile model.MockProfile) model.MockProfile {
-	profile.Routes = append([]model.MockRoute(nil), profile.Routes...)
-	for index := range profile.Routes {
-		profile.Routes[index] = cloneRoute(profile.Routes[index])
+func cloneScenario(scenario model.MockScenario) model.MockScenario {
+	scenario.Routes = append([]model.MockRoute(nil), scenario.Routes...)
+	scenario.Activation.TargetServices = append([]string(nil), scenario.Activation.TargetServices...)
+	scenario.Activation.ActiveServices = append([]string(nil), scenario.Activation.ActiveServices...)
+	for index := range scenario.Routes {
+		scenario.Routes[index] = cloneRoute(scenario.Routes[index])
 	}
-	return profile
+	return scenario
 }
 
 func cloneRoute(route model.MockRoute) model.MockRoute {

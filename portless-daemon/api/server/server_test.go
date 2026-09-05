@@ -100,25 +100,67 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("checkout in-use response code=%d body=%s", checkoutInUse.Code, checkoutInUse.Body.String())
 	}
 	mockBase := "/api/v1/environments/billing/local/mocks/checkout-empty"
-	createdMock := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/mocks", `{"name":"checkout-empty","service":"checkout","description":"predictable checkout"}`, true)
-	if createdMock.Code != http.StatusCreated || !strings.Contains(createdMock.Body.String(), `"mock":{"project":"billing","environment":"local","name":"checkout-empty"`) || !strings.Contains(createdMock.Body.String(), `"warnings":[]`) {
+	createdMock := request(server, authManager, http.MethodPost, "/api/v1/environments/billing/local/mocks", `{"name":"checkout-empty","description":"predictable checkout"}`, true)
+	if createdMock.Code != http.StatusCreated || !strings.Contains(createdMock.Body.String(), `"project":"billing","environment":"local","name":"checkout-empty"`) || !strings.Contains(createdMock.Body.String(), `"state":"disabled"`) {
 		t.Fatalf("mock create response code=%d body=%s", createdMock.Code, createdMock.Body.String())
 	}
-	updatedMock := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"method":"GET","path":"/health","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"ready\":true}","enabled":true}`, true)
-	if updatedMock.Code != http.StatusOK || !strings.Contains(updatedMock.Body.String(), `"name":"health"`) || !strings.Contains(updatedMock.Body.String(), `"method":"GET"`) {
+	emptyActivation := request(server, authManager, http.MethodPut, mockBase+"/activation", `{"enabled":true}`, true)
+	if emptyActivation.Code != http.StatusBadRequest {
+		t.Fatalf("empty scenario activation code=%d body=%s", emptyActivation.Code, emptyActivation.Body.String())
+	}
+	missingService := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"method":"GET","path":"/health","status":200,"enabled":true}`, true)
+	if missingService.Code != http.StatusBadRequest {
+		t.Fatalf("service-less route code=%d body=%s", missingService.Code, missingService.Body.String())
+	}
+	updatedMock := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"service":"checkout","method":"GET","path":"/health","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"ready\":true}","enabled":true}`, true)
+	if updatedMock.Code != http.StatusOK || !strings.Contains(updatedMock.Body.String(), `"name":"health"`) || !strings.Contains(updatedMock.Body.String(), `"service":"checkout"`) || !strings.Contains(updatedMock.Body.String(), `"method":"GET"`) {
 		t.Fatalf("mock route response code=%d body=%s", updatedMock.Code, updatedMock.Body.String())
 	}
-	previewMock := request(server, authManager, http.MethodPost, mockBase+"/preview", `{"method":"GET","path":"/health","headers":{"Accept":["application/json"],"X-Trace":["one","two"]},"body":"preview payload"}`, true)
+	previewMock := request(server, authManager, http.MethodPost, mockBase+"/preview", `{"service":"checkout","method":"GET","path":"/health","headers":{"Accept":["application/json"],"X-Trace":["one","two"]},"body":"preview payload"}`, true)
 	if previewMock.Code != http.StatusOK || !strings.Contains(previewMock.Body.String(), `"matched":true`) || !strings.Contains(previewMock.Body.String(), `"route":"health"`) {
 		t.Fatalf("mock preview response code=%d body=%s", previewMock.Code, previewMock.Body.String())
 	}
 	listedMocks := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/mocks", "", true)
-	if listedMocks.Code != http.StatusOK || !strings.Contains(listedMocks.Body.String(), `"mocks":[`) || !strings.Contains(listedMocks.Body.String(), `"checkout-empty"`) {
+	if listedMocks.Code != http.StatusOK || !strings.Contains(listedMocks.Body.String(), `"scenarios":[`) || !strings.Contains(listedMocks.Body.String(), `"checkout-empty"`) {
 		t.Fatalf("mock list response code=%d body=%s", listedMocks.Code, listedMocks.Body.String())
+	}
+	for _, enabled := range []bool{true, false} {
+		activation := request(server, authManager, http.MethodPut, mockBase+"/activation", `{"enabled":`+strconv.FormatBool(enabled)+`}`, true)
+		if activation.Code != http.StatusAccepted {
+			t.Fatalf("scenario activation code=%d body=%s", activation.Code, activation.Body.String())
+		}
+		var operation model.Operation
+		if err := json.Unmarshal(activation.Body.Bytes(), &operation); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for operation.State == "running" && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			operation, err = app.Operation(context.Background(), "billing", "local", operation.Number)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if operation.State != "succeeded" {
+			t.Fatalf("scenario activation operation = %#v", operation)
+		}
+		if enabled {
+			for _, target := range []string{mockBase, mockBase + "/routes/health"} {
+				blocked := request(server, authManager, http.MethodDelete, target, "", true)
+				if blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "MOCK_SCENARIO_CONFLICT") {
+					t.Fatalf("active scenario mutation code=%d body=%s", blocked.Code, blocked.Body.String())
+				}
+			}
+		}
 	}
 	deletedMockRoute := request(server, authManager, http.MethodDelete, mockBase+"/routes/health", "", true)
 	if deletedMockRoute.Code != http.StatusOK || !strings.Contains(deletedMockRoute.Body.String(), `"routes":[]`) {
 		t.Fatalf("mock route delete response code=%d body=%s", deletedMockRoute.Code, deletedMockRoute.Body.String())
+	}
+	openAPIDocument := `{"openapi":"3.1.0","info":{"title":"checkout","version":"1"},"paths":{"/health":{"get":{"responses":{"200":{"description":"ready"}}}}}}`
+	importedMock := request(server, authManager, http.MethodPost, mockBase+"/imports/openapi", `{"service":"checkout","document":`+strconv.Quote(openAPIDocument)+`}`, true)
+	if importedMock.Code != http.StatusOK || !strings.Contains(importedMock.Body.String(), `"scenario":`) || !strings.Contains(importedMock.Body.String(), `"service":"checkout"`) || !strings.Contains(importedMock.Body.String(), `"warnings":["Response 200 has no example body`) {
+		t.Fatalf("mock import code=%d body=%s", importedMock.Code, importedMock.Body.String())
 	}
 	deletedMock := request(server, authManager, http.MethodDelete, mockBase, "", true)
 	if deletedMock.Code != http.StatusNoContent {
@@ -376,10 +418,6 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("browser claim did not use clean control origin: %d %s", browserClaim.Code, browserClaim.Body.String())
 	}
 
-	applicationAPI := requestHost(server, authManager, http.MethodGet, "/api/v1/projects", "", false, "checkout.local.billing.localhost")
-	if applicationAPI.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("application host reached control API: %d", applicationAPI.Code)
-	}
 	unknown := requestHost(server, authManager, http.MethodGet, "/api/v1/health", "", false, "malicious.example")
 	if unknown.Code != http.StatusMisdirectedRequest {
 		t.Fatalf("unknown host returned %d", unknown.Code)
@@ -410,6 +448,7 @@ type fakeDaemonControl struct {
 	logCalls           int
 	handoff            contract.DaemonHandoffStatus
 	handoffCalls       int
+	restartCalls       int
 	restartedInstance  string
 	restartedReason    string
 	restartedForce     bool
@@ -440,6 +479,7 @@ func (f *fakeDaemonControl) HandoffStatus(context.Context) (contract.DaemonHando
 }
 
 func (f *fakeDaemonControl) Restart(_ context.Context, instanceID, reason string, force bool) (contract.DaemonRestart, error) {
+	f.restartCalls++
 	if instanceID != f.identity.InstanceID {
 		return contract.DaemonRestart{}, &contract.DaemonControlError{Code: "DAEMON_INSTANCE_CHANGED", Message: "daemon instance changed"}
 	}

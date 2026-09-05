@@ -16,8 +16,8 @@ export function actionError(title: string, value: unknown): ActionErrorDetails {
   return { title, message: String(value || 'The request could not be completed.') }
 }
 
-export function ActionErrorNotice({ error, onDismiss }: { error: ActionErrorDetails; onDismiss: () => void }) {
-  return <section className="action-error" role="alert">
+export function ActionErrorNotice({ error, onDismiss }: { error: ActionErrorDetails; onDismiss?: () => void }) {
+  return <section className={`action-error${onDismiss ? '' : ' action-error--persistent'}`} role="alert">
     <span className="action-error__mark" aria-hidden="true">!</span>
     <div className="action-error__body">
       <div className="action-error__heading">
@@ -32,6 +32,6 @@ export function ActionErrorNotice({ error, onDismiss }: { error: ActionErrorDeta
         </li>)}
       </ul>}
     </div>
-    <button className="action-error__dismiss" type="button" aria-label="Dismiss error" title="Dismiss" onClick={onDismiss}>×</button>
+    {onDismiss && <button className="action-error__dismiss" type="button" aria-label="Dismiss error" title="Dismiss" onClick={onDismiss}>×</button>}
   </section>
 }

@@ -4,10 +4,12 @@ import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus } from '../api/contracts/system'
 import { emptyProjectNavigationPreferences } from '../features/projects/projectNavigation'
-import { AppChrome, scrollCommandIntoView, type EnvironmentView, type SettingsView } from './Chrome'
+import { AppChrome, scrollCommandIntoView, type SettingsView } from './Chrome'
+import type { EnvironmentView } from '../features/environment/navigation'
+import { EnvironmentHeaderContext } from '../features/environment/EnvironmentHeader'
 
 const project = { name: 'billing' } as Project
-const environment = { project: 'billing', name: 'local', status: 'healthy' } as Environment
+const environment: Environment = { project: 'billing', name: 'local', status: 'healthy', revision: 1, createdAt: '', updatedAt: '', services: [], connections: [] }
 const daemon = { state: 'ready', instanceId: 'instance', activeEnvironments: [], recoveryProblems: [] } as unknown as DaemonStatus
 const handoff = { state: 'ready', verifiedAt: '2026-08-25T12:00:00Z', activeEnvironments: [], problems: [] } as DaemonHandoffStatus
 const diagnostics = { inventory: { processes: 0, containers: 0, proxyListeners: 0, activeEnvironments: 0, problems: [] } } as unknown as DaemonDiagnostics
@@ -22,6 +24,9 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       sidebarProject={project}
       activeEnvironment={activeEnvironment}
       activeView={activeView}
+      headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={() => undefined} />}
+      headerActions={activeEnvironment && <span>Environment actions</span>}
+      viewCounts={{ mocks: 2, recordings: 1, faults: 2 }}
       settingsActive={settingsActive}
       settingsView={settingsView}
       navigation={emptyProjectNavigationPreferences()}
@@ -76,10 +81,15 @@ describe('application navigation', () => {
     expect(markup).toContain('Bindings')
     expect(markup).toContain('Topology')
     expect(markup).toContain('Timeline')
-    expect(markup).toContain('<a href="/projects">projects</a>')
     expect(markup).toContain('<a href="/projects/billing">billing</a>')
-    expect(markup).toContain('<strong aria-current="page">local</strong>')
-    expect(markup).toContain('<nav class="crumbs" aria-label="Breadcrumb"><a href="/projects">projects</a><b>/</b><a href="/projects/billing">billing</a><b>/</b><strong aria-current="page">local</strong></nav>')
+    expect(markup).toContain('<a href="/environments/billing/local">local</a>')
+    expect(markup).toContain('<h1 id="environment-view-title" tabindex="-1" aria-current="page">Topology</h1>')
+    expect(markup).toContain('billing/local health: healthy; No services. Open service overview')
+    expect(markup).toContain('id="view-count-faults">2 active faults')
+    expect(markup).toContain('<span>Recordings</span><small class="view-nav__count" aria-hidden="true">1</small>')
+    expect(markup).toContain('id="view-count-recordings">1 active recording')
+    expect(markup).toContain('<span>Mocks</span><small class="view-nav__count" aria-hidden="true">2</small>')
+    expect(markup).toContain('id="view-count-mocks">2 active mocks')
     expect(markup).toContain('<button class="is-active" aria-label="Topology" aria-current="page"')
     expect(markup.indexOf('<span>Faults</span>')).toBeLessThan(markup.indexOf('<span>Bindings</span>'))
     expect(markup.indexOf('<span>Bindings</span>')).toBeLessThan(markup.indexOf('<span>Timeline</span>'))
@@ -125,21 +135,43 @@ describe('application navigation', () => {
     }
   })
 
-  it('restores focus mode with full overlay navigation and top-bar status', () => {
+  it.each([false, true])('restores focus mode without a header navigation button (narrow: %s)', (narrow) => {
     vi.stubGlobal('window', {
       localStorage: { getItem: (key: string) => ['portless.focus-mode', 'portless.sidebar-collapsed'].includes(key) ? 'true' : null },
+      matchMedia: () => ({ matches: narrow }),
     })
 
     try {
       const markup = renderChrome(environment, 'traffic')
 
-      expect(markup).toContain('<div class="shell shell--focus-mode">')
+      expect(markup).toContain('class="shell shell--focus-mode shell--overlay-navigation"')
       expect(markup).not.toContain('shell--sidebar-collapsed')
       expect(markup).toContain('aria-label="Close navigation overlay" title="Close navigation overlay"')
-      expect(markup).toContain('class="focus-navigation-edge" type="button" aria-label="Open navigation overlay" aria-expanded="false"')
-      expect(markup).toContain('<div class="topbar__context"><nav class="crumbs"')
-      expect(markup).toContain('</nav><span class="status status--success" title="healthy">')
+      expect(markup).toContain('class="focus-navigation-edge" type="button" aria-label="Reveal navigation"')
+      expect(markup).not.toContain('aria-label="Open navigation"')
+      expect(markup).not.toContain('class="topbar__navigation"')
+      expect(markup).toContain('inert=""')
+      expect(markup).toContain('<h1 id="environment-view-title" tabindex="-1" aria-current="page">Traffic</h1>')
+      expect(markup).toContain('class="status status--success" title="healthy"')
+      expect(markup).toContain('Environment actions')
       expect(markup).not.toContain('aria-label="Traffic" aria-current="page" title="Traffic"')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps the header navigation button on narrow screens outside focus mode', () => {
+    vi.stubGlobal('window', {
+      localStorage: { getItem: () => null },
+      matchMedia: () => ({ matches: true }),
+    })
+
+    try {
+      const markup = renderChrome(environment)
+
+      expect(markup).toContain('class="shell shell--overlay-navigation"')
+      expect(markup).toContain('aria-label="Open navigation" aria-controls="sidebar-navigation" aria-expanded="false"')
+      expect(markup).not.toContain('class="focus-navigation-edge"')
     } finally {
       vi.unstubAllGlobals()
     }
@@ -147,6 +179,14 @@ describe('application navigation', () => {
 })
 
 describe('command palette', () => {
+  it('labels its trigger Search and retains the keyboard shortcut', () => {
+    for (const markup of [renderChrome(), renderChrome(environment)]) {
+      expect(markup).toContain('class="key-button" aria-label="Search" title="Search (⌘K / Ctrl+K)"')
+      expect(markup).toContain('<span>⌘</span><span>K</span><em>Search</em>')
+      expect(markup).not.toContain('jump or run')
+    }
+  })
+
   it('scrolls the selected command to the nearest visible position', () => {
     const scrollIntoView = vi.fn()
 

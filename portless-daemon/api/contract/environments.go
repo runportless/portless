@@ -84,22 +84,36 @@ type OperationList struct {
 	Operations []Operation `json:"operations"`
 }
 
-// MockProfileList is a collection of environment-scoped mock profiles.
-type MockProfileList struct {
-	Mocks []MockProfile `json:"mocks"`
+// MockScenarioList is a collection of environment-scoped mock scenarios.
+type MockScenarioList struct {
+	Scenarios []MockScenario `json:"scenarios"`
 }
 
-// CreateMockRequest creates a profile, optionally deriving routes from a recording.
+// CreateMockRequest creates an empty mock scenario.
 type CreateMockRequest struct {
-	Name            string `json:"name"`
-	Service         string `json:"service"`
-	Description     string `json:"description,omitempty"`
-	FromRecording   string `json:"fromRecording,omitempty"`
-	OpenAPIDocument string `json:"openapiDocument,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
-// MockMutation returns an updated profile and non-fatal import warnings.
-type MockMutation struct {
-	Mock     MockProfile `json:"mock"`
-	Warnings []string    `json:"warnings"`
+// MockScenarioMutation returns an updated scenario and non-fatal import warnings.
+type MockScenarioMutation struct {
+	Scenario MockScenario `json:"scenario"`
+	Warnings []string     `json:"warnings"`
+}
+
+// SetMockScenarioActivationRequest enables or disables one complete scenario.
+type SetMockScenarioActivationRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ImportMockRecordingRequest derives scenario routes from retained traffic.
+type ImportMockRecordingRequest struct {
+	Recording string   `json:"recording"`
+	Services  []string `json:"services,omitempty"`
+}
+
+// ImportMockOpenAPIRequest derives scenario routes for one service from OpenAPI.
+type ImportMockOpenAPIRequest struct {
+	Service  string `json:"service"`
+	Document string `json:"document"`
 }

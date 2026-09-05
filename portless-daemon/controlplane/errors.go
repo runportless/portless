@@ -40,6 +40,8 @@ const (
 	ErrorRuntimeInUse ErrorKind = "runtime-in-use"
 	// ErrorCheckoutInUse indicates that checkout-backed services prevent checkout removal.
 	ErrorCheckoutInUse ErrorKind = "checkout-in-use"
+	// ErrorMockScenarioConflict indicates that scenario ownership blocks a mutation.
+	ErrorMockScenarioConflict ErrorKind = "mock-scenario-conflict"
 	// ErrorRuntimeUnavailable indicates that no usable container runtime is available.
 	ErrorRuntimeUnavailable ErrorKind = "runtime-unavailable"
 )
@@ -61,6 +63,8 @@ func ClassifyError(err error) ErrorClassification {
 	var configuration compiler.ConfigurationError
 	var checkoutInUse CheckoutInUseError
 	switch {
+	case errors.Is(err, errMockScenarioConflict):
+		classification.Kind = ErrorMockScenarioConflict
 	case errors.As(err, &conflict):
 		classification.Kind = ErrorNameTaken
 		classification.Suggestions = append([]string(nil), conflict.Suggestions...)

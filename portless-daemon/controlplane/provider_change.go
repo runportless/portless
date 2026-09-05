@@ -28,6 +28,9 @@ func (s *Service) ChangeBinding(ctx context.Context, projectName, environmentNam
 	if s.resetting {
 		return model.Operation{}, errors.New("Portless reset preparation is in progress")
 	}
+	if err := s.validateDirectProviderChange(ctx, projectName, environmentName, serviceName, binding); err != nil {
+		return model.Operation{}, err
+	}
 	plan, err := s.prepareBindingChange(ctx, projectName, environmentName, serviceName, binding)
 	if err != nil {
 		return model.Operation{}, err
@@ -44,6 +47,18 @@ func (s *Service) ChangeBinding(ctx context.Context, projectName, environmentNam
 	}
 	go s.runBindingChange(scope, operation, plan.binding)
 	return operation, nil
+}
+
+func (s *Service) validateDirectProviderChange(ctx context.Context, project, environment, service string, binding model.ComponentBinding) error {
+	if binding.Provider == model.ProviderMock {
+		return errors.New("enable a mock scenario to use mock providers; services cannot be bound to mocks individually")
+	}
+	if scenario, active, err := s.database.ActiveMockScenarioForService(ctx, project, environment, service); err != nil {
+		return err
+	} else if active {
+		return fmt.Errorf("%w: service %s is controlled by mock scenario %s; disable that scenario before changing its provider", errMockScenarioConflict, service, scenario)
+	}
+	return nil
 }
 
 func (s *Service) prepareBindingChange(ctx context.Context, projectName, environmentName, serviceName string, binding model.ComponentBinding) (bindingChangePlan, error) {
@@ -105,14 +120,14 @@ func (s *Service) prepareBindingChange(ctx context.Context, projectName, environ
 		if err := compiler.ValidateMock(binding.Mock); err != nil {
 			return bindingChangePlan{}, err
 		}
-		profile, err := s.database.MockProfile(ctx, projectName, environmentName, binding.Mock.Profile)
+		scenario, err := s.database.MockScenario(ctx, projectName, environmentName, binding.Mock.Scenario)
 		if err != nil {
-			return bindingChangePlan{}, fmt.Errorf("mock profile %s does not exist: %w", binding.Mock.Profile, err)
+			return bindingChangePlan{}, fmt.Errorf("mock scenario %s does not exist: %w", binding.Mock.Scenario, err)
 		}
-		if !strings.EqualFold(profile.Service, serviceName) {
-			return bindingChangePlan{}, fmt.Errorf("mock profile %s belongs to service %s", profile.Name, profile.Service)
+		if !containsMockService(scenario.Routes, serviceName) {
+			return bindingChangePlan{}, fmt.Errorf("mock scenario %s has no routes for service %s", scenario.Name, serviceName)
 		}
-		binding.Mock.Profile = profile.Name
+		binding.Mock.Scenario = scenario.Name
 		binding.Source, binding.Remote = "", nil
 	default:
 		return bindingChangePlan{}, errors.New("provider must be local, container, remote, or mock")
@@ -133,7 +148,17 @@ func (s *Service) runBindingChange(scope string, operation model.Operation, requ
 	defer lock.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	s.runBindingChangeLocked(ctx, scope, operation, requested, false)
+}
+
+func (s *Service) runBindingChangeLocked(ctx context.Context, scope string, operation model.Operation, requested model.ComponentBinding, scenarioOperation bool) {
 	projectName, environmentName := scopeNames(scope)
+	if !scenarioOperation {
+		if err := s.validateDirectProviderChange(ctx, projectName, environmentName, requested.Service, requested); err != nil {
+			s.failBindingChange(scope, operation, err)
+			return
+		}
+	}
 	plan, err := s.prepareBindingChange(ctx, projectName, environmentName, requested.Service, requested)
 	if err != nil {
 		s.failBindingChange(scope, operation, err)
@@ -163,6 +188,21 @@ func (s *Service) runBindingChange(scope string, operation model.Operation, requ
 	if plan.environment.Status == model.EnvironmentStarting || plan.environment.Status == model.EnvironmentStopping || plan.environment.Status == model.EnvironmentRecovering || plan.environment.Status == model.EnvironmentUnknown {
 		s.failBindingChange(scope, operation, fmt.Errorf("environment is %s; wait for the current lifecycle transition before changing a provider", plan.environment.Status))
 		return
+	}
+	if plan.binding.Provider == model.ProviderLocal {
+		prepared, prepareErr := s.prepareSourceCheckouts(ctx, plan.environment, plan.bindings, operation)
+		if prepareErr != nil {
+			s.failBindingChange(scope, operation, prepareErr)
+			return
+		}
+		defer s.releaseUnusedSourceLeases(scope)
+		if prepared.Revision != plan.environment.Revision {
+			plan, err = s.prepareBindingChange(ctx, projectName, environmentName, plan.binding.Service, plan.binding)
+			if err != nil {
+				s.failBindingChange(scope, operation, err)
+				return
+			}
+		}
 	}
 	if plan.binding.Provider == model.ProviderRemote {
 		probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -195,15 +235,6 @@ func (s *Service) runBindingChange(scope string, operation model.Operation, requ
 		}
 	}
 	activeDefinition := mergeActiveDefinition(oldDefinition, plan.definition, plan.binding.Service)
-	candidate := plan.environment
-	candidate.Bindings = replaceBinding(candidate.Bindings, plan.binding)
-	candidate.Connections = activeDefinition.Connections
-	if plan.binding.Provider == model.ProviderLocal {
-		if err := s.acquireSourceLeases(scope, candidate); err != nil {
-			s.failBindingChange(scope, operation, err)
-			return
-		}
-	}
 	stoppedOld := false
 	applied := false
 	fail := func(changeErr error) {
@@ -325,7 +356,7 @@ func (s *Service) runBindingChange(scope string, operation model.Operation, requ
 			fail(err)
 			return
 		}
-		_ = s.serviceEvent(scope, operation, plan.binding.Service, "ready", plan.binding.Service+" is served by mock profile "+plan.binding.Mock.Profile)
+		_ = s.serviceEvent(scope, operation, plan.binding.Service, "ready", plan.binding.Service+" is served by mock scenario "+plan.binding.Mock.Scenario)
 	}
 	latest, _ := s.database.Environment(ctx, projectName, environmentName)
 	if err := s.ensurePublicTCPProxies(ctx, latest); err != nil {
@@ -448,7 +479,7 @@ func sameProviderBinding(left, right model.ComponentBinding) bool {
 	case model.ProviderRemote:
 		return left.Remote != nil && right.Remote != nil && *left.Remote == *right.Remote
 	case model.ProviderMock:
-		return left.Mock != nil && right.Mock != nil && strings.EqualFold(left.Mock.Profile, right.Mock.Profile)
+		return left.Mock != nil && right.Mock != nil && strings.EqualFold(left.Mock.Scenario, right.Mock.Scenario)
 	default:
 		return false
 	}
@@ -513,7 +544,7 @@ func providerChangeSummary(binding model.ComponentBinding) string {
 		return binding.Service + " now runs from source " + binding.Source
 	}
 	if binding.Provider == model.ProviderMock && binding.Mock != nil {
-		return binding.Service + " now uses mock profile " + binding.Mock.Profile
+		return binding.Service + " now uses mock scenario " + binding.Mock.Scenario
 	}
 	return binding.Service + " now uses the managed container provider"
 }

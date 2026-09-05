@@ -47,7 +47,7 @@ Adjacent products keep separate responsibilities:
 | `controlplane` | Application behavior for projects, environments, lifecycle operations, provider changes, observability, and reconciliation. |
 | `daemonlog` | Bounded, fixed-path inspection and known-secret redaction for the private daemon log. |
 | `database` | SQLite persistence for topology, operations, ownership, runtime state, traffic artifacts, mocks, and faults. |
-| `projects` | Project compilation and bounded, root-confined static discovery. |
+| `projects` | Project compilation, bounded static discovery, and independent checkout preparation in `worktrees`. Only the control plane invokes worktree preparation; discovery remains read-only. |
 | `providers` | Managed-resource plugin contracts, bounded discovery, declarative container plans, and safe bindings. |
 | `runtime` | Process supervisors, containers, debugging, health checks, and log storage. |
 | `networking`, `dns` | Stable endpoint allocation, fixed localhost answers, and authoritative `portless.test` DNS data. |
@@ -117,6 +117,20 @@ The daemon's public wire boundary lives under `api`:
 - `api/contract` owns the Go wire types.
 - `api/client` owns native HTTP transport.
 - `api/server` adapts requests to daemon capabilities.
+
+The request hostname separates application ingress from control routes.
+Application hosts forward `/api/` and `/auth/` paths to the selected service,
+even when a path matches a Portless API or browser claim. Unavailable services
+return an ingress failure without falling back to control handlers. Portless's
+`/api/v1/` and `/auth/claim/` handlers are served only on `portless.localhost`
+and the supported loopback control hosts (`localhost`, `127.0.0.1`, and `::1`).
+Unknown hosts are rejected. Private `/_portless/daemon/v1/...` lifecycle routes
+retain their separate authenticated, control-host-only handler.
+
+The API server adds its browser security headers only after validating a control
+host. Application Content-Security-Policy, frame, referrer, and content-type
+options pass through unchanged, including repeated policy values. An application
+that supplies no such headers does not inherit the control plane's policies.
 
 For a contract change, update the contract first, then the typed client,
 server adapters and behavior, CLI and web consumers, OpenAPI or event
@@ -197,5 +211,6 @@ separate explicit authorization.
 - [Single local daemon decision](../docs/architecture/decisions/0001-single-local-daemon.md)
 - [Public names and private ownership keys](../docs/architecture/decisions/0002-names-public-keys-private.md)
 - [Source-aware edge proxy decision](../docs/architecture/decisions/0003-edge-proxy.md)
+- [Automatic environment checkouts](../docs/architecture/decisions/0008-automatic-environment-checkouts.md)
 - [Package ownership and dependency direction](../docs/plans/package-structure-refactor.md)
 - [MCP boundary](../portless-mcp/README.md)

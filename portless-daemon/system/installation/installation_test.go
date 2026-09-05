@@ -112,3 +112,28 @@ func TestInspectStateRejectsAmbiguousRemovalRoot(t *testing.T) {
 		t.Fatalf("unexpected ambiguous-root error: %v", err)
 	}
 }
+
+func TestEnvironmentCheckoutsSurviveResetAndBlockRecursiveUninstall(t *testing.T) {
+	layout, err := ResolveLayout(filepath.Join(t.TempDir(), "portless-state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(layout.Root, "worktrees", "store-qa", "local-edit.txt")
+	if err := os.MkdirAll(filepath.Dir(checkout), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{layout.AuthToken, checkout} {
+		if err := os.WriteFile(path, []byte("preserve"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ResetApplicationState(layout); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveStoppedState(layout); err == nil || !strings.Contains(err.Error(), "environment checkouts are retained") {
+		t.Fatalf("uninstall would erase environment checkouts: %v", err)
+	}
+	if content, err := os.ReadFile(checkout); err != nil || string(content) != "preserve" {
+		t.Fatalf("checkout edits were lost: %q, %v", content, err)
+	}
+}

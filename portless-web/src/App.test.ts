@@ -5,8 +5,8 @@ import { environmentSessionKey, LoadingScreen, pageTitle, parseRoute, settingsTo
 
 describe('application routes', () => {
   it('recognizes the top-level settings page without inventing project scope', () => {
-    expect(parseRoute('/settings')).toEqual({ settings: true, settingsTab: 'appearance', tab: 'overview' })
-    expect(parseRoute('/projects/billing')).toEqual({ project: 'billing', settings: false, settingsTab: 'appearance', tab: 'overview' })
+    expect(parseRoute('/settings')).toEqual({ settings: true, settingsTab: 'appearance', view: 'overview' })
+    expect(parseRoute('/projects/billing')).toEqual({ project: 'billing', settings: false, settingsTab: 'appearance', view: 'overview' })
   })
 
   it('routes directly to a scoped MCP settings view', () => {
@@ -14,54 +14,48 @@ describe('application routes', () => {
       settings: true,
       settingsTab: 'mcp',
       settingsEnvironment: 'store/local',
-      tab: 'overview',
+      view: 'overview',
     })
-    expect(parseRoute('/settings?tab=not-a-setting')).toEqual({ settings: true, settingsTab: 'appearance', tab: 'overview' })
+    expect(parseRoute('/settings?tab=not-a-setting')).toEqual({ settings: true, settingsTab: 'appearance', view: 'overview' })
     expect(parseRoute('/environments/store/local?tab=traffic')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      tab: 'traffic',
+      view: 'traffic',
     })
-    expect(parseRoute('/environments/store/local?tab=mocks&profile=sold-out')).toEqual({
+    expect(parseRoute('/environments/store/local?tab=mocks&scenario=sold-out')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      mockProfile: 'sold-out',
-      tab: 'mocks',
+      mockScenario: 'sold-out',
+      view: 'mocks',
     })
-    expect(parseRoute('/environments/store/local?tab=traffic&profile=ignored')).not.toHaveProperty('mockProfile')
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create')).toEqual({
+    expect(parseRoute('/environments/store/local?tab=traffic&scenario=ignored')).not.toHaveProperty('mockScenario')
+    expect(parseRoute('/environments/store/local?tab=mocks&scenario=sold-out&create=route')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      mockWorkspace: 'create',
-      tab: 'mocks',
+      mockScenario: 'sold-out',
+      mockCreateRoute: true,
+      view: 'mocks',
     })
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=create&profile=ignored')).not.toHaveProperty('mockProfile')
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&profile=sold-out')).toEqual({
+    expect(parseRoute('/environments/store/local?tab=mocks&scenario=sold-out&route=lookup')).toEqual({
       project: 'store',
       environment: 'local',
       settings: false,
       settingsTab: 'appearance',
-      mockProfile: 'sold-out',
-      mockWorkspace: 'route',
-      tab: 'mocks',
-    })
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&profile=sold-out&route=lookup')).toEqual({
-      project: 'store',
-      environment: 'local',
-      settings: false,
-      settingsTab: 'appearance',
-      mockProfile: 'sold-out',
-      mockWorkspace: 'route',
+      mockScenario: 'sold-out',
       mockRoute: 'lookup',
-      tab: 'mocks',
+      view: 'mocks',
     })
-    expect(parseRoute('/environments/store/local?tab=mocks&workspace=route&route=ignored')).not.toHaveProperty('mockRoute')
+    const orphanedRoute = parseRoute('/environments/store/local?tab=mocks&create=route&route=ignored')
+    expect(orphanedRoute).not.toHaveProperty('mockCreateRoute')
+    expect(orphanedRoute).not.toHaveProperty('mockRoute')
+    expect(parseRoute('/environments/store/local?tab=traffic&scenario=sold-out&create=route')).not.toHaveProperty('mockCreateRoute')
+    expect(parseRoute('/environments/store/local?tab=mocks&scenario=sold-out&route=new')).toHaveProperty('mockRoute', 'new')
   })
 
   it('toggles settings back to the exact previous route', () => {

@@ -19,7 +19,7 @@ export function defaultProviderBinding(project: Project | undefined, environment
 export function providerBindingMatches(binding: ComponentBinding, expected: ComponentBinding) {
   if (binding.provider !== expected.provider) return false
   if (binding.provider === 'local') return binding.source?.toLowerCase() === expected.source?.toLowerCase()
-  if (binding.provider === 'mock') return binding.mock?.profile.toLowerCase() === expected.mock?.profile.toLowerCase()
+	if (binding.provider === 'mock') return binding.mock?.scenario.toLowerCase() === expected.mock?.scenario.toLowerCase()
   return binding.provider === 'container'
 }
 

@@ -156,6 +156,9 @@ WHERE modified_at = ''`, nowText()); err != nil {
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(9, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(10, ?)`, nowText()); err != nil {
+		return fmt.Errorf("record schema version: %w", err)
+	}
 	return nil
 }
 
@@ -247,23 +250,20 @@ CREATE TABLE IF NOT EXISTS environment_bindings (
   PRIMARY KEY(environment_key, service_name)
 );
 
-CREATE TABLE IF NOT EXISTS mock_profiles (
+CREATE TABLE IF NOT EXISTS mock_scenarios (
   environment_key TEXT NOT NULL REFERENCES environments(private_key) ON DELETE CASCADE,
   name TEXT NOT NULL COLLATE NOCASE,
-  service_name TEXT NOT NULL COLLATE NOCASE,
   description TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   modified_at TEXT NOT NULL,
   PRIMARY KEY(environment_key, name)
 );
 
-CREATE INDEX IF NOT EXISTS mock_profiles_by_service
-ON mock_profiles(environment_key, service_name, name);
-
-CREATE TABLE IF NOT EXISTS mock_routes (
+CREATE TABLE IF NOT EXISTS mock_scenario_routes (
   environment_key TEXT NOT NULL,
-  profile_name TEXT NOT NULL COLLATE NOCASE,
+  scenario_name TEXT NOT NULL COLLATE NOCASE,
   name TEXT NOT NULL COLLATE NOCASE,
+  service_name TEXT NOT NULL COLLATE NOCASE,
   method TEXT NOT NULL,
   path TEXT NOT NULL,
   query_json BLOB NOT NULL DEFAULT '{}',
@@ -274,9 +274,24 @@ CREATE TABLE IF NOT EXISTS mock_routes (
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   modified_at TEXT NOT NULL,
-  PRIMARY KEY(environment_key, profile_name, name),
-  FOREIGN KEY(environment_key, profile_name)
-    REFERENCES mock_profiles(environment_key, name) ON DELETE CASCADE
+  PRIMARY KEY(environment_key, scenario_name, name),
+  FOREIGN KEY(environment_key, scenario_name)
+    REFERENCES mock_scenarios(environment_key, name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS mock_scenario_routes_by_service
+ON mock_scenario_routes(environment_key, scenario_name, service_name, name);
+
+CREATE TABLE IF NOT EXISTS mock_scenario_activations (
+  environment_key TEXT NOT NULL,
+  scenario_name TEXT NOT NULL COLLATE NOCASE,
+  service_name TEXT NOT NULL COLLATE NOCASE,
+  previous_binding_json BLOB NOT NULL,
+  activated_at TEXT NOT NULL,
+  PRIMARY KEY(environment_key, scenario_name, service_name),
+  UNIQUE(environment_key, service_name),
+  FOREIGN KEY(environment_key, scenario_name)
+    REFERENCES mock_scenarios(environment_key, name) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS context_selections (

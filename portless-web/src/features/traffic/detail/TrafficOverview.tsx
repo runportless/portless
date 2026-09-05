@@ -1,4 +1,5 @@
 import { duration } from '../../../components/Status'
+import { ActionErrorNotice } from '../../../components/ActionError'
 import type { ComponentBinding } from '../../../api/contracts/topology'
 import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { formatTrafficBytes } from './TrafficFormatting'
@@ -14,7 +15,7 @@ export function trafficTargetBinding(exchange: TrafficExchange, binding?: Compon
   if (provider === 'local') configuration = matchingBinding?.source || exchange.target
   if (provider === 'container') configuration = 'Portless managed'
   if (provider === 'remote') configuration = matchingBinding?.remote?.url || (exchange.remoteClassification ? `${exchange.remoteClassification} target` : exchange.target)
-  if (provider === 'mock') configuration = matchingBinding?.mock?.profile || exchange.mockProfile || exchange.target
+	if (provider === 'mock') configuration = matchingBinding?.mock?.scenario || exchange.mockScenario || exchange.target
   return [configuration, provider].filter(Boolean).join(' · ') || 'not reported'
 }
 
@@ -37,13 +38,13 @@ export function TrafficOverview({ exchange, targetBinding }: { exchange: Traffic
         <OverviewDetail label="COMPLETED" value={duration(exchange.durationMs)} />
       </div>
     </div>
-    {exchange.error && <div className="traffic-detail__error"><span>{exchange.protocol === 'http' ? 'REQUEST ERROR' : 'OPERATION ERROR'}</span><strong>{exchange.error}</strong></div>}
+    {exchange.error && <ActionErrorNotice error={{ title: exchange.protocol === 'http' ? 'Request error' : 'Operation error', message: exchange.error }} />}
     {showTCPNotice && <section className="traffic-tcp-summary"><span>{tcp?.inspection?.toUpperCase() || 'TCP SESSION'}</span><strong>{tcp?.inspectionReason || 'Application protocol details are not available for this connection.'}</strong><small>{formatTrafficBytes(Math.max(0, exchange.requestBytes))} sent · {formatTrafficBytes(Math.max(0, exchange.responseBytes))} received</small></section>}
   </section>
 }
 
 export function TrafficInterventionBadges({ exchange }: { exchange: TrafficExchange }) {
-  const mock = [exchange.mockProfile, exchange.mockRoute].filter(Boolean).join(' / ')
+	const mock = [exchange.mockScenario, exchange.mockRoute].filter(Boolean).join(' / ')
   if (!exchange.fault && !exchange.recording && !mock) return null
   return <div className="traffic-intervention-badges" role="list" aria-label="Exchange interventions">
     {exchange.fault && <span className="traffic-intervention-badge traffic-intervention-badge--fault" role="listitem" aria-label={`FAULT ${exchange.fault}`}><b>FAULT</b><span>{exchange.fault}</span></span>}

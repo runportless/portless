@@ -49,7 +49,7 @@ the normal command tree instead.
 | `projects` | Project, source, environment, provider-binding, and checkout commands. |
 | `observe` | Logs, timeline, service inspection and lifecycle, and effective connections. |
 | `traffic` | Traffic exchanges and traces, recordings, and fault rules. |
-| `mocks` | Deterministic mock profiles, routes, imports, and previews. |
+| `mocks` | Multi-service mock scenarios, activation, routes, imports, and previews. |
 | `administration` | Preferences, daemon, relay, runtime, MCP, reset, uninstall, and setup commands. |
 | `doctor` | Installation diagnostics and report types used by `administration`. |
 

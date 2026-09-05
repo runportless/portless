@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { authenticate, environmentPath, issueBrowserClaim } from './helpers'
+import { applicationRequest, authenticate, environmentHeader, environmentPath, issueBrowserClaim } from './helpers'
 import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
@@ -10,9 +10,14 @@ test('requires and consumes a one-use browser claim', async ({ page, request }) 
   await expect(page.getByRole('heading', { name: 'Open this control plane from the CLI.' })).toBeVisible()
 
   const claim = await issueBrowserClaim()
+  const application = await applicationRequest(new URL(claim).pathname)
+  expect(application.status).toBe(404)
+  expect(application.body).toBe('404 page not found\n')
+  expect(application.headers['set-cookie']).toBeUndefined()
+
   await page.goto(claim)
   await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
-  await expect(page.getByRole('heading', { name: state.environment, exact: true })).toBeVisible()
+  await expect(environmentHeader(page).getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
 
   const reuse = await request.get(claim)
   expect(reuse.status()).toBe(401)
@@ -45,10 +50,10 @@ test('keeps scrollable pages within the standard bottom gutter', async ({ page }
   await page.setViewportSize({ width: 1280, height: 400 })
   await authenticate(page)
 
-  const expectBottomGutter = async (lastContent: string) => {
+  const expectBottomGutter = async (lastContent: string, scrollable = false) => {
     await expect(page.locator(lastContent)).toBeVisible()
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+    if (scrollable) await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
     const gap = await page.locator('.page').evaluate((element) => {
       const last = element.lastElementChild
       if (!last) return -1
@@ -57,12 +62,12 @@ test('keeps scrollable pages within the standard bottom gutter', async ({ page }
     expect(gap).toBe(28)
   }
 
-  await expectBottomGutter('.overview-grid')
+  await expectBottomGutter('.overview-grid', true)
   await page.goto(`${state.baseURL}${environmentPath('timeline')}`)
   await expectBottomGutter('.timeline-panel')
 })
 
-test('keeps environment panel title bars at one height across tabs', async ({ page }) => {
+test('keeps the persistent header and panel title bars consistent across views', async ({ page }) => {
   const state = readE2EState()
   await authenticate(page)
 
@@ -70,7 +75,7 @@ test('keeps environment panel title bars at one height across tabs', async ({ pa
     ['overview', '.services-panel > .panel-title'],
     ['topology', '.topology-panel--page > .panel-title'],
     ['traffic', '.traffic-header'],
-    ['mocks', '.mock-profiles-panel > .panel-title'],
+    ['mocks', '.mock-scenarios-panel > .panel-title'],
     ['recordings', '.recording-control-panel > .panel-title'],
     ['faults', '.faults-panel-title'],
     ['bindings', '.configured-providers-panel > .panel-title'],
@@ -79,6 +84,15 @@ test('keeps environment panel title bars at one height across tabs', async ({ pa
 
   for (const [tab, selector] of titles) {
     if (tab !== 'overview') await page.goto(`${state.baseURL}${environmentPath(tab)}`)
+    const header = environmentHeader(page)
+    await expect(header.getByRole('heading', { name: tab[0].toUpperCase() + tab.slice(1), exact: true })).toBeVisible()
+    await expect(header.getByRole('link', { name: /health: healthy; 3\/3 ready/ })).toBeVisible()
+    await expect(header.getByRole('link', { name: 'OPEN APP' })).toHaveAttribute('href', `http://${state.applicationHost}`)
+    await expect(header.getByRole('button', { name: 'STOP ALL' })).toHaveCount(0)
+    await expect(header.getByRole('button', { name: `Environment actions for ${state.project}/${state.environment}` })).toHaveCount(0)
+    await expect(header.getByRole('button', { name: 'Search', exact: true }).locator('em')).toBeVisible()
+    await expect(header.getByRole('link', { name: 'OPEN APP' })).toHaveClass(/\bbutton\b/)
+    await expect(page.getByRole('navigation', { name: 'Environment views', exact: true })).toHaveCount(0)
     const title = page.locator(selector)
     await expect(title).toBeVisible()
     expect(await title.evaluate((element) => Math.round(element.getBoundingClientRect().height)), `${tab} title bar height`).toBe(48)
@@ -86,47 +100,93 @@ test('keeps environment panel title bars at one height across tabs', async ({ pa
 })
 
 test('toggles persistent focus mode from the keyboard and command palette', async ({ page }) => {
+  const state = readE2EState()
   await authenticate(page)
 
   const shell = page.locator('.shell')
   const stage = page.locator('.stage')
   const sidebar = page.locator('.sidebar')
-  const heading = page.locator('.environment-page > .project-heading')
+  const header = environmentHeader(page)
+  const navigation = header.getByRole('button', { name: 'Open navigation' })
   const normalStageLeft = await stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))
   expect(normalStageLeft).toBeGreaterThan(0)
 
   await page.keyboard.press('Control+Shift+F')
   await expect(shell).toHaveClass(/shell--focus-mode/)
-  await expect(heading).toBeHidden()
-  await expect(page.locator('.topbar__context > .status')).toContainText('healthy')
+  await expect(header.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()
+  await expect(header.getByRole('link', { name: /health: healthy/ })).toBeVisible()
+  await expect(header.getByRole('link', { name: 'OPEN APP' })).toBeVisible()
+  await expect(header.getByRole('button', { name: 'STOP ALL' })).toHaveCount(0)
+  await expect(header.getByRole('button', { name: `Environment actions for ${state.project}/${state.environment}` })).toHaveCount(0)
+  await expect(header.getByRole('button', { name: 'Search', exact: true }).locator('em')).toBeVisible()
+  await expect(navigation).toHaveCount(0)
   await expect.poll(() => stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))).toBe(0)
   await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().right))).toBeLessThanOrEqual(0)
   await expect.poll(() => page.evaluate(() => localStorage.getItem('portless.focus-mode'))).toBe('true')
 
-  const edge = page.getByRole('button', { name: 'Open navigation overlay' })
+  const edge = page.getByRole('button', { name: 'Reveal navigation' })
   await edge.hover()
-  await expect(shell).toHaveClass(/shell--focus-navigation-open/)
+  await expect(shell).toHaveClass(/shell--navigation-open/)
+  await expect(sidebar).not.toHaveAttribute('aria-modal')
   await expect.poll(() => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().left))).toBe(0)
   expect(await stage.evaluate((element) => Math.round(element.getBoundingClientRect().left))).toBe(0)
   await page.mouse.move(900, 400)
-  await expect(shell).not.toHaveClass(/shell--focus-navigation-open/)
+  await expect(shell).not.toHaveClass(/shell--navigation-open/)
+
+  await edge.focus()
+  await expect(shell).not.toHaveClass(/shell--navigation-open/)
+  await page.keyboard.press('Enter')
+  const overlay = page.getByRole('dialog', { name: 'Navigation', exact: true })
+  await expect(overlay).toBeVisible()
+  await expect.poll(() => overlay.evaluate((element) => element.contains(document.activeElement) ? 'navigation' : document.activeElement?.tagName)).toBe('navigation')
+  await page.mouse.move(900, 400)
+  await page.waitForTimeout(400)
+  await expect(overlay).toBeVisible()
+  await overlay.getByRole('button', { name: `Current project ${state.project}. Switch project` }).click()
+  const switcher = page.getByRole('dialog', { name: 'Switch project', exact: true })
+  await expect(switcher.getByRole('combobox', { name: 'Search projects' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(switcher).toHaveCount(0)
+  await expect(overlay).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(overlay).toHaveCount(0)
+  await expect(edge).toBeFocused()
+  await expect(shell).not.toHaveClass(/shell--navigation-open/)
+
+  await page.keyboard.press('Space')
+  await overlay.getByRole('button', { name: 'Traffic', exact: true }).click()
+  await expect(overlay).toHaveCount(0)
+  await expect(header.getByRole('heading', { name: 'Traffic', exact: true })).toBeFocused()
 
   await page.reload()
   await expect(shell).toHaveClass(/shell--focus-mode/)
-  await expect(heading).toBeHidden()
+  await expect(header.getByRole('heading', { name: 'Traffic', exact: true })).toBeVisible()
+  await expect(navigation).toHaveCount(0)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(navigation).toHaveCount(0)
+  await edge.focus()
+  await page.keyboard.press('Enter')
+  await expect(overlay).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(overlay).toHaveCount(0)
+  await expect(edge).toBeFocused()
+  await expect(shell).not.toHaveClass(/shell--navigation-open/)
 
   await page.keyboard.press('Control+K')
   const palette = page.getByRole('dialog', { name: 'Command palette' })
-  await palette.getByPlaceholder('jump to a project or environment').fill('Exit focus mode')
+  await palette.getByPlaceholder('Search').fill('Exit focus mode')
   await palette.getByRole('button', { name: /Exit focus mode/ }).click()
   await expect(shell).not.toHaveClass(/shell--focus-mode/)
-  await expect(heading).toBeVisible()
+  await expect(header).toBeVisible()
+  await expect(navigation).toBeVisible()
   await expect.poll(() => page.evaluate(() => localStorage.getItem('portless.focus-mode'))).toBe('false')
 
   await page.keyboard.press('Control+K')
-  await palette.getByPlaceholder('jump to a project or environment').fill('Enter focus mode')
+  await palette.getByPlaceholder('Search').fill('Enter focus mode')
   await palette.getByRole('button', { name: /Enter focus mode/ }).click()
   await expect(shell).toHaveClass(/shell--focus-mode/)
+  await expect(navigation).toHaveCount(0)
   await page.keyboard.press('Control+Shift+F')
   await expect(shell).not.toHaveClass(/shell--focus-mode/)
 })
@@ -216,8 +276,10 @@ test('supports keyboard topology inspection and command palette navigation', asy
 
   await page.keyboard.press('Control+K')
   const palette = page.getByRole('dialog', { name: 'Command palette' })
-  const input = palette.getByPlaceholder('jump to a project or environment')
+  const input = palette.getByPlaceholder('Search')
   await expect(input).toBeFocused()
+  await expect(input).toHaveAccessibleName('Search')
+  await expect(environmentHeader(page).getByRole('button', { name: 'Search', exact: true })).toHaveAttribute('title', 'Search (⌘K / Ctrl+K)')
   await input.fill('Settings')
   await input.press('Enter')
   await expect(page).toHaveURL(new RegExp('/settings$'))
@@ -228,7 +290,7 @@ test('supports keyboard topology inspection and command palette navigation', asy
   await expect(page.locator('.runtime-candidate')).toHaveCount(2)
 
   await page.keyboard.press('Control+K')
-  await palette.getByPlaceholder('jump to a project or environment').fill('nothing-matches-this-command')
+  await palette.getByPlaceholder('Search').fill('nothing-matches-this-command')
   await expect(palette).toContainText('No matching project, environment, or action.')
   await page.keyboard.press('Escape')
   await expect(palette).toHaveCount(0)

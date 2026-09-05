@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
 import { api, environmentPath, jsonBody } from '../../../api'
 import { actionError, type ActionErrorDetails } from '../../../components/ActionError'
 import type { Environment, EnvironmentMutation, SourceBinding } from '../../../api/contracts/environments'
-import type { MockProfile, MockProfileList } from '../../../api/contracts/mocks'
 import type { Project, ProjectSource } from '../../../api/contracts/projects'
 import { ConfigureCheckoutModal, RemoveCheckoutModal } from '../../SourceModals'
 import { CheckoutTable } from './CheckoutTable'
@@ -17,17 +16,11 @@ export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
   onChanged: () => void | Promise<void>
 }) {
   const [configureTarget, setConfigureTarget] = useState<{ service?: string } | null>(null)
-  const [mockProfiles, setMockProfiles] = useState<MockProfile[]>([])
   const [checkoutEdit, setCheckoutEdit] = useState<{ source: ProjectSource; checkout?: SourceBinding } | null>(null)
   const [checkoutRemove, setCheckoutRemove] = useState<{ source: ProjectSource; checkout: SourceBinding; usedBy: string[] } | null>(null)
   const [checkoutMutationBusy, setCheckoutMutationBusy] = useState(false)
   const [checkoutMutationError, setCheckoutMutationError] = useState<ActionErrorDetails | null>(null)
   const [checkoutNotice, setCheckoutNotice] = useState('')
-  const environmentIdentity = useMemo(() => ({ project: environment.project, name: environment.name }), [environment.project, environment.name])
-
-  useEffect(() => {
-    api<MockProfileList>(environmentPath(environmentIdentity, '/mocks')).then((result) => setMockProfiles(result.mocks)).catch(() => setMockProfiles([]))
-  }, [environmentIdentity])
 
   const openCheckoutEdit = (item: EnvironmentCheckoutRow) => {
     setCheckoutMutationError(null)
@@ -93,7 +86,6 @@ export function BindingsPanel({ environment, project, onNavigate, onChanged }: {
       environment={environment}
       project={project}
       initialService={configureTarget.service}
-      mockProfiles={mockProfiles}
       onChanged={onChanged}
       onClose={() => setConfigureTarget(null)}
     />}

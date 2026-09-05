@@ -82,6 +82,10 @@ The CLI E2E suite protects these product contracts:
 
 - zero-configuration discovery and a complete `up`, request, inspect, logs,
   `down` lifecycle;
+- application `/api/` and `/auth/` ingress with preserved query strings, POST
+  bodies, application headers, and source-to-target traffic attribution;
+  control-shaped paths remain application requests and do not inherit control
+  browser security headers;
 - framework-plugin discovery for Spring Boot with Gradle and Maven, NestJS,
   Express, Fastify, Next.js, Go, and FastAPI, including commands, port
   contracts, statically proven HTTP readiness paths with TCP fallback, evidence,
@@ -109,6 +113,10 @@ The CLI E2E suite protects these product contracts:
   including automatic restart by one `portless up` and direct forced reset;
 - `down --all` from an ambiguous checkout and across multiple simultaneously
   active worktrees;
+- automatic worktree preparation when starting a cloned Git-backed environment,
+  including current uncommitted code, retained CLI selection, independent live
+  responses, reuse after stop/start, and daemon handoff without restarting the
+  original processes;
 - several source repositories compiled into one project, environment cloning,
   adding a source after cloning, explicit remediation of the other
   environment, and project-wide source deletion;
@@ -116,34 +124,79 @@ The CLI E2E suite protects these product contracts:
   including traffic attribution, local enforcement of its read-only write
   policy, and active local/remote provider handoffs that preserve unrelated
   service PIDs and generations;
-- deterministic mock profile and route creation, matcher preview, active
-  local/mock provider handoff, mock traffic attribution, dependency short
-  circuiting, peer-process preservation, and restoration of the real service;
+- deterministic multi-service scenario and route creation, service-specific
+  matcher preview, whole-scenario activation, mock traffic attribution,
+  dependency short circuiting, peer-process preservation, and restoration of
+  every target provider;
 - forced reset when ordinary lifecycle state is from an incompatible model.
 
 The Playwright suite protects these browser journeys:
 
-- browser authentication and one-use claim consumption;
-- focused per-tab project and environment navigation, the running/recent project switcher with remembered environments, the searchable project registry with direct configuration, hide, and safe forget workflows, the persistent collapsible icon rail, keyboard- and command-palette-driven focus mode with edge-revealed overlay navigation, Settings return, and breadcrumbs;
+- browser authentication and one-use claim consumption, including proof that
+  requesting a claim path on an application host neither consumes the claim
+  nor issues a Portless session cookie;
+- application-defined browser policies, with inline scripts and same-origin
+  frames working through the real application host without extra control policies;
+- focused per-browser-tab project and environment navigation, the running/recent
+  project switcher with remembered environments, the searchable project registry
+  with direct configuration, hide, and safe forget workflows, the persistent
+  collapsible icon rail, Settings return, and breadcrumbs;
+- a persistent environment header across all eight views, health and public
+  Open App links, shared lifecycle state with the command palette, and a single
+  activity subscription that discards responses from a previous environment;
+- compact recording, fault, and mock icons in that header, with themed colors,
+  descriptive tooltips, keyboard navigation, and live activation state; the mock
+  icon opens the scenarios list even when only one scenario is active;
+- an Overview heading with environment identity and clone provenance kept out
+  of the persistent header, no duplicate recording/fault/mock controls, and
+  readable wrapping in focus mode and on narrow screens, plus sidebar badges
+  that count each active mock scenario once and show `1` only while recording,
+  disappearing when those activities end;
+- one shared red error notice for a failed environment start and its saved
+  failure reason across all eight views, dismissal without a duplicate
+  reappearing, persisted errors after reload, and a new failure after recovery;
+- keyboard- and command-palette-driven focus mode, desktop hover navigation,
+  explicit overlay navigation on narrow screens, nested dialog dismissal,
+  focus restoration, and viewport-sized topology;
 - environment creation from the persistent sidebar through the modal without
   duplicating project sources,
-  including visible clone provenance that does not displace status messaging,
-  plus stopped-only forgetting from the current environment header;
+  including visible clone provenance that does not displace status messaging;
+- starting a clone directly from its header while the original remains healthy,
+  with automatic checkout preparation, nested source paths, preserved local
+  files, unchanged original processes, and checkout reuse on a later start;
 - browser theme persistence;
-- services, copyable endpoints, hover- and focus-driven topology service
+- services with aligned URLs and mock explanations in both themes and focus
+  mode, copyable endpoints, hover- and focus-driven topology service
   previews with connected-edge emphasis, service details, and default-on live
   logs with a plain-text raw tab and pause/resume controls;
+- live mock-binding badges on topology cards, scenario identification on hover
+  and keyboard focus, and service-endpoint links into the scenario workspace,
+  with stable card geometry in both themes and indicator removal on restoration;
 - starting a real Portless-owned Node debugger from the service drawer,
   displaying its attach endpoint, preserving healthy environment semantics,
   and returning the service to normal mode;
 - captured request and response inspection with repeated headers, redacted
   credentials, and Portless-injected trace carriers kept out of header views;
-- recording, mock-provider, and fault workflows, including URL-addressable mock
-  and route workspaces, a maximizable route builder with on-demand local
-  matching preview, explicit post-save activation, a maximizable mock-profile
-  drawer, complete header/body preview input, stable peer service PIDs, and
-  traffic attribution;
-- environment stop/start controls, project-page source add/delete, and
+- recording, mock-provider, and fault workflows, including scenario-table-first
+  navigation, empty service-independent scenario creation, URL-addressable
+  scenario split workspaces with URL-addressable route selection, a
+  service-selecting right-hand editor that respects focus mode, retained drafts
+  while switching routes, save/discard and selected-route deletion, clickable
+  and sortable routes paginated at ten rows, whole-scenario activation, stable
+  peer service PIDs, stationary tables and route panes throughout activation
+  and restoration, and traffic attribution;
+- normal daemon restart with a mocked caller that has no outgoing proxy ports,
+  healthy recovery without restarting peer processes, and browser-driven
+  scenario disabling, original-provider restoration, and deletion afterward;
+- a fixed-width Open button replaced by Start for stopped environments, with
+  disabled startup progress in the same slot and no environment action menu;
+  visible Search text across desktop, narrow, and focus-mode headers,
+  Stop environment through Search, shared pending state with the command palette,
+  and keyboard-accessible, disabled-while-pending lifecycle controls;
+- Services-table Start All and Stop All controls without a workload count,
+  mixed-state suppression, stable header geometry, and shared pending state
+  with the top header, Search, and per-service actions;
+- project-page source add/delete and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;
 - active service-scoped provider handoff with unrelated runtime preservation,
@@ -187,6 +240,13 @@ modules so it exercises project compilation rather than a monorepo shortcut.
 The `tests/fixtures/debug-node` workspace provides two small NestJS-shaped Node
 services with safe direct-node launch commands. It verifies real inspector
 listeners and process ownership without installing application dependencies.
+
+The browser fixture is shared across spec files. Environment journeys wait for
+pending lifecycle operations and restore stopped services in `afterEach`, so a
+failed assertion does not leave later recording or fault journeys without an
+application. Intercepted lifecycle responses finish before their routes are
+removed. Header positions are measured after the focus-mode transition finishes;
+responsive overflow assertions retry while the viewport layout settles.
 
 ## Managed-resource integration
 
@@ -330,8 +390,9 @@ coverage.
 ## Failures and artifacts
 
 The Playwright suite is split into focused access/navigation, settings,
-projects, environment, experiments, traffic-list, traffic-inspection,
-traffic-waterfall, and daemon journey specs. The specs still run with one
+projects, environment, environment-errors, experiments, mock-recovery,
+topology-mocks, traffic-list, traffic-inspection, traffic-waterfall, and daemon
+journey specs. The specs still run with one
 worker and stop after the first failure because they share one real isolated
 Portless stack. To run one journey while developing:
 

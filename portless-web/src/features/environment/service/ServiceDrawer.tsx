@@ -6,14 +6,16 @@ import { DrawerShell } from '../../../components/overlays/DrawerShell'
 import { relativeTime, StatusMark } from '../../../components/Status'
 import type { Environment } from '../../../api/contracts/environments'
 import type { Service, ServiceConfiguration } from '../../../api/contracts/topology'
+import { environmentUIPath } from '../navigation'
 import { serviceActionProgressLabel, useServiceActions } from './serviceActions'
-import { bindingFor, displayLaunchMode, publicEndpoint, serviceEndpoints } from './servicePresentation'
+import { bindingFor, displayLaunchMode, mockScenarioFor, publicEndpoint, serviceEndpoints } from './servicePresentation'
 
-export function ServiceDrawer({ environment, service, onClose, onChanged }: {
+export function ServiceDrawer({ environment, service, onClose, onChanged, onNavigate }: {
   environment: Environment
   service: Service
   onClose: () => void
   onChanged: () => void
+  onNavigate: (path: string) => void
 }) {
   const [configuration, setConfiguration] = useState<ServiceConfiguration | null>(null)
   const [drawerTab, setDrawerTab] = useState<'details' | 'logs' | 'configuration'>('details')
@@ -27,6 +29,8 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
 
   const endpoints = serviceEndpoints(service, bindingFor(environment, service.name))
   const httpEndpoint = publicEndpoint(service, 'http')
+  const mockScenario = mockScenarioFor(environment, service.name)
+  const mockScenarioPath = mockScenario ? environmentUIPath(environment, 'mocks', { scenario: mockScenario }) : ''
   const localProcess = service.kind === 'process' && bindingFor(environment, service.name)?.provider === 'local'
   return <DrawerShell
     label={`${service.name} service`}
@@ -43,7 +47,11 @@ export function ServiceDrawer({ environment, service, onClose, onChanged }: {
     {drawerTab === 'details' && <>
       <section className="drawer-section service-identity"><div className="eyebrow">SERVICE IDENTITY</div><div className="detail-grid service-detail-grid"><Detail label="KIND" value={service.framework || service.resource?.type || service.kind} /><Detail label="MODE" value={displayLaunchMode(environment, service)} /><Detail label="GENERATION" value={String(service.generation || '—')} /><Detail label="PID" value={String(service.pid || '—')} /><Detail label="UPSTREAM" value={service.upstreamPort ? `127.0.0.1:${service.upstreamPort}` : '—'} wide /><Detail label="RESTARTS" value={String(service.restartCount)} /><Detail label="STARTED" value={service.startedAt ? `${relativeTime(service.startedAt)} ago` : '—'} /></div></section>
       {service.debugger && <section className="drawer-section service-debugger"><div className="eyebrow">DEBUGGER</div><pre>{service.debugger.adapter} · {service.debugger.host}:{service.debugger.port}</pre><small>{service.debugger.state}. Use your IDE's Attach to Process action and choose the matching Node or JVM process.</small></section>}
-      <section className="drawer-section service-endpoints"><div className="eyebrow">ENDPOINTS</div><div className="service-endpoint-list">{endpoints.map((endpoint) => <div className="service-endpoint" key={`${endpoint.label}:${endpoint.value}`}><span>{endpoint.label}</span>{endpoint.href ? <a href={endpoint.href} target="_blank" rel="noreferrer">{endpoint.value} ↗</a> : <code>{endpoint.value}</code>}<small>{endpoint.detail}</small></div>)}{endpoints.length === 0 && <p className="muted">No endpoint is available while this service is stopped.</p>}</div></section>
+      <section className="drawer-section service-endpoints"><div className="eyebrow">ENDPOINTS</div>{mockScenario && <div className="service-mock-binding"><span>Mock scenario: <strong title={mockScenario}>{mockScenario}</strong></span><a href={mockScenarioPath} onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+        event.preventDefault()
+        onNavigate(mockScenarioPath)
+      }}>VIEW SCENARIO →</a></div>}<div className="service-endpoint-list">{endpoints.map((endpoint) => <div className="service-endpoint" key={`${endpoint.label}:${endpoint.value}`}><span>{endpoint.label}</span>{endpoint.href ? <a href={endpoint.href} target="_blank" rel="noreferrer">{endpoint.value} ↗</a> : <code>{endpoint.value}</code>}<small>{endpoint.detail}</small></div>)}{endpoints.length === 0 && <p className="muted">No endpoint is available while this service is stopped.</p>}</div></section>
       <section className="drawer-section service-command"><div className="eyebrow">COMMAND</div><pre>{service.command?.join(' ') || `managed ${service.resource?.type} ${service.resource?.version}`}</pre></section>
       <section className="drawer-section service-health"><div className="eyebrow">HEALTH</div><div className="service-health-summary"><div><StatusMark status={service.status} label={false} /><strong>{service.health.kind}{service.health.path ? ` ${service.health.path}` : ''}</strong></div><small>{service.reason || 'No current readiness error.'}</small></div></section>
     </>}

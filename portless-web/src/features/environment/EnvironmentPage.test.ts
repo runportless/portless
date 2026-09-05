@@ -1,4 +1,4 @@
-import { createElement, createRef } from 'react'
+import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment, TimelineEvent } from '../../api/contracts/environments'
@@ -10,8 +10,9 @@ import { paginateItems } from '../../components/PanelPagination'
 import { sortCheckoutRows } from './bindings/CheckoutTable'
 import { defaultProviderBinding, providerBindingMatches, providerDisplayName } from './bindings/bindingPresentation'
 import { sortProviderBindings } from './bindings/ProviderBindingsTable'
-import { EnvironmentActivityIndicators, EnvironmentPage } from './EnvironmentPage'
-import { ForgetEnvironmentDialog } from './ForgetEnvironmentDialog'
+import { EnvironmentPage } from './EnvironmentPage'
+import type { EnvironmentActivity } from './useEnvironmentActivity'
+import type { EnvironmentActions } from './useEnvironmentActions'
 import { sortOverviewServices, summarizeEnvironmentBindings } from './OverviewPanel'
 import { displayLaunchMode, overviewServiceEndpoint, serviceEndpoints } from './service/servicePresentation'
 import { TimelinePanel } from './timeline/TimelinePanel'
@@ -20,93 +21,139 @@ import { buildTopology, mergeTopologySignal, summarizeTopologyTraffic, topologyC
 
 const service = (name: string): Service => ({ name } as Service)
 
-describe('environment topology', () => {
-  it('links active recording and fault indicators to their environment views', () => {
-    const environment = { project: 'billing', name: 'local' } as Environment
-    const activeRecording = { name: 'checkout-flow', status: 'active' } as Recording
-    const markup = renderToStaticMarkup(createElement(EnvironmentActivityIndicators, {
-      environment, activeRecording, activeFaultCount: 2, onNavigate: () => undefined,
-    }))
+const activity: EnvironmentActivity = { timeline: [], recordings: [], faults: [], error: null, loading: false, refresh: async () => undefined, dismissError: () => undefined }
+const actions: EnvironmentActions = { identity: 'billing/local', busy: null, error: null, forgetError: null, trackingInterrupted: false, disabled: false, run: async () => undefined, forget: async () => undefined, resumeTracking: () => undefined, dismissError: () => undefined, dismissForgetError: () => undefined }
 
-    expect(markup).toContain('class="recording-indicator" href="/environments/billing/local?tab=recordings"')
-    expect(markup).toContain('>REC checkout-flow</a>')
-    expect(markup).toContain('class="fault-indicator" href="/environments/billing/local?tab=faults"')
-    expect(markup).toContain('>▲ 2 ACTIVE FAULTS</a>')
-  })
+describe('environment content notices', () => {
+  const environment: Environment = { project: 'billing', name: 'local', status: 'healthy', revision: 1, createdAt: '', updatedAt: '', services: [], connections: [] }
+  const render = (value: Environment, view: 'overview' | 'topology' | 'mocks' = 'overview') => renderToStaticMarkup(createElement(EnvironmentPage, { environment: value, activity, actions, view, onNavigate: () => undefined, onChanged: () => undefined }))
 
-  it('places the infrequently used bindings tab immediately before timeline', () => {
-    const environment = {
-      project: 'billing', name: 'local', status: 'healthy', revision: 1,
-      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
-      services: [], connections: [],
-    } as Environment
-
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
-    }))
-    const tabs = markup.match(/<nav class="tabs" aria-label="Environment views">(.*?)<\/nav>/)?.[1] ?? ''
-
-    expect(tabs).toContain('>faults<')
-    expect(tabs.indexOf('>faults<')).toBeLessThan(tabs.indexOf('>bindings<'))
-    expect(tabs.indexOf('>bindings<')).toBeLessThan(tabs.indexOf('>timeline<'))
-  })
-
-  it('reserves the environment status message row when there is no message', () => {
-    const environment = {
-      project: 'billing', name: 'local', status: 'healthy', revision: 1,
-      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
-      services: [], connections: [],
-    } as Environment
-
-    const healthyMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
-    }))
-    const reasonMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment: { ...environment, status: 'degraded', reason: 'Waiting for orders to become ready' },
-      tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
-    }))
-    const clonedMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment: { ...environment, name: 'qa-assisted', clonedFrom: 'local' },
-      tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
-    }))
-
-    expect(healthyMarkup).toContain('<p class="environment-heading__message"></p>')
-    expect(reasonMarkup).toContain('<p class="environment-heading__message">Waiting for orders to become ready</p>')
-    expect(clonedMarkup).toContain('class="environment-clone-origin" title="Created by cloning billing/local; changes are independent."')
-    expect(clonedMarkup).toContain('>FROM <strong>local</strong></span>')
-    expect(clonedMarkup).toContain('<p class="environment-heading__message"></p>')
-  })
-
-  it('offers preview-first environment forgetting from the page header', () => {
-    const environment = {
-      project: 'billing', name: 'qa', status: 'stopped', revision: 1,
-      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
-      services: [], connections: [],
-    } as Environment
-    const pageMarkup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
-    }))
-    const dialogProps = {
-      busy: false,
-      error: null,
-      restoreFocusRef: createRef<HTMLElement>(),
-      onDismissError: () => undefined,
-      onClose: () => undefined,
-      onForget: async () => undefined,
+  it('keeps navigation and routine status in the header while showing Overview identity', () => {
+    for (const value of [environment, { ...environment, status: 'stopped' as const, reason: 'not running' }]) {
+      const markup = render(value)
+      expect(markup).not.toContain('environment-notices')
+      expect(markup).not.toContain('aria-label="Environment views"')
+      expect(markup).not.toContain('<h1')
+      expect(markup).not.toContain('environment-heading__message')
     }
-    const stoppedMarkup = renderToStaticMarkup(createElement(ForgetEnvironmentDialog, { ...dialogProps, environment }))
-    const runningMarkup = renderToStaticMarkup(createElement(ForgetEnvironmentDialog, { ...dialogProps, environment: { ...environment, status: 'healthy' } }))
-
-    expect(pageMarkup).toContain('aria-label="Environment actions for billing/qa" aria-haspopup="menu" aria-expanded="false"')
-    expect(pageMarkup).not.toContain('>FORGET ENVIRONMENT</button>')
-    expect(stoppedMarkup).toContain('<h2 id="forget-environment-title">Forget billing/qa?</h2>')
-    expect(stoppedMarkup).toContain('Source files and checkouts on disk are not deleted.')
-    expect(stoppedMarkup).toContain('Source checkouts and managed data volumes')
-    expect(stoppedMarkup).toContain('<button class="button button--danger" type="button">FORGET ENVIRONMENT</button>')
-    expect(runningMarkup).toContain('Stop this environment before forgetting it.')
-    expect(runningMarkup).toContain('<button class="button button--danger" type="button" disabled="">FORGET ENVIRONMENT</button>')
+    expect(render(environment)).toContain('all services')
+    expect(render(environment)).toContain('<h2>local</h2>')
+    expect(render(environment).indexOf('environment-overview-heading')).toBeLessThan(render(environment).indexOf('state-grid'))
+    for (const view of ['topology', 'mocks'] as const) {
+      expect(render(environment, view)).not.toContain('environment-overview-heading')
+    }
   })
 
+  it('keeps activity in the status cards without duplicate Overview controls', () => {
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment: { ...environment, bindings: [{ service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } }] }, actions, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+      activity: { ...activity,
+        recordings: [{ name: 'completed-capture', status: 'completed' }, { name: 'live-capture', status: 'active' }] as Recording[],
+        faults: [{ name: 'disabled-fault', enabled: false }, { name: 'enabled-fault', enabled: true }] as FaultRule[],
+      },
+    }))
+    expect(markup).not.toContain('environment-activity-indicators')
+    expect(markup).not.toContain('recording-indicator')
+    expect(markup).not.toContain('fault-indicator')
+    expect(markup).not.toContain('mock-indicator')
+    expect(markup).toContain('live-capture')
+    expect(markup).toContain('affecting local traffic')
+    expect(markup).not.toContain('completed-capture')
+  })
+
+  it.each([
+    ['starting', 'services are starting'],
+    ['recovering', 'services are being recovered'],
+    ['stopping', 'services are stopping'],
+  ] as const)('keeps %s progress out of the content layout', (status, reason) => {
+    for (const view of ['overview', 'topology', 'mocks'] as const) {
+      const markup = render({ ...environment, status, reason }, view)
+      expect(markup).not.toContain('environment-notices')
+      expect(markup).not.toContain('environment-status-reason')
+    }
+  })
+
+  it('keeps failure reasons and configuration remediation readable', () => {
+    const markup = render({ ...environment, status: 'degraded', reason: 'Waiting for orders to become ready', issues: [{ code: 'MISSING_SOURCE', message: 'Orders checkout is missing.', remediation: 'Attach the orders checkout in Bindings.' }] })
+    expect(markup).toContain('environment-notices')
+    expect(markup).toContain('Waiting for orders to become ready')
+    expect(markup).toContain('Orders checkout is missing.')
+    expect(markup).toContain('Attach the orders checkout in Bindings.')
+    expect(markup.match(/class="action-error" role="alert"/g)).toHaveLength(2)
+    expect(markup).not.toContain('class="alert')
+  })
+
+  it.each(['failed', 'unknown'] as const)('keeps %s explanations visible', (status) => {
+    const markup = render({ ...environment, status, reason: 'Orders runtime could not be verified.' })
+    expect(markup).toContain('class="action-error" role="alert"')
+    expect(markup).not.toContain('environment-status-reason')
+    expect(markup).toContain('Orders runtime could not be verified.')
+  })
+
+  it('still shows actionable configuration issues during a transition', () => {
+    const markup = render({ ...environment, status: 'recovering', reason: 'services are being recovered', issues: [{ code: 'MISSING_SOURCE', message: 'Orders checkout is missing.', remediation: 'Attach the orders checkout in Bindings.' }] })
+    expect(markup).not.toContain('environment-status-reason')
+    expect(markup).toContain('Configuration needs attention')
+    expect(markup).toContain('Attach the orders checkout in Bindings.')
+    expect(markup).toContain('class="action-error" role="alert"')
+  })
+})
+
+describe('overview services lifecycle controls', () => {
+  const render = (status: Environment['status'], statuses: readonly Service['status'][], actionOverrides: Partial<EnvironmentActions> = {}) => {
+    const environment: Environment = {
+      project: 'billing', name: 'local', status, revision: 1, createdAt: '', updatedAt: '', connections: [],
+      services: statuses.map((state, index): Service => ({ name: `service-${index}`, kind: 'process', status: state, launchMode: 'managed', generation: 1, required: true, health: { kind: 'tcp', timeout: 0, interval: 0 }, restartCount: 0, recentRequests: 0, endpoints: [] })),
+    }
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, activity, actions: { ...actions, ...actionOverrides }, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+    return { markup, button: markup.match(/<button class="button button--small services-lifecycle[^>]*>[^<]*<\/button>/)?.[0] }
+  }
+
+  it.each([
+    ['stopped', ['stopped', 'stopped'], 'Start All'],
+    ['stopped', ['planned', 'planned'], 'Start All'],
+    ['healthy', ['ready', 'ready'], 'Stop All'],
+  ] as const)('offers the bulk action for a %s environment without a workload count', (status, statuses, label) => {
+    const { markup, button } = render(status, statuses)
+    expect(button).toContain(`>${label}</button>`)
+    expect(button).not.toContain('disabled=""')
+    expect(markup).not.toContain('workloads')
+  })
+
+  it.each([
+    ['stopped', []],
+    ['healthy', []],
+    ['degraded', ['ready', 'stopped']],
+    ['degraded', ['ready', 'unhealthy']],
+    ['failed', ['failed', 'failed']],
+    ['unknown', ['ready', 'unknown']],
+  ] as const)('omits the bulk action for mixed, empty, or unverified services in %s state', (status, statuses) => {
+    expect(render(status, statuses).button).toBeUndefined()
+  })
+
+  it.each([
+    ['healthy', ['ready', 'ready'], 'up', 'Starting…'],
+    ['stopped', ['stopped', 'stopped'], 'down', 'Stopping…'],
+    ['starting', ['ready', 'stopped'], null, 'Starting…'],
+    ['stopping', ['ready', 'stopped'], null, 'Stopping…'],
+    ['degraded', ['ready', 'stopped'], 'up', 'Starting…'],
+    ['degraded', ['ready', 'stopped'], 'down', 'Stopping…'],
+  ] as const)('keeps confirmed progress disabled during %s, including mixed service snapshots', (status, statuses, busy, label) => {
+    const { markup, button } = render(status, statuses, { busy, disabled: true })
+    expect(button).toContain(`>${label}</button>`)
+    expect(button).toContain('disabled=""')
+    const serviceMenus = markup.match(/<button class="service-row__menu-trigger"[^>]*>/g)
+    expect(serviceMenus).toHaveLength(2)
+    for (const menu of serviceMenus!) expect(menu).toContain('disabled=""')
+  })
+
+  it('disables the bulk action while the daemon is disconnected', () => {
+    const { button } = render('healthy', ['ready', 'ready'], { disabled: true })
+    expect(button).toContain('>Stop All</button>')
+    expect(button).toContain('disabled=""')
+  })
+})
+
+describe('environment topology', () => {
   it('renders the overview topology as a bounded preview that opens the dedicated view', () => {
     const environment = {
       project: 'billing', name: 'local', status: 'healthy', revision: 1,
@@ -114,8 +161,8 @@ describe('environment topology', () => {
       services: [], connections: [],
     } as Environment
 
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions,
+      environment, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined,
     }))
 
     expect(markup).toContain('class="panel topology-panel topology-panel--preview"')
@@ -150,15 +197,15 @@ describe('environment topology', () => {
       services: [], connections: [],
     } as Environment
 
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, tab: 'topology', onNavigate: () => undefined, onChanged: () => undefined,
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions,
+      environment, view: 'topology', onNavigate: () => undefined, onChanged: () => undefined,
     }))
 
     expect(markup).toContain('class="panel topology-panel topology-panel--page"')
     expect(markup).toContain('aria-label="Center topology"')
     expect(markup).toContain('aria-label="Maximize topology"')
     expect(markup).toContain('aria-pressed="false"')
-    expect(markup).toContain('>topology<')
+    expect(markup).toContain('>TOPOLOGY<')
   })
 
   it('describes clean, remote, and protocol-specific public service endpoints', () => {
@@ -184,7 +231,7 @@ describe('environment topology', () => {
     } as Environment
 
     expect(overviewServiceEndpoint(environment, checkout)).toBe('http://checkout.local.billing.localhost')
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions, environment, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
     expect(markup).toContain('aria-label="Copy checkout endpoint"')
     expect(markup).toContain('title="Copy endpoint"')
     expect(markup).toContain('http://checkout.local.billing.localhost')
@@ -197,6 +244,21 @@ describe('environment topology', () => {
     expect(markup).not.toContain('sortable-column-sort-control')
   })
 
+  it('uses the same endpoint cell for mock explanations without a copy action', () => {
+    const checkout = { name: 'checkout', kind: 'process', status: 'ready', reason: 'mock scenario sold-out', endpoints: [{ kind: 'public', protocol: 'http', host: 'checkout.local.billing.localhost', port: 80, url: 'http://checkout.local.billing.localhost' }], restartCount: 0, recentRequests: 0 } as Service
+    const environment = {
+      project: 'billing', name: 'local', status: 'healthy', revision: 1,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      services: [checkout], connections: [], bindings: [{ service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } }],
+    } as Environment
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions, environment, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+
+    expect(markup).toContain('<span class="service-list-endpoint"><span class="truncate muted" title="mock scenario sold-out">mock scenario sold-out</span></span>')
+    expect(markup).not.toContain('aria-label="Copy checkout endpoint"')
+    expect(markup).not.toContain('service-list-endpoint--copyable')
+    expect(markup).toContain('aria-label="View checkout details"')
+  })
+
   it('sorts overview services and renders controls when multiple rows can move', () => {
     const checkout: Service = { name: 'checkout', kind: 'process', required: true, health: { kind: 'http', timeout: 0, interval: 0 }, launchMode: 'managed', status: 'ready', generation: 1, restartCount: 2, recentRequests: 10, p95Millis: 80, endpoints: [] }
     const orders: Service = { name: 'orders', kind: 'process', required: true, health: { kind: 'http', timeout: 0, interval: 0 }, launchMode: 'managed', status: 'stopped', reason: 'not running', generation: 1, restartCount: 0, recentRequests: 2, endpoints: [] }
@@ -205,7 +267,7 @@ describe('environment topology', () => {
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
       services: [orders, checkout], connections: [], bindings: [{ service: 'checkout', provider: 'local' }, { service: 'orders', provider: 'remote' }],
     } as Environment
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, tab: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions, environment, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
 
     expect(markup.match(/class="sortable-column-sort-control"/g)).toHaveLength(7)
     expect(markup).toContain('class="table-row table-row--header service-row sortable-header-row is-default-sort" role="row"')
@@ -235,7 +297,7 @@ describe('environment topology', () => {
     ] })).toEqual({ value: 'REMOTE', detail: '2 remote services', tone: 'warning' })
     expect(summarizeEnvironmentBindings({ ...environment, bindings: [
       { service: 'checkout', provider: 'local' },
-      { service: 'orders', provider: 'mock', mock: { profile: 'sold-out' } },
+      { service: 'orders', provider: 'mock', mock: { scenario: 'sold-out' } },
       { service: 'postgres', provider: 'container' },
     ] })).toEqual({ value: 'LOCAL', detail: '2 local · 1 mocked' })
   })
@@ -244,7 +306,7 @@ describe('environment topology', () => {
     const inventory = { name: 'inventory', kind: 'process', launchMode: 'managed' } as Service
     const environment = {
       services: [inventory],
-      bindings: [{ service: 'inventory', provider: 'mock', mock: { profile: 'sold-out' } }],
+      bindings: [{ service: 'inventory', provider: 'mock', mock: { scenario: 'sold-out' } }],
     } as Environment
 
     expect(displayLaunchMode(environment, inventory)).toBe('mock')
@@ -271,8 +333,8 @@ describe('environment topology', () => {
       bindings: [{ service: 'checkout', provider: 'local', source: 'checkout', modifiedAt: '2026-08-18T18:30:00Z' }],
     } as Environment
 
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, project, tab: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions,
+      environment, project, view: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
     }))
 
     expect(markup).toContain('class="experiment-layout bindings-layout"')
@@ -338,8 +400,8 @@ describe('environment topology', () => {
       bindings: services.map((item, index) => ({ service: item.name, provider: 'local', source: `source-${index + 1}` })),
     } as Environment
 
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, tab: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions,
+      environment, view: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
     }))
 
     expect(markup).toContain('aria-label="providers pagination"')
@@ -382,8 +444,8 @@ describe('environment topology', () => {
       issues: [{ code: 'MISSING_BINDING', subject: 'inventory', message: 'component has no provider binding' }],
     } as Environment
 
-    const markup = renderToStaticMarkup(createElement(EnvironmentPage, {
-      environment, project, tab: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
+    const markup = renderToStaticMarkup(createElement(EnvironmentPage, { activity, actions,
+      environment, project, view: 'bindings', onNavigate: () => undefined, onChanged: () => undefined,
     }))
 
     expect(markup).toContain('<strong>inventory</strong>')
@@ -401,7 +463,7 @@ describe('environment topology', () => {
     expect(defaultProviderBinding(project, environment, checkout)).toEqual({ service: 'checkout', provider: 'local', source: 'checkout' })
     expect(defaultProviderBinding(project, environment, postgres)).toEqual({ service: 'postgres', provider: 'container' })
     expect(providerBindingMatches({ service: 'checkout', provider: 'local', source: 'checkout' }, { service: 'checkout', provider: 'local', source: 'CHECKOUT' })).toBe(true)
-    expect(providerBindingMatches({ service: 'checkout', provider: 'mock', mock: { profile: 'sold-out' } }, { service: 'checkout', provider: 'mock', mock: { profile: 'SOLD-OUT' } })).toBe(true)
+    expect(providerBindingMatches({ service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } }, { service: 'checkout', provider: 'mock', mock: { scenario: 'SOLD-OUT' } })).toBe(true)
     expect(providerBindingMatches({ service: 'checkout', provider: 'remote' }, { service: 'checkout', provider: 'local', source: 'checkout' })).toBe(false)
   })
 
@@ -432,6 +494,8 @@ describe('environment topology', () => {
       type: 'nestjs',
       mode: 'managed',
       endpoint: 'http://checkout.local.store.localhost',
+      mockScenario: undefined,
+      reason: undefined,
       inbound: 1,
       outbound: 2,
       fault: 'checkout-delay on checkout → orders',

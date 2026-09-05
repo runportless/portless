@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,7 +80,7 @@ VALUES(?, ?, ?, 1, ?, '', ?, ?, ?, ?, ?)`, key, projectKey, environmentName, mod
 	return s.Environment(ctx, projectName, environmentName)
 }
 
-// CloneEnvironment copies topology, source bindings, provider bindings, and mock profiles into a new environment.
+// CloneEnvironment copies topology, source bindings, provider bindings, and mock scenarios into a new environment.
 func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, targetName string) (model.Environment, error) {
 	source, err := s.Environment(ctx, projectName, sourceName)
 	if err != nil {
@@ -93,7 +94,7 @@ func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, t
 	if err != nil {
 		return model.Environment{}, err
 	}
-	if err := s.cloneMockProfiles(ctx, projectName, sourceName, targetName); err != nil {
+	if err := s.cloneMockScenarios(ctx, projectName, sourceName, targetName); err != nil {
 		_ = s.ForgetEnvironment(context.Background(), projectName, targetName)
 		return model.Environment{}, err
 	}
@@ -273,7 +274,11 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key)
 	if _, err := tx.ExecContext(ctx, `
 DELETE FROM context_selections
 WHERE environment_key = ?
-  AND path NOT IN (SELECT path FROM environment_sources WHERE environment_key = ?)`, key, key); err != nil {
+  AND path NOT IN (
+    SELECT source.path FROM environment_sources source
+    JOIN environments e ON e.private_key = source.environment_key
+    WHERE e.project_key = (SELECT project_key FROM environments WHERE private_key = ?)
+  )`, key, key); err != nil {
 		return model.Environment{}, err
 	}
 	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
@@ -328,6 +333,81 @@ WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, key, binding.Ser
 	}
 	if err := insertBinding(ctx, tx, key, binding); err != nil {
 		return model.Environment{}, err
+	}
+	for _, service := range definition.Services {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO service_runtime(environment_key, service_name, status)
+VALUES(?, ?, ?)
+ON CONFLICT(environment_key, service_name) DO NOTHING`, key, service.Name, model.ServicePlanned); err != nil {
+			return model.Environment{}, err
+		}
+	}
+	if err := syncNetworkAllocationsTx(ctx, tx, key, specs); err != nil {
+		return model.Environment{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Environment{}, err
+	}
+	return s.Environment(ctx, projectName, environmentName)
+}
+
+// ApplyMockScenarioConfiguration atomically replaces provider bindings and the
+// private restoration records for one scenario without disturbing runtime
+// ownership for unrelated services.
+func (s *Store) ApplyMockScenarioConfiguration(ctx context.Context, projectName, environmentName string, expectedRevision int64, definition model.ProjectModel, bindings []model.ComponentBinding, scenario string, previous []model.ComponentBinding, enabled bool) (model.Environment, error) {
+	modelJSON, err := encodeProjectModel(definition)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	specs, err := networking.AllocationSpecs(projectName, environmentName, definition)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Environment{}, err
+	}
+	defer tx.Rollback()
+	var key string
+	var revision int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT e.private_key, e.revision FROM environments e
+JOIN projects p ON p.private_key = e.project_key
+WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, environmentName).Scan(&key, &revision); err != nil {
+		return model.Environment{}, mapSQLError(err)
+	}
+	if expectedRevision > 0 && revision != expectedRevision {
+		return model.Environment{}, ErrConflict
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE environments SET model_json = ?, primary_service = ?, revision = revision + 1, updated_at = ?
+WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key); err != nil {
+		return model.Environment{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM environment_bindings WHERE environment_key = ?`, key); err != nil {
+		return model.Environment{}, err
+	}
+	for _, binding := range bindings {
+		if err := insertBinding(ctx, tx, key, binding); err != nil {
+			return model.Environment{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mock_scenario_activations WHERE environment_key = ? AND scenario_name = ? COLLATE NOCASE`, key, scenario); err != nil {
+		return model.Environment{}, err
+	}
+	if enabled {
+		activatedAt := nowText()
+		for _, binding := range previous {
+			bindingJSON, err := json.Marshal(binding)
+			if err != nil {
+				return model.Environment{}, err
+			}
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO mock_scenario_activations(environment_key, scenario_name, service_name, previous_binding_json, activated_at)
+VALUES(?, ?, ?, ?, ?)`, key, scenario, binding.Service, bindingJSON, activatedAt); err != nil {
+				return model.Environment{}, err
+			}
+		}
 	}
 	for _, service := range definition.Services {
 		if _, err := tx.ExecContext(ctx, `
@@ -547,7 +627,15 @@ func (s *Store) ReplaceProjectConfiguration(ctx context.Context, projectName str
 			return nil, err
 		}
 		for _, service := range removedServices {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM mock_profiles WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, environment.key, service); err != nil {
+			var scenario, route string
+			err := tx.QueryRowContext(ctx, `
+SELECT scenario_name, name FROM mock_scenario_routes
+WHERE environment_key = ? AND service_name = ? COLLATE NOCASE
+ORDER BY scenario_name COLLATE NOCASE, name COLLATE NOCASE LIMIT 1`, environment.key, service).Scan(&scenario, &route)
+			if err == nil {
+				return nil, fmt.Errorf("service %s is referenced by mock scenario %s route %s; move or delete those routes before removing the service", service, scenario, route)
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE fault_rules SET enabled = 0, revision = revision + 1 WHERE environment_key = ? AND enabled = 1 AND (source = ? COLLATE NOCASE OR target = ? COLLATE NOCASE)`, environment.key, service, service); err != nil {
@@ -607,7 +695,10 @@ func (s *Store) SetContextSelection(ctx context.Context, path, projectName, envi
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT path FROM environment_sources WHERE environment_key = ?`, key)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT source.path FROM environment_sources source
+JOIN environments e ON e.private_key = source.environment_key
+WHERE e.project_key = (SELECT project_key FROM environments WHERE private_key = ?)`, key)
 	if err != nil {
 		return err
 	}
@@ -626,7 +717,7 @@ func (s *Store) SetContextSelection(ctx context.Context, path, projectName, envi
 		return err
 	}
 	if selectionPath == "" {
-		return errors.New("the selected environment does not use this source path")
+		return errors.New("the selected environment's project does not use this source path")
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO context_selections(path, environment_key, selected_at) VALUES(?, ?, ?)
@@ -644,7 +735,6 @@ func (s *Store) ContextSelection(ctx context.Context, path string) (model.Enviro
 SELECT c.path, p.name, e.name FROM context_selections c
 JOIN environments e ON e.private_key = c.environment_key
 JOIN projects p ON p.private_key = e.project_key
-JOIN environment_sources source ON source.environment_key = c.environment_key AND source.path = c.path
 	ORDER BY length(c.path) DESC`)
 	if err != nil {
 		return model.Environment{}, err

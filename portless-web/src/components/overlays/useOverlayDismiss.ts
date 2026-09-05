@@ -12,13 +12,14 @@ function isTopOverlay(id: symbol, document: Document) {
   return false
 }
 
-export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusRef, dismissBlocked, onDismiss, onEscape = onDismiss }: {
+export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusRef, dismissBlocked, onDismiss, onEscape = onDismiss, enabled = true }: {
   containerRef: RefObject<HTMLElement | null>
   initialFocusRef?: RefObject<HTMLElement | null>
   restoreFocusRef?: RefObject<HTMLElement | null>
   dismissBlocked: boolean
   onDismiss: () => void
   onEscape?: () => void
+  enabled?: boolean
 }) {
   const overlayID = useRef(Symbol('overlay'))
   const dismissBlockedRef = useRef(dismissBlocked)
@@ -29,6 +30,7 @@ export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusR
   onEscapeRef.current = onEscape
 
   useEffect(() => {
+    if (!enabled) return
     const container = containerRef.current
     if (!container) return
     const document = container.ownerDocument
@@ -67,7 +69,7 @@ export function useOverlayDismiss({ containerRef, initialFocusRef, restoreFocusR
       unlockScroll()
       restoreOverlayFocus(restoreFocus || previouslyFocused, view)
     }
-  }, [containerRef, initialFocusRef, restoreFocusRef])
+  }, [containerRef, enabled, initialFocusRef, restoreFocusRef])
 
   const onBackdropMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget || dismissBlockedRef.current) return

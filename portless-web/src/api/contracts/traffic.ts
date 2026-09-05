@@ -67,7 +67,7 @@ export interface TrafficExchange {
   responseCapturedBytes?: number
   fault?: string
   recording?: string
-  mockProfile?: string
+	mockScenario?: string
   mockRoute?: string
   error?: string
   traceId?: string

@@ -305,7 +305,7 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 	for _, logical := range project.Services {
 		binding, ok := bindingByService[strings.ToLower(logical.Name)]
 		if !ok {
-			result.Issues = append(result.Issues, issue("MISSING_BINDING", logical.Name, "component has no provider binding", "bind it to a local source, managed resource, remote service, or mock profile"))
+			result.Issues = append(result.Issues, issue("MISSING_BINDING", logical.Name, "component has no provider binding", "bind it to a local source, managed resource, remote service, or mock scenario"))
 			continue
 		}
 		switch binding.Provider {
@@ -343,7 +343,7 @@ func Compile(project model.ProjectModel, sources []model.SourceBinding, bindings
 				continue
 			}
 			if err := ValidateMock(binding.Mock); err != nil {
-				result.Issues = append(result.Issues, issue("INVALID_MOCK", logical.Name, err.Error(), "choose an existing mock profile"))
+				result.Issues = append(result.Issues, issue("INVALID_MOCK", logical.Name, err.Error(), "choose an existing mock scenario"))
 				continue
 			}
 			effective = append(effective, logical)
@@ -537,13 +537,13 @@ func ValidateRemote(remote *model.RemoteTarget) error {
 	return nil
 }
 
-// ValidateMock verifies that a provider selects a syntactically valid profile.
+// ValidateMock verifies that a provider selects a syntactically valid scenario.
 func ValidateMock(mock *model.MockTarget) error {
 	if mock == nil {
 		return errors.New("mock target configuration is missing")
 	}
-	if err := model.ValidateArtifactName(mock.Profile); err != nil {
-		return fmt.Errorf("mock profile is invalid: %w", err)
+	if err := model.ValidateArtifactName(mock.Scenario); err != nil {
+		return fmt.Errorf("mock scenario is invalid: %w", err)
 	}
 	return nil
 }

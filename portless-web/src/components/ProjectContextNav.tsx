@@ -1,11 +1,12 @@
+import { environmentUIPath } from '../features/environment/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import { CreateEnvironmentDialog } from '../features/projects/CreateEnvironmentDialog'
 import { aggregateProjectStatus } from '../features/projects/projectPresentation'
 import { formatProjectLastOpened, projectIsRunning, recentProjects, runningProjects, type ProjectNavigationPreferences } from '../features/projects/projectNavigation'
-import { environmentRoute } from '../features/projects/projectOperations'
 import { StatusMark } from './Status'
+import { useOverlayDismiss } from './overlays/useOverlayDismiss'
 
 export function ProjectContextNav({ projects, environments, project, activeEnvironment, navigation, collapsed, onNavigate, onSwitchProject, onEnvironmentChanged }: {
   projects: Project[]
@@ -69,7 +70,7 @@ export function ProjectContextNav({ projects, environments, project, activeEnvir
       <nav className="project-nav project-environment-nav" aria-label={`${project.name} environments`}>
         {ownedEnvironments.map((environment) => {
           const selected = activeEnvironment?.project === environment.project && activeEnvironment.name === environment.name
-          return <button key={environment.name} className={selected ? 'project-nav__item is-active' : 'project-nav__item'} aria-label={`${environment.project}/${environment.name}, ${environment.status}`} aria-current={selected ? 'page' : undefined} title={collapsed ? `${environment.project}/${environment.name}` : undefined} onClick={() => onNavigate(environmentRoute(environment))}>
+          return <button key={environment.name} className={selected ? 'project-nav__item is-active' : 'project-nav__item'} aria-label={`${environment.project}/${environment.name}, ${environment.status}`} aria-current={selected ? 'page' : undefined} title={collapsed ? `${environment.project}/${environment.name}` : undefined} onClick={() => onNavigate(environmentUIPath(environment))}>
             <span className="project-nav__environment-icon"><EnvironmentIcon /><StatusMark status={environment.status} label={false} /></span><span>{environment.name}</span><small data-status={environment.status}>{environment.status}</small>
           </button>
         })}
@@ -101,6 +102,7 @@ function ProjectSwitcher({ projects, environments, project, navigation, onClose,
   const container = useRef<HTMLDivElement>(null)
   const search = useRef<HTMLInputElement>(null)
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  useOverlayDismiss({ containerRef: container, initialFocusRef: search, dismissBlocked: false, onDismiss: () => onClose(true) })
   const active = useMemo(() => runningProjects(projects, environments), [environments, projects])
   const recent = useMemo(() => recentProjects(projects, environments, navigation), [environments, navigation, projects])
   const activeNames = new Set(active.map((item) => item.name))
@@ -115,10 +117,9 @@ function ProjectSwitcher({ projects, environments, project, navigation, onClose,
   const options = groups.flatMap((group) => group.projects)
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => search.current?.focus())
     const outside = (event: MouseEvent) => { if (!container.current?.contains(event.target as Node)) onClose() }
     document.addEventListener('mousedown', outside)
-    return () => { window.cancelAnimationFrame(frame); document.removeEventListener('mousedown', outside) }
+    return () => document.removeEventListener('mousedown', outside)
   }, [onClose])
 
   useEffect(() => {
@@ -129,7 +130,6 @@ function ProjectSwitcher({ projects, environments, project, navigation, onClose,
   useEffect(() => optionRefs.current[selected]?.scrollIntoView({ block: 'nearest' }), [selected])
 
   const keydown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Escape') { event.preventDefault(); onClose(true); return }
     if (!options.length) return
     if (event.key === 'ArrowDown') { event.preventDefault(); setSelected((value) => (value + 1) % options.length) }
     if (event.key === 'ArrowUp') { event.preventDefault(); setSelected((value) => (value - 1 + options.length) % options.length) }
@@ -137,7 +137,7 @@ function ProjectSwitcher({ projects, environments, project, navigation, onClose,
   }
 
   let optionIndex = 0
-  return <div ref={container} className="project-switcher" role="dialog" aria-label="Switch project">
+  return <div ref={container} className="project-switcher" role="dialog" aria-modal="true" aria-label="Switch project">
     <div className="project-switcher__heading"><span>Switch project</span><button type="button" aria-label="Close project switcher" onClick={() => onClose(true)}>×</button></div>
     <label className="project-switcher__search"><span className="sr-only">Search projects</span><SearchIcon /><input ref={search} role="combobox" value={query} placeholder="Search" autoComplete="off" aria-autocomplete="list" aria-expanded="true" aria-controls="project-switcher-results" aria-activedescendant={options.length ? `project-switcher-option-${selected}` : undefined} onChange={(event) => setQuery(event.target.value)} onKeyDown={keydown} /></label>
     <div id="project-switcher-results" className="project-switcher__results" role="listbox" aria-label="Projects">

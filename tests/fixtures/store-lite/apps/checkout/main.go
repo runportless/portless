@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -24,6 +25,10 @@ func main() {
 	http.HandleFunc("/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{"service": "checkout", "ready": true})
 	})
+	http.HandleFunc("/api/orders", echoRequest)
+	http.HandleFunc("/auth/login", echoRequest)
+	http.HandleFunc("/browser-policy", browserPolicy)
+	http.HandleFunc("/browser-policy/frame", browserPolicy)
 	http.HandleFunc("/checkout", func(writer http.ResponseWriter, request *http.Request) {
 		sku := request.URL.Query().Get("sku")
 		if sku == "" {
@@ -54,6 +59,38 @@ func main() {
 
 	log.Printf("checkout ready on %s", port)
 	log.Fatal(http.ListenAndServe("127.0.0.1:"+port, nil))
+}
+
+func echoRequest(writer http.ResponseWriter, request *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 4096))
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"service": "checkout", "method": request.Method, "path": request.URL.Path,
+		"query": request.URL.RawQuery, "body": string(body), "header": request.Header.Get("X-E2E-Application"),
+	})
+}
+
+func browserPolicy(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; frame-src 'self'; frame-ancestors 'self'")
+	writer.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	writer.Header().Set("Referrer-Policy", "origin")
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	if request.URL.Path == "/browser-policy/frame" {
+		_, _ = io.WriteString(writer, "<!doctype html><html lang=\"en\"><title>Application frame</title><p>Application frame loaded</p></html>")
+		return
+	}
+	_, _ = io.WriteString(writer, `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Application browser policy</title>
+<p id="script-result">Waiting for application script</p>
+<script>document.getElementById('script-result').textContent = 'Application script ran'</script>
+<iframe title="Application frame" src="/browser-policy/frame"></iframe>
+</html>`)
 }
 
 func getJSON(endpoint string, incoming http.Header) (map[string]any, error) {

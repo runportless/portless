@@ -273,7 +273,7 @@ func TestProjectSourceAdditionRequiresEveryEnvironmentToBeStoppedAndRollsBack(t 
 	}
 }
 
-func TestProjectSourceRemovalUpdatesEveryStoppedEnvironmentAndDeletesOwnedMocks(t *testing.T) {
+func TestProjectSourceRemovalRejectsReferencedMockScenarioRoutes(t *testing.T) {
 	ctx := context.Background()
 	data := t.TempDir()
 	controlStore, err := database.Open(filepath.Join(data, "portless.db"))
@@ -298,7 +298,10 @@ func TestProjectSourceRemovalUpdatesEveryStoppedEnvironmentAndDeletesOwnedMocks(
 	if _, _, err := app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventory, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.CreateMockProfile(ctx, "store", "local", model.MockProfile{Name: "empty-inventory", Service: "inventory"}, "test"); err != nil {
+	if _, err := app.CreateMockScenario(ctx, "store", "local", model.MockScenario{Name: "empty-inventory"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.PutMockRoute(ctx, "store", "local", "empty-inventory", model.MockRoute{Name: "unavailable", Service: "inventory", Method: "GET", Path: "/", Status: 503, Enabled: true}, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controlStore.CreateFault(ctx, model.FaultRule{Project: "store", Environment: "local", Name: "inventory-timeout", Source: "checkout", Target: "inventory", Abort: true}); err != nil {
@@ -311,6 +314,12 @@ func TestProjectSourceRemovalUpdatesEveryStoppedEnvironmentAndDeletesOwnedMocks(
 		t.Fatal("active environment did not block source removal")
 	}
 	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentStopped, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.RemoveProjectSource(ctx, "store", "inventory", "test"); err == nil || !strings.Contains(err.Error(), "mock scenario") {
+		t.Fatalf("referenced mock scenario route did not block source removal: %v", err)
+	}
+	if err := app.DeleteMockScenario(ctx, "store", "local", "empty-inventory", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -337,9 +346,9 @@ func TestProjectSourceRemovalUpdatesEveryStoppedEnvironmentAndDeletesOwnedMocks(
 			}
 		}
 	}
-	mocks, err := app.MockProfiles(ctx, "store", "local")
-	if err != nil || len(mocks) != 0 {
-		t.Fatalf("owned mocks after source removal = %#v, err = %v", mocks, err)
+	scenarios, err := app.MockScenarios(ctx, "store", "local")
+	if err != nil || len(scenarios) != 0 {
+		t.Fatalf("mock scenarios after source removal = %#v, err = %v", scenarios, err)
 	}
 	fault, err := controlStore.Fault(ctx, "store/local", "inventory-timeout")
 	if err != nil || fault.Enabled || fault.Revision != 2 {
