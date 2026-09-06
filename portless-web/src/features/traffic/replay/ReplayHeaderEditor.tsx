@@ -12,7 +12,7 @@ export function ReplayHeaderEditor({ rows, disabled, onChange }: { rows: ReplayH
     onChange(row.id === nextID ? [...rows, next] : rows.map((candidate) => candidate.id === row.id ? next : candidate))
   }
   return <div className="replay-headers">
-    <div className="replay-headers__hint"><span>Repeat a name for multiple values. Omit unavailable credentials explicitly.</span><button type="button" className="traffic-copy-button" disabled={disabled} aria-pressed={visible} onClick={() => setVisible(!visible)}>{visible ? 'HIDE VALUES' : 'SHOW VALUES'}</button></div>
+    <div className="replay-headers__actions"><button type="button" className="traffic-copy-button" disabled={disabled} aria-pressed={visible} onClick={() => setVisible(!visible)}>{visible ? 'HIDE VALUES' : 'SHOW VALUES'}</button></div>
     <table ref={table} className="replay-header-table" aria-label="Replay request headers">
       <thead><tr><th scope="col">NAME</th><th scope="col">VALUE</th><th scope="col">OMIT</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
       <tbody>{display.map((row, index) => <tr key={row.id} className={row.omitted ? 'is-omitted' : ''}>

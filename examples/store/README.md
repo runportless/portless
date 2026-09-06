@@ -171,4 +171,6 @@ make test-e2e-store
 The E2E target uses a temporary Portless home and private ingress, starts two
 real PostgreSQL containers plus Valkey, verifies decoded inventory SQL, order
 SQL, and cache commands, and proves both stock and orders survive process
-restarts and ordinary environment down/up.
+restarts and ordinary environment down/up. It also restarts the daemon with an
+idle PostgreSQL connection and verifies that all services survive and orders
+reconnects on its next database query.

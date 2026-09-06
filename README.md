@@ -525,6 +525,8 @@ environment or another environment in the same project. Opening the editor
 does not send a request; **Send replay** submits one request to the original
 source-to-target edge. The expanded drawer keeps the original response frozen
 and shows the latest response alongside a status, header, and JSON or text diff.
+Captured and replacement request bodies fill the available height with the
+same bottom gap and internal scrolling as the response panes.
 Response panes offer Body, Headers, and Raw tabs with the trace inspector's
 colors. Body formats JSON while preserving exact number tokens and duplicate
 keys; Raw shows the status, headers, and unformatted body. Copy preserves the

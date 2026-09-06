@@ -106,6 +106,29 @@ async function expectResponseFillsHeight(editor: Locator) {
   expect(layout.headingHeights[0]).toBe(layout.headingHeights[1])
 }
 
+async function expectRequestBodyFillsHeight(editor: Locator) {
+  const layout = await editor.evaluate((element) => {
+    const body = element.querySelector('textarea')!
+    const content = element.querySelector('.replay-request__content')!
+    const response = element.querySelector('.replay-response__body')!
+    return {
+      bottomGap: element.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom,
+      bodyHeight: body.clientHeight,
+      outerOverflow: content.scrollHeight - content.clientHeight,
+      background: getComputedStyle(body).backgroundColor,
+      responseBackground: getComputedStyle(response).backgroundColor,
+      text: getComputedStyle(body).color,
+      responseText: getComputedStyle(response.querySelector('pre')!).color,
+    }
+  })
+  expect(layout.bottomGap).toBeGreaterThanOrEqual(15)
+  expect(layout.bottomGap).toBeLessThanOrEqual(18)
+  expect(layout.bodyHeight).toBeGreaterThan(80)
+  expect(layout.outerOverflow).toBeLessThanOrEqual(1)
+  expect(layout.background).toBe(layout.responseBackground)
+  expect(layout.text).toBe(layout.responseText)
+}
+
 async function responsePalette(body: Locator, tabs: Locator) {
   return {
     body: await body.evaluate((element) => {
@@ -121,7 +144,9 @@ test('opens without sending, edits one live HTTP request, and compares the real 
   await page.emulateMedia({ colorScheme: 'dark' })
   const marker = randomUUID().slice(0, 8)
   const path = `/api/orders?replay=${marker}&tag=a&tag=b&space=+&other=%20`
-  expect(await echoRequest(path, '{"id":9007199254740993,"value":"original"}')).toBe(200)
+  const capturedBody = `{\n  "id":9007199254740993,\n  "value":"original",\n  "items":[\n${Array.from({ length: 80 }, (_, index) => `    "item ${index}"`).join(',\n')}\n  ]\n}`
+  const editedBody = capturedBody.replace('"original"', '"edited"')
+  expect(await echoRequest(path, capturedBody)).toBe(200)
   await authenticate(page, environmentPath('traffic'))
   await page.getByRole('tab', { name: 'EXCHANGES', exact: true }).click()
   await page.locator('button.traffic-row').filter({ hasText: marker }).first().click()
@@ -161,22 +186,43 @@ test('opens without sending, edits one live HTTP request, and compares the real 
   const repeated = rows.filter({ has: page.locator('input[data-header-name]').filter({ visible: true }) })
   expect(await repeated.count()).toBeGreaterThan(1)
   await editor.getByRole('tablist', { name: 'Replay request fields' }).getByRole('tab', { name: 'Body', exact: true }).click()
-  await editor.getByRole('combobox', { name: 'Replay body source' }).selectOption('replacement')
-  await editor.getByRole('textbox', { name: 'Replay request body' }).fill('{"id":9007199254740993,"value":"edited"}')
+  const requestBody = editor.getByRole('textbox', { name: 'Replay request body' })
+  for (const mode of ['captured', 'replacement'] as const) {
+    await editor.getByRole('combobox', { name: 'Replay body source' }).selectOption(mode)
+    if (mode === 'replacement') await requestBody.fill(editedBody)
+    await expect(requestBody).toHaveValue(mode === 'captured' ? capturedBody : editedBody)
+    await expect(requestBody).toHaveJSProperty('readOnly', mode === 'captured')
+    for (const [size, colorScheme] of [[viewport, 'dark'], [{ width: 1280, height: 600 }, 'light'], [{ width: 580, height: 900 }, 'light']] as const) {
+      await page.setViewportSize(size)
+      await page.emulateMedia({ colorScheme })
+      await editor.locator('.replay-workspace').evaluate((element) => element.scrollTo(0, 0))
+      await expectRequestBodyFillsHeight(editor)
+      await requestBody.evaluate((element) => element.scrollTo(0, 0))
+      await requestBody.hover()
+      await page.mouse.wheel(0, 240)
+      await expect.poll(() => requestBody.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+      await expectRequestBodyFillsHeight(editor)
+      await requestBody.evaluate((element) => element.scrollTo(0, 0))
+      if (size.height !== 600) await page.screenshot({ path: testInfo.outputPath(`replay-request-${mode}-${colorScheme}.png`), animations: 'disabled' })
+    }
+    await page.setViewportSize(viewport)
+    await page.emulateMedia({ colorScheme: 'dark' })
+  }
   expect(runRequests).toBe(0)
   const completed = await sendAndInspect(page)
   expect(runRequests).toBe(1)
   expect(completed.run).toMatchObject({ state: 'completed', outcome: 'response-received' })
   expect(completed.result?.exchange?.requestTarget).toBe(`${path}&edited=yes`)
   expect(completed.result?.exchange?.requestHeaders?.['X-E2e-Application']).toEqual(['original', 'second'])
-  expect(completed.result?.exchange?.requestBody).toBe('{"id":9007199254740993,"value":"edited"}')
+  expect(completed.result?.exchange?.requestBody).toBe(editedBody)
   expect(completed.baseline?.requestTarget).toBe(path)
-  expect(completed.baseline?.requestBody).toBe('{"id":9007199254740993,"value":"original"}')
+  expect(completed.baseline?.requestBody).toBe(capturedBody)
   await expect(editor.getByRole('tab', { name: 'Response diff', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(editor.getByRole('table', { name: 'body changes' })).toContainText('/body')
   await page.screenshot({ path: testInfo.outputPath('replay-response-diff.png'), animations: 'disabled' })
   await editor.getByRole('tab', { name: 'Original', exact: true }).click()
   await expect(editor.getByRole('region', { name: 'Original body', exact: true })).toContainText('9007199254740993')
+  await expectRequestBodyFillsHeight(editor)
   await editor.getByRole('button', { name: 'Copy original response body' }).click()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(completed.baseline!.responseBody)
   await expectResponseFillsHeight(editor)

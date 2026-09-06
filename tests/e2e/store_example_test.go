@@ -106,6 +106,27 @@ func TestStoreExampleEndToEnd(t *testing.T) {
 
 	assertStoreProtocolTraffic(t, binary, home, checkout, selector, created.Order.ID)
 
+	// A missing-order read opens an idle PostgreSQL connection without caching
+	// the result. Replacing the daemon must discard that connection without
+	// crashing orders, and the next read must establish a fresh connection.
+	beforeDaemonRestart := explicitEnvironmentStatus(t, binary, home, checkout, selector)
+	const missingOrderPath = "/orders/2147483647"
+	assertStoreJSON(t, home, host, http.MethodGet, missingOrderPath, "", nil, http.StatusNotFound)
+	if output, err := runCLIAt(binary, home, checkout, "daemon", "restart"); err != nil {
+		t.Fatalf("restart Store daemon with an idle database connection: %v\n%s", err, output)
+	}
+	afterDaemonRestart := explicitEnvironmentStatus(t, binary, home, checkout, selector)
+	if afterDaemonRestart.Status != model.EnvironmentHealthy {
+		t.Fatalf("Store did not recover after daemon restart: %s: %s", afterDaemonRestart.Status, afterDaemonRestart.Reason)
+	}
+	for _, previous := range beforeDaemonRestart.Services {
+		current := requireService(t, afterDaemonRestart, previous.Name)
+		if current.Status != model.ServiceReady || current.PID != previous.PID || current.Generation != previous.Generation {
+			t.Fatalf("Store service %s was not preserved across daemon restart: before=%#v after=%#v", previous.Name, previous, current)
+		}
+	}
+	assertStoreJSON(t, home, host, http.MethodGet, missingOrderPath, "", nil, http.StatusNotFound)
+
 	redis := requireService(t, environment, "orders-redis")
 	if deleted := valkeyCommand(t, managedResourceProbeAddress(t, redis), "DEL", fmt.Sprintf("store:order:%d", created.Order.ID)); deleted != "1" {
 		t.Fatalf("clear Store order cache = %q", deleted)

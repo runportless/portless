@@ -143,7 +143,8 @@ The Playwright suite protects these browser journeys:
   request headers and replacement text bodies, same-project destination
   selection, frozen response comparison with lossless large JSON numbers,
   formatted Body, Headers, and Raw tabs, trace colors in both themes, and
-  response panes that fill the available height and scroll internally,
+  captured/replacement request bodies and response panes that fill the available
+  height and scroll internally,
   explicit remote-write confirmation, and closing/reopening a pending run
   without a second application request;
 
@@ -403,6 +404,8 @@ temporary Portless home and private E2E ingress. It verifies:
 - decoded inventory PostgreSQL `UPDATE` plus order PostgreSQL `INSERT` and
   `SELECT` exchanges with captured SQL;
 - decoded Redis `GET` and `SET` exchanges with the expected cache key;
+- daemon restart with an idle PostgreSQL connection preserving every service
+  process and allowing a fresh database query afterward;
 - stock and order persistence across their owning process restarts; and
 - both PostgreSQL volumes persisting across ordinary environment down/up; and
 - the checkout page's inventory reset restoring the seed stock through the
