@@ -293,7 +293,7 @@ the right. Request and Response tabs separate the configuration: Request holds
 the route name, service, method, path, and required query parameters; Response
 holds status, delay, body, and response headers. The response body grows to use
 the available space. A compact header row shows the scenario name as a back link
-and its enable/disable control. Below it, the selected route's name, method, and
+and its enable/disable switch. Below it, the selected route's name, method, and
 path remain visible in both workspace views and follow unsaved edits. The scenario
 list shows its services; hovering a scenario name reveals its description. Routes
 and Preview tabs sit to the right of the route title:
@@ -372,6 +372,20 @@ The embedded control plane and CLI share the same authenticated daemon API.
 Both can inspect services and effective connections, tail structured logs,
 follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
+
+Recording history keeps Export and Delete in each row's ellipsis menu. Start a
+new recording from the form above the history table.
+
+Mock scenarios, individual mock routes, and faults use the same on/off switches.
+Changes apply immediately without a Save step. A spinner in the switch shows a
+pending change and prevents repeat clicks; failures appear in the shared error
+notice. Scenario and fault status labels remain visible alongside their switches,
+including partially active scenarios. Mocks and Faults have a Disable All row
+above their table columns. The action is unavailable when nothing is active.
+For mocks, it restores each enabled or degraded scenario's original providers in
+sequence, keeping scenarios, routes, and route enabled flags saved. Controls stay
+locked while restoration runs. If a scenario fails, the batch stops and reports
+the scenario and completed count; retrying targets the scenarios still active.
 
 Each browser tab stays focused on one project. The sidebar shows only that
 project's environments. The project switcher puts running environments at the

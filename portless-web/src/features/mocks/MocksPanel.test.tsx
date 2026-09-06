@@ -29,6 +29,7 @@ const listProps = {
   onCreate: () => undefined,
   onOpen: () => undefined,
   onToggle: () => undefined,
+  onDisableAll: () => undefined,
   onDelete: () => undefined,
   onDismissDelete: () => undefined,
 }
@@ -62,6 +63,7 @@ describe('MocksPanel', () => {
     expect(html.match(/class="sortable-grid-header/g)).toHaveLength(5)
     expect(html).toContain('Loading mock scenarios')
     expect(html).not.toContain('mock-scenario-workspace')
+    expect(html).not.toContain('DISABLE ALL')
   })
 
   it('creates only scenario identity in the modal', () => {
@@ -196,9 +198,53 @@ describe('MocksPanel', () => {
     expect(mockScenarioIsActive(scenario)).toBe(false)
     expect(mockScenarioIsActive(enabled)).toBe(true)
     expect(mockScenarioIsActive(degraded)).toBe(true)
-    expect(html).toContain('aria-label="Disable checkout-failure"')
-    expect(html).toContain('aria-label="Disable partial"')
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*checked="")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*checked="")(?=[^>]*aria-label="partial enabled")[^>]*>/)
+    expect(html.match(/role="switch"/g)).toHaveLength(3)
     expect(html).toContain('Degraded')
+  })
+
+  it('blocks empty scenarios and shows pending activation even after the saved state changes', () => {
+    const empty = { ...scenario, name: 'empty', routes: [] }
+    const emptyHTML = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={[empty]} />)
+    expect(emptyHTML).toContain('title="Add a route before enabling this scenario."')
+    expect(emptyHTML).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*disabled="")(?=[^>]*aria-label="empty enabled")[^>]*>/)
+
+    const enabled = { ...scenario, activation: { ...scenario.activation, state: 'enabled' as const } }
+    const html = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={[enabled, empty]} busy="enable:checkout-failure" />)
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*disabled="")(?=[^>]*checked="")(?=[^>]*aria-busy="true")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
+    expect(html.match(/class="toggle-switch is-pending"/g)).toHaveLength(1)
+    expect(html).toContain('<span class="sr-only">Updating</span>')
+
+    const workspaceHTML = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={enabled} busy="enable:checkout-failure" />)
+    expect(workspaceHTML).toContain('>ENABLING…</span>')
+    expect(workspaceHTML).toMatch(/<input(?=[^>]*aria-busy="true")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
+  })
+
+  it('places Disable All above scenario columns and keeps it disabled when every scenario is off', () => {
+    const html = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={[scenario]} />)
+    expect(html).toMatch(/class="mock-scenarios-bulk-actions"><button[^>]*disabled=""[^>]*>DISABLE ALL<\/button>/)
+    expect(html.indexOf('CREATE SCENARIO')).toBeLessThan(html.indexOf('DISABLE ALL'))
+    expect(html.indexOf('DISABLE ALL')).toBeLessThan(html.indexOf('mock-scenario-row--header'))
+  })
+
+  it.each(['enabled', 'degraded'] as const)('allows Disable All for %s scenarios and locks it during other operations', (state) => {
+    const active = { ...scenario, activation: { ...scenario.activation, state } }
+    const html = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={[active]} />)
+    expect(html).toMatch(/class="mock-scenarios-bulk-actions"><button(?![^>]*disabled="")[^>]*>DISABLE ALL<\/button>/)
+    for (const overrides of [{ busy: 'route' }, { loading: true }, { transitionBlocked: true }]) {
+      const blocked = renderToStaticMarkup(<MockScenariosList {...listProps} {...overrides} scenarios={[active]} />)
+      expect(blocked).toMatch(/class="mock-scenarios-bulk-actions"><button[^>]*disabled=""[^>]*>DISABLE ALL<\/button>/)
+    }
+  })
+
+  it('shows bulk progress on active scenarios while locking every scenario action', () => {
+    const active = { ...scenario, name: 'active', activation: { ...scenario.activation, state: 'enabled' as const } }
+    const html = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={[scenario, active]} busy="disable-all" />)
+    expect(html).toMatch(/class="mock-scenarios-bulk-actions"><button[^>]*disabled=""[^>]*>DISABLING…<\/button>/)
+    expect(html).toMatch(/<input(?=[^>]*disabled="")(?=[^>]*aria-busy="true")(?=[^>]*aria-label="active enabled")[^>]*>/)
+    expect(html).toMatch(/<input(?=[^>]*disabled="")(?=[^>]*aria-busy="false")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
+    expect(html).toMatch(/<button(?=[^>]*disabled="")(?=[^>]*aria-label="Mock scenario actions for active")[^>]*>/)
   })
 
   it('sorts scenarios by every displayed data column', () => {

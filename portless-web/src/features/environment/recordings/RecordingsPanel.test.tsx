@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Environment } from '../../../api/contracts/environments'
 import type { Recording } from '../../../api/contracts/experiments'
-import { createRecordingDefaults, formatRecordingDuration, RecordingHistoryRepeatButton, RecordingsPanel, sortRecordingHistory, startRecordingDurationTimer } from './RecordingsPanel'
+import { createRecordingDefaults, formatRecordingDuration, RecordingsPanel, sortRecordingHistory, startRecordingDurationTimer } from './RecordingsPanel'
 
 const environment: Environment = {
   project: 'store',
@@ -127,15 +127,14 @@ describe('RecordingsPanel', () => {
     expect(scheduler.clearInterval).toHaveBeenCalledWith(42)
   })
 
-  it('keeps repeat visible and moves secondary recording actions into a named row menu', () => {
+  it('keeps recording history actions in a named row menu', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[completedRecording]} refresh={async () => undefined} />)
 
     expect(html).toContain('completed-checkout')
     expect(html).toContain('aria-label="Delete all 1 completed recording"')
     expect(html).toContain('>DELETE ALL</button>')
-    expect(html).toContain('aria-label="Repeat recording completed-checkout"')
-    expect(html).toContain('class="recording-history__repeat-icon"')
-    expect(html).toContain('<span>REPEAT</span>')
+    expect(html).not.toContain('Repeat recording')
+    expect(html).not.toContain('REPEAT')
     expect(html).toContain('aria-label="Recording actions for completed-checkout"')
     expect(html).toContain('aria-haspopup="menu"')
     expect(html).not.toContain('/recordings/completed-checkout/export')
@@ -143,23 +142,6 @@ describe('RecordingsPanel', () => {
     expect(html).not.toContain('aria-label="Delete completed-checkout"')
     expect(html).not.toContain('>DELETE</button>')
     expect(html).not.toContain('Confirm delete completed-checkout')
-  })
-
-  it('renders repeat as a compact one-click action', () => {
-    const html = renderToStaticMarkup(<RecordingHistoryRepeatButton recordingName="completed-checkout" starting={false} disabled={false} onClick={() => undefined} />)
-
-    expect(html).toContain('class="recording-history__repeat"')
-    expect(html).toContain('aria-label="Repeat recording completed-checkout"')
-    expect(html).toContain('<svg class="recording-history__repeat-icon"')
-    expect(html).toContain('<span>REPEAT</span>')
-    expect(html).not.toContain('CONFIRM')
-  })
-
-  it('disables repeat actions while another recording is active', () => {
-    const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[recording, completedRecording]} refresh={async () => undefined} />)
-
-    expect(html).toMatch(/<button(?=[^>]*class="recording-history__repeat")(?=[^>]*disabled="")(?=[^>]*aria-label="Repeat recording completed-checkout")[^>]*>/)
-    expect(html).toContain('<span>REPEAT</span>')
   })
 
   it('paginates recording history after six recordings', () => {
@@ -191,17 +173,17 @@ describe('RecordingsPanel', () => {
     expect(sortRecordingHistory([earlier, later], { key: 'duration', direction: 'asc' }).map((item) => item.name)).toEqual(['beta', 'alpha'])
   })
 
-  it('generates a repeated recording with the prior capture settings and an available name', () => {
-    const previous = { ...completedRecording, capturePayloads: true, maxEvents: 5000, maxPayloadBytes: 100000 }
-    const existingRepeat = { ...previous, name: 'completed-checkout-2' }
+  it('generates an available default recording name', () => {
+    const previous = { ...completedRecording, name: 'checkout-debug', capturePayloads: true, maxEvents: 5000, maxPayloadBytes: 100000 }
+    const existing = { ...previous, name: 'checkout-debug-2' }
 
-    expect(createRecordingDefaults([previous, existingRepeat], previous)).toEqual({
-      name: 'completed-checkout-3',
-      source: 'checkout',
-      target: 'orders',
-      capturePayloads: true,
-      maxEvents: 5000,
-      maxPayloadBytes: 100000,
+    expect(createRecordingDefaults([previous, existing])).toEqual({
+      name: 'checkout-debug-3',
+      source: '',
+      target: '',
+      capturePayloads: false,
+      maxEvents: 10000,
+      maxPayloadBytes: 65536,
     })
   })
 })

@@ -58,7 +58,7 @@ test('recovers a mocked caller after daemon restart and allows disabling and del
   expect(recovered.services.map(({ name, pid, generation }) => ({ name, pid, generation }))).toEqual(before.services.map(({ name, pid, generation }) => ({ name, pid, generation })))
   expect(await applicationRequest('/checkout')).toMatchObject({ status: 409, body: '{"mocked":true}' })
 
-  await workspace.locator('.mock-scenario-toggle').click()
+  await toggle.click()
   await expect(toggle).not.toBeChecked()
   await expect(toggle).toBeEnabled()
   const restored = await controlAPI<Snapshot>(base)

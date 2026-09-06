@@ -73,8 +73,8 @@ describe('FaultsPanel', () => {
     expect(html).toContain('class="faults-bulk-actions"')
     expect(html).toContain('class="faults-disable-all-link"')
     expect(html.indexOf('CREATE FAULT')).toBeLessThan(html.indexOf('DISABLE ALL'))
-    expect(html).toContain('>DISABLE</button>')
-    expect(html).toContain('>ENABLE</button>')
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*checked="")(?=[^>]*aria-label="current-latency fault enabled")[^>]*>/)
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?![^>]*checked="")(?=[^>]*aria-label="old-latency fault enabled")[^>]*>/)
     expect(html.match(/class="sortable-column-sort-control"/g)).toHaveLength(8)
   })
 
@@ -87,7 +87,7 @@ describe('FaultsPanel', () => {
   it('keeps fault lifecycle visible and moves deletion into a named row menu', () => {
     const html = renderToStaticMarkup(<FaultsPanel environment={environment} faults={[fault('slow-orders', false)]} refresh={async () => undefined} />)
 
-    expect(html).toContain('>ENABLE</button>')
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?![^>]*checked="")(?=[^>]*aria-label="slow-orders fault enabled")[^>]*>/)
     expect(html).toContain('aria-label="Fault actions for slow-orders"')
     expect(html).toContain('aria-haspopup="menu"')
     expect(html).not.toContain('aria-label="Delete slow-orders"')

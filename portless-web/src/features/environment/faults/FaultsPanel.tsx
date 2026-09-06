@@ -7,6 +7,7 @@ import { FormDialog } from '../../../components/overlays/FormDialog'
 import { RowActionsMenu } from '../../../components/RowActionsMenu'
 import { SortableTableHeader, type TableSort } from '../../../components/SortableTableHeader'
 import { StatusMark } from '../../../components/Status'
+import { ToggleSwitch } from '../../../components/ToggleSwitch'
 import { experimentScopes, preferredFaultScope } from '../../experimentScopes'
 import { httpErrorStatusGroups } from '../../httpStatuses'
 
@@ -169,9 +170,7 @@ export function FaultsPanel({ environment, faults, refresh }: { environment: Env
               <td className="fault-table__enabled">{fault.enabled ? <time dateTime={fault.enabledAt} title={new Date(fault.enabledAt).toLocaleString()}>{formatFaultTimestamp(fault.enabledAt)}</time> : '—'}</td>
               <td className="fault-table__created"><time dateTime={fault.createdAt} title={new Date(fault.createdAt).toLocaleString()}>{formatFaultTimestamp(fault.createdAt)}</time></td>
               <td><div className="table-row-actions">
-                <button type="button" disabled={!!busy} onClick={() => void changeRule(fault, fault.enabled ? 'disable' : 'enable')}>
-                  {busy === `${fault.enabled ? 'disable' : 'enable'}:${fault.name}` ? fault.enabled ? 'DISABLING…' : 'ENABLING…' : fault.enabled ? 'DISABLE' : 'ENABLE'}
-                </button>
+                <ToggleSwitch label={`${fault.name} fault enabled`} checked={fault.enabled} disabled={!!busy} pending={busy === `enable:${fault.name}` || busy === `disable:${fault.name}` || busy === 'disable-all' && fault.enabled} onChange={(enabled) => { void changeRule(fault, enabled ? 'enable' : 'disable') }} />
                 <RowActionsMenu
                   label={`Fault actions for ${fault.name}`}
                   menuLabel={`${fault.name} fault actions`}

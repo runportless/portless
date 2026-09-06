@@ -193,6 +193,17 @@ The Playwright suite protects these browser journeys:
   muted request details, and badge removal after re-enabling; stable peer service
   PIDs, stationary tables and route panes throughout activation and restoration,
   and traffic attribution;
+- recording history rows with one ellipsis menu for Export and Delete, including
+  export contents, deletion, and row layouts in both themes;
+- consistent on/off switches for mock scenarios, routes, and faults, including
+  keyboard toggling without opening the scenario or changing the selected route;
+  fault switches keep their saved state after a failed browser request and show
+  pending progress while the real request is held, blocking repeat actions until
+  it finishes; switch states are inspected in dark and light themes;
+- Disable All in the mock scenarios table, with sequential provider restoration,
+  pending control locks, a reported partial failure and retry of remaining active
+  scenarios, preserved routes and disabled scenarios, unchanged peer processes,
+  and a disabled bulk action when all scenarios are off;
 - reloading an edited mock route or navigating away from a new route without a
   native browser confirmation, with saved values restored after reload; explicit
   in-app Back navigation still offers its discard/keep-editing dialog;

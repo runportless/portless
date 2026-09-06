@@ -4,7 +4,7 @@ import { readE2EState } from './state'
 
 test.describe.configure({ mode: 'serial' })
 
-test('creates, captures, exports, repeats, and deletes recordings', async ({ page }) => {
+test('creates, captures, exports, and deletes recordings from the history menu', async ({ page }, testInfo) => {
   await authenticate(page, environmentPath('recordings'))
   await page.getByLabel('NAME', { exact: true }).fill('ui-recording')
   await page.getByLabel('Recording traffic scope').selectOption('checkout:orders')
@@ -32,6 +32,8 @@ test('creates, captures, exports, repeats, and deletes recordings', async ({ pag
   const row = recordingRow('ui-recording')
   await expect(row).toContainText('checkout → orders')
   await expect(row.locator('td').nth(1)).toHaveText('1')
+  await expect(row.getByRole('button')).toHaveCount(1)
+  await expect(row.getByRole('button', { name: /Repeat recording/ })).toHaveCount(0)
   await expect(page.locator('.recording-history-table .sortable-column-sort-control')).toHaveCount(0)
 
   await row.getByRole('button', { name: 'Recording actions for ui-recording', exact: true }).click()
@@ -45,26 +47,18 @@ test('creates, captures, exports, repeats, and deletes recordings', async ({ pag
   expect(exported.exchanges).toHaveLength(1)
   expect(exported.exchanges[0]).toMatchObject({ source: 'checkout', target: 'orders' })
 
-  const repeatRecording = row.getByRole('button', { name: 'Repeat recording ui-recording' })
-  await expect(repeatRecording).toContainText('REPEAT')
-  await repeatRecording.click()
-  await expect(activeRecording).toContainText('ui-recording-2')
-  await expect(repeatRecording).toBeDisabled()
-  await activeRecording.getByRole('button', { name: 'STOP RECORDING' }).click()
-  const repeatedRow = recordingRow('ui-recording-2')
-  await expect(repeatedRow).toContainText('checkout → orders')
+  for (const theme of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: theme })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+    await expect(row.getByRole('button', { name: 'Recording actions for ui-recording', exact: true })).toBeInViewport({ ratio: 1 })
+    await page.screenshot({ path: testInfo.outputPath(`recording-history-${theme}.png`), animations: 'disabled' })
+  }
 
   await row.getByRole('button', { name: 'Recording actions for ui-recording', exact: true }).click()
   await expect(recordingMenu).toBeVisible()
   await recordingMenu.getByRole('menuitem', { name: 'Delete ui-recording' }).click()
   await recordingMenu.getByRole('menuitem', { name: 'Confirm delete ui-recording' }).click()
   await expect(row).toHaveCount(0)
-
-  await repeatedRow.getByRole('button', { name: 'Recording actions for ui-recording-2', exact: true }).click()
-  const repeatedMenu = repeatedRow.getByRole('menu', { name: 'ui-recording-2 recording actions' })
-  await repeatedMenu.getByRole('menuitem', { name: 'Delete ui-recording-2' }).click()
-  await repeatedMenu.getByRole('menuitem', { name: 'Confirm delete ui-recording-2' }).click()
-  await expect(repeatedRow).toHaveCount(0)
 })
 
 test('creates a multi-service scenario, edits routes, and restores providers without restarting peers', async ({ page }, testInfo) => {
@@ -245,7 +239,7 @@ test('creates a multi-service scenario, edits routes, and restores providers wit
   await page.setViewportSize({ width: 1280, height: 720 })
 
   const routeEnabled = routeRow.getByRole('switch', { name: 'lookup route enabled' })
-  const routeToggle = routeRow.locator('.mock-route-toggle')
+  const routeToggle = routeRow.locator('.toggle-switch')
   await expect(routeEnabled).toBeChecked()
   await expect(routeToggle).toHaveText('On')
   await expect(routeRow.locator('.mock-route-disabled-state')).toHaveCount(0)
@@ -274,7 +268,7 @@ test('creates a multi-service scenario, edits routes, and restores providers wit
   const enableScenario = scenarioWorkspace.getByRole('switch', { name: 'sold-out enabled' })
   await expect(enableScenario).toBeEnabled()
   const assertRouteWorkspaceStayedStill = await watchMockPanelLayout(scenarioWorkspace)
-  await scenarioWorkspace.locator('.mock-scenario-toggle').click()
+  await enableScenario.click()
   await expect(enableScenario).toBeChecked({ timeout: 30_000 })
   await expect(enableScenario).toBeEnabled({ timeout: 30_000 })
   await assertRouteWorkspaceStayedStill()
@@ -331,6 +325,9 @@ test('creates a multi-service scenario, edits routes, and restores providers wit
   await expect(scenarioState.getByText('Enabled', { exact: true })).toBeVisible()
   await expect(scenarioRow.locator('.mock-scenario-services')).toHaveText('inventory, orders')
   await expect(scenarioRow.locator('time.mock-scenario-row__modified')).toBeVisible()
+  const scenarioSwitch = scenarioRow.getByRole('switch', { name: 'sold-out enabled', exact: true })
+  await expect(scenarioSwitch).toBeChecked()
+  await page.screenshot({ path: testInfo.outputPath('mock-scenario-switch-on-dark.png'), animations: 'disabled' })
 
   const mocked = await controlAPI<Snapshot>(`/api/v1/environments/${state.project}/${state.environment}`)
   const mockedByName = new Map(mocked.services.map((service) => [service.name, service]))
@@ -351,10 +348,17 @@ test('creates a multi-service scenario, edits routes, and restores providers wit
   }).toBe(true)
 
   const assertScenariosTableStayedStill = await watchMockPanelLayout(page.locator('.mock-scenarios-panel'))
-  await scenarioRow.getByRole('button', { name: 'Disable sold-out' }).click()
-  await expect(scenarioRow.getByRole('button', { name: 'Enable sold-out' })).toBeEnabled({ timeout: 30_000 })
+  await scenarioSwitch.focus()
+  await page.keyboard.press('Space')
+  await expect(scenarioSwitch).not.toBeChecked({ timeout: 30_000 })
+  await expect(scenarioSwitch).toBeEnabled({ timeout: 30_000 })
+  await expect(scenarioSwitch).toHaveAttribute('aria-busy', 'false')
+  await expect(page).toHaveURL(/\?tab=mocks$/)
   await expect(scenarioState.getByText('Disabled', { exact: true })).toBeVisible()
   await assertScenariosTableStayedStill()
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.screenshot({ path: testInfo.outputPath('mock-scenario-switch-off-light.png'), animations: 'disabled' })
   const restored = await controlAPI<Snapshot>(`/api/v1/environments/${state.project}/${state.environment}`)
   const restoredByName = new Map(restored.services.map((service) => [service.name, service]))
   expect(restoredByName.get('checkout')?.pid).toBe(beforeByName.get('checkout')?.pid)
@@ -374,7 +378,7 @@ test('creates a multi-service scenario, edits routes, and restores providers wit
   await expect(scenarioRow).toHaveCount(0)
 })
 
-test('applies, disables, re-enables, and deletes a persistent fault', async ({ page }) => {
+test('applies, disables, re-enables, and deletes a persistent fault', async ({ page }, testInfo) => {
   await authenticate(page, environmentPath('faults'))
   await page.getByRole('button', { name: 'CREATE FAULT', exact: true }).click()
   const faultDialog = page.getByRole('dialog', { name: 'Create Fault' })
@@ -390,17 +394,63 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
   await expect(page.getByRole('button', { name: 'Faults', exact: true })).toHaveAccessibleDescription('1 active fault')
 
   const row = page.locator('.fault-table tbody tr').filter({ hasText: 'ui-orders-fault' })
+  const faultSwitch = row.getByRole('switch', { name: 'ui-orders-fault fault enabled', exact: true })
+  await expect(faultSwitch).toBeChecked()
   await expect(row).toContainText('until disabled')
   const failed = await applicationRequest('/checkout?sku=coffee-mug&quantity=1')
   expect(failed.status).toBe(502)
   expect(failed.body).toContain('orders: returned 503 Service Unavailable')
 
-  await row.getByRole('button', { name: 'DISABLE' }).click()
+  const disablePattern = '**/faults/ui-orders-fault/disable'
+  await page.route(disablePattern, (intercept) => intercept.abort('failed'), { times: 1 })
+  await faultSwitch.click()
+  await expect(page.getByRole('alert')).toContainText("Fault wasn't disabled")
+  await expect(faultSwitch).toBeChecked()
+  await expect(faultSwitch).toBeEnabled()
+  await expect(faultSwitch).toHaveAttribute('aria-busy', 'false')
+
+  let releaseDisable = () => {}
+  const disableReleased = new Promise<void>((resolve) => { releaseDisable = resolve })
+  let finishDisable = () => {}
+  const disableFinished = new Promise<void>((resolve) => { finishDisable = resolve })
+  let disableStarted = false
+  await page.route(disablePattern, async (intercept) => {
+    disableStarted = true
+    try {
+      await disableReleased
+      await intercept.continue()
+    } finally { finishDisable() }
+  }, { times: 1 })
+  try {
+    await faultSwitch.click()
+    await expect(faultSwitch).toBeDisabled()
+    await expect(faultSwitch).toBeChecked()
+    await expect(faultSwitch).toHaveAttribute('aria-busy', 'true')
+    await expect(row.locator('.toggle-switch')).toHaveClass(/is-pending/)
+    await expect(row.getByRole('button', { name: 'Fault actions for ui-orders-fault' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'DISABLE ALL', exact: true })).toBeDisabled()
+    await page.screenshot({ path: testInfo.outputPath('fault-switch-pending-dark.png'), animations: 'disabled' })
+  } finally {
+    releaseDisable()
+    if (disableStarted) await disableFinished
+    await page.unroute(disablePattern)
+  }
+  await expect(faultSwitch).not.toBeChecked()
+  await expect(faultSwitch).toBeEnabled()
   await expect(row.locator('td').nth(4)).toHaveText('1')
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.screenshot({ path: testInfo.outputPath('fault-switch-off-light.png'), animations: 'disabled' })
 
-  await row.getByRole('button', { name: 'ENABLE' }).click()
-  await expect(row.getByRole('button', { name: 'DISABLE' })).toBeEnabled()
+  await faultSwitch.focus()
+  await page.keyboard.press('Space')
+  await expect(faultSwitch).toBeChecked()
+  await expect(faultSwitch).toBeEnabled()
+  await expect(faultSwitch).toHaveAttribute('aria-busy', 'false')
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await page.screenshot({ path: testInfo.outputPath('fault-switch-on-dark.png'), animations: 'disabled' })
   await row.getByRole('button', { name: 'Fault actions for ui-orders-fault' }).click()
   const faultMenu = row.getByRole('menu', { name: 'ui-orders-fault fault actions' })
   await faultMenu.getByRole('menuitem', { name: 'Delete ui-orders-fault' }).click()

@@ -22,26 +22,21 @@ export interface CreateRecordingInput {
   maxPayloadBytes: number
 }
 
-export function createRecordingDefaults(recordings: Recording[], previous?: Recording): CreateRecordingInput {
+export function createRecordingDefaults(recordings: Recording[]): CreateRecordingInput {
   const existingNames = new Set(recordings.map((recording) => recording.name.toLowerCase()))
-  const originalName = previous?.name || 'checkout-debug'
-  const numberedName = originalName.match(/^(.*)-(\d+)$/)
-  const stem = numberedName?.[1] || originalName
-  let sequence = numberedName ? Number(numberedName[2]) + 1 : 2
-  let name = originalName
+  let name = 'checkout-debug'
+  let sequence = 2
   while (existingNames.has(name.toLowerCase())) {
-    const suffix = `-${sequence}`
-    const availableStem = stem.slice(0, 64 - suffix.length).replace(/[._-]+$/, '')
-    name = `${availableStem}${suffix}`
+    name = `checkout-debug-${sequence}`
     sequence++
   }
   return {
     name,
-    source: previous?.source || '',
-    target: previous?.target || '',
-    capturePayloads: previous?.capturePayloads ?? false,
-    maxEvents: previous?.maxEvents ?? 10000,
-    maxPayloadBytes: previous?.maxPayloadBytes ?? 65536,
+    source: '',
+    target: '',
+    capturePayloads: false,
+    maxEvents: 10000,
+    maxPayloadBytes: 65536,
   }
 }
 
@@ -67,8 +62,8 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     setHistorySort(defaultRecordingHistorySort)
   }, [environment.project, environment.name])
 
-  const start = async (input: CreateRecordingInput, action = 'create') => {
-    setBusy(action)
+  const start = async (input: CreateRecordingInput) => {
+    setBusy('create')
     setDeleteName('')
     setMenuRecording('')
     setDeleteAllConfirm(false)
@@ -149,10 +144,6 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     }
   }
 
-  const recordAgain = async (recording: Recording) => {
-    await start(createRecordingDefaults(recordings, recording), `repeat:${recording.name}`)
-  }
-
   const clearRowConfirmations = () => {
     setDeleteName('')
     setMenuRecording('')
@@ -212,13 +203,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
               <td className="recording-history__created"><time dateTime={recording.startedAt} title={new Date(recording.startedAt).toLocaleString()}>{formatRecordingTimestamp(recording.startedAt)}</time></td>
               <td className="recording-history__duration">{recording.completedAt ? formatRecordingDuration(recording.startedAt, new Date(recording.completedAt).getTime()) : '—'}</td>
               <td className="recording-history__time"><time dateTime={recording.completedAt || recording.startedAt}>{relativeTime(recording.completedAt || recording.startedAt)} ago</time></td>
-              <td><div className="table-row-actions recording-history__actions">
-                <RecordingHistoryRepeatButton
-                  recordingName={recording.name}
-                  starting={busy === `repeat:${recording.name}`}
-                  disabled={!!busy || !!activeRecording}
-                  onClick={() => void recordAgain(recording)}
-                />
+              <td><div className="table-row-actions">
                 <RowActionsMenu
                   label={`Recording actions for ${recording.name}`}
                   menuLabel={`${recording.name} recording actions`}
@@ -246,28 +231,6 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
       <PanelPagination label="recordings" pagination={historyPagination} onPage={(page) => { setHistoryPage(page); clearRowConfirmations() }} />
     </section>
   </div>
-}
-
-export function RecordingHistoryRepeatButton({ recordingName, starting, disabled, onClick }: {
-  recordingName: string
-  starting: boolean
-  disabled: boolean
-  onClick: () => void
-}) {
-  return <button
-    className="recording-history__repeat"
-    type="button"
-    disabled={disabled}
-    aria-label={`Repeat recording ${recordingName}`}
-    onClick={onClick}
-  ><RepeatRecordingIcon /><span>{starting ? 'STARTING…' : 'REPEAT'}</span></button>
-}
-
-function RepeatRecordingIcon() {
-  return <svg className="recording-history__repeat-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-    <path d="M13 6.5A5.5 5.5 0 1 0 13 10" />
-    <path d="M10.5 3.5H13v3" />
-  </svg>
 }
 
 function formatRecordingTimestamp(value: string) {
