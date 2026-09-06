@@ -1,6 +1,7 @@
 import type { Environment } from '../../../api/contracts/environments'
 import type { Service } from '../../../api/contracts/topology'
 import type { TrafficActivity, TrafficExchange } from '../../../api/contracts/traffic'
+import { isWebSocketHandshake } from '../../traffic/trafficProtocol'
 
 export type TopologyItem = { kind: 'client'; key: 'external' } | { kind: 'service'; key: string; service: Service }
 export type TopologySignal = TrafficExchange | TrafficActivity
@@ -10,6 +11,8 @@ export type TopologyEdgeMetric = {
   activeConnections: number
   lastSeen: number
   latestSequence: number
+  observedHTTP: boolean
+  observedWebSocket: boolean
   fault?: string
   faultSeen?: number
 }
@@ -32,9 +35,14 @@ export function summarizeTopologyTraffic(events: TrafficExchange[], now = Date.n
   for (const event of events) {
     if (event.background) continue
     const observedAt = new Date(event.completedAt || event.startedAt).getTime()
-    if (!Number.isFinite(observedAt) || now - observedAt > topologyWindowMilliseconds) continue
+    if (!Number.isFinite(observedAt)) continue
+    const recent = now - observedAt <= topologyWindowMilliseconds
+    if (!recent && event.protocol !== 'http') continue
     const key = topologyEdgeKey(event.source, event.target)
     const current = metrics.get(key) || emptyTopologyMetric()
+    observeTopologyProtocol(current, event)
+    metrics.set(key, current)
+    if (!recent) continue
     current.samples.push({ observedAt, duration: event.durationMs || 0, error: topologyExchangeError(event) })
     current.bytes += Math.max(0, event.requestBytes || 0) + Math.max(0, event.responseBytes || 0)
     current.lastSeen = Math.max(current.lastSeen, observedAt)
@@ -43,7 +51,6 @@ export function summarizeTopologyTraffic(events: TrafficExchange[], now = Date.n
       current.fault = event.fault
       current.faultSeen = observedAt
     }
-    metrics.set(key, current)
   }
   return metrics
 }
@@ -68,6 +75,7 @@ export function mergeTopologySignal(metrics: Map<string, TopologyEdgeMetric>, si
       current.lastSeen = observedAt
     }
   } else {
+    observeTopologyProtocol(current, signal)
     const observedAt = new Date(signal.completedAt || signal.startedAt).getTime() || now
     current.samples.push({ observedAt, duration: signal.durationMs || 0, error: topologyExchangeError(signal) })
     current.bytes += Math.max(0, signal.requestBytes || 0) + Math.max(0, signal.responseBytes || 0)
@@ -94,6 +102,7 @@ export function topologyEdgeTone(metric: TopologyEdgeMetric | undefined, hasFaul
 
 export function topologyEdgeLabel(edge: TopologyEdge, metric: TopologyEdgeMetric | undefined, now: number, activeFault?: string) {
   if (activeFault) return `▲ ${activeFault}`
+  if (edge.protocol === 'http' && metric?.observedWebSocket) return metric.observedHTTP ? 'HTTP + WS' : 'WEBSOCKET'
   if (!metric) return edge.protocol.toUpperCase()
   if (now - metric.lastSeen > topologyWindowMilliseconds) return edge.protocol !== 'http' && metric.activeConnections > 0 ? `${metric.activeConnections} OPEN` : edge.protocol.toUpperCase()
   if (edge.protocol !== 'http') return metric.activeConnections > 0 ? `${metric.activeConnections} OPEN · ${formatBytes(metric.bytes)}` : formatBytes(metric.bytes)
@@ -102,6 +111,18 @@ export function topologyEdgeLabel(edge: TopologyEdge, metric: TopologyEdgeMetric
   const average = samples.length ? Math.round(samples.reduce((sum, sample) => sum + sample.duration, 0) / samples.length) : 0
   const errors = samples.filter((sample) => sample.error).length
   return `${requestsPerSecond < 0.1 ? requestsPerSecond.toFixed(2) : requestsPerSecond.toFixed(1)} RPS · ${average}MS${errors ? ` · ${errors} ERR` : ''}`
+}
+
+export function topologyServiceProtocols(service: string, edges: TopologyEdge[], metrics: Map<string, TopologyEdgeMetric>) {
+  let http = false
+  let websocket = false
+  for (const edge of edges) {
+    if (edge.source !== service && edge.target !== service) continue
+    const metric = metrics.get(topologyEdgeKey(edge.source, edge.target))
+    http ||= !!metric?.observedHTTP
+    websocket ||= !!metric?.observedWebSocket
+  }
+  return websocket ? (http ? 'HTTP + WebSocket' : 'WebSocket') : ''
 }
 
 export function topologyEdgeVisualState(metric: TopologyEdgeMetric | undefined, now: number, hasFault: boolean) {
@@ -169,7 +190,13 @@ export function buildTopology(environment: Environment) {
 }
 
 function emptyTopologyMetric(): TopologyEdgeMetric {
-  return { samples: [], bytes: 0, activeConnections: 0, lastSeen: 0, latestSequence: 0 }
+  return { samples: [], bytes: 0, activeConnections: 0, lastSeen: 0, latestSequence: 0, observedHTTP: false, observedWebSocket: false }
+}
+
+function observeTopologyProtocol(metric: TopologyEdgeMetric, exchange: TrafficExchange) {
+  if (exchange.protocol !== 'http') return
+  if (isWebSocketHandshake(exchange)) metric.observedWebSocket = true
+  else metric.observedHTTP = true
 }
 
 function topologyExchangeError(exchange: TrafficExchange) {

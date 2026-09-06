@@ -41,6 +41,7 @@ type edge struct {
 }
 
 type target struct {
+	generation     uint64
 	provider       model.ProviderKind
 	address        string
 	baseURL        *url.URL
@@ -61,6 +62,9 @@ type Manager struct {
 	edges                   map[string]*edge
 	localProcessTransport   *http.Transport
 	boundedTransport        *http.Transport
+	websocketTransport      *http.Transport
+	websocketSessions       map[*websocketSession]struct{}
+	targetGeneration        uint64
 	contexts                injectedTraceContextRegistry
 	protocols               *protocol.Registry
 	activeProtocolSessions  atomic.Int64
@@ -127,6 +131,8 @@ func NewManager(controlStore *database.Store, trafficStore *traffic.Store, broke
 		edges:                 make(map[string]*edge),
 		localProcessTransport: newUpstreamTransport(0),
 		boundedTransport:      newUpstreamTransport(30 * time.Second),
+		websocketTransport:    newWebSocketTransport(),
+		websocketSessions:     make(map[*websocketSession]struct{}),
 		protocols:             protocolbuiltin.Registry(),
 	}
 }
@@ -145,9 +151,7 @@ func (m *Manager) SetTarget(scope, service string, port int) {
 
 // SetTargetProvider registers a loopback target and its effective provider classification.
 func (m *Manager) SetTargetProvider(scope, service string, port int, provider model.ProviderKind) {
-	m.mu.Lock()
-	m.targets[targetKey(scope, service)] = target{provider: provider, address: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
-	m.mu.Unlock()
+	m.setTarget(scope, service, target{provider: provider, address: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))})
 }
 
 // ConnectionRuntime reports effective listener, provider, and upstream details for an edge.
@@ -174,9 +178,9 @@ func (m *Manager) SetRemoteTarget(scope, service string, remote model.RemoteTarg
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	m.targets[targetKey(scope, service)] = configured
-	m.mu.Unlock()
+	if !m.setTarget(scope, service, configured) {
+		return errors.New("proxy manager is closed")
+	}
 	return nil
 }
 
@@ -191,11 +195,13 @@ func buildRemoteTarget(remote model.RemoteTarget) (target, error) {
 	return target{provider: model.ProviderRemote, baseURL: parsed, classification: remote.Classification, writePolicy: remote.WritePolicy, healthPath: remote.HealthPath}, nil
 }
 
-// RemoveTarget unregisters a service upstream without closing its source edges.
+// RemoveTarget unregisters a service upstream and closes its WebSockets while retaining source listeners.
 func (m *Manager) RemoveTarget(scope, service string) {
 	m.mu.Lock()
 	delete(m.targets, targetKey(scope, service))
+	closing := m.invalidateWebSocketsLocked(scope, service)
 	m.mu.Unlock()
+	closeWebSockets(closing)
 }
 
 // EnsureEdge creates or reuses a source-scoped proxy on an ephemeral loopback port.
@@ -263,7 +269,24 @@ func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model
 		scope: scope, source: connection.Source, target: connection.Target, protocol: connection.Protocol,
 		applicationProtocol: connection.ApplicationProtocol, listener: listener, cancel: cancel,
 	}
+	if connection.Protocol == model.ProtocolHTTP {
+		created.server = &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				m.forwardHTTP(w, r, scope, connection.Source, connection.Target)
+			}),
+			BaseContext: func(net.Listener) context.Context {
+				return context.WithValue(edgeContext, websocketEdgeContextKey{}, created)
+			},
+			ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second,
+		}
+	}
 	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		cancel()
+		_ = listener.Close()
+		return nil, errors.New("proxy manager is closed")
+	}
 	if existing := m.edges[key]; existing != nil {
 		m.mu.Unlock()
 		cancel()
@@ -272,14 +295,7 @@ func (m *Manager) ensureEdge(ctx context.Context, scope string, connection model
 	}
 	m.edges[key] = created
 	m.mu.Unlock()
-	if connection.Protocol == model.ProtocolHTTP {
-		created.server = &http.Server{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				m.forwardHTTP(w, r, scope, connection.Source, connection.Target)
-			}),
-			ReadHeaderTimeout: 5 * time.Second,
-			IdleTimeout:       90 * time.Second,
-		}
+	if created.server != nil {
 		go func() { _ = created.server.Serve(listener) }()
 	} else {
 		go m.serveTCP(edgeContext, created)
@@ -339,7 +355,9 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 			delete(m.targets, key)
 		}
 	}
+	sessions := m.invalidateWebSocketsLocked(scope, "")
 	m.mu.Unlock()
+	closeWebSockets(sessions)
 	for _, current := range closing {
 		if current.cancel != nil {
 			current.cancel()
@@ -352,6 +370,7 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 		// goroutine that starts a newly-created edge.
 		_ = current.listener.Close()
 	}
+	waitWebSockets(ctx, sessions)
 }
 
 // Close idempotently closes all environment proxies and idle upstream connections.
@@ -359,17 +378,25 @@ func (m *Manager) Close(ctx context.Context) {
 	if !m.closed.CompareAndSwap(false, true) {
 		return
 	}
-	m.mu.RLock()
+	m.mu.Lock()
+	sessions := m.invalidateWebSocketsLocked("", "")
 	projects := make(map[string]struct{})
 	for _, current := range m.edges {
 		projects[current.scope] = struct{}{}
 	}
-	m.mu.RUnlock()
+	for key := range m.targets {
+		scope, _, _ := strings.Cut(key, "\x00")
+		projects[scope] = struct{}{}
+	}
+	m.mu.Unlock()
+	closeWebSockets(sessions)
 	for project := range projects {
 		m.CloseEnvironment(ctx, project)
 	}
 	m.localProcessTransport.CloseIdleConnections()
 	m.boundedTransport.CloseIdleConnections()
+	m.websocketTransport.CloseIdleConnections()
+	waitWebSockets(ctx, sessions)
 }
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
@@ -387,25 +414,52 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		captureLimit = int(recordBodyLimit)
 	}
 	requestCapture := captureRequestBody(request, captureLimit)
+	var upstream target
+	var session *websocketSession
+	if isHTTPUpgrade(request.Header) {
+		failure := validateWebSocketRequest(request)
+		if failure == nil {
+			upstream, session, failure = m.admitWebSocket(request.Context(), scope, source, targetName)
+		}
+		if failure != nil {
+			if failure.status == http.StatusUpgradeRequired {
+				writer.Header().Set("Sec-WebSocket-Version", "13")
+			}
+			if failure.status == http.StatusForbidden {
+				writer.Header().Set("X-Portless-Remote-Policy", string(model.WriteReadOnly))
+			}
+			http.Error(writer, "Portless: "+failure.message, failure.status)
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, failure.status, 0, "", failure.message, upstream, writer.Header(), requestCapture, nil, traceContext)
+			return
+		}
+		defer m.releaseWebSocket(session)
+		request = request.WithContext(session.ctx)
+	}
 	fault := m.matchFault(request.Context(), scope, source, targetName, request.Method, request.URL.Path)
 	if fault != nil {
 		m.applyDelay(request.Context(), *fault)
 		if request.Context().Err() != nil {
+			if session != nil {
+				m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, "WebSocket handshake canceled", upstream, nil, nil, nil, traceContext)
+			}
 			return
 		}
 		if fault.StatusCode != 0 {
 			writer.Header().Set("X-Portless-Fault", fault.Name)
 			http.Error(writer, "Portless fault "+fault.Name, fault.StatusCode)
-			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", target{}, writer.Header(), requestCapture, nil, traceContext)
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", upstream, writer.Header(), requestCapture, nil, traceContext)
 			return
 		}
 		if fault.Abort {
 			m.abortHTTP(writer)
-			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", target{}, nil, requestCapture, nil, traceContext)
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", upstream, nil, requestCapture, nil, traceContext)
 			return
 		}
 	}
-	upstream, ok := m.target(scope, targetName)
+	ok := session != nil
+	if !ok {
+		upstream, ok = m.target(scope, targetName)
+	}
 	if !ok {
 		http.Error(writer, "Portless: "+targetName+" is not available", http.StatusBadGateway)
 		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil, traceContext)
@@ -426,19 +480,44 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		outgoing.URL.Host = upstream.baseURL.Host
 		outgoing.URL.Path = joinURLPath(upstream.baseURL.Path, request.URL.Path)
 		outgoing.URL.RawPath = ""
+		if session != nil {
+			outgoing.URL.RawPath = joinURLPath(upstream.baseURL.EscapedPath(), request.URL.EscapedPath())
+			outgoing.URL.Path, _ = url.PathUnescape(outgoing.URL.RawPath)
+		}
 		outgoing.Host = upstream.baseURL.Host
 	} else {
 		outgoing.URL.Scheme = "http"
 		outgoing.URL.Host = upstream.address
 	}
 	removeHopHeaders(outgoing.Header)
-	response, err := m.upstreamTransport(upstream).RoundTrip(outgoing)
+	transport := m.upstreamTransport(upstream)
+	if session != nil {
+		outgoing.Header.Set("Connection", "Upgrade")
+		outgoing.Header.Set("Upgrade", "websocket")
+		transport = m.websocketTransport
+	}
+	response, err := transport.RoundTrip(outgoing)
 	if err != nil {
-		http.Error(writer, "Portless upstream error: "+err.Error(), http.StatusBadGateway)
-		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), err.Error(), upstream, writer.Header(), requestCapture, nil, traceContext)
+		message := err.Error()
+		if session != nil {
+			message = "WebSocket upstream request failed"
+		}
+		http.Error(writer, "Portless upstream error: "+message, http.StatusBadGateway)
+		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), message, upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusSwitchingProtocols {
+		if session == nil {
+			http.Error(writer, "Portless: unsolicited protocol upgrade", http.StatusBadGateway)
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "unsolicited protocol upgrade", upstream, writer.Header(), requestCapture, nil, traceContext)
+		} else {
+			switchWebSocket(writer, request, response, session, func(status int, message string, headers http.Header) {
+				m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, status, 0, faultName(fault), message, upstream, headers, nil, nil, traceContext)
+			})
+		}
+		return
+	}
 	removeHopHeaders(response.Header)
 	if upstream.provider == model.ProviderMock {
 		upstream.mockScenario = response.Header.Get(mocks.ScenarioHeader)
@@ -511,7 +590,13 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 	if exchange.Recording != "" {
 		persisted.Sequence = exchange.Sequence
 		persisted.Background = exchange.Background
-		_ = m.database.PersistTraffic(context.Background(), persisted)
+		persistContext := context.Background()
+		if isHTTPUpgrade(request.Header) {
+			var cancel context.CancelFunc
+			persistContext, cancel = context.WithTimeout(ctx, time.Second)
+			defer cancel()
+		}
+		_ = m.database.PersistTraffic(persistContext, persisted)
 	}
 }
 
@@ -1174,6 +1259,11 @@ func copyHeaders(destination, source http.Header) {
 }
 
 func removeHopHeaders(headers http.Header) {
+	for _, value := range headers.Values("Connection") {
+		for name := range strings.SplitSeq(value, ",") {
+			headers.Del(strings.TrimSpace(name))
+		}
+	}
 	for _, name := range []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
 		headers.Del(name)
 	}
@@ -1218,7 +1308,7 @@ func captureRequestHeaders(headers http.Header, portlessFormats tracePropagation
 
 func sensitiveTrafficHeader(name string) bool {
 	switch strings.ToLower(name) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token":
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token", "sec-websocket-protocol":
 		return true
 	default:
 		return false

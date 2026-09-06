@@ -40,7 +40,7 @@ describe('project navigation preferences', () => {
     })
   })
 
-  it('shows at most five recent stopped projects while excluding running and hidden projects', () => {
+  it('shows the five most recently opened projects while excluding projects hidden from recent', () => {
     const now = new Date('2026-08-30T12:00:00Z').getTime()
     let preferences = emptyProjectNavigationPreferences()
     projects.forEach((project, index) => {
@@ -48,10 +48,29 @@ describe('project navigation preferences', () => {
     })
     preferences = setProjectHidden(preferences, 'bravo', true)
 
-    const recent = recentProjects(projects, [environment('alpha', 'local', 'healthy')], preferences, now)
+    const recent = recentProjects(projects, preferences)
 
     expect(recent).toHaveLength(recentProjectLimit)
-    expect(recent.map((project) => project.name)).toEqual(['charlie', 'delta', 'echo', 'foxtrot', 'golf'])
+    expect(recent.map((project) => project.name)).toEqual(['alpha', 'charlie', 'delta', 'echo', 'foxtrot'])
+  })
+
+  it('moves a reopened project to the front and drops the least recent of the five', () => {
+    let preferences = emptyProjectNavigationPreferences()
+    projects.forEach((project, index) => {
+      preferences = recordProjectVisit(preferences, project.name, undefined, `2026-08-${30 - index}T12:00:00Z`)
+    })
+    expect(recentProjects(projects, preferences).map((project) => project.name)).toEqual(['alpha', 'bravo', 'charlie', 'delta', 'echo'])
+
+    preferences = recordProjectVisit(preferences, 'golf', 'local', '2026-09-05T12:00:00Z')
+
+    expect(recentProjects(projects, preferences).map((project) => project.name)).toEqual(['golf', 'alpha', 'bravo', 'charlie', 'delta'])
+  })
+
+  it('retains older visits and omits unvisited or invalid entries without filling the list with unrelated projects', () => {
+    const preferences = { ...emptyProjectNavigationPreferences(), lastOpenedByProject: { alpha: '2025-01-01T12:00:00Z', bravo: 'invalid', charlie: '2025-01-01T12:00:00Z', forgotten: '2026-09-05T12:00:00Z' } }
+
+    expect(recentProjects([...projects].reverse(), preferences).map((project) => project.name)).toEqual(['alpha', 'charlie'])
+    expect(recentProjects(projects, emptyProjectNavigationPreferences())).toEqual([])
   })
 
   it('selects the remembered environment, then a running environment, then the first environment', () => {

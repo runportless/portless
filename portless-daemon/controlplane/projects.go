@@ -323,7 +323,17 @@ func (s *Service) Rename(ctx context.Context, projectName, newName string, revis
 
 // Forget removes a stopped project and all of its application state.
 func (s *Service) Forget(ctx context.Context, projectName string) error {
-	return s.database.ForgetProject(ctx, projectName)
+	environments, err := s.database.ListEnvironments(ctx, projectName)
+	if err != nil {
+		return err
+	}
+	if err := s.database.ForgetProject(ctx, projectName); err != nil {
+		return err
+	}
+	for _, environment := range environments {
+		s.traffic.DisposeEnvironment(model.EnvironmentSelector(projectName, environment.Name))
+	}
+	return nil
 }
 
 // Projects lists all known projects with dashboard links and environment summaries.
@@ -393,7 +403,11 @@ func (s *Service) CloneEnvironment(ctx context.Context, projectName, from, name 
 
 // ForgetEnvironment removes a stopped environment and its retained application state.
 func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmentName string) error {
-	return s.database.ForgetEnvironment(ctx, projectName, environmentName)
+	if err := s.database.ForgetEnvironment(ctx, projectName, environmentName); err != nil {
+		return err
+	}
+	s.traffic.DisposeEnvironment(model.EnvironmentSelector(projectName, environmentName))
+	return nil
 }
 
 // SetSourceCheckout rebinds one environment checkout to a newly discovered filesystem path.

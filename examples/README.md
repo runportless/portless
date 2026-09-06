@@ -4,6 +4,16 @@ These runnable applications demonstrate Portless without requiring a
 `portless.yaml` file or an account. Portless discovers their topology from
 ordinary application files and sample environment values.
 
+## Chat
+
+[Chat](chat/README.md) is a live chat room with presence, typing indicators,
+and reconnection. Its two Node.js services exercise WebSockets through both
+application ingress and a source-aware dependency proxy. History stays in
+memory, so it needs no database or container engine.
+
+Use Chat to try two browser tabs, service and daemon restarts, and inspection
+of both opening handshakes in Portless Traffic.
+
 ## Store
 
 [Store](store/README.md) is a compact commerce application in one checkout. A

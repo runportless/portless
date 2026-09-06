@@ -37,7 +37,8 @@ func (c *Client) DeleteMockScenario(ctx context.Context, project, environment, n
 	return c.do(ctx, http.MethodDelete, mocksPath(project, environment)+"/"+EscapePath(name), nil, nil)
 }
 
-// PutMockRoute creates or replaces one named scenario route.
+// PutMockRoute creates or replaces the addressed route. Input.Name is required;
+// a different name renames an existing route and must be unique in the scenario.
 func (c *Client) PutMockRoute(ctx context.Context, project, environment, scenario, route string, input contract.MockRoute) (contract.MockScenario, error) {
 	var result contract.MockScenario
 	err := c.do(ctx, http.MethodPut, mocksPath(project, environment)+"/"+EscapePath(scenario)+"/routes/"+EscapePath(route), input, &result)
@@ -51,8 +52,8 @@ func (c *Client) DeleteMockRoute(ctx context.Context, project, environment, scen
 	return result, err
 }
 
-// PreviewMock evaluates one scenario request without generating traffic.
-func (c *Client) PreviewMock(ctx context.Context, project, environment, scenario string, input contract.MockRequest) (contract.MockPreview, error) {
+// PreviewMock evaluates saved routes and an optional draft without generating traffic.
+func (c *Client) PreviewMock(ctx context.Context, project, environment, scenario string, input contract.PreviewMockRequest) (contract.MockPreview, error) {
 	var result contract.MockPreview
 	err := c.do(ctx, http.MethodPost, mocksPath(project, environment)+"/"+EscapePath(scenario)+"/preview", input, &result)
 	return result, err

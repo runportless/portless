@@ -1,6 +1,6 @@
 # End-to-end testing
 
-Portless has two default end-to-end suites and four explicit opt-in integration
+Portless has two default end-to-end suites and five explicit opt-in integration
 boundaries. All of them exercise the compiled product rather than replacing
 the daemon or API with test doubles:
 
@@ -14,15 +14,18 @@ the daemon or API with test doubles:
   Spring Boot, Node.js, two PostgreSQL instances, and Valkey.
 - The Dispatch example suite runs the real three-source example, including its
   Next.js, FastAPI, Fastify, and Go services plus MySQL and NATS.
+- The Chat example suite drives the real in-memory Node.js chat room through
+  Chromium, including both WebSocket paths, reconnection, and topology protocol
+  labels from live and retained handshakes, with HTTP + WS labels for mixed traffic.
 - The destructive relay suite installs the production machine relay and uses
   the real port-80 and DNS integration.
 
-The default, managed-resource, Store, and Dispatch tests receive a temporary
+The default, managed-resource, Store, Dispatch, and Chat tests receive a temporary
 `PORTLESS_HOME`. The first two also receive temporary source checkouts. Store
-and Dispatch run tracked example sources and write only ignored dependency and
-build output. Teardown performs a forced Portless reset, stops the isolated
-daemon, and removes the temporary directory. Those suites do not read or
-change the developer's normal `~/.portless` installation. The relay suite is
+and Dispatch, along with Chat, run tracked example sources and write only
+ignored dependency and build output. Teardown performs a forced Portless
+reset, stops the isolated daemon, and removes the temporary directory. Those
+suites do not read or change the developer's normal `~/.portless` installation. The relay suite is
 the explicit machine-level exception described below.
 
 ## Run the suites
@@ -137,8 +140,11 @@ The Playwright suite protects these browser journeys:
   nor issues a Portless session cookie;
 - application-defined browser policies, with inline scripts and same-origin
   frames working through the real application host without extra control policies;
-- focused per-browser-tab project and environment navigation, the running/recent
-  project switcher with remembered environments, the searchable project registry
+- focused per-browser-tab project and environment navigation, running-environment
+  shortcuts above the five most recently opened projects, separate current-context
+  and runtime-state markers, recency ordering preserved across lifecycle changes,
+  persistent visit history, search and keyboard navigation across both groups, direct
+  environment shortcuts alongside remembered project destinations, the searchable project registry
   with direct configuration, hide, and safe forget workflows, the persistent
   collapsible icon rail, Settings return, and breadcrumbs;
 - a persistent environment header across all eight views, health and public
@@ -185,10 +191,37 @@ The Playwright suite protects these browser journeys:
   and sortable routes paginated at ten rows, whole-scenario activation, stable
   peer service PIDs, stationary tables and route panes throughout activation
   and restoration, and traffic attribution;
+- reloading an edited mock route or navigating away from a new route without a
+  native browser confirmation, with saved values restored after reload; explicit
+  in-app Back navigation still offers its discard/keep-editing dialog;
+- separate Request and Response route-configuration tabs with keyboard arrows,
+  Home/End navigation, contextual fields in the active panel, retained edits across
+  tabs, Preview returning to the selected configuration tab, and complete-draft saves
+  from either tab; fixed tabs and footer remain usable in both themes and narrow layouts;
+- in-pane mock request previews against unsaved new and existing routes in disabled
+  scenarios, with saved-route precedence, unmatched 501 responses, disabled routes,
+  repeated and empty query values, JSON/raw bodies, response headers, and unchanged
+  saved scenarios, runtime providers, traffic, recordings, and timeline history;
+  draft/request retention across Edit and Preview, explicit stale-result reruns,
+  recoverable validation errors, cancellation when switching routes, and usable
+  response panes in light/dark themes, focus mode, and narrow layouts;
+- editable mock response header tables with a trailing blank row, keyboard focus
+  while adding names, tabbing to values, and removing rows; errors for duplicate
+  header names regardless of case and values without names; exact colon-containing
+  values through preview and save; and retained header
+  drafts across route selection and Edit/Preview in light/dark and narrow layouts;
+- attached Exact/Template path selectors and Equals/Exists query operators, with
+  mode validation, disabled presence-value cells, save/reload persistence, and
+  preview using the same match criteria in both themes and narrow layouts;
+- required and preview query parameter tables with editable rows, keyboard focus,
+  removal, retained route drafts and request values, duplicate required-name and
+  missing-name validation, repeated names and empty preview values, exact equals-sign
+  values, stale-result reruns, and Reset Request restoring the draft's requirements;
+  query tables are checked in both themes and at narrow widths;
 - normal daemon restart with a mocked caller that has no outgoing proxy ports,
   healthy recovery without restarting peer processes, and browser-driven
   scenario disabling, original-provider restoration, and deletion afterward;
-- a fixed-width Open button replaced by Start for stopped environments, with
+- a fixed-width OPEN button replaced by Start All for stopped environments, with
   disabled startup progress in the same slot and no environment action menu;
   visible Search text across desktop, narrow, and focus-mode headers,
   Stop environment through Search, shared pending state with the command palette,
@@ -203,12 +236,30 @@ The Playwright suite protects these browser journeys:
   plus stopped-environment remote binding persistence and restore;
 - durable timeline rendering and pagination;
 - trace-first traffic expansion, raw exchange filtering, buffered pause/resume,
-  and HTTP/TCP switching;
+  HTTP/TCP switching, summary-only filtered bursts, and reuse of unchanged
+  expanded trace detail as unrelated requests arrive;
 - keyboard topology inspection, command-palette navigation, runtime status,
   not-found routes, and automatic recovery from a failed control-plane poll;
 - daemon details, restart timing, and logs; full-screen drawer behavior;
   blocked-handoff stop guidance and force-restart confirmation; five-second
   restart failure messaging, reconnect, and runtime adoption.
+
+## WebSocket coverage
+
+The default CLI suite exercises real WebSockets through application ingress and
+checkout's generated orders dependency URL. It checks handshake traffic while a
+connection is still open, redacted recording exports, normal daemon replacement
+with process adoption, and reconnection after environment stop/start. The browser
+suite uses Chromium's native WebSocket client on the application origin to test
+text, binary, subprotocol negotiation, close, and WS labels in handshake-only traffic details.
+No browser network route is stubbed.
+
+The fixture remains dependency-free. Its `wstest` package implements only the
+bounded frame cases needed by these tests; it is not a product WebSocket codec.
+Proxy package tests cover fragmented/control/compressed byte streams, TLS,
+read-only policy, admission limits, and lifecycle races. The relay runtime test
+uses temporary TCP and Unix listeners to verify upgrade bytes and cancellation;
+it does not install or replace the machine relay.
 
 ## Test-only ingress
 
@@ -251,6 +302,20 @@ Keyboard focus-mode checks place the pointer away from the navigation reveal
 edge before toggling; otherwise a pointer at the browser's origin can immediately
 reopen the sidebar through its hover behavior. Hover navigation is exercised
 explicitly after verifying that keyboard entry hides the sidebar.
+Mock-preview journeys create their own disabled scenarios and delete them in
+`finally` cleanup. Matching and validation use the real daemon. The cancellation
+journey delays delivery of one real preview response, then switches routes and
+verifies that its late result cannot replace the newly selected route's response.
+Query regex journeys cover operator selection, retained patterns, invalid-pattern
+errors without saving, full-value and repeated-value previews, save/reload, and
+switching back to Equals or Exists. The matcher unit suite compares regex previews
+with real HTTP responses from an isolated mock listener.
+Route-renaming journeys cover retained name/configuration drafts across route
+selection, duplicate-name rejection, previewing the new identity, saving from
+Preview or Response, URL/selection updates, reload, and discarding another rename.
+Control-plane tests verify active listeners keep their addresses and providers,
+while database tests inject a save failure to verify name and configuration roll
+back together.
 
 ## Managed-resource integration
 
@@ -323,6 +388,55 @@ OpenAPI documents, and asserts the statically discovered topology. See the
 [Dispatch walkthrough](../examples/dispatch/README.md) for the interactive
 worktree, fault, recording, mock, and remote-provider scenarios.
 
+## Chat example integration
+
+Chat has a dedicated browser suite with its own locked Playwright dependency:
+
+```bash
+make example-chat-dependencies
+make -C examples/chat install-browser
+make test-example-chat
+make test-e2e-chat
+```
+
+Browser installation is a separate one-time step. CI installs the example
+package's exact Chromium revision with operating-system dependencies;
+`make test-e2e-chat` does not download browsers automatically.
+
+Each test creates a fresh temporary `PORTLESS_HOME` before its first CLI call,
+requires the Make target's explicit `PORTLESS_E2E_BINARY`, and runs against
+`examples/chat`. The application address uses the discovered Chat hostname
+with the isolated daemon's control port. It traverses real ingress and the
+real `chat:rooms` proxy without using the installed relay, machine DNS
+configuration, or application process ports.
+
+The serial suite runs without retries and verifies:
+
+- discovery of exactly `chat`, `rooms`, and their HTTP dependency;
+- independent browser sessions, Open another tab, messaging, presence, typing,
+  and literal text rendering;
+- inspectable HTTP 101 traffic on `external:chat` and `chat:rooms` while sockets
+  remain open, with chat content absent from capture;
+- room restart, chat restart, daemon adoption with preserved process IDs,
+  backend unavailability, and environment stop/start;
+- draft preservation and cancellation of retries after Leave; and
+- keyboard use, scroll preservation, duplicate names, and 390 px/700 px/1280 px
+  screenshots in both themes.
+
+Node tests separately exercise uncertain delivery, confirmation/history
+reconciliation, stale callbacks, limits, Origin/subprotocol rules, and cleanup.
+Browser networking is real; the runnable app has no test-only failure endpoints.
+
+Failure traces, screenshots, video, and reports go in the example's ignored
+output directories. Each test writes redacted CLI output, daemon/service logs,
+and cleanup results under its diagnostics folder. Set
+`PORTLESS_E2E_ARTIFACT_DIR` to additionally retain installation diagnostics.
+Installation keys and token-bearing state files are never copied. Cleanup runs
+after partial startup, targets only that test's installation, and fails if a
+known owned process remains. CI tests the minimum Node version and runs browser
+journeys on macOS and Linux with Node 24, retaining failure artifacts for seven
+days.
+
 ## Destructive relay integration
 
 The default E2E suites deliberately do not mutate machine-level networking.
@@ -394,7 +508,7 @@ coverage.
 ## Failures and artifacts
 
 The Playwright suite is split into focused access/navigation, settings,
-projects, environment, environment-errors, experiments, mock-recovery,
+projects, environment, environment-errors, experiments, mock-preview, mock-recovery,
 topology-mocks, traffic-list, traffic-inspection, traffic-waterfall, and daemon
 journey specs. The specs still run with one
 worker and stop after the first failure because they share one real isolated

@@ -55,7 +55,11 @@ type FaultRule = model.FaultRule
 type MockScenario = model.MockScenario
 
 // MockRoute is the stable deterministic mock-route wire model.
+// Name is required when saving; a different name renames the route addressed by the URL.
 type MockRoute = model.MockRoute
+
+// MockQueryMatcher selects how one required query parameter is matched.
+type MockQueryMatcher = model.MockQueryMatcher
 
 // MockRequest is the stable mock preview request wire model.
 type MockRequest = model.MockRequest

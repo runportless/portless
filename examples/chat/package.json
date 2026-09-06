@@ -1,0 +1,14 @@
+{
+  "name": "portless-chat",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12" },
+  "workspaces": ["apps/chat", "apps/rooms"],
+  "scripts": {
+    "test": "node --test apps/rooms/*.test.mjs apps/chat/*.test.mjs",
+    "check": "node check.mjs",
+    "test:e2e": "playwright test",
+    "install-browser": "playwright install chromium"
+  },
+  "devDependencies": { "@playwright/test": "1.63.0" }
+}

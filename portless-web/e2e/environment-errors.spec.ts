@@ -19,7 +19,7 @@ test('shows one red failure across views, dismissal, reload, and a repeated fail
     const error = notices.getByRole('alert')
     const views = page.getByRole('navigation', { name: `${state.project}/${name} views` })
 
-    await header.getByRole('button', { name: 'Start', exact: true }).click()
+    await header.getByRole('button', { name: 'Start All', exact: true }).click()
     await expect(header.getByRole('link', { name: /health: failed/ })).toBeVisible()
     await expect(error).toHaveCount(1)
     await expect(error).toContainText('Environment startup failed')
@@ -78,7 +78,7 @@ test('shows one red failure across views, dismissal, reload, and a repeated fail
     await expect(notices).toHaveCount(0)
 
     await stop()
-    await header.getByRole('button', { name: 'Start', exact: true }).click()
+    await header.getByRole('button', { name: 'Start All', exact: true }).click()
     await expect(error).toHaveCount(1)
     await expect(error).toContainText('Environment startup failed')
     await expect(error.locator('.action-error__body > p')).toHaveText(reason)

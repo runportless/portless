@@ -152,6 +152,43 @@ The public naming model and private ownership keys are explained in
 source-aware routing is explained in
 [ADR 0003](docs/architecture/decisions/0003-edge-proxy.md).
 
+## WebSockets
+
+The standalone [Chat example](examples/chat/README.md) demonstrates a live
+room with presence, typing, in-memory history, and reconnection. Its two Node.js
+services exercise both application ingress and a source-aware dependency proxy.
+
+Applications can serve WebSockets through their existing Portless HTTP endpoint.
+For an application that serves `/ws`, use
+`ws://checkout.local.billing.localhost/ws`. HTTP dependency URLs also support
+WebSocket upgrades, preserving the caller-to-target edge. No additional listener
+or service declaration is required.
+
+Portless forwards HTTP/1.1 version-13 handshakes and bidirectional traffic for
+local, container, and explicitly read-write remote providers. Remote `https://`
+URLs use verified TLS upstream; the local public endpoint remains `ws://`.
+Read-only remote targets reject upgrades locally with HTTP 403. Applications
+handle authentication, Origin checks, heartbeat messages, and reconnection.
+
+Traffic and recordings show the opening HTTP 101 handshake, its duration, and
+redacted headers. The browser labels these exchanges WS. Topology edges show
+WEBSOCKET after an observed upgrade, or HTTP + WS when both kinds of traffic
+have been observed, and participating service cards display a WS badge. Protocol
+labels survive the 30-second activity window and reload from retained traffic;
+clearing that traffic clears the labels. Activity still reflects captured
+handshakes, not ongoing message traffic or an open-connection count.
+WebSocket messages and session byte totals are not captured or
+replayed. Subprotocol header values are redacted because they may contain
+credentials. HTTP mocks cannot serve WebSockets; importing a recording skips
+upgrade handshakes with a warning. Faults apply to the opening handshake only.
+
+Connections close when an involved service is replaced, its environment stops,
+or the daemon restarts. Applications reconnect using the same endpoint; normal
+daemon replacement preserves their processes. Portless permits 256 pending or
+active WebSockets per daemon, waits up to 30 seconds for upstream handshake
+headers, and allows 5 seconds to write the client handshake. Accepted connections
+have no fixed lifetime or idle timeout.
+
 ## Core workflows
 
 ### Projects spanning repositories
@@ -252,10 +289,53 @@ and can be disabled after recovery to restore their original providers.
 
 In the browser, selecting a mock scenario opens a split workspace: a sortable,
 ten-per-page route list on the left and the selected route's configuration on
-the right. Adding and saving routes stays in that workspace. Unsaved drafts
+the right. Request and Response tabs separate the configuration: Request holds
+the route name, service, method, path, and required query parameters; Response
+holds status, delay, body, and response headers. The response body grows to use
+the available space. Save, Preview, and the enabled toggle stay available while
+switching tabs. Adding and saving routes stays in that workspace. Unsaved drafts
 are retained while switching between routes in the scenario; Save applies a
-draft, and Discard restores its saved values. The panes scroll independently,
-adapt to focus mode, and the route editor can also be maximized.
+draft, and Discard restores its saved values. Refreshing or leaving the page
+discards unsaved drafts without a browser confirmation prompt. The panes scroll
+independently and adapt to focus mode.
+
+Route names are editable in the Request tab. Save Route renames the existing route
+and applies its other edits together, preserving its creation time and configuration.
+The selected route and URL follow the new name. Names must remain unique within
+the scenario. Preview can test a renamed draft before saving, and active scenarios
+apply a rename without changing their service providers.
+
+The Path field includes an Exact/Template selector. Template paths use named
+segments such as `/inventory/{sku}`; typing a parameter selects Template
+automatically. Each parameter matches one nonempty segment. Exact mode uses a
+literal path. Path wildcard and regex matching are not available.
+
+Response headers and required query parameters use editable
+Name/Value tables. Type in a blank row to add an entry, edit either cell directly,
+or remove a row with its minus button. Drafts are retained with the rest of the
+route and validated before Save or Preview. Required query names are unique and
+case-sensitive. Their Match column selects Equals for a specific nonempty value,
+Exists for any value, or Regex for a pattern such as `coffee-.*` or `[1-9][0-9]*`.
+Exists disables the value cell. Regex uses Go/RE2 syntax, matches the entire decoded
+value, and is case-sensitive unless the pattern uses an inline flag. At least one
+value must match when a query name repeats. Invalid patterns are rejected on Save
+and Preview. Preview starts regex sample values empty so you can enter a concrete
+value to test. At otherwise equal specificity, Equals takes precedence over Regex,
+then Exists; equally specific regex routes are conservatively checked for ambiguity.
+The CLI accepts `--query-regex 'sku=coffee-.*'` alongside `--query warehouse=central`.
+
+PREVIEW beside Save Route opens a request tester in the same pane. Choose a
+service, method, concrete path, and optional query values in the same table
+layout (repeat a name for multiple values), then Run
+Preview to inspect the matched route, status, configured delay, body, and
+headers. Preview uses the current route draft alongside the scenario's saved
+routes; drafts retained for other routes are not included. It works while the
+scenario is disabled and makes no saves, provider changes, application requests,
+or traffic/timeline entries. Disabled routes remain excluded from matching.
+Edit returns to the preserved draft and selected configuration tab; request inputs and results remain available
+when reopening Preview, with results marked outdated after relevant changes.
+Reset Request restores suggestions from the current draft. Delay is shown
+without waiting, and response bodies are displayed as formatted or raw text.
 
 Topology service cards show a compact `MOCK` badge when their endpoint is bound
 to a mock scenario. Hovering or focusing a card identifies the scenario; the
@@ -270,27 +350,34 @@ follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
 
 Each browser tab stays focused on one project. The sidebar shows only that
-project's environments, while the project switcher keeps running and recently
-opened projects close at hand and remembers the last environment used in each.
+project's environments. The project switcher puts running environments at the
+top for direct access to a specific project/environment. Below, Recent projects
+shows the five most recently opened projects, newest first, and remembers the
+last environment used in each. Search matches recent project and running-environment names. Current
+markers identify the project and environment being viewed alongside their
+actual runtime status. Starting or stopping environments updates the shortcuts
+without changing recent-project order. Opening a project moves it to the front
+of Recent projects, whether its environments are running or stopped.
 The Projects page is the durable searchable registry, including projects hidden
-from the recent list. Its project action menu opens configuration for creating
-environments and managing sources, hides the project from the recent list, or
-safely forgets it. Forgetting is available only after all of the project's
+from Recent projects. Its project action menu opens configuration
+for creating environments and managing sources, hides the project from
+recents in both the picker and registry, or safely forgets it. Forgetting is available only after all of the project's
 environments are stopped and never deletes source checkouts from disk.
 The sidebar selects Overview, Topology, Traffic, Mocks, Recordings, Faults,
 Bindings, and Timeline. Its badges count active mock scenarios and faults.
 Recordings shows `1` only while a recording is running; all badges update live
 and hide when inactive.
 A compact persistent header shows the project,
-environment, current view, health and ready-service count, an Open button,
+environment, current view, health and ready-service count, an OPEN button,
 and minimalist colored activity icons: red for recordings, amber for faults,
 and purple for mocks. Tooltips show Recording or the active fault and mock
 counts; clicking opens the corresponding list of recordings, faults, or mock
 scenarios.
-The health link opens Overview; Open uses the primary service's public HTTP URL.
-When stopped, Open is replaced by a Start button that starts the entire
-environment. Both share a fixed width, including disabled Starting… progress,
-so the action does not resize during startup. Stop environment is available
+The health link opens Overview; OPEN uses the primary service's public HTTP URL.
+When stopped, OPEN is replaced by a Start All button that starts the entire
+environment, matching the Services header action. OPEN and Start All share a
+fixed width, including disabled Starting… progress, so the action does not
+resize during startup. Stop environment is available
 through Search (`Command-K` or `Control-K`). The header has no environment action menu, and
 Search keeps its visible label beside the keyboard shortcut at every screen size.
 Overview's Services header offers Start All when the environment is stopped or
@@ -386,6 +473,13 @@ next exchange controls, following the table's active filters across pages.
 The trace list is HTTP-rooted while retaining decoded TCP dependency spans
 inside those requests. Standalone TCP operations remain available through the
 raw Exchanges view and its TCP protocol filter.
+
+Live traffic retains up to 5,000 exchanges and 64 MiB of captured payloads per
+environment. Trace correlation runs in shared background batches; summary lists
+reuse the resulting metadata and opening a trace loads only that trace's
+captured exchanges. Pausing the view keeps a bounded notification buffer, and
+resuming reloads the retained history, including merges and evictions that
+occurred while paused.
 
 The [command reference](portless-cli/COMMANDS.md) contains complete CLI usage.
 Traffic payloads can contain application data; see

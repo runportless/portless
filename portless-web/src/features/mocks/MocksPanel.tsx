@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath, jsonBody } from '../../api'
 import type { Environment, Operation } from '../../api/contracts/environments'
-import type { MockRoute, MockScenario, MockScenarioList } from '../../api/contracts/mocks'
+import type { MockPreview, MockRoute, MockScenario, MockScenarioList, PreviewMockRequest } from '../../api/contracts/mocks'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { FormDialog } from '../../components/overlays/FormDialog'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
@@ -11,6 +11,9 @@ import { StatusMark } from '../../components/Status'
 import { waitForEnvironmentOperation } from '../environment/operationPolling'
 import { httpStatusGroups } from '../httpStatuses'
 import { MockRouteEditor, mockRouteDraft, mockRouteDraftHasChanges, newMockRouteDraft, type MockRouteDraft } from './MockRouteEditor'
+import { mockResponseHeaders } from './mockResponseHeaders'
+import { mockRequiredQueryParameters } from './mockQueryParameters'
+import type { RunMockPreview } from './useMockRoutePreview'
 
 type MockScenarioSortField = 'state' | 'name' | 'services' | 'routes' | 'modifiedAt'
 type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'delay' | 'state'
@@ -18,6 +21,7 @@ type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'delay' |
 const defaultMockScenarioSort: TableSort<MockScenarioSortField> = { key: 'state', direction: 'asc' }
 const defaultMockRouteSort: TableSort<MockRouteSortField> = { key: 'service', direction: 'asc' }
 const mockRoutePageSize = 10
+const mockStatusLabels = new Map<number, string>(httpStatusGroups.flatMap((group) => group.statuses.map(([code, label]) => [code, label] as const)))
 
 export const mockHTTPStatusGroups = httpStatusGroups
 
@@ -102,14 +106,11 @@ export function MocksPanel({ environment, selectedScenario, creatingRoute, selec
     setBusy('route'); setError(null)
     try {
       const routeName = draft.name.trim()
-      if (originalName && originalName.toLowerCase() !== routeName.toLowerCase()) {
-        throw new Error('Route names cannot be changed in place. Create a new route, then delete the old route.')
-      }
       const candidateDrafts = selected.routes.filter((route) => route.name !== originalName).map(mockRouteDraft)
       candidateDrafts.push(draft)
       const route = mockRoutesFromDrafts(candidateDrafts).find((item) => item.name.toLowerCase() === routeName.toLowerCase())
       if (!route) throw new Error('The route could not be validated.')
-      const updated = await api<MockScenario>(environmentPath(environment, `/mocks/${encodeURIComponent(selected.name)}/routes/${encodeURIComponent(routeName)}`), {
+      const updated = await api<MockScenario>(environmentPath(environment, `/mocks/${encodeURIComponent(selected.name)}/routes/${encodeURIComponent(originalName || routeName)}`), {
         method: 'PUT', ...jsonBody(route),
       })
       setScenarios((current) => current.map((scenario) => scenario.name === updated.name ? updated : scenario))
@@ -150,6 +151,11 @@ export function MocksPanel({ environment, selectedScenario, creatingRoute, selec
   }
 
   const processServices = environment.services.filter((service) => service.kind === 'process' && !environment.connections.some((connection) => connection.target.toLowerCase() === service.name.toLowerCase() && connection.protocol !== 'http')).map((service) => service.name)
+  const previewRoute: RunMockPreview = async (draft, originalRoute, request, signal) => {
+    if (!selected) throw new Error('Choose a mock scenario to preview.')
+    const input: PreviewMockRequest = { request, draft: mockRoutesFromDrafts([draft])[0], ...(originalRoute ? { originalRoute } : {}) }
+    return api<MockPreview>(environmentPath(environment, `/mocks/${encodeURIComponent(selected.name)}/preview`), { method: 'POST', ...jsonBody(input), signal })
+  }
   const routeEditorServices = selected && mockScenarioIsActive(selected)
     ? processServices.filter((service) => selected.activation.targetServices.some((target) => target.toLowerCase() === service.toLowerCase()))
     : processServices
@@ -172,6 +178,7 @@ export function MocksPanel({ environment, selectedScenario, creatingRoute, selec
       onAddRoute={() => onCreateRoute(selected.name)}
       onSelectRoute={(route) => onSelectRoute(selected.name, route)}
       onSaveRoute={saveRoute}
+      onPreviewRoute={previewRoute}
       onToggleRoute={setRouteEnabled}
       onDeleteRoute={removeRoute}
       onDismissDelete={() => setDeleteName('')}
@@ -318,7 +325,7 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
   </section>
 }
 
-export function MockScenarioWorkspace({ scenario, services, selectedRoute, creatingRoute = false, busy, deleteName, transitionBlocked, error, onDismissError, onBack, onToggle, onAddRoute, onSelectRoute, onSaveRoute, onToggleRoute, onDeleteRoute, onDismissDelete }: {
+export function MockScenarioWorkspace({ scenario, services, selectedRoute, creatingRoute = false, busy, deleteName, transitionBlocked, error, onDismissError, onBack, onToggle, onAddRoute, onSelectRoute, onSaveRoute, onPreviewRoute, onToggleRoute, onDeleteRoute, onDismissDelete }: {
   environment: Environment
   scenario: MockScenario
   services: string[]
@@ -334,6 +341,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   onAddRoute: () => void
   onSelectRoute: (route?: string) => void
   onSaveRoute: (route: MockRouteDraft, originalName?: string) => Promise<boolean>
+  onPreviewRoute: RunMockPreview
   onToggleRoute: (route: MockRoute, enabled: boolean) => Promise<boolean>
   onDeleteRoute: (route: MockRoute) => Promise<boolean>
   onDismissDelete: () => void
@@ -366,13 +374,6 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   useEffect(() => {
     setRoutePage((current) => Math.min(current, Math.max(0, Math.ceil(scenario.routes.length / mockRoutePageSize) - 1)))
   }, [scenario.routes.length])
-
-  useEffect(() => {
-    if (!hasDrafts) return
-    const warnOnUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
-    window.addEventListener('beforeunload', warnOnUnload)
-    return () => window.removeEventListener('beforeunload', warnOnUnload)
-  }, [hasDrafts])
 
   const clearDraft = (key: string) => setDrafts((current) => {
     const next = { ...current }
@@ -462,11 +463,19 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
         {(creatingRoute || drafts.new) && <button className={`mock-route-new${creatingRoute ? ' is-selected' : ''}`} type="button" disabled={!!busy} aria-current={creatingRoute ? 'true' : undefined} onClick={() => { if (!creatingRoute) onAddRoute() }}>NEW ROUTE <span>{drafts.new ? 'UNSAVED' : 'DRAFT'}</span></button>}
         <div className="mock-route-browser__scroll">
           <div className="mock-route-list" role="list" aria-label="Routes">
-            {routePagination.items.map((route) => <div className={`mock-route-item${route.name === routeName ? ' is-selected' : ''}`} role="listitem" key={route.name} onClick={() => selectRoute(route.name)}>
+            {routePagination.items.map((route) => <div className={`mock-route-item${route.name === routeName ? ' is-selected' : ''}${route.enabled ? '' : ' is-off'}`} role="listitem" key={route.name} onClick={() => selectRoute(route.name)}>
               <button className="mock-route-select" type="button" disabled={!!busy} aria-label={`Edit ${route.name} route`} aria-current={route.name === routeName ? 'true' : undefined} onClick={(event) => { event.stopPropagation(); selectRoute(route.name) }}>
-                <span className="mock-route-select__name"><strong>{route.name}</strong>{drafts[`route:${route.name}`] && <small>UNSAVED</small>}</span>
-                <code title={`${route.method} ${route.path}${formatQuerySummary(route.query)}`}>{route.method} {route.path}{formatQuerySummary(route.query)}</code>
-                <span className="mock-route-select__meta"><span>{route.service}</span><span>{route.status}{route.delayMs ? ` · ${route.delayMs} ms` : ''}</span></span>
+                <span className="mock-route-select__name"><strong title={route.name}>{route.name}</strong>{drafts[`route:${route.name}`] && <small title="Unsaved changes"><span className="sr-only">UNSAVED</span></small>}</span>
+                <span className="mock-route-select__request">
+                  <span className="mock-route-method">{route.method}</span>{' '}
+                  <code title={`${route.method} ${route.path}${formatQuerySummary(route.query)}`}>{route.path}<span>{formatQuerySummary(route.query)}</span></code>
+                </span>
+                <span className="mock-route-select__meta">
+                  <span className="mock-route-select__service" title={`Service: ${route.service}`}>{route.service}</span>
+                  <span aria-hidden="true">·</span>
+                  <span title={`Response: ${route.status} ${mockStatusLabels.get(route.status) || ''}`}>{route.status}</span>
+                  {!!route.delayMs && <><span aria-hidden="true">·</span><span title={`Response delay: ${route.delayMs} ms`}>{route.delayMs} ms</span></>}
+                </span>
               </button>
               <div className="mock-route-item__actions table-row-actions">
                 <RowActionsMenu label={`Route actions for ${route.name}`} menuLabel={`${route.name} route actions`} open={routeMenu === route.name} disabled={!!busy} onOpenChange={(open) => { setRouteMenu(open ? route.name : ''); if (!open || routeMenu !== route.name) onDismissDelete() }}>
@@ -481,7 +490,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
         </div>
         <PanelPagination label="routes" pagination={routePagination} onPage={(page) => { setRoutePage(page); setRouteMenu(''); onDismissDelete() }} />
       </section>
-      {draftKey ? <MockRouteEditor key={draftKey} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} /> : <div className="mock-route-editor-empty"><span>Add a route to configure its request and response.</span></div>}
+      {draftKey ? <MockRouteEditor key={draftKey} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} onPreview={onPreviewRoute} /> : <div className="mock-route-editor-empty"><span>Add a route to configure its request and response.</span></div>}
     </div>
     {leaveOpen && <FormDialog className="mock-scenario-leave-dialog" titleID="mock-scenario-leave-title" descriptionID="mock-scenario-leave-description" closeLabel="Keep editing routes" onClose={() => setLeaveOpen(false)} header={<h2 id="mock-scenario-leave-title">Discard unsaved changes?</h2>}>
       <p id="mock-scenario-leave-description">Your route drafts will be discarded when you leave this scenario.</p>
@@ -494,7 +503,7 @@ function MockRouteEnabledToggle({ route, busy, disabled, onToggle }: { route: Mo
   return <label className={`mock-route-toggle${route.enabled ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`} title={`${route.name}: ${route.enabled ? 'enabled' : 'disabled'}`} onClick={(event) => event.stopPropagation()}>
     <input className="sr-only" type="checkbox" role="switch" checked={route.enabled} disabled={disabled} aria-label={`${route.name} route enabled`} onChange={(event) => onToggle(event.target.checked)} />
     <span className="mock-route-toggle__track" aria-hidden="true"><span /></span>
-    <span className="sr-only">{busy ? route.enabled ? 'DISABLING…' : 'ENABLING…' : route.enabled ? 'ENABLED' : 'DISABLED'}</span>
+    <span className="sr-only">{busy ? '…' : route.enabled ? 'On' : 'Off'}</span>
   </label>
 }
 
@@ -535,6 +544,8 @@ export function mockRoutesFromDrafts(drafts: MockRouteDraft[]): MockRoute[] {
       if (parameters.has(segment)) throw new Error(`Route ${name} path parameter ${segment} is duplicated.`)
       parameters.add(segment)
     }
+    if (draft.pathMatch === 'exact' && parameters.size > 0) throw new Error(`Route ${name} uses path parameters. Choose Template matching or enter an exact path.`)
+    if (draft.pathMatch === 'template' && parameters.size === 0) throw new Error(`Route ${name} needs a path parameter such as /inventory/{sku}, or choose Exact matching.`)
     const delayMs = Number(draft.delayMs)
     if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 300_000) throw new Error(`Route ${name} delay must be between 0 and 300000 ms.`)
     if (!registeredStatuses.has(Number(draft.status))) throw new Error(`Route ${name} status must be a registered final HTTP response status.`)
@@ -544,7 +555,7 @@ export function mockRoutesFromDrafts(drafts: MockRouteDraft[]): MockRoute[] {
     if (totalBodyBytes > 8_388_608) throw new Error('Mock response bodies exceed 8388608 bytes.')
     return {
       name, service, method: draft.method, path: draft.path, status: Number(draft.status),
-      query: parseMockPairs(draft.queryText, '='), headers: parseMockResponseHeaderPairs(draft.headersText),
+      query: mockRequiredQueryParameters(draft.query), headers: mockResponseHeaders(draft.headers),
       body: draft.body, delayMs, enabled: draft.enabled,
     }
   })
@@ -556,33 +567,6 @@ export function mockRoutesFromDrafts(drafts: MockRouteDraft[]): MockRoute[] {
     }
   }
   return routes
-}
-
-export function parseMockPairs(value: string, separator: ':' | '=') {
-  const result: Record<string, string> = {}
-  for (const line of value.split('\n').map((item) => item.trim()).filter(Boolean)) {
-    const index = line.indexOf(separator)
-    if (index < 1) throw new Error(`Expected ${separator === ':' ? 'Name: value' : 'name=value'} on every non-empty line.`)
-    result[line.slice(0, index).trim()] = line.slice(index + 1).trim()
-  }
-  return result
-}
-
-export function parseMockResponseHeaderPairs(value: string) {
-  const result: Record<string, string> = {}
-  const names = new Set<string>()
-  const managed = new Set(['connection', 'content-length', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
-  for (const line of value.split('\n').map((item) => item.trim()).filter(Boolean)) {
-    const index = line.indexOf(':')
-    const name = line.slice(0, index).trim()
-    if (index < 1 || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) throw new Error('Expected Name: value with a valid HTTP header name on every non-empty line.')
-    const canonical = name.toLowerCase()
-    if (names.has(canonical)) throw new Error(`Response header ${name} is duplicated.`)
-    if (managed.has(canonical)) throw new Error(`Response header ${name} is managed by the HTTP transport.`)
-    names.add(canonical)
-    result[name] = line.slice(index + 1).trim()
-  }
-  return result
 }
 
 export function mockScenarioIsActive(scenario: Pick<MockScenario, 'activation'>) {
@@ -673,6 +657,9 @@ function mockRoutesAreAmbiguous(left: MockRoute, right: MockRoute) {
   const leftQuery = left.query || {}
   const rightQuery = right.query || {}
   if (left.method.toUpperCase() !== right.method.toUpperCase() || leftSegments.length !== rightSegments.length || leftLiteralCount !== rightLiteralCount || Object.keys(leftQuery).length !== Object.keys(rightQuery).length) return false
+  for (const match of ['equals', 'regex']) {
+    if (Object.values(leftQuery).filter((matcher) => matcher.match === match).length !== Object.values(rightQuery).filter((matcher) => matcher.match === match).length) return false
+  }
   for (let index = 0; index < leftSegments.length; index++) {
     const leftParameter = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(leftSegments[index])
     const rightParameter = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(rightSegments[index])
@@ -680,7 +667,7 @@ function mockRoutesAreAmbiguous(left: MockRoute, right: MockRoute) {
   }
   for (const [name, leftValue] of Object.entries(leftQuery)) {
     const rightValue = rightQuery[name]
-    if (rightValue !== undefined && leftValue && rightValue && leftValue !== rightValue) return false
+    if (leftValue.match === 'equals' && rightValue?.match === 'equals' && leftValue.value !== rightValue.value) return false
   }
   return true
 }
@@ -689,8 +676,13 @@ function splitMockRoutePath(path: string) {
   return path === '/' ? [] : path.replace(/^\//, '').split('/')
 }
 
-function formatQuerySummary(query?: Record<string, string>) {
-  const value = new URLSearchParams(query || {}).toString()
+function formatQuerySummary(query: MockRoute['query']) {
+  const value = Object.entries(query || {}).map(([name, matcher]) => {
+    const key = encodeURIComponent(name)
+    if (matcher.match === 'exists') return key
+    if (matcher.match === 'regex') return `${key}~${matcher.value}`
+    return `${key}=${encodeURIComponent(matcher.value)}`
+  }).join('&')
   return value ? `?${value}` : ''
 }
 

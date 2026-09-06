@@ -14,6 +14,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/events"
 	"github.com/runportless/portless/portless-daemon/model"
 	"github.com/runportless/portless/portless-daemon/runtime/logstore"
+	"github.com/runportless/portless/portless-daemon/traffic"
 )
 
 const (
@@ -21,9 +22,9 @@ const (
 	maximumRecordingPayloadLimit int64 = 1 << 20
 )
 
-// TrafficExchanges returns the most recent in-memory traffic exchanges for an environment.
+// TrafficExchanges returns recent in-memory exchange summaries without captured payloads.
 func (s *Service) TrafficExchanges(project, environment string, limit int) []model.TrafficExchange {
-	return s.traffic.RecentExchanges(model.EnvironmentSelector(project, environment), limit)
+	return s.traffic.ExchangeSummaries(model.EnvironmentSelector(project, environment), limit)
 }
 
 // TrafficExchange finds one exchange in live or recorded history by sequence number.
@@ -48,14 +49,18 @@ func (s *Service) RecordedTraffic(ctx context.Context, project, environment, rec
 	return s.database.RecordedTraffic(ctx, model.EnvironmentSelector(project, environment), recording, limit)
 }
 
-// TrafficTraces returns trace projections from the live exchange buffer.
-func (s *Service) TrafficTraces(project, environment string, limit int) []model.TrafficTrace {
-	return s.traffic.Traces(model.EnvironmentSelector(project, environment), limit)
+// TrafficTraces returns a coherent cached trace summary snapshot matching query.
+func (s *Service) TrafficTraces(ctx context.Context, project, environment string, query traffic.TraceQuery) (traffic.TraceSnapshot, error) {
+	return s.traffic.Traces(ctx, model.EnvironmentSelector(project, environment), query)
 }
 
 // TrafficTrace returns one full live trace projection by environment-local number.
-func (s *Service) TrafficTrace(project, environment string, number int64) (model.TrafficTrace, error) {
-	if trace, ok := s.traffic.Trace(model.EnvironmentSelector(project, environment), number); ok {
+func (s *Service) TrafficTrace(ctx context.Context, project, environment string, number int64) (model.TrafficTrace, error) {
+	trace, ok, err := s.traffic.Trace(ctx, model.EnvironmentSelector(project, environment), number)
+	if err != nil {
+		return model.TrafficTrace{}, err
+	}
+	if ok {
 		return trace, nil
 	}
 	return model.TrafficTrace{}, database.ErrNotFound
@@ -63,7 +68,7 @@ func (s *Service) TrafficTrace(project, environment string, number int64) (model
 
 // ClearTraffic removes the environment's live exchanges and derived traces.
 // Durable recording contents and the sequence high-water mark are preserved.
-func (s *Service) ClearTraffic(project, environment string) (int, int64) {
+func (s *Service) ClearTraffic(project, environment string) (int, int64, uint64) {
 	return s.traffic.Clear(project, environment)
 }
 

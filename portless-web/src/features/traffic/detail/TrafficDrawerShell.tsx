@@ -9,6 +9,7 @@ import { traceTransactionCommandSpans, type TraceNavigationItem } from '../Trace
 import { formatTrafficBytes } from './TrafficFormatting'
 import { TrafficInterventionBadges, TrafficOverview } from './TrafficOverview'
 import type { TrafficDetailView } from './trafficDetailTypes'
+import { isWebSocketHandshake } from '../trafficProtocol'
 
 export function defaultTrafficDetailView(_exchange: TrafficExchange): TrafficDetailView {
   return 'request'
@@ -69,7 +70,7 @@ export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, 
   const operation = detailExchange.tcp?.operation || 'SESSION'
   const commandCount = transaction ? transactionCommands.length : decodedTCP ? 1 : 0
   const commandLabel = `${commandCount} ${commandCount === 1 ? 'command' : 'commands'}`
-  const protocolBadge = http ? 'HTTP' : 'TCP'
+  const protocolBadge = isWebSocketHandshake(detailExchange) ? 'WS' : http ? 'HTTP' : 'TCP'
 
   return <aside className={`traffic-detail${maximized ? ' traffic-detail--maximized' : ''}`} role="dialog" aria-label={`Traffic request and response ${detailExchange.sequence}`}>
     <header className="traffic-detail__header">

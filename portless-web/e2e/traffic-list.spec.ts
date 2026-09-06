@@ -139,3 +139,28 @@ test('filters, pauses, resumes, and switches live traffic protocols', async ({ p
   await protocol.getByRole('button', { name: 'HTTP' }).click()
   await expect(protocol.getByRole('button', { name: 'HTTP' })).toHaveClass(/is-active/)
 })
+
+test('uses summary requests for filtered bursts and reuses unchanged expanded detail', async ({ page }) => {
+  const detailRequests: string[] = []
+  page.on('request', (request) => {
+    if (/\/traffic\/traces\/\d+(?:\?|$)/.test(request.url())) detailRequests.push(request.url())
+  })
+  await authenticate(page, `${environmentPath('traffic')}&edge=external%3Acheckout`)
+  const marker = `/cached-tracing-${Date.now()}`
+  expect((await applicationRequest(`${marker}-selected`)).status).toBe(404)
+  const filter = page.getByPlaceholder('filter path, service, edge, status…')
+  await filter.fill(`${marker}-selected`)
+  const selected = page.locator('button.trace-row').filter({ hasText: `${marker}-selected` })
+  await expect(selected).toBeVisible()
+  expect(detailRequests).toHaveLength(0)
+  await selected.click()
+  await expect(page.locator('.trace-waterfall')).toBeVisible()
+  expect(detailRequests).toHaveLength(1)
+  const responses = await Promise.all(Array.from({ length: 80 }, (_, index) => applicationRequest(`${marker}-${index}`)))
+  expect(responses.every((response) => response.status === 404)).toBe(true)
+  await filter.fill(marker)
+  await expect(page.getByLabel('traces pagination')).toContainText('of 81')
+  await filter.fill(`${marker}-selected`)
+  await expect(page.locator('.trace-waterfall')).toBeVisible()
+  expect(detailRequests).toHaveLength(1)
+})

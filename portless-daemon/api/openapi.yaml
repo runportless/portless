@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 13.1.0
+  version: 16.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -36,7 +36,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.1.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '16.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -882,14 +882,16 @@ paths:
           description: Include browser subresource and successful connection-housekeeping traces.
       responses:
         '200':
-          description: Newest-first trace summaries rebuilt from the bounded exchange window
+          description: Newest-first cached trace summaries, filtered before limiting, with complete projection watermarks
           content:
             application/json:
               schema:
                 type: object
-                required: [traces]
+                required: [traces, revision, throughSequence]
                 properties:
                   traces: { type: array, items: { $ref: '#/components/schemas/TrafficTrace' } }
+                  revision: { type: integer, format: int64, minimum: 0, description: Complete environment projection revision before filtering and limiting. Resets with the daemon. }
+                  throughSequence: { type: integer, format: int64, minimum: 0, description: Complete exchange high-water mark represented by this projection, including empty results. }
   /environments/{projectName}/{environmentName}/traffic/traces/{number}:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
@@ -1001,6 +1003,9 @@ paths:
         Creates or replaces one fixed-response route. Service is required. Ambiguity is
         checked only within the same service. While enabled, response edits and route
         toggles reload active runtimes, but edits must not change the set of target services.
+        The request body name is required. If it differs from routeName, the addressed
+        route must exist and is renamed atomically with the other edits. An existing
+        destination name is rejected; creation time and scenario ownership are preserved.
       requestBody:
         required: true
         content:
@@ -1012,6 +1017,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MockScenario' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: deleteMockRoute
@@ -1028,18 +1034,31 @@ paths:
     parameters: *mockScenarioParameters
     post:
       operationId: previewMockRequest
-      description: Evaluates routes for the requested service without generating traffic or timeline history.
+      description: >-
+        Evaluates a sample request against saved scenario routes and an optional
+        in-memory route draft. The scenario may be disabled. An existing draft
+        requires originalRoute; a new draft omits it and must have a unique name.
+        The full temporary scenario is validated, disabled routes are skipped,
+        and normal service/path/query precedence applies. No state is saved,
+        provider changed, application contacted, delay awaited, or traffic,
+        recording, event, or timeline history generated.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/MockRequest' }
+            schema: { $ref: '#/components/schemas/PreviewMockRequest' }
       responses:
         '200':
-          description: Selected fixed response, or an unmatched 501 preview
+          description: Expected mock response with mock-owned headers, or structured unmatched 501 response; HTTP HEAD/204/304 body suppression applies
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MockPreview' }
+        '400':
+          description: Invalid envelope, sample request, draft, or ambiguous temporary scenario
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /environments/{projectName}/{environmentName}/mocks/{scenarioName}/imports/recording:
     parameters: *mockScenarioParameters
     post:
@@ -1406,7 +1425,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '13.1.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '16.0.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1609,7 +1628,7 @@ components:
       properties:
         url: { type: string, format: uri, pattern: '^https?://' }
         classification: { type: string, enum: [development, qa, staging, unknown] }
-        writePolicy: { type: string, enum: [read-only, read-write] }
+        writePolicy: { type: string, enum: [read-only, read-write], description: Enforced locally before forwarding. WebSocket upgrades require read-write regardless of the GET handshake method. }
         healthPath: { type: string, pattern: '^/' }
     MockTarget:
       type: object
@@ -1631,6 +1650,32 @@ components:
         dependencies, and remote requires remote configuration. Mock bindings are
         managed only through scenario activation, never through individual binding changes.
         A mock binding identifies the environment-scoped scenario owning that service.
+    MockQueryMatcher:
+      oneOf:
+        - type: object
+          required: [match]
+          additionalProperties: false
+          properties:
+            match: { type: string, enum: [exists] }
+            value: { type: string, maxLength: 0 }
+        - type: object
+          required: [match, value]
+          additionalProperties: false
+          properties:
+            match: { type: string, enum: [equals] }
+            value: { type: string, minLength: 1 }
+        - type: object
+          required: [match, value]
+          additionalProperties: false
+          properties:
+            match: { type: string, enum: [regex] }
+            value: { type: string, minLength: 1, maxLength: 4096 }
+      description: >-
+        A required, case-sensitive query name matches by presence, exact nonempty
+        value, or a Go/RE2 regular expression over an entire decoded value. At least
+        one repeated value must match. Regex is case-sensitive unless its pattern
+        enables case folding; delimiters are not required. Patterns are limited to
+        4096 UTF-8 bytes each and 262144 bytes per scenario, validated at compile time.
     MockRoute:
       type: object
       required: [name, service, method, path, status, enabled]
@@ -1641,8 +1686,13 @@ components:
         path: { type: string, pattern: '^/', example: '/inventory/{sku}' }
         query:
           type: object
-          additionalProperties: { type: string }
-          description: Required query names and optional exact values. An empty value requires only presence.
+          additionalProperties: { $ref: '#/components/schemas/MockQueryMatcher' }
+          description: >-
+            Required query names and explicit match operators. All names must match.
+            At equal path and query-count specificity, more Equals matchers win,
+            then more Regex matchers, then Exists. Regex rules with equal specificity
+            are conservatively treated as overlapping unless paths or other exact
+            query constraints distinguish them.
         status: { $ref: '#/components/schemas/HTTPFinalStatusCode' }
         headers:
           type: object
@@ -1706,6 +1756,18 @@ components:
       properties:
         service: { $ref: '#/components/schemas/ServiceName' }
         document: { type: string, maxLength: 1048576, description: Complete local OpenAPI 3.0 or 3.1 JSON/YAML document. }
+    PreviewMockRequest:
+      type: object
+      additionalProperties: false
+      required: [request]
+      properties:
+        request: { $ref: '#/components/schemas/MockRequest' }
+        draft:
+          allOf: [{ $ref: '#/components/schemas/MockRoute' }]
+          description: Optional route definition overlaid only for this preview. Its service and the complete temporary scenario are validated using the normal matcher rules.
+        originalRoute:
+          allOf: [{ $ref: '#/components/schemas/ArtifactName' }]
+          description: Saved route to replace for preview; requires draft, which may have a new unique name. A missing saved route is an error. Omit to append a new unique draft route.
     MockRequest:
       type: object
       required: [service, method, path]
@@ -1726,6 +1788,11 @@ components:
           description: Optional request body used only for the side-effect-free preview. Request bodies are not route matchers.
     MockPreview:
       type: object
+      description: >-
+        Expected mock-owned response, including scenario/route headers and
+        unmatched JSON. Body is empty for HEAD, 204, and 304; Content-Type is
+        omitted for 304. Date, Content-Length, and other transport-added headers
+        are not synthesized. Delay is metadata and preview does not wait.
       required: [service, matched, status]
       properties:
         service: { $ref: '#/components/schemas/ServiceName' }
@@ -1734,7 +1801,7 @@ components:
         status: { $ref: '#/components/schemas/HTTPFinalStatusCode' }
         headers: { type: object, additionalProperties: { type: string } }
         body: { type: string }
-        delayMs: { type: integer, format: int64, minimum: 0 }
+        delayMs: { type: integer, format: int64, minimum: 0, description: 'Configured response delay, reported without sleeping.' }
     HealthCheck:
       type: object
       required: [kind, timeout, interval]
@@ -1925,10 +1992,10 @@ components:
         path: { type: string }
         requestTarget: { type: string, description: Exact escaped path and query string received by the proxy. }
         requestKind: { type: string, enum: [navigation, subresource, fetch, service, unknown] }
-        status: { type: integer }
-        durationMs: { type: integer, format: int64 }
-        requestBytes: { type: integer, format: int64 }
-        responseBytes: { type: integer, format: int64 }
+        status: { type: integer, description: HTTP response status. A WebSocket handshake completes with 101 after its downstream headers flush. }
+        durationMs: { type: integer, format: int64, description: Exchange duration. For a WebSocket this measures only its opening handshake. }
+        requestBytes: { type: integer, format: int64, description: HTTP body or TCP wire bytes. Zero for a WebSocket handshake; frames are not counted. }
+        responseBytes: { type: integer, format: int64, description: HTTP body or TCP wire bytes. Zero for a WebSocket handshake; frames are not counted. }
         requestCapturedBytes: { type: integer, format: int64, minimum: 0 }
         responseCapturedBytes: { type: integer, format: int64, minimum: 0 }
         fault: { type: string }
@@ -1943,21 +2010,22 @@ components:
         requestHeaders:
           type: object
           additionalProperties: { type: array, items: { type: string } }
-          description: Application-supplied headers received by Portless before forwarding changes. Propagation carriers previously injected by Portless are omitted. Repeated values are preserved; known credential-bearing values are replaced with [REDACTED] before retention.
+          description: Application-supplied headers received by Portless before forwarding changes. Propagation carriers previously injected by Portless are omitted. Repeated values are preserved; known credential-bearing values including Sec-WebSocket-Protocol are replaced with [REDACTED] before retention.
         responseHeaders:
           type: object
           additionalProperties: { type: array, items: { type: string } }
-          description: Repeated values are preserved; known credential-bearing values are replaced with [REDACTED] before retention.
-        requestBody: { type: string, description: Bounded inspectable request-body prefix. }
-        responseBody: { type: string, description: Bounded inspectable response-body prefix. }
+          description: Repeated values are preserved; known credential-bearing values including Sec-WebSocket-Protocol are replaced with [REDACTED] before retention.
+        requestBody: { type: string, description: Bounded inspectable request-body prefix. WebSocket messages are never included. }
+        responseBody: { type: string, description: Bounded inspectable response-body prefix. WebSocket messages are never included. }
         requestBodyTruncated: { type: boolean }
         responseBodyTruncated: { type: boolean }
         tcp: { $ref: '#/components/schemas/TrafficTCPExchange' }
     TrafficClearResponse:
       type: object
-      required: [cleared, throughSequence]
+      required: [cleared, throughSequence, revision]
       properties:
         cleared: { type: integer, minimum: 0, description: Number of live exchanges removed. }
+        revision: { type: integer, format: int64, minimum: 1, description: Environment projection revision after Clear. Older trace updates cannot restore cleared rows. }
         throughSequence: { type: integer, format: int64, minimum: 0, description: Highest environment-local sequence covered by the clear. }
     TrafficTraceSpan:
       type: object
@@ -1971,12 +2039,13 @@ components:
         transactionGroup: { type: integer, minimum: 1, description: Trace-local group shared by decoded operations from one explicit database transaction on one TCP connection. }
     TrafficTrace:
       type: object
-      required: [project, environment, number, lastSequence, protocol, startedAt, completedAt, durationMs, source, target, error, faulted, background, provisional, spanCount, correlation]
+      required: [project, environment, revision, number, lastSequence, protocol, startedAt, completedAt, durationMs, source, target, error, faulted, background, provisional, spanCount, correlation]
       properties:
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
+        revision: { type: integer, format: int64, minimum: 1, description: Most recent change to this trace projection. Unchanged traces retain their revision; resets with the daemon. }
         number: { type: integer, format: int64, minimum: 1, description: Environment-local number equal to the earliest retained exchange sequence in the trace. }
-        lastSequence: { type: integer, format: int64, minimum: 1, description: Highest exchange sequence currently projected into the trace; used for deterministic snapshot reconciliation. }
+        lastSequence: { type: integer, format: int64, minimum: 1, description: Highest exchange sequence currently included in this trace. The trace revision governs update ordering; list responses carry the complete projection watermark. }
         traceId: { type: string, pattern: '^[0-9a-f]{32}$', description: Normalized trace identifier for the projected root exchange. }
         rootSequence: { type: integer, format: int64, minimum: 1 }
         protocol: { type: string, enum: [http, tcp], description: Protocol of the current root exchange. }

@@ -29,7 +29,7 @@ export function environmentLifecycleLabel(environment: Pick<Environment, 'status
   if (busy === 'up' || environment.status === 'starting') return 'Starting…'
   if (busy === 'down' || environment.status === 'stopping') return 'Stopping…'
   if (environment.status === 'recovering') return 'Recovering…'
-  return environment.status === 'stopped' ? 'Start' : 'Stop'
+  return environment.status === 'stopped' ? 'Start All' : 'Stop'
 }
 
 export function useEnvironmentActions(environment: Environment | undefined, identity: string, live: boolean, latestOperation: Operation | undefined, onChanged: () => Promise<void>, onNavigate: (path: string) => void) {

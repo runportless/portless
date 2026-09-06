@@ -158,8 +158,60 @@ func (s *Store) PutMockRoutes(ctx context.Context, project, environment, scenari
 	return s.MockScenario(ctx, project, environment, canonicalScenario)
 }
 
+// RenameMockRoute atomically renames and updates a route without overwriting a peer
+// or changing its creation time. The original route must still exist.
+func (s *Store) RenameMockRoute(ctx context.Context, project, environment, scenarioName, originalName string, route model.MockRoute) (model.MockScenario, error) {
+	if err := model.ValidateArtifactName(route.Name); err != nil {
+		return model.MockScenario{}, fmt.Errorf("invalid mock route name: %w", err)
+	}
+	if err := model.ValidateServiceName(route.Service); err != nil {
+		return model.MockScenario{}, err
+	}
+	key, err := s.PrivateEnvironmentKey(ctx, project, environment)
+	if err != nil {
+		return model.MockScenario{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.MockScenario{}, err
+	}
+	defer tx.Rollback()
+	var canonicalScenario, canonicalRoute string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM mock_scenarios WHERE environment_key = ? AND name = ? COLLATE NOCASE`, key, scenarioName).Scan(&canonicalScenario); err != nil {
+		return model.MockScenario{}, mapSQLError(err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM mock_scenario_routes WHERE environment_key = ? AND scenario_name = ? AND name = ? COLLATE NOCASE`, key, canonicalScenario, originalName).Scan(&canonicalRoute); err != nil {
+		return model.MockScenario{}, mapSQLError(err)
+	}
+	var conflict bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM mock_scenario_routes WHERE environment_key = ? AND scenario_name = ? AND name = ? COLLATE NOCASE AND name != ? COLLATE NOCASE)`, key, canonicalScenario, route.Name, canonicalRoute).Scan(&conflict); err != nil {
+		return model.MockScenario{}, err
+	}
+	if conflict {
+		return model.MockScenario{}, fmt.Errorf("mock route %s already exists: %w", route.Name, ErrAlreadyExists)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE mock_scenario_routes SET name = ? WHERE environment_key = ? AND scenario_name = ? AND name = ?`, route.Name, key, canonicalScenario, canonicalRoute); err != nil {
+		return model.MockScenario{}, fmt.Errorf("rename mock route: %w", err)
+	}
+	now := nowText()
+	if err := putMockRouteTx(ctx, tx, key, canonicalScenario, route, now); err != nil {
+		return model.MockScenario{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE mock_scenarios SET modified_at = ? WHERE environment_key = ? AND name = ?`, now, key, canonicalScenario); err != nil {
+		return model.MockScenario{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.MockScenario{}, err
+	}
+	return s.MockScenario(ctx, project, environment, canonicalScenario)
+}
+
 func putMockRouteTx(ctx context.Context, tx *sql.Tx, environmentKey, scenario string, route model.MockRoute, now string) error {
-	queryJSON, err := json.Marshal(nonNilStringMap(route.Query))
+	query := route.Query
+	if query == nil {
+		query = map[string]model.MockQueryMatcher{}
+	}
+	queryJSON, err := json.Marshal(query)
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/runportless/portless/portless-daemon/auth"
 	"github.com/runportless/portless/portless-daemon/controlplane"
 	"github.com/runportless/portless/portless-daemon/model"
+	"github.com/runportless/portless/portless-daemon/traffic"
 )
 
 func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
@@ -25,8 +26,8 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
-		cleared, throughSequence := s.app.ClearTraffic(project, environment)
-		writeJSON(writer, http.StatusOK, contract.TrafficClearResponse{Cleared: cleared, ThroughSequence: throughSequence})
+		cleared, throughSequence, revision := s.app.ClearTraffic(project, environment)
+		writeJSON(writer, http.StatusOK, contract.TrafficClearResponse{Cleared: cleared, ThroughSequence: throughSequence, Revision: revision})
 		return
 	}
 	if request.Method != http.MethodGet {
@@ -127,7 +128,7 @@ func (s *Server) handleTrafficTraces(writer http.ResponseWriter, request *http.R
 			writeAPIError(writer, http.StatusBadRequest, *err)
 			return
 		}
-		trace, findErr := s.app.TrafficTrace(project, environment, number)
+		trace, findErr := s.app.TrafficTrace(request.Context(), project, environment, number)
 		if findErr != nil {
 			if controlplane.IsNotFound(findErr) {
 				writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "TRAFFIC_TRACE_NOT_FOUND", Message: "traffic trace is no longer in the live buffer"})
@@ -151,21 +152,14 @@ func (s *Server) handleTrafficTraces(writer http.ResponseWriter, request *http.R
 	}
 	service := request.URL.Query().Get("service")
 	includeBackground := request.URL.Query().Get("background") == "include"
-	filtered := make([]model.TrafficTrace, 0, limit)
-	for _, trace := range s.app.TrafficTraces(project, environment, 5000) {
-		if trace.Background && !includeBackground {
-			continue
-		}
-		if !traceMatches(trace, service, source, target) {
-			continue
-		}
-		trace.Spans = nil
-		filtered = append(filtered, trace)
-		if len(filtered) == limit {
-			break
-		}
+	snapshot, err := s.app.TrafficTraces(request.Context(), project, environment, traffic.TraceQuery{
+		Service: service, Source: source, Target: target, IncludeBackground: includeBackground, Limit: limit,
+	})
+	if err != nil {
+		s.writeError(writer, err, environmentSubject(project, environment))
+		return
 	}
-	writeJSON(writer, http.StatusOK, contract.TrafficTraceList{Traces: filtered})
+	writeJSON(writer, http.StatusOK, contract.TrafficTraceList{Traces: snapshot.Traces, Revision: snapshot.Revision, ThroughSequence: snapshot.ThroughSequence})
 }
 
 func positiveTrafficNumber(value, kind string) (int64, *contract.APIError) {
@@ -187,26 +181,6 @@ func trafficEdge(value string) (string, string, *contract.APIError) {
 		return "", "", &apiError
 	}
 	return source, target, nil
-}
-
-func traceMatches(trace model.TrafficTrace, service, source, target string) bool {
-	if service == "" && source == "" && target == "" {
-		return true
-	}
-	for _, span := range trace.Spans {
-		exchange := span.Exchange
-		if service != "" && exchange.Source != service && exchange.Target != service {
-			continue
-		}
-		if source != "" && exchange.Source != source {
-			continue
-		}
-		if target != "" && exchange.Target != target {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func (s *Server) handleStream(writer http.ResponseWriter, request *http.Request, project, environment string) {

@@ -22,3 +22,11 @@ browser-claim paths, return the application's ordinary 404.
 headers that allow an inline script and same-origin embedding. The Chromium
 suite verifies those policies survive ingress without additional Portless
 restrictions; the request-echo endpoints verify absent policies stay absent.
+
+Checkout and orders serve bounded WebSocket echo endpoints at `/ws`, `/api/ws`,
+and `/auth/ws`, negotiating `portless-test`. Checkout's `/websocket-dependency`
+opens a real WebSocket using `ORDERS_URL` and returns the echoed response.
+`/browser-websocket` uses the browser's native WebSocket client to exchange text
+and binary messages and close cleanly under an application-owned CSP. The
+fixture-only `wstest` package supports unfragmented frames up to one MiB with
+finite I/O deadlines; it is not used by the production proxy.

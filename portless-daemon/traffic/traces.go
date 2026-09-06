@@ -1,247 +1,345 @@
 package traffic
 
 import (
-	"sort"
+	"container/heap"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
+// traceInput contains correlation metadata only. Cached projections never own
+// headers, bodies, or decoded message payloads.
+type traceInput struct {
+	sequence                             int64
+	project, environment, source, target string
+	traceID, spanID, parentSpanID        string
+	started, completed                   time.Time
+	protocol                             model.Protocol
+	method, requestTarget                string
+	status                               int
+	error, faulted, background           bool
+	session, transaction                 uint64
+}
+
+func traceInputFor(exchange model.TrafficExchange) traceInput {
+	requestTarget := exchange.RequestTarget
+	if requestTarget == "" {
+		requestTarget = exchange.Path
+	}
+	input := traceInput{
+		sequence: exchange.Sequence, project: exchange.Project, environment: exchange.Environment,
+		source: exchange.Source, target: exchange.Target, traceID: exchange.TraceID,
+		spanID: exchange.SpanID, parentSpanID: exchange.ParentSpanID,
+		started: exchange.StartedAt, completed: exchange.CompletedAt, protocol: exchange.Protocol,
+		method: exchange.Method, requestTarget: requestTarget, status: exchange.Status,
+		error: exchange.Error != "" || exchange.Status >= 500, faulted: exchange.Fault != "",
+		background: backgroundExchange(exchange),
+	}
+	if exchange.TCP != nil {
+		input.session, input.transaction = exchange.TCP.SessionSequence, exchange.TCP.TransactionSequence
+	}
+	return input
+}
+
 type traceNode struct {
-	exchange    model.TrafficExchange
-	parent      int64
+	input       *traceInput
+	parent      int
 	correlation model.TrafficCorrelation
 }
 
-type tcpTransactionKey struct {
-	session     uint64
-	transaction uint64
+type projectedSpan struct {
+	sequence, parent int64
+	depth            int
+	offset           int64
+	correlation      model.TrafficCorrelation
+	transactionGroup int
 }
 
-type disjointSet struct {
-	parent map[int64]int64
+type serviceEdge struct{ source, target string }
+
+type projectedTrace struct {
+	summary  model.TrafficTrace
+	spans    []projectedSpan
+	services map[string]struct{}
+	edges    map[serviceEdge]struct{}
 }
 
-func newDisjointSet(exchanges []model.TrafficExchange) *disjointSet {
-	set := &disjointSet{parent: make(map[int64]int64, len(exchanges))}
-	for _, exchange := range exchanges {
-		set.parent[exchange.Sequence] = exchange.Sequence
+type traceUnion struct{ parents, ranks []int }
+
+func (set *traceUnion) find(value int) int {
+	for value != set.parents[value] {
+		set.parents[value] = set.parents[set.parents[value]]
+		value = set.parents[value]
 	}
-	return set
+	return value
 }
 
-func (s *disjointSet) find(value int64) int64 {
-	parent := s.parent[value]
-	if parent != value {
-		s.parent[value] = s.find(parent)
+func (set *traceUnion) union(left, right int) {
+	left, right = set.find(left), set.find(right)
+	if left == right {
+		return
 	}
-	return s.parent[value]
+	if set.ranks[left] < set.ranks[right] {
+		left, right = right, left
+	}
+	set.parents[right] = left
+	if set.ranks[left] == set.ranks[right] {
+		set.ranks[left]++
+	}
 }
 
-func (s *disjointSet) union(left, right int64) {
-	leftRoot, rightRoot := s.find(left), s.find(right)
-	if leftRoot != rightRoot {
-		s.parent[rightRoot] = leftRoot
-	}
+type parentExpiry struct {
+	index     int
+	completed time.Time
+}
+type parentExpirations []parentExpiry
+
+// Len returns the number of parent intervals awaiting expiry.
+func (h parentExpirations) Len() int { return len(h) }
+
+// Less orders parent intervals by completion time.
+func (h parentExpirations) Less(i, j int) bool { return h[i].completed.Before(h[j].completed) }
+
+// Swap exchanges two heap entries.
+func (h parentExpirations) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+// Push appends a parent interval for container/heap.
+func (h *parentExpirations) Push(value any) { *h = append(*h, value.(parentExpiry)) }
+
+// Pop removes the final heap entry for container/heap.
+func (h *parentExpirations) Pop() any {
+	values := *h
+	value := values[len(values)-1]
+	*h = values[:len(values)-1]
+	return value
 }
 
-func buildTraces(exchanges []model.TrafficExchange) []model.TrafficTrace {
-	if len(exchanges) == 0 {
-		return []model.TrafficTrace{}
-	}
-	ordered := make([]model.TrafficExchange, len(exchanges))
-	for index, exchange := range exchanges {
-		ordered[index] = cloneExchange(exchange)
-	}
-	sort.SliceStable(ordered, func(left, right int) bool {
-		if ordered[left].StartedAt.Equal(ordered[right].StartedAt) {
-			return ordered[left].Sequence < ordered[right].Sequence
+// buildProjection consumes an owned metadata slice, sorting it in place. Parent
+// candidates are visited at most twice per child, even with heavy overlap.
+func buildProjection(inputs []traceInput) []projectedTrace {
+	slices.SortFunc(inputs, func(left, right traceInput) int {
+		if order := left.started.Compare(right.started); order != 0 {
+			return order
 		}
-		return ordered[left].StartedAt.Before(ordered[right].StartedAt)
+		if left.sequence < right.sequence {
+			return -1
+		}
+		if left.sequence > right.sequence {
+			return 1
+		}
+		return 0
 	})
-
-	nodes := make(map[int64]*traceNode, len(ordered))
-	spanOwners := make(map[string]int64)
-	traceMembers := make(map[string][]int64)
-	for _, exchange := range ordered {
-		nodes[exchange.Sequence] = &traceNode{exchange: exchange, correlation: model.TrafficCorrelationPartial}
-		if exchange.TraceID != "" {
-			traceMembers[exchange.TraceID] = append(traceMembers[exchange.TraceID], exchange.Sequence)
-		}
-		if exchange.TraceID != "" && exchange.SpanID != "" {
-			spanOwners[exchange.TraceID+"\x00"+exchange.SpanID] = exchange.Sequence
+	nodes := make([]traceNode, len(inputs))
+	set := traceUnion{parents: make([]int, len(inputs)), ranks: make([]int, len(inputs))}
+	spanOwners := make(map[string]int, len(inputs))
+	traceOwners := make(map[string]int, len(inputs))
+	for index := range inputs {
+		input := &inputs[index]
+		nodes[index] = traceNode{input: input, parent: -1, correlation: model.TrafficCorrelationPartial}
+		set.parents[index] = index
+		if input.traceID != "" {
+			if owner, exists := traceOwners[input.traceID]; exists {
+				set.union(owner, index)
+			} else {
+				traceOwners[input.traceID] = index
+			}
+			if input.spanID != "" {
+				spanOwners[input.traceID+"\x00"+input.spanID] = index
+			}
 		}
 	}
-
-	set := newDisjointSet(ordered)
-	for _, members := range traceMembers {
-		for index := 1; index < len(members); index++ {
-			set.union(members[0], members[index])
+	active := make(map[string]map[int]struct{})
+	expirations := make(parentExpirations, 0, len(inputs))
+	for first := 0; first < len(inputs); {
+		end := first + 1
+		for end < len(inputs) && inputs[first].started.Equal(inputs[end].started) {
+			end++
 		}
-	}
-	for _, exchange := range ordered {
-		node := nodes[exchange.Sequence]
-		if exchange.TraceID != "" && exchange.ParentSpanID != "" {
-			if parent := spanOwners[exchange.TraceID+"\x00"+exchange.ParentSpanID]; parent != 0 && parent != exchange.Sequence {
-				node.parent = parent
-				node.correlation = model.TrafficCorrelationExact
-				set.union(parent, exchange.Sequence)
+		// Equal-time parents must all be eligible, regardless of completion order.
+		for index := first; index < end; index++ {
+			input := &inputs[index]
+			if active[input.target] == nil {
+				active[input.target] = make(map[int]struct{})
+			}
+			active[input.target][index] = struct{}{}
+			heap.Push(&expirations, parentExpiry{index, input.completed})
+		}
+		for len(expirations) > 0 && expirations[0].completed.Before(inputs[first].started) {
+			expired := heap.Pop(&expirations).(parentExpiry)
+			delete(active[inputs[expired.index].target], expired.index)
+		}
+		for index := first; index < end; index++ {
+			node, input := &nodes[index], &inputs[index]
+			if parent, exists := spanOwners[input.traceID+"\x00"+input.parentSpanID]; input.traceID != "" && input.parentSpanID != "" && exists && parent != index {
+				node.parent, node.correlation = parent, model.TrafficCorrelationExact
+				set.union(parent, index)
 				continue
 			}
-		}
-		candidates := inferenceCandidates(ordered, exchange)
-		switch len(candidates) {
-		case 1:
-			node.parent = candidates[0]
-			node.correlation = model.TrafficCorrelationInferred
-			set.union(candidates[0], exchange.Sequence)
-		case 0:
-			if exchange.Source == "external" {
-				node.correlation = model.TrafficCorrelationExact
+			parent, count := -1, 0
+			for candidate := range active[input.source] {
+				if candidate == index {
+					continue
+				}
+				parent = candidate
+				count++
+				if count == 2 {
+					break
+				}
 			}
-		default:
-			node.correlation = model.TrafficCorrelationAmbiguous
+			switch count {
+			case 0:
+				if input.source == "external" {
+					node.correlation = model.TrafficCorrelationExact
+				}
+			case 1:
+				node.parent, node.correlation = parent, model.TrafficCorrelationInferred
+				set.union(parent, index)
+			default:
+				node.correlation = model.TrafficCorrelationAmbiguous
+			}
 		}
+		first = end
 	}
-
-	components := make(map[int64][]*traceNode)
-	for _, exchange := range ordered {
-		root := set.find(exchange.Sequence)
-		components[root] = append(components[root], nodes[exchange.Sequence])
+	depths := traceDepths(nodes)
+	components := make(map[int][]int)
+	for index := range nodes {
+		root := set.find(index)
+		components[root] = append(components[root], index)
 	}
-	traces := make([]model.TrafficTrace, 0, len(components))
+	traces := make([]projectedTrace, 0, len(components))
 	for _, members := range components {
-		traces = append(traces, projectTrace(members, nodes))
+		traces = append(traces, projectTrace(members, nodes, depths))
 	}
+	slices.SortFunc(traces, func(left, right projectedTrace) int {
+		if order := right.summary.StartedAt.Compare(left.summary.StartedAt); order != 0 {
+			return order
+		}
+		if left.summary.Number > right.summary.Number {
+			return -1
+		}
+		if left.summary.Number < right.summary.Number {
+			return 1
+		}
+		return 0
+	})
 	return traces
 }
 
-func inferenceCandidates(exchanges []model.TrafficExchange, child model.TrafficExchange) []int64 {
-	candidates := make([]int64, 0, 2)
-	for _, candidate := range exchanges {
-		if candidate.Sequence == child.Sequence || candidate.Target != child.Source {
-			continue
+func projectTrace(members []int, nodes []traceNode, depths []int) projectedTrace {
+	root := members[0]
+	for _, index := range members {
+		if nodes[index].parent == -1 {
+			root = index
+			break
 		}
-		if candidate.StartedAt.After(child.StartedAt) || candidate.CompletedAt.Before(child.StartedAt) {
-			continue
-		}
-		candidates = append(candidates, candidate.Sequence)
 	}
-	return candidates
-}
-
-func projectTrace(members []*traceNode, all map[int64]*traceNode) model.TrafficTrace {
-	sort.SliceStable(members, func(left, right int) bool {
-		if members[left].exchange.StartedAt.Equal(members[right].exchange.StartedAt) {
-			return members[left].exchange.Sequence < members[right].exchange.Sequence
+	for _, index := range members {
+		if nodes[index].parent == -1 && nodes[index].input.source == "external" {
+			root = index
+			break
 		}
-		return members[left].exchange.StartedAt.Before(members[right].exchange.StartedAt)
-	})
-	root := traceRoot(members)
-	started, completed := members[0].exchange.StartedAt, members[0].exchange.CompletedAt
-	number := members[0].exchange.Sequence
-	lastSequence := members[0].exchange.Sequence
-	correlation := model.TrafficCorrelationExact
-	errorResult, faulted := false, false
-	for _, member := range members {
-		if member.exchange.Sequence < number {
-			number = member.exchange.Sequence
-		}
-		if member.exchange.Sequence > lastSequence {
-			lastSequence = member.exchange.Sequence
-		}
-		if member.exchange.StartedAt.Before(started) {
-			started = member.exchange.StartedAt
-		}
-		if member.exchange.CompletedAt.After(completed) {
-			completed = member.exchange.CompletedAt
-		}
-		if member.exchange.Error != "" || member.exchange.Status >= 500 {
-			errorResult = true
-		}
-		faulted = faulted || member.exchange.Fault != ""
-		correlation = weakerCorrelation(correlation, member.correlation)
 	}
-	spans := make([]model.TrafficTraceSpan, 0, len(members))
-	transactionGroups := make(map[tcpTransactionKey]int)
-	nextTransactionGroup := 0
-	for _, member := range members {
-		spanCorrelation := member.correlation
-		if member != root && member.parent == 0 && spanCorrelation != model.TrafficCorrelationAmbiguous {
-			spanCorrelation = model.TrafficCorrelationPartial
-			correlation = weakerCorrelation(correlation, spanCorrelation)
+	input := nodes[root].input
+	first := nodes[members[0]].input
+	trace := projectedTrace{
+		summary: model.TrafficTrace{Project: input.project, Environment: input.environment,
+			Number: first.sequence, LastSequence: first.sequence, TraceID: input.traceID, RootSequence: input.sequence,
+			Protocol: input.protocol, StartedAt: first.started, CompletedAt: first.completed,
+			Method: input.method, RequestTarget: input.requestTarget, Source: input.source, Target: input.target,
+			Status: input.status, Background: input.background, SpanCount: len(members), Correlation: model.TrafficCorrelationExact},
+		spans: make([]projectedSpan, 0, len(members)), services: make(map[string]struct{}), edges: make(map[serviceEdge]struct{}),
+	}
+	groups := make(map[[2]uint64]int)
+	for _, index := range members {
+		node := &nodes[index]
+		item := node.input
+		trace.summary.Number = min(trace.summary.Number, item.sequence)
+		trace.summary.LastSequence = max(trace.summary.LastSequence, item.sequence)
+		if item.completed.After(trace.summary.CompletedAt) {
+			trace.summary.CompletedAt = item.completed
 		}
-		span := model.TrafficTraceSpan{
-			Exchange: member.exchange, ParentSequence: member.parent,
-			Depth: traceDepth(member, all), StartOffsetMS: member.exchange.StartedAt.Sub(started).Milliseconds(),
-			Correlation: spanCorrelation,
+		trace.summary.Error = trace.summary.Error || item.error
+		trace.summary.Faulted = trace.summary.Faulted || item.faulted
+		trace.summary.Correlation = weakerCorrelation(trace.summary.Correlation, node.correlation)
+		span := projectedSpan{sequence: item.sequence, depth: depths[index], offset: item.started.Sub(first.started).Milliseconds(), correlation: node.correlation}
+		if node.parent != -1 {
+			span.parent = nodes[node.parent].input.sequence
 		}
-		if tcp := member.exchange.TCP; tcp != nil && tcp.SessionSequence != 0 && tcp.TransactionSequence != 0 {
-			key := tcpTransactionKey{session: tcp.SessionSequence, transaction: tcp.TransactionSequence}
-			group := transactionGroups[key]
-			if group == 0 {
-				nextTransactionGroup++
-				group = nextTransactionGroup
-				transactionGroups[key] = group
+		if index != root && node.parent == -1 && span.correlation != model.TrafficCorrelationAmbiguous {
+			span.correlation = model.TrafficCorrelationPartial
+			trace.summary.Correlation = weakerCorrelation(trace.summary.Correlation, span.correlation)
+		}
+		if item.session != 0 && item.transaction != 0 {
+			key := [2]uint64{item.session, item.transaction}
+			if groups[key] == 0 {
+				groups[key] = len(groups) + 1
 			}
-			span.TransactionGroup = group
+			span.transactionGroup = groups[key]
 		}
-		spans = append(spans, span)
+		trace.spans = append(trace.spans, span)
+		trace.services[item.source] = struct{}{}
+		trace.services[item.target] = struct{}{}
+		trace.edges[serviceEdge{item.source, item.target}] = struct{}{}
 	}
-	rootExchange := root.exchange
-	requestTarget := rootExchange.RequestTarget
-	if requestTarget == "" {
-		requestTarget = rootExchange.Path
-	}
-	return model.TrafficTrace{
-		Project: rootExchange.Project, Environment: rootExchange.Environment,
-		Number: number, LastSequence: lastSequence, TraceID: rootExchange.TraceID, RootSequence: rootExchange.Sequence,
-		Protocol:  rootExchange.Protocol,
-		StartedAt: started, CompletedAt: completed, DurationMS: completed.Sub(started).Milliseconds(),
-		Method: rootExchange.Method, RequestTarget: requestTarget, Source: rootExchange.Source, Target: rootExchange.Target,
-		Status: rootExchange.Status, Error: errorResult, Faulted: faulted,
-		Background: backgroundExchange(rootExchange), SpanCount: len(spans), Correlation: correlation, Spans: spans,
-	}
+	trace.summary.DurationMS = trace.summary.CompletedAt.Sub(trace.summary.StartedAt).Milliseconds()
+	return trace
 }
 
-func traceRoot(members []*traceNode) *traceNode {
-	for _, member := range members {
-		if member.parent == 0 && member.exchange.Source == "external" {
-			return member
+func traceDepths(nodes []traceNode) []int {
+	depths, visiting := make([]int, len(nodes)), make([]int, len(nodes))
+	for i := range depths {
+		depths[i] = -1
+		visiting[i] = -1
+	}
+	path := make([]int, 0)
+	for start := range nodes {
+		if depths[start] >= 0 {
+			continue
+		}
+		path = path[:0]
+		current := start
+		for current != -1 && depths[current] < 0 && visiting[current] < 0 {
+			visiting[current] = len(path)
+			path = append(path, current)
+			current = nodes[current].parent
+		}
+		if current != -1 && depths[current] < 0 {
+			cycleStart := visiting[current]
+			for _, index := range path[cycleStart:] {
+				depths[index] = len(path) - cycleStart - 1
+			}
+		}
+		for i := len(path) - 1; i >= 0; i-- {
+			index := path[i]
+			if depths[index] < 0 {
+				if nodes[index].parent == -1 {
+					depths[index] = 0
+				} else {
+					depths[index] = depths[nodes[index].parent] + 1
+				}
+			}
+			visiting[index] = -1
 		}
 	}
-	for _, member := range members {
-		if member.parent == 0 {
-			return member
-		}
-	}
-	return members[0]
-}
-
-func traceDepth(node *traceNode, all map[int64]*traceNode) int {
-	depth := 0
-	visited := map[int64]struct{}{node.exchange.Sequence: {}}
-	for parent := node.parent; parent != 0; {
-		if _, exists := visited[parent]; exists {
-			break
-		}
-		visited[parent] = struct{}{}
-		depth++
-		parentNode := all[parent]
-		if parentNode == nil {
-			break
-		}
-		parent = parentNode.parent
-	}
-	return depth
+	return depths
 }
 
 func weakerCorrelation(current, candidate model.TrafficCorrelation) model.TrafficCorrelation {
-	strength := map[model.TrafficCorrelation]int{
-		model.TrafficCorrelationExact: 0, model.TrafficCorrelationInferred: 1,
-		model.TrafficCorrelationPartial: 2, model.TrafficCorrelationAmbiguous: 3,
+	strength := func(value model.TrafficCorrelation) int {
+		switch value {
+		case model.TrafficCorrelationInferred:
+			return 1
+		case model.TrafficCorrelationPartial:
+			return 2
+		case model.TrafficCorrelationAmbiguous:
+			return 3
+		default:
+			return 0
+		}
 	}
-	if strength[candidate] > strength[current] {
+	if strength(candidate) > strength(current) {
 		return candidate
 	}
 	return current
@@ -251,10 +349,7 @@ func backgroundExchange(exchange model.TrafficExchange) bool {
 	if exchange.Error != "" || exchange.Fault != "" || exchange.Status >= 500 || exchange.TCP != nil && exchange.TCP.Outcome == model.TrafficTCPOutcomeError {
 		return false
 	}
-	if exchange.Background {
-		return true
-	}
-	if exchange.RequestKind == model.TrafficRequestSubresource {
+	if exchange.Background || exchange.RequestKind == model.TrafficRequestSubresource {
 		return true
 	}
 	requestTarget := strings.ToLower(exchange.RequestTarget)

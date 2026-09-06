@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
-import type { ProjectNavigationPreferences } from '../features/projects/projectNavigation'
 import { DaemonDrawer } from './DaemonDrawer'
 import { FaultIcon, MockIcon, RecordIcon } from './ExperimentIcons'
 import { ProjectContextNav } from './ProjectContextNav'
@@ -17,8 +16,9 @@ const focusModeKey = 'portless.focus-mode'
 const focusModeShortcut = '⌘⇧F / Ctrl+Shift+F'
 const focusNavigationCloseDelay = 320
 
-export function AppChrome({ projects, environments, activeProject, sidebarProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', navigation, runtime, daemon, diagnostics, controlPlaneHealth, relay, children, headerContext, headerActions, viewCounts, onNavigate, onSwitchProject, onEnvironmentChanged, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
+export function AppChrome({ projects, recentProjects, environments, activeProject, sidebarProject, activeEnvironment, activeView, settingsActive = false, settingsView = 'appearance', runtime, daemon, diagnostics, controlPlaneHealth, relay, children, headerContext, headerActions, viewCounts, onNavigate, onSwitchProject, onEnvironmentChanged, onSettingsToggle, commands, live = true, onDaemonRefresh, onDaemonDiagnosticsRefresh, onDaemonHandoffVerify, onDaemonRestart, onDaemonReconnected }: {
   projects: Project[]
+  recentProjects: Project[]
   environments: Environment[]
   activeProject?: Project
   sidebarProject?: Project
@@ -26,7 +26,6 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
   activeView: EnvironmentView
   settingsActive?: boolean
   settingsView?: SettingsView
-  navigation: ProjectNavigationPreferences
   runtime?: RuntimeStatus | null
   daemon: DaemonStatus | null
   diagnostics: DaemonDiagnostics | null
@@ -202,7 +201,7 @@ export function AppChrome({ projects, environments, activeProject, sidebarProjec
           : <button className="sidebar__collapse" type="button" aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} aria-expanded={!sidebarCollapsed} title={`${sidebarCollapsed ? 'Expand' : 'Collapse'} navigation`} onClick={() => setSidebarCollapsed((value) => !value)}><SidebarCollapseIcon collapsed={sidebarCollapsed} /></button>}
       </div>
       <div className="sidebar__body">
-        <ProjectContextNav projects={projects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} navigation={navigation} collapsed={compactSidebar} onNavigate={navigateFromSidebar} onSwitchProject={switchFromSidebar} onEnvironmentChanged={onEnvironmentChanged} />
+        <ProjectContextNav projects={projects} recentProjects={recentProjects} environments={environments} project={sidebarProject} activeEnvironment={activeEnvironment} collapsed={compactSidebar} onNavigate={navigateFromSidebar} onSwitchProject={switchFromSidebar} onEnvironmentChanged={onEnvironmentChanged} />
         {activeEnvironment && <>
           <div className="sidebar__section-label sidebar__section-label--context"><span>Environment</span><small title={`${activeEnvironment.project}/${activeEnvironment.name}`}>{activeEnvironment.project}/{activeEnvironment.name}</small></div>
           <nav className="view-nav" aria-label={`${activeEnvironment.project}/${activeEnvironment.name} views`}>

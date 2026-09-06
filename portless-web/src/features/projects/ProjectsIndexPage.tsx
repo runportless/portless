@@ -34,7 +34,7 @@ export function ProjectsIndexPage({ projects, environments, focusedProject, navi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const menu = useRef<HTMLDivElement>(null)
-  const recent = useMemo(() => recentProjects(projects, environments, navigation), [environments, navigation, projects])
+  const recent = useMemo(() => recentProjects(projects, navigation), [navigation, projects])
   const recentNames = new Set(recent.map((project) => project.name))
   const hiddenNames = new Set(navigation.hiddenProjects)
   const rows = sortProjectRegistryRows(projects

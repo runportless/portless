@@ -159,6 +159,9 @@ WHERE modified_at = ''`, nowText()); err != nil {
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(10, ?)`, nowText()); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
+	if err := s.migrateMockQueryMatchers(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

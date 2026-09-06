@@ -108,15 +108,15 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if emptyActivation.Code != http.StatusBadRequest {
 		t.Fatalf("empty scenario activation code=%d body=%s", emptyActivation.Code, emptyActivation.Body.String())
 	}
-	missingService := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"method":"GET","path":"/health","status":200,"enabled":true}`, true)
+	missingService := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"name":"health","method":"GET","path":"/health","status":200,"enabled":true}`, true)
 	if missingService.Code != http.StatusBadRequest {
 		t.Fatalf("service-less route code=%d body=%s", missingService.Code, missingService.Body.String())
 	}
-	updatedMock := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"service":"checkout","method":"GET","path":"/health","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"ready\":true}","enabled":true}`, true)
+	updatedMock := request(server, authManager, http.MethodPut, mockBase+"/routes/health", `{"name":"health","service":"checkout","method":"GET","path":"/health","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"ready\":true}","enabled":true}`, true)
 	if updatedMock.Code != http.StatusOK || !strings.Contains(updatedMock.Body.String(), `"name":"health"`) || !strings.Contains(updatedMock.Body.String(), `"service":"checkout"`) || !strings.Contains(updatedMock.Body.String(), `"method":"GET"`) {
 		t.Fatalf("mock route response code=%d body=%s", updatedMock.Code, updatedMock.Body.String())
 	}
-	previewMock := request(server, authManager, http.MethodPost, mockBase+"/preview", `{"service":"checkout","method":"GET","path":"/health","headers":{"Accept":["application/json"],"X-Trace":["one","two"]},"body":"preview payload"}`, true)
+	previewMock := request(server, authManager, http.MethodPost, mockBase+"/preview", `{"request":{"service":"checkout","method":"GET","path":"/health","headers":{"Accept":["application/json"],"X-Trace":["one","two"]},"body":"preview payload"}}`, true)
 	if previewMock.Code != http.StatusOK || !strings.Contains(previewMock.Body.String(), `"matched":true`) || !strings.Contains(previewMock.Body.String(), `"route":"health"`) {
 		t.Fatalf("mock preview response code=%d body=%s", previewMock.Code, previewMock.Body.String())
 	}
@@ -204,6 +204,15 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	if traces.Code != http.StatusOK || !strings.Contains(traces.Body.String(), `"traces":[`) || !strings.Contains(traces.Body.String(), `"protocol":"http"`) || !strings.Contains(traces.Body.String(), `"provisional":false`) || strings.Contains(traces.Body.String(), `"spans"`) {
 		t.Fatalf("trace summaries response code=%d body=%s", traces.Code, traces.Body.String())
 	}
+	var traceSnapshot contract.TrafficTraceList
+	if err := json.Unmarshal(traces.Body.Bytes(), &traceSnapshot); err != nil || traceSnapshot.Revision == 0 || traceSnapshot.ThroughSequence != 2 {
+		t.Fatalf("trace snapshot metadata: %#v %v", traceSnapshot, err)
+	}
+	filteredTraces := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces?edge=missing:edge&limit=1", "", true)
+	var filteredSnapshot contract.TrafficTraceList
+	if err := json.Unmarshal(filteredTraces.Body.Bytes(), &filteredSnapshot); err != nil || len(filteredSnapshot.Traces) != 0 || filteredSnapshot.Revision != traceSnapshot.Revision || filteredSnapshot.ThroughSequence != 2 {
+		t.Fatalf("filtered snapshot lost complete watermark: %#v %v", filteredSnapshot, err)
+	}
 	traceDetail := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/traces/"+strconv.FormatInt(httpExchange.Sequence, 10), "", true)
 	if traceDetail.Code != http.StatusOK || !strings.Contains(traceDetail.Body.String(), `"spans":[`) || !strings.Contains(traceDetail.Body.String(), `"requestTarget":"/orders?state=open"`) {
 		t.Fatalf("trace detail response code=%d body=%s", traceDetail.Code, traceDetail.Body.String())
@@ -211,6 +220,10 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 	clearedTraffic := request(server, authManager, http.MethodDelete, "/api/v1/environments/billing/local/traffic", "", true)
 	if clearedTraffic.Code != http.StatusOK || !strings.Contains(clearedTraffic.Body.String(), `"cleared":2`) || !strings.Contains(clearedTraffic.Body.String(), `"throughSequence":2`) {
 		t.Fatalf("clear traffic response code=%d body=%s", clearedTraffic.Code, clearedTraffic.Body.String())
+	}
+	var clearedSnapshot contract.TrafficClearResponse
+	if err := json.Unmarshal(clearedTraffic.Body.Bytes(), &clearedSnapshot); err != nil || clearedSnapshot.Revision <= traceSnapshot.Revision {
+		t.Fatalf("Clear did not advance revision: %#v %v", clearedSnapshot, err)
 	}
 	afterClear := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/traffic/exchanges?protocol=all", "", true)
 	if afterClear.Code != http.StatusOK || afterClear.Body.String() != "{\"exchanges\":[]}\n" {

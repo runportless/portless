@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"example.com/portless-e2e-store/wstest"
 	"fmt"
 	"io"
 	"log"
@@ -22,9 +23,14 @@ func main() {
 	inventory := strings.TrimRight(os.Getenv("INVENTORY_URL"), "/")
 	orders := strings.TrimRight(os.Getenv("ORDERS_URL"), "/")
 
+	http.HandleFunc("/ws", wstest.Echo)
+	http.HandleFunc("/api/ws", wstest.Echo)
+	http.HandleFunc("/auth/ws", wstest.Echo)
 	http.HandleFunc("/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{"service": "checkout", "ready": true})
 	})
+	http.HandleFunc("/websocket-dependency", websocketDependency(orders))
+	http.HandleFunc("/browser-websocket", websocketPage)
 	http.HandleFunc("/api/orders", echoRequest)
 	http.HandleFunc("/auth/login", echoRequest)
 	http.HandleFunc("/browser-policy", browserPolicy)

@@ -18,7 +18,7 @@ afterEach(() => {
 })
 
 describe('traffic snapshots', () => {
-  it('loads traces after the exchange cutoff so reconciliation cannot apply an older trace snapshot', async () => {
+  it('uses the authoritative projection watermark instead of a limited exchange list', async () => {
     const exchangeResponse = deferred<Response>()
     const exchange = { sequence: 42 } as TrafficExchange
     const trace = { number: 42, lastSequence: 42 } as TrafficTrace
@@ -27,7 +27,7 @@ describe('traffic snapshots', () => {
       const url = String(input)
       calls.push(url)
       if (url.includes('/traffic/exchanges')) return exchangeResponse.promise
-      if (url.includes('/traffic/traces')) return Promise.resolve(jsonResponse({ traces: [trace] }))
+      if (url.includes('/traffic/traces')) return Promise.resolve(jsonResponse({ traces: [trace], revision: 80, throughSequence: 75 }))
       return Promise.reject(new Error(`unexpected request: ${url}`))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -38,7 +38,7 @@ describe('traffic snapshots', () => {
     exchangeResponse.resolve(jsonResponse({ exchanges: [exchange] }))
     await vi.waitFor(() => expect(calls).toHaveLength(2))
 
-    await expect(pending).resolves.toEqual({ exchanges: [exchange], traces: [trace], throughSequence: 42 })
+    await expect(pending).resolves.toEqual({ exchanges: [exchange], traces: [trace], revision: 80, throughSequence: 75 })
     expect(calls[1]).toBe('/api/v1/environments/store/local/traffic/traces?background=include&limit=1000&edge=checkout%3Aorders')
   })
 })

@@ -14,7 +14,7 @@ function exchange(sequence: number, overrides: Partial<TrafficExchange> = {}): T
 
 function trace(number: number, overrides: Partial<TrafficTrace> = {}): TrafficTrace {
   return {
-    project: 'store', environment: 'local', number, lastSequence: number,
+    project: 'store', environment: 'local', number, lastSequence: number, revision: number,
     protocol: 'http', provisional: false,
     startedAt: '2026-08-17T12:00:00Z', completedAt: '2026-08-17T12:00:00.100Z',
     durationMs: 100, method: 'GET', requestTarget: '/orders', source: 'external', target: 'checkout',
@@ -59,6 +59,14 @@ describe('traffic state', () => {
     expect(filterTraces(traces, '', 'all').map((item) => item.number)).toEqual([1, 3])
     expect(filterTraces(traces, 'favicon', 'all')).toEqual([])
     expect(filterTraces(traces, '', 'slow').map((item) => item.number)).toEqual([3])
+  })
+
+  it('rejects stale revisions and invalidates detail when parentage changes without a new sequence', () => {
+    const detailed = trace(1, { revision: 5, spans: [{ exchange: exchange(1), depth: 0, startOffsetMs: 0, correlation: 'exact' }] })
+    expect(mergeTraces([detailed], [trace(1, { revision: 4 })])[0]).toEqual(detailed)
+    expect(mergeTraces([detailed], [trace(1, { revision: 5 })])[0].spans).toHaveLength(1)
+    expect(mergeTraces([detailed], [trace(1, { revision: 6, provisional: true })])[0].spans).toBeUndefined()
+    expect(reconcileTraces([trace(1, { revision: 6 }), trace(2, { revision: 4 })], [], 5).map((item) => item.number)).toEqual([1])
   })
 
   it('keeps all TCP roots out of traces while preserving correlated request traces', () => {

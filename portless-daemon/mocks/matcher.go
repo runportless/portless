@@ -4,9 +4,11 @@ package mocks
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 
@@ -24,16 +26,23 @@ const (
 	MaxScenarioBodyBytes = 8 << 20
 	// MaxPreviewRequestBodyBytes bounds a side-effect-free preview request body.
 	MaxPreviewRequestBodyBytes = 256 << 10
+	// MaxQueryPatternBytes bounds one query regular expression before compilation.
+	MaxQueryPatternBytes = 4096
+	// MaxScenarioQueryPatternBytes bounds total query regex compilation per scenario.
+	MaxScenarioQueryPatternBytes = 256 << 10
 )
 
 // ErrNoMatch indicates that no enabled route accepts a request.
 var ErrNoMatch = errors.New("no mock route matched the request")
 
 type compiledRoute struct {
-	route        model.MockRoute
-	segments     []string
-	literalCount int
-	queryCount   int
+	route            model.MockRoute
+	segments         []string
+	literalCount     int
+	queryCount       int
+	queryEqualsCount int
+	queryRegexCount  int
+	queryPatterns    map[string]*regexp.Regexp
 }
 
 // CompiledScenario is an immutable, validated matcher ready for concurrent use.
@@ -54,6 +63,7 @@ func Compile(scenario model.MockScenario) (*CompiledScenario, error) {
 	result := &CompiledScenario{scenario: scenario}
 	seen := map[string]struct{}{}
 	totalBodyBytes := 0
+	totalPatternBytes := 0
 	for _, route := range scenario.Routes {
 		if err := model.ValidateServiceName(route.Service); err != nil {
 			return nil, fmt.Errorf("route %s has invalid service: %w", route.Name, err)
@@ -64,6 +74,14 @@ func Compile(scenario model.MockScenario) (*CompiledScenario, error) {
 		totalBodyBytes += len(route.Body)
 		if totalBodyBytes > MaxScenarioBodyBytes {
 			return nil, fmt.Errorf("mock scenario response bodies exceed %d bytes", MaxScenarioBodyBytes)
+		}
+		for _, matcher := range route.Query {
+			if matcher.Match == "regex" {
+				totalPatternBytes += len(matcher.Value)
+			}
+		}
+		if totalPatternBytes > MaxScenarioQueryPatternBytes {
+			return nil, fmt.Errorf("mock scenario query regex patterns exceed %d bytes", MaxScenarioQueryPatternBytes)
 		}
 		compiled, err := compileRoute(route)
 		if err != nil {
@@ -97,6 +115,12 @@ func Compile(scenario model.MockScenario) (*CompiledScenario, error) {
 		}
 		if left.queryCount != right.queryCount {
 			return left.queryCount > right.queryCount
+		}
+		if left.queryEqualsCount != right.queryEqualsCount {
+			return left.queryEqualsCount > right.queryEqualsCount
+		}
+		if left.queryRegexCount != right.queryRegexCount {
+			return left.queryRegexCount > right.queryRegexCount
 		}
 		if len(left.segments) != len(right.segments) {
 			return len(left.segments) > len(right.segments)
@@ -133,7 +157,7 @@ func (c *CompiledScenario) Match(service, method, path string, query url.Values)
 				break
 			}
 		}
-		if !matched || !matchesQuery(candidate.route.Query, query) {
+		if !matched || !candidate.matchesQuery(query) {
 			continue
 		}
 		return cloneRoute(candidate.route), nil
@@ -141,7 +165,9 @@ func (c *CompiledScenario) Match(service, method, path string, query url.Values)
 	return model.MockRoute{}, ErrNoMatch
 }
 
-// Preview validates and evaluates a request and returns the response that would be served.
+// Preview evaluates a request without traffic or delay, returning the mock-owned
+// response headers and body after HTTP body suppression. Transport-added headers
+// such as Date and Content-Length are not synthesized.
 func (c *CompiledScenario) Preview(request model.MockRequest) (model.MockPreview, error) {
 	if err := validatePreviewRequest(request); err != nil {
 		return model.MockPreview{}, err
@@ -150,11 +176,16 @@ func (c *CompiledScenario) Preview(request model.MockRequest) (model.MockPreview
 	for key, values := range request.Query {
 		query[key] = append([]string{}, values...)
 	}
-	route, err := c.Match(request.Service, request.Method, request.Path, query)
-	if err != nil {
-		return model.MockPreview{Service: request.Service, Status: http.StatusNotImplemented}, nil
+	target := (&url.URL{Path: request.Path, RawQuery: query.Encode()}).RequestURI()
+	result := c.response(request.Service, request.Method, request.Path, query, target)
+	if strings.EqualFold(request.Method, http.MethodHead) || result.Status == http.StatusNoContent || result.Status == http.StatusNotModified {
+		result.Body = ""
 	}
-	return model.MockPreview{Service: request.Service, Matched: true, Route: route.Name, Status: route.Status, Headers: cloneStringMap(route.Headers), Body: route.Body, DelayMS: route.DelayMS}, nil
+	if result.Status == http.StatusNotModified {
+		// net/http removes Content-Type when writing a 304 response.
+		delete(result.Headers, "Content-Type")
+	}
+	return result, nil
 }
 
 func validatePreviewRequest(request model.MockRequest) error {
@@ -229,9 +260,36 @@ func compileRoute(route model.MockRoute) (compiledRoute, error) {
 		}
 		literals++
 	}
-	for key := range route.Query {
+	compiled := compiledRoute{route: route, segments: segments, literalCount: literals, queryCount: len(route.Query), queryPatterns: map[string]*regexp.Regexp{}}
+	for key, matcher := range route.Query {
 		if strings.TrimSpace(key) == "" {
 			return compiledRoute{}, errors.New("query matcher names cannot be empty")
+		}
+		switch matcher.Match {
+		case "exists":
+			if matcher.Value != "" {
+				return compiledRoute{}, fmt.Errorf("query parameter %s: Exists cannot have a value", key)
+			}
+		case "equals":
+			if matcher.Value == "" {
+				return compiledRoute{}, fmt.Errorf("query parameter %s: enter a value or choose Exists", key)
+			}
+			compiled.queryEqualsCount++
+		case "regex":
+			if matcher.Value == "" || len(matcher.Value) > MaxQueryPatternBytes {
+				return compiledRoute{}, fmt.Errorf("query parameter %s: regex must contain 1 to %d bytes", key, MaxQueryPatternBytes)
+			}
+			if _, err := syntax.Parse(matcher.Value, syntax.Perl); err != nil {
+				return compiledRoute{}, fmt.Errorf("query parameter %s has an invalid regex: %w", key, err)
+			}
+			pattern, err := regexp.Compile(`\A(?:` + matcher.Value + `)\z`)
+			if err != nil {
+				return compiledRoute{}, fmt.Errorf("query parameter %s has an invalid regex: %w", key, err)
+			}
+			compiled.queryPatterns[key] = pattern
+			compiled.queryRegexCount++
+		default:
+			return compiledRoute{}, fmt.Errorf("query parameter %s: match must be equals, exists, or regex", key)
 		}
 	}
 	headerNames := map[string]struct{}{}
@@ -252,7 +310,7 @@ func compileRoute(route model.MockRoute) (compiledRoute, error) {
 			return compiledRoute{}, fmt.Errorf("response header %s contains a line break", key)
 		}
 	}
-	return compiledRoute{route: route, segments: segments, literalCount: literals, queryCount: len(route.Query)}, nil
+	return compiled, nil
 }
 
 func validHTTPToken(value string) bool {
@@ -279,18 +337,18 @@ func splitPath(path string) []string {
 	return strings.Split(strings.TrimPrefix(path, "/"), "/")
 }
 
-func matchesQuery(required map[string]string, actual url.Values) bool {
-	for key, expected := range required {
+func (route compiledRoute) matchesQuery(actual url.Values) bool {
+	for key, expected := range route.route.Query {
 		values, exists := actual[key]
 		if !exists {
 			return false
 		}
-		if expected == "" {
+		if expected.Match == "exists" {
 			continue
 		}
 		found := false
 		for _, value := range values {
-			if value == expected {
+			if (expected.Match == "equals" && value == expected.Value) || (expected.Match == "regex" && route.queryPatterns[key].MatchString(value)) {
 				found = true
 				break
 			}
@@ -304,7 +362,8 @@ func matchesQuery(required map[string]string, actual url.Values) bool {
 
 func routesAreAmbiguous(left, right compiledRoute) bool {
 	if left.route.Method != right.route.Method || len(left.segments) != len(right.segments) ||
-		left.literalCount != right.literalCount || left.queryCount != right.queryCount {
+		left.literalCount != right.literalCount || left.queryCount != right.queryCount ||
+		left.queryEqualsCount != right.queryEqualsCount || left.queryRegexCount != right.queryRegexCount {
 		return false
 	}
 	for index := range left.segments {
@@ -315,7 +374,7 @@ func routesAreAmbiguous(left, right compiledRoute) bool {
 		}
 	}
 	for key, leftValue := range left.route.Query {
-		if rightValue, exists := right.route.Query[key]; exists && leftValue != "" && rightValue != "" && leftValue != rightValue {
+		if rightValue, exists := right.route.Query[key]; exists && leftValue.Match == "equals" && rightValue.Match == "equals" && leftValue.Value != rightValue.Value {
 			return false
 		}
 	}
@@ -333,7 +392,7 @@ func cloneScenario(scenario model.MockScenario) model.MockScenario {
 }
 
 func cloneRoute(route model.MockRoute) model.MockRoute {
-	route.Query = cloneStringMap(route.Query)
+	route.Query = maps.Clone(route.Query)
 	route.Headers = cloneStringMap(route.Headers)
 	return route
 }

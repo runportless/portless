@@ -64,8 +64,8 @@ export function EnvironmentHeaderActions({ environment, activity, actions, onNav
     <EnvironmentActivityIndicators environment={environment} activeRecording={activity.recordings.find((recording) => recording.status === 'active')} activeFaultCount={activity.faults.filter((fault) => fault.enabled).length} mockScenarios={boundMockScenarios(environment)} onNavigate={onNavigate} />
     {(endpoint || showStart) && <div className="environment-header-actions">
       {showStart
-        ? <button className="button environment-lifecycle button--primary" type="button" aria-label={label} disabled={actions.disabled} title={`Start ${environment.project}/${environment.name}`} onClick={() => void actions.run('up')}>{label}</button>
-        : endpoint && <a className="button environment-open-app" aria-label="OPEN APP" href={endpoint.url} target="_blank" rel="noreferrer" title={`Open ${primary.name} in a new tab`}>Open <span aria-hidden="true">↗</span></a>}
+        ? <button className="button environment-lifecycle button--primary" type="button" aria-label={label} disabled={actions.disabled} title={`Start all services in ${environment.project}/${environment.name}`} onClick={() => void actions.run('up')}>{label}</button>
+        : endpoint && <a className="button environment-open-app" aria-label="OPEN APP" href={endpoint.url} target="_blank" rel="noreferrer" title={`Open ${primary.name} in a new tab`}>OPEN</a>}
     </div>}
     <span className="sr-only" role="status">{lifecyclePending ? label : ''}</span>
   </>

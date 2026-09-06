@@ -44,3 +44,19 @@ func TestMockScenarioOpenAPIImportAppendsAtomicallyForAnExplicitService(t *testi
 		t.Fatalf("failed import changed routes: %#v, %v", after, err)
 	}
 }
+
+func TestMockRecordingImportSkipsWebSocketsBeforeDeduplication(t *testing.T) {
+	upgrade := model.TrafficExchange{Protocol: model.ProtocolHTTP, Target: "orders", Method: "GET", RequestTarget: "/ws?topic=orders", Status: 101}
+	ordinary := upgrade
+	ordinary.Status = 200
+	ordinary.ResponseBody = "ordinary HTTP"
+	allowed := map[string]string{"orders": "orders"}
+	routes, warnings := mockRoutesFromRecording(allowed, []model.TrafficExchange{upgrade, ordinary})
+	if len(routes) != 1 || routes[0].Status != 200 || len(warnings) != 1 || !strings.Contains(warnings[0], "WebSocket handshakes") {
+		t.Fatalf("routes %#v, warnings %#v", routes, warnings)
+	}
+	routes, warnings = mockRoutesFromRecording(allowed, []model.TrafficExchange{upgrade})
+	if len(routes) != 0 || len(warnings) != 2 {
+		t.Fatalf("upgrades-only routes %#v, warnings %#v", routes, warnings)
+	}
+}

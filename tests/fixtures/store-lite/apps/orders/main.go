@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"example.com/portless-e2e-store/wstest"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,9 @@ func main() {
 	if port == "" {
 		port = "3001"
 	}
+	http.HandleFunc("/ws", wstest.Echo)
+	http.HandleFunc("/api/ws", wstest.Echo)
+	http.HandleFunc("/auth/ws", wstest.Echo)
 	http.HandleFunc("/health", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, map[string]any{"service": "orders", "ready": true})
 	})

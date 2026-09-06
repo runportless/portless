@@ -5,7 +5,6 @@ import { projectRoute } from './projectOperations'
 
 export const projectNavigationStorageKey = 'portless.project-navigation.v1'
 export const recentProjectLimit = 5
-export const recentProjectMaximumAgeMs = 30 * 24 * 60 * 60 * 1_000
 
 export interface ProjectNavigationPreferences {
   lastActiveProject?: string
@@ -88,13 +87,12 @@ export function runningProjects(projects: Project[], environments: Environment[]
   return projects.filter((project) => projectIsRunning(project, environments))
 }
 
-export function recentProjects(projects: Project[], environments: Environment[], preferences: ProjectNavigationPreferences, now = Date.now()) {
+export function recentProjects(projects: Project[], preferences: ProjectNavigationPreferences) {
   const hidden = new Set(preferences.hiddenProjects)
-  const cutoff = now - recentProjectMaximumAgeMs
   return projects
-    .filter((project) => !projectIsRunning(project, environments) && !hidden.has(project.name))
+    .filter((project) => !hidden.has(project.name))
     .map((project) => ({ project, openedAt: timestamp(preferences.lastOpenedByProject[project.name]) }))
-    .filter((item) => item.openedAt >= cutoff)
+    .filter((item) => item.openedAt > 0)
     .sort((left, right) => right.openedAt - left.openedAt || left.project.name.localeCompare(right.project.name))
     .slice(0, recentProjectLimit)
     .map((item) => item.project)

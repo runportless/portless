@@ -68,12 +68,12 @@ func (s *Server) handleMocks(writer http.ResponseWriter, request *http.Request, 
 			methodNotAllowed(writer, http.MethodPost)
 			return
 		}
-		var input model.MockRequest
+		var input contract.PreviewMockRequest
 		if err := decodeJSON(request, &input); err != nil {
 			writeDecodeError(writer, err)
 			return
 		}
-		preview, err := s.app.PreviewMock(request.Context(), project, environment, scenarioName, input)
+		preview, err := s.app.PreviewMock(request.Context(), project, environment, scenarioName, input.Request, input.Draft, input.OriginalRoute)
 		if err != nil {
 			s.writeError(writer, err, subject(scenarioName))
 			return
@@ -108,8 +108,7 @@ func (s *Server) handleMocks(writer http.ResponseWriter, request *http.Request, 
 				writeDecodeError(writer, err)
 				return
 			}
-			route.Name = routeName
-			scenario, err := s.app.PutMockRoute(request.Context(), project, environment, scenarioName, route, principal.Actor)
+			scenario, err := s.app.PutMockRoute(request.Context(), project, environment, scenarioName, routeName, route, principal.Actor)
 			if err != nil {
 				s.writeError(writer, err, subject(scenarioName))
 				return

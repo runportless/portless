@@ -147,7 +147,7 @@ func (c *Commands) delete(ctx context.Context, name string) error {
 }
 
 func (c *Commands) setRoute(ctx context.Context, scenarioName, routeName string, options routeOptions) error {
-	query, err := keyValueMap(options.query, "query")
+	query, err := queryMatchers(options.query, options.queryRegex)
 	if err != nil {
 		return err
 	}
@@ -216,7 +216,7 @@ func (c *Commands) preview(ctx context.Context, scenarioName string, options pre
 	if err != nil {
 		return err
 	}
-	preview, err := client.PreviewMock(ctx, environment.Project, environment.Name, scenarioName, model.MockRequest{Service: options.service, Method: options.method, Path: options.path, Query: values, Headers: headers, Body: body})
+	preview, err := client.PreviewMock(ctx, environment.Project, environment.Name, scenarioName, contract.PreviewMockRequest{Request: contract.MockRequest{Service: options.service, Method: options.method, Path: options.path, Query: values, Headers: headers, Body: body}})
 	if err != nil {
 		return err
 	}
@@ -278,6 +278,31 @@ func (c *Commands) importOpenAPI(ctx context.Context, scenarioName, service, pat
 	c.PrintWarnings(result.Warnings)
 	fmt.Fprintf(c.Out, "imported OpenAPI routes for %s into mock scenario %s (%d routes)\n", service, result.Scenario.Name, len(result.Scenario.Routes))
 	return nil
+}
+
+func queryMatchers(exact, regex []string) (map[string]model.MockQueryMatcher, error) {
+	result := map[string]model.MockQueryMatcher{}
+	for _, group := range []struct {
+		values []string
+		flag   string
+		match  string
+	}{{exact, "query", "equals"}, {regex, "query-regex", "regex"}} {
+		for _, argument := range group.values {
+			name, value, found := strings.Cut(argument, "=")
+			if !found || strings.TrimSpace(name) == "" {
+				return nil, command.UsageError("--%s must use name=value", group.flag)
+			}
+			if _, exists := result[name]; exists {
+				return nil, command.UsageError("query parameter %s is duplicated", name)
+			}
+			match := group.match
+			if match == "equals" && value == "" {
+				match = "exists"
+			}
+			result[name] = model.MockQueryMatcher{Match: match, Value: value}
+		}
+	}
+	return result, nil
 }
 
 func keyValueMap(values []string, label string) (map[string]string, error) {

@@ -11,7 +11,7 @@ import (
 
 func TestStoreRestoresSequencesAndPublishesProtocolNeutralUpdates(t *testing.T) {
 	broker := events.NewBroker()
-	store := NewStore(broker)
+	store := newTestStore(t, broker)
 	scope := model.EnvironmentSelector("billing", "local")
 	store.EnsureSequence(scope, 41)
 	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.exchange", "traffic.trace"})
@@ -42,7 +42,7 @@ func TestStoreRestoresSequencesAndPublishesProtocolNeutralUpdates(t *testing.T) 
 }
 
 func TestTraceProjectionUsesStartTimeAndTopologyAcrossCompletionOrder(t *testing.T) {
-	store := NewStore(nil)
+	store := newTestStore(t, nil)
 	base := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	exchanges := []model.TrafficExchange{
 		{Project: "store", Environment: "local", Protocol: model.ProtocolHTTP, Source: "checkout", Target: "inventory", StartedAt: base.Add(10 * time.Millisecond), CompletedAt: base.Add(25 * time.Millisecond), Method: "GET", RequestTarget: "/inventory/mug", Status: 200},
@@ -54,7 +54,7 @@ func TestTraceProjectionUsesStartTimeAndTopologyAcrossCompletionOrder(t *testing
 	for _, exchange := range exchanges {
 		store.AddExchange(exchange)
 	}
-	traces := store.Traces(model.EnvironmentSelector("store", "local"), 10)
+	traces := testTraceDetails(t, store, model.EnvironmentSelector("store", "local"), 10)
 	if len(traces) != 1 {
 		t.Fatalf("traces = %#v, want one inferred trace", traces)
 	}
@@ -83,7 +83,7 @@ func TestTraceProjectionGroupsTransactionsWithinOneTCPConnection(t *testing.T) {
 		{Sequence: 5, Project: "store", Environment: "local", Protocol: model.ProtocolTCP, Source: "inventory", Target: "inventory-postgres", StartedAt: base.Add(7 * time.Millisecond), CompletedAt: base.Add(8 * time.Millisecond), TCP: &model.TrafficTCPExchange{SessionSequence: 8, TransactionSequence: 1}},
 	}
 
-	traces := buildTraces(exchanges)
+	traces := projectedDetails(exchanges)
 	if len(traces) != 1 || len(traces[0].Spans) != 5 {
 		t.Fatalf("traces = %#v, want one five-span trace", traces)
 	}
@@ -98,7 +98,7 @@ func TestTraceProjectionGroupsTransactionsWithinOneTCPConnection(t *testing.T) {
 
 func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T) {
 	broker := events.NewBroker()
-	store := NewStore(broker)
+	store := newTestStore(t, broker)
 	scope := model.EnvironmentSelector("store", "local")
 	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.trace"})
 	defer subscription.Close()
@@ -109,7 +109,7 @@ func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T)
 		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
 		Source: "orders", Target: "redis", StartedAt: base.Add(5 * time.Millisecond), CompletedAt: base.Add(10 * time.Millisecond),
 	})
-	provisional := store.Traces(scope, 10)
+	provisional := testTraceDetails(t, store, scope, 10)
 	if len(provisional) != 1 || provisional[0].Protocol != model.ProtocolTCP || !provisional[0].Provisional {
 		t.Fatalf("active-parent TCP trace = %#v, want one provisional TCP root", provisional)
 	}
@@ -127,7 +127,7 @@ func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T)
 		Project: "store", Environment: "local", Protocol: model.ProtocolHTTP,
 		Source: "external", Target: "orders", StartedAt: base, CompletedAt: base.Add(20 * time.Millisecond), Method: "GET", RequestTarget: "/orders",
 	})
-	settled := store.Traces(scope, 10)
+	settled := testTraceDetails(t, store, scope, 10)
 	if len(settled) != 1 || settled[0].Protocol != model.ProtocolHTTP || settled[0].Provisional || settled[0].SpanCount != 2 {
 		t.Fatalf("completed-parent trace = %#v, want one settled HTTP-rooted trace", settled)
 	}
@@ -141,12 +141,12 @@ func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T)
 		t.Fatal("timed out waiting for settled HTTP trace")
 	}
 
-	standalone := NewStore(nil)
+	standalone := newTestStore(t, nil)
 	standalone.AddExchange(model.TrafficExchange{
 		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
 		Source: "worker", Target: "redis", StartedAt: base, CompletedAt: base.Add(time.Millisecond),
 	})
-	standaloneTraces := standalone.Traces(scope, 10)
+	standaloneTraces := testTraceDetails(t, standalone, scope, 10)
 	if len(standaloneTraces) != 1 || standaloneTraces[0].Protocol != model.ProtocolTCP || standaloneTraces[0].Provisional {
 		t.Fatalf("standalone TCP trace = %#v, want one settled TCP root", standaloneTraces)
 	}
@@ -155,7 +155,7 @@ func TestTCPTraceIsProvisionalOnlyWhilePotentialHTTPParentIsActive(t *testing.T)
 func TestBackgroundExchangeIsRetainedButOnlyHidesStandaloneSuccessfulTrace(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	scope := model.EnvironmentSelector("store", "local")
-	standalone := NewStore(nil)
+	standalone := newTestStore(t, nil)
 	background := standalone.AddExchange(model.TrafficExchange{
 		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
 		Source: "orders", Target: "redis", Background: true,
@@ -165,12 +165,12 @@ func TestBackgroundExchangeIsRetainedButOnlyHidesStandaloneSuccessfulTrace(t *te
 	if !background.Background || len(standalone.RecentExchanges(scope, 10)) != 1 {
 		t.Fatalf("background raw exchange was not retained: %#v", background)
 	}
-	traces := standalone.Traces(scope, 10)
+	traces := testTraceDetails(t, standalone, scope, 10)
 	if len(traces) != 1 || !traces[0].Background {
 		t.Fatalf("standalone housekeeping trace = %#v, want background", traces)
 	}
 
-	correlated := NewStore(nil)
+	correlated := newTestStore(t, nil)
 	activeRequest := correlated.BeginHTTPRequest(scope, "orders", base)
 	correlated.AddExchange(model.TrafficExchange{
 		Project: "store", Environment: "local", Protocol: model.ProtocolTCP,
@@ -182,7 +182,7 @@ func TestBackgroundExchangeIsRetainedButOnlyHidesStandaloneSuccessfulTrace(t *te
 		Project: "store", Environment: "local", Protocol: model.ProtocolHTTP,
 		Source: "external", Target: "orders", StartedAt: base, CompletedAt: base.Add(3 * time.Millisecond), Status: 200,
 	})
-	traces = correlated.Traces(scope, 10)
+	traces = testTraceDetails(t, correlated, scope, 10)
 	if len(traces) != 1 || traces[0].Background || traces[0].SpanCount != 2 {
 		t.Fatalf("HTTP trace with housekeeping child = %#v, want visible two-span trace", traces)
 	}
@@ -200,7 +200,7 @@ func TestBackgroundExchangeIsRetainedButOnlyHidesStandaloneSuccessfulTrace(t *te
 
 func TestTraceProjectionUsesExactContextAndRefusesAmbiguousInference(t *testing.T) {
 	base := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
-	exact := buildTraces([]model.TrafficExchange{
+	exact := projectedDetails([]model.TrafficExchange{
 		{Sequence: 1, Project: "store", Environment: "local", Source: "external", Target: "checkout", TraceID: "trace", SpanID: "root", StartedAt: base, CompletedAt: base.Add(50 * time.Millisecond)},
 		{Sequence: 2, Project: "store", Environment: "local", Source: "checkout", Target: "orders", TraceID: "trace", SpanID: "child", ParentSpanID: "root", StartedAt: base.Add(5 * time.Millisecond), CompletedAt: base.Add(20 * time.Millisecond)},
 	})
@@ -208,7 +208,7 @@ func TestTraceProjectionUsesExactContextAndRefusesAmbiguousInference(t *testing.
 		t.Fatalf("exact trace = %#v", exact)
 	}
 
-	ambiguous := buildTraces([]model.TrafficExchange{
+	ambiguous := projectedDetails([]model.TrafficExchange{
 		{Sequence: 1, Project: "store", Environment: "local", Source: "external", Target: "checkout", StartedAt: base, CompletedAt: base.Add(50 * time.Millisecond)},
 		{Sequence: 2, Project: "store", Environment: "local", Source: "external", Target: "checkout", StartedAt: base.Add(time.Millisecond), CompletedAt: base.Add(45 * time.Millisecond)},
 		{Sequence: 3, Project: "store", Environment: "local", Source: "checkout", Target: "orders", StartedAt: base.Add(5 * time.Millisecond), CompletedAt: base.Add(10 * time.Millisecond)},
@@ -228,7 +228,7 @@ func TestTraceProjectionUsesExactContextAndRefusesAmbiguousInference(t *testing.
 }
 
 func TestStoreClonesRepeatedHeaders(t *testing.T) {
-	store := NewStore(nil)
+	store := newTestStore(t, nil)
 	exchange := store.AddExchange(model.TrafficExchange{
 		Project: "billing", Environment: "local", RequestHeaders: map[string][]string{"X-Value": {"one", "two"}},
 	})
@@ -240,7 +240,7 @@ func TestStoreClonesRepeatedHeaders(t *testing.T) {
 }
 
 func TestStoreClonesDecodedTCPMessagesAndEvictsByPayloadBytes(t *testing.T) {
-	store := NewStore(nil)
+	store := newTestStore(t, nil)
 	store.payloadLimit = 20
 	first := store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local", TCP: &model.TrafficTCPExchange{
 		Kind: model.TrafficTCPKindOperation, Inspection: model.TrafficInspectionDecoded,
@@ -264,16 +264,16 @@ func TestStoreClonesDecodedTCPMessagesAndEvictsByPayloadBytes(t *testing.T) {
 
 func TestStoreClearPreservesSequenceAndPublishesScopeUpdate(t *testing.T) {
 	broker := events.NewBroker()
-	store := NewStore(broker)
+	store := newTestStore(t, broker)
 	scope := model.EnvironmentSelector("billing", "local")
 	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.cleared"})
 	defer subscription.Close()
 
 	store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local"})
 	store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local"})
-	cleared, throughSequence := store.Clear("billing", "local")
-	if cleared != 2 || throughSequence != 2 || len(store.RecentExchanges(scope, 10)) != 0 || len(store.Traces(scope, 10)) != 0 {
-		t.Fatalf("clear result = (%d, %d), exchanges=%d traces=%d", cleared, throughSequence, len(store.RecentExchanges(scope, 10)), len(store.Traces(scope, 10)))
+	cleared, throughSequence, _ := store.Clear("billing", "local")
+	if cleared != 2 || throughSequence != 2 || len(store.RecentExchanges(scope, 10)) != 0 || len(testTraceDetails(t, store, scope, 10)) != 0 {
+		t.Fatalf("clear result = (%d, %d), exchanges=%d traces=%d", cleared, throughSequence, len(store.RecentExchanges(scope, 10)), len(testTraceDetails(t, store, scope, 10)))
 	}
 	if next := store.AddExchange(model.TrafficExchange{Project: "billing", Environment: "local"}); next.Sequence != 3 {
 		t.Fatalf("sequence after clear = %d, want 3", next.Sequence)

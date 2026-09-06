@@ -115,7 +115,7 @@ test('manages project sources separately from environment checkouts', async ({ p
 
   await authenticate(page, environmentPath('bindings'))
   await (await openCommandPalette(page, 'Stop environment')).getByRole('button', { name: /Stop environment/ }).click()
-  await expect(environmentHeader(page).getByRole('button', { name: 'Start', exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(environmentHeader(page).getByRole('button', { name: 'Start All', exact: true })).toBeVisible({ timeout: 30_000 })
 
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: state.project }).click()
   await expect(page).toHaveURL(new RegExp(`/projects/${state.project}$`))
@@ -194,11 +194,12 @@ test('manages project sources separately from environment checkouts', async ({ p
   expect(project.sources.length).toBeGreaterThan(0)
 
   await page.goto(`${state.baseURL}${environmentPath()}`)
-  await environmentHeader(page).getByRole('button', { name: 'Start', exact: true }).click()
+  await environmentHeader(page).getByRole('button', { name: 'Start All', exact: true }).click()
   await expect(environmentHeader(page).getByRole('link', { name: /health: healthy/ })).toBeVisible({ timeout: 30_000 })
 })
 
-test('focuses the sidebar on one project while retaining searchable project history', async ({ page }) => {
+test('focuses the sidebar on one project with running shortcuts and recent projects', async ({ page }, testInfo) => {
+  test.setTimeout(90_000)
   const state = readE2EState()
   const archivedProject = 'archive-ui'
   const archivedCheckout = join(state.root, archivedProject)
@@ -214,9 +215,19 @@ test('focuses the sidebar on one project while retaining searchable project hist
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: archivedProject, sources: [{ name: archivedProject, path: realpathSync(archivedCheckout) }] }),
   })
+  await controlAPI('/api/v1/environments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project: archivedProject, name: 'qa-picker', from: 'local' }),
+  })
 
   await authenticate(page)
-  await page.reload()
+  await page.goto(`${state.baseURL}/environments/${state.debugProject}/local`)
+  await expect(environmentHeader(page, state.debugProject, 'local')).toBeVisible()
+  await page.goto(`${state.baseURL}/environments/${archivedProject}/local`)
+  await expect(environmentHeader(page, archivedProject, 'local')).toBeVisible()
+  await page.goto(`${state.baseURL}${environmentPath()}`)
+  await expect(environmentHeader(page)).toBeVisible()
   const sidebar = page.locator('.sidebar')
   await expect(page.getByRole('button', { name: `Current project ${state.project}. Switch project` })).toBeVisible()
   await expect(page.getByRole('navigation', { name: `${state.project} environments` })).toBeVisible()
@@ -227,8 +238,20 @@ test('focuses the sidebar on one project while retaining searchable project hist
   await currentProjectTrigger.click()
   let switcher = page.getByRole('dialog', { name: 'Switch project' })
   await expect(switcher.getByLabel('Search projects')).toHaveAttribute('placeholder', 'Search')
-  await expect(switcher.getByText('RUNNING')).toBeVisible()
-  await expect(switcher.getByRole('option', { name: new RegExp(state.debugProject) })).toBeVisible()
+  let expectedPickerNames = [state.project, archivedProject, state.debugProject]
+  const recentProjects = () => switcher.getByRole('group', { name: 'Recent projects' })
+  const runningEnvironments = () => switcher.getByRole('group', { name: 'Running environments' })
+  const pickerNames = () => recentProjects().locator('.project-switcher__name strong')
+  await expect(switcher.locator('.project-switcher__group-heading')).toHaveText(['Running environments', 'Recent projects'])
+  await expect(runningEnvironments().locator('.project-switcher__name strong')).toHaveText([`${state.debugProject}/local`, `${state.project}/${state.environment}`])
+  await expect(pickerNames()).toHaveText(expectedPickerNames)
+  const currentOption = recentProjects().getByRole('option', { name: new RegExp(state.project) })
+  await expect(currentOption).toHaveAttribute('data-current', 'true')
+  await expect(currentOption).toContainText(state.project)
+  await expect(currentOption).toContainText('Current')
+  await expect(currentOption.locator('em')).toHaveText('HEALTHY')
+  await expect(recentProjects().getByRole('option', { name: new RegExp(archivedProject) }).locator('em')).toHaveText('STOPPED')
+  await expect(recentProjects().getByRole('option', { name: new RegExp(state.debugProject) })).toBeVisible()
   await switcher.getByLabel('Search projects').press('Escape')
   await expect(currentProjectTrigger).toBeFocused()
   await currentProjectTrigger.click()
@@ -242,13 +265,69 @@ test('focuses the sidebar on one project while retaining searchable project hist
 
   await page.getByRole('button', { name: `Current project ${archivedProject}. Switch project` }).click()
   switcher = page.getByRole('dialog', { name: 'Switch project' })
+  expectedPickerNames = [archivedProject, state.project, state.debugProject]
+  await expect(pickerNames()).toHaveText(expectedPickerNames)
+  const archivedOption = recentProjects().getByRole('option', { name: new RegExp(archivedProject) })
+  await expect(archivedOption).toHaveAttribute('data-current', 'true')
+  await expect(archivedOption).toContainText('Current')
+  await expect(archivedOption.locator('em')).toHaveText('STOPPED')
+  await page.screenshot({ path: testInfo.outputPath('project-picker-current-stopped.png') })
+
+  for (const [action, status] of [['up', 'HEALTHY'], ['down', 'STOPPED']] as const) {
+    await controlAPI(`/api/v1/environments/${archivedProject}/local/${action}`, {
+      method: 'POST',
+      ...(action === 'down' ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeVolumes: false }) } : {}),
+    })
+    await expect(archivedOption.locator('em')).toHaveText(status, { timeout: 30_000 })
+    await expect(archivedOption).toHaveAttribute('data-current', 'true')
+    await expect(archivedOption).toContainText('Current')
+    await expect(pickerNames()).toHaveText(expectedPickerNames)
+    const runningArchive = runningEnvironments().getByRole('option', { name: new RegExp(`${archivedProject}/local`) })
+    if (action === 'up') {
+      await expect(runningArchive.locator('em')).toHaveText('HEALTHY')
+      await expect(runningArchive).toContainText('Current')
+      await switcher.getByLabel('Search projects').press('Escape')
+      await page.getByRole('navigation', { name: `${archivedProject} environments` }).getByRole('button', { name: `${archivedProject}/qa-picker, stopped`, exact: true }).click()
+      await expect(page).toHaveURL(new RegExp(`/environments/${archivedProject}/qa-picker$`))
+
+      await page.getByRole('button', { name: `Current project ${archivedProject}. Switch project` }).click()
+      await expect(runningArchive).not.toContainText('Current')
+      await archivedOption.click()
+      await expect(page).toHaveURL(new RegExp(`/environments/${archivedProject}/qa-picker$`))
+
+      await page.getByRole('button', { name: `Current project ${archivedProject}. Switch project` }).click()
+      await switcher.getByLabel('Search projects').fill(`${archivedProject}/local`)
+      await expect(switcher.getByRole('option')).toHaveCount(1)
+      await expect(runningArchive).toBeVisible()
+      await switcher.getByLabel('Search projects').press('Enter')
+      await expect(page).toHaveURL(new RegExp(`/environments/${archivedProject}/local$`))
+      await page.getByRole('button', { name: `Current project ${archivedProject}. Switch project` }).click()
+    } else {
+      await expect(runningArchive).toHaveCount(0)
+    }
+  }
+
+  await switcher.getByLabel('Search projects').fill('no-such-project')
+  await expect(switcher.getByRole('option')).toHaveCount(0)
+  await expect(switcher).toContainText('No projects or environments match this search.')
   await switcher.getByLabel('Search projects').fill(state.project)
-  await switcher.getByRole('option', { name: new RegExp(state.project) }).click()
+  await expect(runningEnvironments().getByRole('option', { selected: true })).toBeVisible()
+  await switcher.getByLabel('Search projects').press('ArrowDown')
+  await expect(recentProjects().getByRole('option', { selected: true })).toBeVisible()
+  await switcher.getByLabel('Search projects').press('ArrowDown')
+  await expect(runningEnvironments().getByRole('option', { selected: true })).toBeVisible()
+  await switcher.getByLabel('Search projects').press('ArrowUp')
+  await expect(recentProjects().getByRole('option', { selected: true })).toBeVisible()
+  await switcher.getByLabel('Search projects').press('Enter')
   await expect(page).toHaveURL(new RegExp(`${environmentPath()}$`))
 
   await page.getByRole('button', { name: `Current project ${state.project}. Switch project` }).click()
   switcher = page.getByRole('dialog', { name: 'Switch project' })
-  await expect(switcher.getByRole('option', { name: new RegExp(archivedProject) })).toBeVisible()
+  expectedPickerNames = [state.project, archivedProject, state.debugProject]
+  await expect(pickerNames()).toHaveText(expectedPickerNames)
+  await expect(archivedOption).toHaveAttribute('data-current', 'false')
+  await expect(archivedOption.locator('em')).toHaveText('STOPPED')
+  await expect(archivedOption).toBeVisible()
   await switcher.getByRole('button', { name: 'Manage projects' }).click()
   await expect(page).toHaveURL(/\/projects$/)
   await expect(page.getByLabel('Search projects')).toHaveAttribute('placeholder', 'Search')
@@ -303,8 +382,9 @@ test('focuses the sidebar on one project while retaining searchable project hist
 
   await page.getByRole('button', { name: `Current project ${state.project}. Switch project` }).click()
   switcher = page.getByRole('dialog', { name: 'Switch project' })
+  await expect(pickerNames()).toHaveText([state.project, state.debugProject])
   await switcher.getByLabel('Search projects').fill(archivedProject)
-  await expect(switcher.getByRole('option', { name: new RegExp(archivedProject) })).toContainText('HIDDEN')
+  await expect(switcher.getByRole('option')).toHaveCount(0)
   await switcher.getByRole('button', { name: 'Close project switcher' }).click()
 
   await page.getByRole('button', { name: /all/i }).click()
@@ -317,6 +397,77 @@ test('focuses the sidebar on one project while retaining searchable project hist
   await forgetDialog.getByRole('button', { name: 'FORGET PROJECT', exact: true }).click()
   await expect(forgetDialog).toHaveCount(0)
   await expect(projectRow(archivedProject)).toHaveCount(0)
+})
+
+test('keeps only the five most recently opened projects in the picker', async ({ page }, testInfo) => {
+  const state = readE2EState()
+  const projectNames = ['zulu', 'alpha', 'echo', 'bravo', 'golf', 'charlie', 'unopened'].map((name) => `recent-ui-${name}`)
+  const createdProjects: string[] = []
+  let cleanupFailure = ''
+  try {
+    for (const name of projectNames) {
+      const checkout = join(state.root, name)
+      mkdirSync(checkout, { recursive: true })
+      writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name, scripts: { start: 'node server.js' }, dependencies: { express: '1.0.0' } }))
+      writeFileSync(join(checkout, 'server.js'), "require('http').createServer((_request, response) => response.end('recent')).listen(Number(process.env.PORT))\n")
+      await controlAPI('/api/v1/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, sources: [{ name, path: realpathSync(checkout) }] }),
+      })
+      createdProjects.push(name)
+    }
+
+    await authenticate(page, '/projects')
+    await page.getByRole('button', { name: 'Select project. Switch project', exact: true }).click()
+    const switcher = page.getByRole('dialog', { name: 'Switch project' })
+    const recent = switcher.getByRole('group', { name: 'Recent projects' })
+    const recentNames = recent.locator('.project-switcher__name strong')
+    await expect(recent).toContainText('No recent projects.')
+    await expect(switcher.getByRole('group', { name: 'Running environments' }).getByRole('option')).toHaveCount(2)
+    await switcher.getByRole('button', { name: 'Close project switcher' }).click()
+
+    for (const name of projectNames.slice(0, 6)) {
+      await page.goto(`${state.baseURL}/projects/${name}`)
+      await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
+    }
+
+    await page.getByRole('button', { name: `Current project ${projectNames[5]}. Switch project` }).click()
+    const expected = projectNames.slice(1, 6).reverse()
+    await expect(recentNames).toHaveText(expected)
+    await expect(recent.getByRole('option').first()).toContainText('Current')
+    await expect(recent.locator('em')).toHaveText(Array(5).fill('STOPPED'))
+    await page.reload()
+    await page.getByRole('button', { name: `Current project ${projectNames[5]}. Switch project` }).click()
+    await expect(recentNames).toHaveText(expected)
+
+    await switcher.getByRole('button', { name: 'Manage projects' }).click()
+    await expect(page.locator('.project-registry-row:not(.table-row--header)')).toHaveCount(9)
+    const oldest = page.locator('.project-registry-row:not(.table-row--header)').filter({ hasText: projectNames[0] })
+    await oldest.locator('.project-registry-row__runtime').click()
+    await expect(page).toHaveURL(`${state.baseURL}/environments/${projectNames[0]}/local`)
+    await page.getByRole('button', { name: `Current project ${projectNames[0]}. Switch project` }).click()
+    await expect(recentNames).toHaveText([projectNames[0], ...expected.slice(0, 4)])
+    const pickerBounds = await switcher.boundingBox()
+    expect(pickerBounds!.y + pickerBounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height - 12)
+    await page.screenshot({ path: testInfo.outputPath('project-picker-five-recent.png') })
+
+    await switcher.getByLabel('Search projects').fill(projectNames[1])
+    await expect(switcher.getByRole('option')).toHaveCount(0)
+    await switcher.getByLabel('Search projects').fill(projectNames[3])
+    await expect(recentNames).toHaveText([projectNames[3]])
+    await switcher.getByLabel('Search projects').press('Enter')
+    await expect(page).toHaveURL(`${state.baseURL}/environments/${projectNames[3]}/local`)
+  } finally {
+    for (const name of createdProjects.reverse()) {
+      const response = await fetch(`${state.baseURL}/api/v1/projects/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${state.token}` },
+      })
+      if (!response.ok && !cleanupFailure) cleanupFailure = `DELETE ${name}: ${response.status} ${await response.text()}`
+    }
+  }
+  expect(cleanupFailure).toBe('')
 })
 
 test('paginates the project registry after ten rows and resets the page when controls change', async ({ page }) => {

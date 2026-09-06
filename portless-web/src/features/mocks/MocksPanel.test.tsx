@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { Environment } from '../../api/contracts/environments'
 import type { MockRoute, MockScenario } from '../../api/contracts/mocks'
-import { MockScenarioCreateDialog, MockScenariosList, MockScenarioWorkspace, MocksPanel, mockHTTPStatusGroups, mockRoutesFromDrafts, mockScenarioIsActive, parseMockPairs, parseMockResponseHeaderPairs, sortMockRoutes, sortMockScenarios } from './MocksPanel'
+import { MockScenarioCreateDialog, MockScenariosList, MockScenarioWorkspace, MocksPanel, mockHTTPStatusGroups, mockRoutesFromDrafts, mockScenarioIsActive, sortMockRoutes, sortMockScenarios } from './MocksPanel'
 import { newMockRouteDraft } from './MockRouteEditor'
 
 const environment: Environment = {
@@ -46,6 +46,7 @@ const workspaceProps = {
   onAddRoute: () => undefined,
   onSelectRoute: () => undefined,
   onSaveRoute: async () => true,
+  onPreviewRoute: async () => ({ service: 'inventory', matched: false, status: 501 }),
   onToggleRoute: async () => true,
   onDeleteRoute: async () => true,
   onDismissDelete: () => undefined,
@@ -90,7 +91,7 @@ describe('MocksPanel', () => {
   })
 
   it('renders a compact route list beside the first route configuration', () => {
-    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} />)
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, routes: [route, { ...scenario.routes[1], method: 'POST', enabled: false, delayMs: 150 }] }} />)
     expect(html).toContain('SERVICES / inventory · payments')
     expect(html).not.toContain('class="empty-row"')
     expect(html).toContain('class="mock-scenario-split"')
@@ -102,8 +103,20 @@ describe('MocksPanel', () => {
     expect(html).toContain('aria-label="Sort routes by"')
     for (const label of ['Service', 'Route', 'Match', 'Response', 'Delay', 'State']) expect(html).toContain(`>${label}</option>`)
     expect(html).toContain('aria-label="Route actions for lookup"')
+    expect(html).toContain('title="Service: inventory"')
+    expect(html).toContain('class="mock-route-method">GET</span>')
+    expect(html).toContain('class="mock-route-method">POST</span>')
+    expect(html).toContain('title="Response: 503 Service Unavailable"')
+    expect(html).toContain('title="Response delay: 150 ms"')
+    expect(html).toContain('aria-label="lookup route enabled"')
+    expect(html).toContain('aria-label="decline route enabled"')
+    expect(html).toContain('<span class="sr-only">On</span>')
+    expect(html).toContain('<span class="sr-only">Off</span>')
     expect(html).toContain('aria-label="Edit Route"')
     expect(html).toContain('value="/inventory/{sku}"')
+    expect(html).toContain('role="tablist" aria-label="Mock route configuration"')
+    expect(html).toContain('aria-label="Required query parameters"')
+    expect(html).not.toContain('aria-label="RESPONSE BODY"')
   })
 
   it('paginates routes after ten entries', () => {
@@ -208,14 +221,66 @@ describe('MocksPanel', () => {
     expect(() => mockRoutesFromDrafts([{ ...first, path: '/inventory/item-{id}' }])).toThrow(/whole segment/)
   })
 
-  it('parses route fields and exposes only registered final statuses', () => {
-    expect(parseMockPairs('warehouse=central\ninclude=stock+price', '=')).toEqual({ warehouse: 'central', include: 'stock+price' })
-    expect(parseMockResponseHeaderPairs('Content-Type: application/json\nX-Mode: sold-out')).toEqual({ 'Content-Type': 'application/json', 'X-Mode': 'sold-out' })
-    expect(() => parseMockResponseHeaderPairs('X-Mode: one\nx-mode: two')).toThrow(/duplicated/)
+  it('exposes only registered final statuses', () => {
     const codes = mockHTTPStatusGroups.flatMap((group) => group.statuses.map(([code]) => code))
     expect(codes).toContain(200)
     expect(codes).toContain(503)
     expect(codes).not.toContain(103)
     expect(codes).not.toContain(599)
+  })
+
+  it('converts response header rows through the same validation for saved and previewed routes', () => {
+    const draft = { ...newMockRouteDraft(1, 'inventory'), headers: [{ id: 1, name: 'Location', value: 'https://example.test:8443/items:a' }, { id: 2, name: 'X-Empty', value: '' }, { id: 3, name: '', value: '' }] }
+    expect(mockRoutesFromDrafts([draft])[0].headers).toEqual({ Location: 'https://example.test:8443/items:a', 'X-Empty': '' })
+    expect(() => mockRoutesFromDrafts([{ ...draft, headers: [{ id: 1, name: 'X-Mode', value: 'one' }, { id: 2, name: 'x-mode', value: 'two' }] }])).toThrow(/duplicated/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, headers: [{ id: 1, name: 'Content-Length', value: '100' }] }])).toThrow(/managed by the HTTP transport/)
+  })
+
+  it('converts required query rows without losing literal or case-sensitive values', () => {
+    const draft = { ...newMockRouteDraft(1, 'inventory'), query: [{ id: 1, name: 'warehouse', value: 'central' }, { id: 2, name: 'Warehouse', value: 'east' }, { id: 3, name: 'filter', value: 'a=b&c:d?' }, { id: 4, name: 'optional', value: '' }] }
+    expect(mockRoutesFromDrafts([draft])[0].query).toEqual({ warehouse: { match: 'equals', value: 'central' }, Warehouse: { match: 'equals', value: 'east' }, filter: { match: 'equals', value: 'a=b&c:d?' }, optional: { match: 'exists' } })
+    expect(() => mockRoutesFromDrafts([{ ...draft, query: [...draft.query, { id: 5, name: 'warehouse', value: 'west' }] }])).toThrow(/duplicated/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, query: [{ id: 1, name: '', value: 'central' }] }])).toThrow(/name is required/)
+  })
+
+  it('serializes the complete request and response draft for saving or previewing from either tab', () => {
+    const draft = {
+      ...newMockRouteDraft(1, 'payments'),
+      name: 'create-order',
+      nameCustomized: true,
+      method: 'POST',
+      path: '/orders/{id}',
+      pathMatch: 'template' as const,
+      query: [{ id: 1, name: 'region', value: 'east' }],
+      status: 202,
+      delayMs: 150,
+      body: '{"reserved":true}',
+      headers: [{ id: 1, name: 'Content-Type', value: 'application/json' }, { id: 2, name: 'X-Mode', value: 'pending' }],
+      enabled: false,
+    }
+    expect(mockRoutesFromDrafts([draft])).toEqual([{
+      name: 'create-order', service: 'payments', method: 'POST', path: '/orders/{id}', query: { region: { match: 'equals', value: 'east' } },
+      status: 202, delayMs: 150, body: '{"reserved":true}', headers: { 'Content-Type': 'application/json', 'X-Mode': 'pending' }, enabled: false,
+    }])
+  })
+
+  it('orders query operators by specificity and rejects equal-rank regex routes', () => {
+    const base = newMockRouteDraft(1, 'inventory')
+    const exact = { ...base, name: 'exact', query: [{ id: 1, name: 'sku', match: 'equals' as const, value: 'coffee-mug' }] }
+    const regex = { ...base, name: 'pattern', query: [{ id: 1, name: 'sku', match: 'regex' as const, value: 'coffee-.*' }] }
+    const exists = { ...base, name: 'present', query: [{ id: 1, name: 'sku', match: 'exists' as const, value: '' }] }
+    expect(mockRoutesFromDrafts([exact, regex, exists])).toHaveLength(3)
+    expect(() => mockRoutesFromDrafts([regex, { ...regex, name: 'other', query: [{ id: 1, name: 'sku', match: 'regex', value: 'tea-.*' }] }])).toThrow(/ambiguous/)
+  })
+
+  it('validates fields belonging to both tabs before saving or previewing', () => {
+    const draft = newMockRouteDraft(1, 'inventory')
+    expect(() => mockRoutesFromDrafts([{ ...draft, name: 'invalid name' }])).toThrow(/lowercase URL-safe name/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, delayMs: -1 }])).toThrow(/delay must be between/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, status: 103 }])).toThrow(/registered final HTTP response status/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, headers: [{ id: 1, name: '', value: 'unfinished' }] }])).toThrow(/header name is required/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, query: [{ id: 1, name: '', value: 'unfinished' }] }])).toThrow(/parameter name is required/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, path: '/inventory/{sku}' }])).toThrow(/Choose Template/)
+    expect(() => mockRoutesFromDrafts([{ ...draft, pathMatch: 'template' }])).toThrow(/choose Exact/)
   })
 })

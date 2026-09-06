@@ -121,16 +121,8 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
 
   const closeExchange = () => resetSelection()
 
-  const toggleTrace = async (trace: TrafficTrace) => {
-    if (expandedTrace === trace.number) { setExpandedTrace(null); return }
-    setExpandedTrace(trace.number)
-    if (trace.spans?.length) return
-    try {
-      const detail = await api<TrafficTrace>(environmentPath(environment, `/traffic/traces/${trace.number}`))
-      stream.mergeTrace(detail)
-    } catch (value) {
-      stream.reportError("Trace details aren't available", value)
-    }
+  const toggleTrace = (trace: TrafficTrace) => {
+    setExpandedTrace((current) => current === trace.number ? null : trace.number)
   }
 
   const selectedTraceNavigationItems = useMemo(() => selectedTrace && traceNavigationScoped ? traceNavigationItems(selectedTrace) : undefined, [selectedTrace, traceNavigationScoped])

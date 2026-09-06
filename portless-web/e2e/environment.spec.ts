@@ -244,13 +244,13 @@ test('starts a Portless-owned debugger and returns the service to normal mode', 
   await expect(checkout).toContainText('managed')
 })
 
-test('replaces Open with Start in the same header slot and starts the environment', async ({ page }, testInfo) => {
+test('replaces Open with Start All in the same header slot and starts the environment', async ({ page }, testInfo) => {
   const state = readE2EState()
   const startPattern = `**/api/v1/environments/${state.project}/${state.environment}/up`
   await authenticate(page)
   const header = environmentHeader(page)
   const open = header.getByRole('link', { name: 'OPEN APP', exact: true })
-  const start = header.getByRole('button', { name: 'Start', exact: true })
+  const start = header.getByRole('button', { name: 'Start All', exact: true })
   await expect(open).toBeVisible()
   const openBounds = await open.boundingBox()
   expect(openBounds).toMatchObject({ width: 100, height: 32 })
@@ -258,7 +258,8 @@ test('replaces Open with Start in the same header slot and starts the environmen
   await header.screenshot({ path: testInfo.outputPath('header-open.png') })
   await (await openCommandPalette(page, 'Stop environment')).getByRole('textbox', { name: 'Search', exact: true }).press('Enter')
   await expect(start).toBeEnabled({ timeout: 30_000 })
-  await expect(start).toHaveText('Start')
+  await expect(start).toHaveText('Start All')
+  await expect(start).toHaveCSS('text-transform', 'uppercase')
   await expect(open).toHaveCount(0)
   await expect(header).toContainText('stopped')
   expect(await start.boundingBox()).toEqual(openBounds)

@@ -132,6 +132,23 @@ host. Application Content-Security-Policy, frame, referrer, and content-type
 options pass through unchanged, including repeated policy values. An application
 that supplies no such headers does not inherit the control plane's policies.
 
+Application ingress and directed HTTP dependency proxies also forward HTTP/1.1
+WebSocket upgrades. `traffic/proxy` owns bounded handshake admission, duplex byte
+forwarding, and cancellation of pending or hijacked connections. Target changes
+close affected connections; unchanged reconciliation preserves them. HTTP
+server shutdown alone cannot close hijacked sockets, so the manager closes all
+owned sessions, including ingress-only sessions, within the existing shutdown
+budget. The relay remains a byte transport and adds no privileged behavior.
+
+Remote WebSockets require an explicit read-write policy; GET does not make an
+upgraded connection read-only. HTTPS remote targets use normal TLS verification.
+The opening handshake is one HTTP traffic exchange, completed when the client
+101 headers flush, with no frame bodies or session throughput. Credentials,
+including WebSocket subprotocol values, are redacted before capture. HTTP mocks
+reject upgrades, and recording imports exclude successful handshakes with a
+warning. The control API and its SSE event stream retain their existing wire
+contracts.
+
 For a contract change, update the contract first, then the typed client,
 server adapters and behavior, CLI and web consumers, OpenAPI or event
 documentation, and the relevant tests. Increment the semantic API version

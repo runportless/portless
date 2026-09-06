@@ -22,6 +22,7 @@ import {
   topologyInactiveEdgeVisual,
   topologyPanPosition,
   topologyParticleMotion,
+  topologyServiceProtocols,
   topologyWarningEdgeVisual,
   type TopologyEdge,
   type TopologyEdgeMetric,
@@ -70,6 +71,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
   const previewServiceName = previewTarget?.name || ''
   const previewService = environment.services.find((service) => service.name === previewServiceName)
   const previewDetails = previewService ? topologyServicePreviewDetails(environment, previewService, edges, faults) : undefined
+  const previewProtocols = topologyServiceProtocols(previewServiceName, edges, edgeMetrics)
   const previewRelatedItems = new Set<string>()
   if (previewServiceName) {
     previewRelatedItems.add(previewServiceName)
@@ -81,6 +83,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
 
   useEffect(() => {
     let active = true
+    setEdgeMetrics(new Map())
     api<TrafficExchangeList>(environmentPath(environmentIdentity, '/traffic/exchanges?protocol=all&limit=1000')).then((result) => {
       if (active) setEdgeMetrics(summarizeTopologyTraffic(result.exchanges))
     }).catch(() => undefined)
@@ -94,8 +97,9 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
 
   useEffect(() => {
     if (paused) return
-    return connectEvents(environmentIdentity, ['traffic.exchange', 'traffic.tcp.activity'], (type, value) => {
-      if (type.startsWith('traffic.')) setEdgeMetrics((metrics) => mergeTopologySignal(metrics, value as TopologySignal))
+    return connectEvents(environmentIdentity, ['traffic.exchange', 'traffic.tcp.activity', 'traffic.cleared'], (type, value) => {
+      if (type === 'traffic.cleared') setEdgeMetrics(new Map())
+      else setEdgeMetrics((metrics) => mergeTopologySignal(metrics, value as TopologySignal))
     })
   }, [environmentIdentity, paused])
 
@@ -258,6 +262,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
       if (item.kind === 'client') return <div key={item.key} className={`topology__external topology__item${previewClass}`} style={{ left: position.x, top: position.y }}><span>INGRESS</span><strong>browser / client</strong><small>localhost</small></div>
       const service = item.service
       const mockScenario = mockScenarioFor(environment, service.name)
+      const observedProtocols = topologyServiceProtocols(service.name, edges, edgeMetrics)
       return <button
         key={item.key}
         data-service={service.name}
@@ -270,7 +275,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
         onBlur={() => setFocusedPreview((current) => current?.name === service.name ? undefined : current)}
         onClick={() => selectService(service)}
       >
-        <span className="topology-node__heading"><span className="topology-node__kind"><StatusMark status={service.status} label={false} /><span className="topology-node__framework">{service.kind === 'resource' ? service.resource?.type : service.framework}</span></span>{mockScenario && <span className="topology-node__mock">MOCK</span>}</span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
+        <span className="topology-node__heading"><span className="topology-node__kind"><StatusMark status={service.status} label={false} /><span className="topology-node__framework">{service.kind === 'resource' ? service.resource?.type : service.framework}</span></span><span className="topology-node__badges">{observedProtocols && <span className="topology-node__websocket" title={`${observedProtocols} traffic observed`} aria-label="WebSocket traffic observed">WS</span>}{mockScenario && <span className="topology-node__mock">MOCK</span>}</span></span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
       </button>
     })}
     {previewService && previewDetails && previewTarget && <aside
@@ -281,6 +286,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
     >
       <div className="topology-service-preview__heading"><strong>{previewService.name}</strong><StatusMark status={previewService.status} /></div>
       <div className="topology-service-preview__mode">{previewDetails.type} · {previewDetails.mode}</div>
+      {previewProtocols && <div className="topology-service-preview__protocols">Observed traffic: {previewProtocols}</div>}
       {previewDetails.endpoint && <><span className="topology-service-preview__label">ENDPOINT</span><span className="topology-service-preview__endpoint" title={previewDetails.endpoint}>{previewDetails.endpoint}</span></>}
       {previewDetails.mockScenario && <div className="topology-service-preview__mock">Mock scenario: <strong>{previewDetails.mockScenario}</strong></div>}
       <div className="topology-service-preview__metrics"><span>{previewService.recentRequests} recent requests</span><span>{previewService.p95Millis ? `${previewService.p95Millis}ms p95` : '— p95'}</span>{previewService.restartCount > 0 && <span className="warning-text">{previewService.restartCount} restarts</span>}</div>

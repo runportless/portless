@@ -3,8 +3,9 @@
 package traffic
 
 import (
-	"sort"
+	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/events"
@@ -16,23 +17,56 @@ const (
 	defaultPayloadLimit  = 64 << 20
 )
 
-// Store retains a bounded live traffic window for each environment and
-// publishes metadata notifications without blocking application proxying.
+// Store retains bounded immutable exchanges and shares asynchronously computed
+// metadata projections across traffic readers.
 type Store struct {
-	mu                 sync.RWMutex
-	broker             *events.Broker
-	sequences          map[string]int64
-	exchanges          map[string][]model.TrafficExchange
-	payloadBytes       map[string]int64
-	activeHTTPRequests map[uint64]activeHTTPRequest
-	nextHTTPRequest    uint64
-	limit              int
-	payloadLimit       int64
-	lastPrunedAt       *time.Time
+	mu           sync.RWMutex
+	windows      map[string]*trafficWindow
+	requests     sync.Map
+	nextRequest  atomic.Uint64
+	broker       *events.Broker
+	limit        int
+	payloadLimit int64
+	project      func([]traceInput) []projectedTrace
+	builds       atomic.Uint64
+	pendingMu    sync.Mutex
+	pending      map[*trafficWindow]time.Time
+	wake         chan struct{}
+	jobs         chan *trafficWindow
+	done         chan struct{}
+	closeOnce    sync.Once
+	workers      sync.WaitGroup
 }
 
-// RetentionStats summarizes the live in-memory traffic window and its fixed
-// per-environment bounds.
+type retainedExchange struct {
+	exchange model.TrafficExchange
+	input    traceInput
+	bytes    int64
+}
+
+type trafficWindow struct {
+	mu                           sync.RWMutex
+	publishMu                    sync.Mutex
+	ring                         []*retainedExchange
+	head, count                  int
+	entries                      map[int64]*retainedExchange
+	sequence                     int64
+	revision, generation, wanted uint64
+	payloadBytes                 int64
+	prunedAt                     *time.Time
+	active                       map[uint64]activeHTTPRequest
+	cache                        *projectionCache
+	building                     bool
+	disposed                     bool
+	changed                      chan struct{}
+}
+
+type activeHTTPRequest struct {
+	target  string
+	started time.Time
+}
+
+// RetentionStats summarizes the live in-memory window and per-environment bounds.
 type RetentionStats struct {
 	Exchanges         int
 	PayloadBytes      int64
@@ -41,301 +75,309 @@ type RetentionStats struct {
 	LastPrunedAt      *time.Time
 }
 
-type activeHTTPRequest struct {
-	scope   string
-	target  string
-	started time.Time
+// NewStore constructs bounded retention with a two-worker trace projection pool.
+// The owner must call Close after stopping capture producers.
+func NewStore(broker *events.Broker) *Store { return newStore(broker, buildProjection) }
+
+func newStore(broker *events.Broker, project func([]traceInput) []projectedTrace) *Store {
+	s := &Store{windows: make(map[string]*trafficWindow), broker: broker,
+		limit: defaultExchangeLimit, payloadLimit: defaultPayloadLimit, project: project,
+		pending: make(map[*trafficWindow]time.Time), wake: make(chan struct{}, 1),
+		jobs: make(chan *trafficWindow), done: make(chan struct{})}
+	s.workers.Add(3)
+	go s.scheduleProjections()
+	go s.projectionWorker()
+	go s.projectionWorker()
+	return s
 }
 
-// NewStore constructs an empty traffic store backed by broker notifications.
-func NewStore(broker *events.Broker) *Store {
-	return &Store{
-		broker: broker, sequences: make(map[string]int64),
-		exchanges: make(map[string][]model.TrafficExchange), payloadBytes: make(map[string]int64),
-		activeHTTPRequests: make(map[uint64]activeHTTPRequest), limit: defaultExchangeLimit, payloadLimit: defaultPayloadLimit,
-	}
-}
-
-// BeginHTTPRequest registers an active HTTP request that may become the
-// parent of a completed dependency exchange.
-func (s *Store) BeginHTTPRequest(scope, target string, started time.Time) uint64 {
+// Close cancels pending projection work and joins the bounded CPU workers.
+func (s *Store) Close() {
+	s.closeOnce.Do(func() { close(s.done) })
+	s.workers.Wait()
+	s.pendingMu.Lock()
+	clear(s.pending)
+	s.pendingMu.Unlock()
 	s.mu.Lock()
-	s.nextHTTPRequest++
-	identifier := s.nextHTTPRequest
-	s.activeHTTPRequests[identifier] = activeHTTPRequest{scope: scope, target: target, started: started}
+	clear(s.windows)
 	s.mu.Unlock()
-	return identifier
+	s.requests.Clear()
 }
 
-// AbandonHTTPRequest removes an active HTTP request that completed without a
-// retained exchange.
-func (s *Store) AbandonHTTPRequest(identifier uint64) {
-	if identifier == 0 {
+// DisposeEnvironment releases retained traffic after an environment's producers
+// have stopped and its persistent state has been successfully removed.
+func (s *Store) DisposeEnvironment(scope string) {
+	s.mu.Lock()
+	window := s.windows[scope]
+	delete(s.windows, scope)
+	s.mu.Unlock()
+	if window == nil {
 		return
 	}
-	s.mu.Lock()
-	delete(s.activeHTTPRequests, identifier)
-	s.mu.Unlock()
+	window.publishMu.Lock()
+	defer window.publishMu.Unlock()
+	window.mu.Lock()
+	window.disposed = true
+	window.generation++
+	window.revision++
+	clear(window.ring)
+	clear(window.entries)
+	window.count, window.payloadBytes = 0, 0
+	for identifier := range window.active {
+		s.requests.Delete(identifier)
+	}
+	clear(window.active)
+	window.cache = emptyProjection(window.revision, window.generation, window.sequence)
+	close(window.changed)
+	window.changed = make(chan struct{})
+	window.mu.Unlock()
+	s.pendingMu.Lock()
+	delete(s.pending, window)
+	s.pendingMu.Unlock()
 }
 
-// CompleteHTTPRequest atomically removes an active HTTP request and retains
-// its completed exchange so trace projections never observe a gap between the
-// two states.
+func (s *Store) window(scope string) *trafficWindow {
+	s.mu.RLock()
+	window := s.windows[scope]
+	s.mu.RUnlock()
+	if window != nil {
+		return window
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if window = s.windows[scope]; window == nil {
+		window = &trafficWindow{ring: make([]*retainedExchange, max(1, s.limit)), entries: make(map[int64]*retainedExchange),
+			active: make(map[uint64]activeHTTPRequest), changed: make(chan struct{}), cache: emptyProjection(0, 0, 0)}
+		s.windows[scope] = window
+	}
+	return window
+}
+
+// BeginHTTPRequest registers an HTTP request eligible to absorb dependency spans.
+func (s *Store) BeginHTTPRequest(scope, target string, started time.Time) uint64 {
+	window := s.window(scope)
+	id := s.nextRequest.Add(1)
+	window.mu.Lock()
+	window.active[id] = activeHTTPRequest{target, started}
+	window.revision++
+	window.mu.Unlock()
+	s.requests.Store(id, window)
+	s.schedule(window, false)
+	return id
+}
+
+// AbandonHTTPRequest removes an unfinished HTTP parent and updates provisional traces.
+func (s *Store) AbandonHTTPRequest(identifier uint64) {
+	value, exists := s.requests.LoadAndDelete(identifier)
+	if !exists {
+		return
+	}
+	window := value.(*trafficWindow)
+	window.mu.Lock()
+	delete(window.active, identifier)
+	window.revision++
+	window.mu.Unlock()
+	s.schedule(window, false)
+}
+
+// CompleteHTTPRequest atomically retains a completed HTTP exchange and removes
+// its active-parent registration before scheduling a shared projection.
 func (s *Store) CompleteHTTPRequest(identifier uint64, exchange model.TrafficExchange) model.TrafficExchange {
 	return s.addExchange(identifier, exchange)
 }
 
-// AddExchange assigns an environment-local sequence, retains the completed
-// exchange, and publishes exchange and trace updates.
+// AddExchange retains an immutable exchange and immediately publishes its summary.
+// Trace projection runs separately from the capture caller.
 func (s *Store) AddExchange(exchange model.TrafficExchange) model.TrafficExchange {
 	return s.addExchange(0, exchange)
 }
 
-func (s *Store) addExchange(completedHTTPRequest uint64, exchange model.TrafficExchange) model.TrafficExchange {
-	scope := model.EnvironmentSelector(exchange.Project, exchange.Environment)
+func (s *Store) addExchange(identifier uint64, exchange model.TrafficExchange) model.TrafficExchange {
 	exchange.Background = backgroundExchange(exchange)
 	exchange = cloneExchange(exchange)
-	s.mu.Lock()
-	if completedHTTPRequest != 0 {
-		delete(s.activeHTTPRequests, completedHTTPRequest)
+	window := s.window(model.EnvironmentSelector(exchange.Project, exchange.Environment))
+	entry := &retainedExchange{exchange: exchange, bytes: exchangePayloadBytes(exchange)}
+	window.mu.Lock()
+	if identifier != 0 {
+		delete(window.active, identifier)
+		s.requests.Delete(identifier)
 	}
-	s.sequences[scope]++
-	exchange.Sequence = s.sequences[scope]
-	items := append(s.exchanges[scope], exchange)
-	payloadBytes := s.payloadBytes[scope] + exchangePayloadBytes(exchange)
-	pruned := false
-	for len(items) > 0 && (len(items) > s.limit || payloadBytes > s.payloadLimit) {
-		payloadBytes -= exchangePayloadBytes(items[0])
-		items = items[1:]
-		pruned = true
+	window.sequence++
+	window.revision++
+	entry.exchange.Sequence = window.sequence
+	entry.input = traceInputFor(entry.exchange)
+	for window.count > 0 && (window.count == len(window.ring) || window.payloadBytes+entry.bytes > s.payloadLimit) {
+		window.evict()
 	}
-	if pruned {
-		prunedAt := time.Now().UTC()
-		s.lastPrunedAt = &prunedAt
+	if entry.bytes <= s.payloadLimit {
+		window.ring[(window.head+window.count)%len(window.ring)] = entry
+		window.count++
+		window.payloadBytes += entry.bytes
+		window.entries[entry.exchange.Sequence] = entry
+	} else {
+		pruned := time.Now().UTC()
+		window.prunedAt = &pruned
 	}
-	s.exchanges[scope] = append([]model.TrafficExchange(nil), items...)
-	s.payloadBytes[scope] = payloadBytes
-	traces := buildTraces(items)
-	markProvisionalTraces(traces, activeRequestsForScope(s.activeHTTPRequests, scope))
-	trace := traceContaining(traces, exchange.Sequence)
-	s.mu.Unlock()
-
+	window.mu.Unlock()
 	if s.broker != nil {
-		s.broker.Publish(events.Event{Type: "traffic.exchange", Project: exchange.Project, Environment: exchange.Environment, Data: exchange})
-		if trace.Number > 0 {
-			trace.Spans = nil
-			s.broker.Publish(events.Event{Type: "traffic.trace", Project: exchange.Project, Environment: exchange.Environment, Data: trace})
-		}
+		s.broker.Publish(events.Event{Type: "traffic.exchange", Project: exchange.Project, Environment: exchange.Environment, Data: exchangeSummary(entry.exchange)})
 	}
-	return cloneExchange(exchange)
+	s.schedule(window, false)
+	return cloneExchange(entry.exchange)
 }
 
-// RetentionStats returns aggregate live traffic usage without copying retained
-// exchanges or application payloads.
+func (window *trafficWindow) evict() {
+	entry := window.ring[window.head]
+	delete(window.entries, entry.exchange.Sequence)
+	window.payloadBytes -= entry.bytes
+	window.ring[window.head] = nil
+	window.head = (window.head + 1) % len(window.ring)
+	window.count--
+	pruned := time.Now().UTC()
+	window.prunedAt = &pruned
+}
+
+// EnsureSequence restores the durable high-water mark without reusing sequences.
+func (s *Store) EnsureSequence(scope string, sequence int64) {
+	window := s.window(scope)
+	window.mu.Lock()
+	if window.sequence < sequence {
+		window.sequence = sequence
+		window.revision++
+	}
+	window.mu.Unlock()
+	s.schedule(window, false)
+}
+
+// Clear removes live history and invalidates older projection work while
+// preserving active requests, durable recordings, and the sequence high-water mark.
+func (s *Store) Clear(project, environment string) (int, int64, uint64) {
+	window := s.window(model.EnvironmentSelector(project, environment))
+	window.mu.Lock()
+	count, sequence := window.count, window.sequence
+	window.revision++
+	window.generation++
+	clear(window.ring)
+	clear(window.entries)
+	window.head, window.count, window.payloadBytes = 0, 0, 0
+	window.cache = emptyProjection(window.revision, window.generation, window.sequence)
+	close(window.changed)
+	window.changed = make(chan struct{})
+	revision := window.revision
+	window.mu.Unlock()
+	if s.broker != nil {
+		window.publishMu.Lock()
+		s.broker.Publish(events.Event{Type: "traffic.cleared", Project: project, Environment: environment,
+			Data: map[string]any{"cleared": count, "throughSequence": sequence, "revision": revision}})
+		window.publishMu.Unlock()
+	}
+	return count, sequence, revision
+}
+
+// RetentionStats returns usage without cloning exchanges or taking a long global lock.
 func (s *Store) RetentionStats() RetentionStats {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	windows := make([]*trafficWindow, 0, len(s.windows))
+	for _, window := range s.windows {
+		windows = append(windows, window)
+	}
+	s.mu.RUnlock()
 	result := RetentionStats{ExchangeLimit: s.limit, PayloadLimitBytes: s.payloadLimit}
-	for _, exchanges := range s.exchanges {
-		result.Exchanges += len(exchanges)
-	}
-	for _, bytes := range s.payloadBytes {
-		result.PayloadBytes += bytes
-	}
-	if s.lastPrunedAt != nil {
-		value := *s.lastPrunedAt
-		result.LastPrunedAt = &value
+	for _, window := range windows {
+		window.mu.RLock()
+		result.Exchanges += window.count
+		result.PayloadBytes += window.payloadBytes
+		if window.prunedAt != nil && (result.LastPrunedAt == nil || window.prunedAt.After(*result.LastPrunedAt)) {
+			value := *window.prunedAt
+			result.LastPrunedAt = &value
+		}
+		window.mu.RUnlock()
 	}
 	return result
 }
 
-// EnsureSequence restores an environment's durable traffic high-water mark so
-// new live exchanges cannot reuse a retained recording sequence.
-func (s *Store) EnsureSequence(scope string, sequence int64) {
-	s.mu.Lock()
-	if s.sequences[scope] < sequence {
-		s.sequences[scope] = sequence
+func (s *Store) recent(scope string, limit int, summaries bool) []model.TrafficExchange {
+	window := s.window(scope)
+	window.mu.RLock()
+	if limit <= 0 || limit > window.count {
+		limit = window.count
 	}
-	s.mu.Unlock()
+	entries := make([]*retainedExchange, limit)
+	for i := range entries {
+		entries[i] = window.ring[(window.head+window.count-1-i)%len(window.ring)]
+	}
+	window.mu.RUnlock()
+	result := make([]model.TrafficExchange, len(entries))
+	for i, entry := range entries {
+		if summaries {
+			result[i] = exchangeSummary(entry.exchange)
+		} else {
+			result[i] = cloneExchange(entry.exchange)
+		}
+	}
+	return result
 }
 
-// Clear removes the live exchange window for an environment while preserving
-// its sequence high-water mark and any separately persisted recordings.
-func (s *Store) Clear(project, environment string) (int, int64) {
-	scope := model.EnvironmentSelector(project, environment)
-	s.mu.Lock()
-	cleared := len(s.exchanges[scope])
-	throughSequence := s.sequences[scope]
-	delete(s.exchanges, scope)
-	delete(s.payloadBytes, scope)
-	s.mu.Unlock()
-
-	if s.broker != nil {
-		s.broker.Publish(events.Event{
-			Type: "traffic.cleared", Project: project, Environment: environment,
-			Data: map[string]any{"cleared": cleared, "throughSequence": throughSequence},
-		})
-	}
-	return cleared, throughSequence
-}
-
-// RecentExchanges returns newest-completed-first retained exchanges for scope.
+// RecentExchanges returns newest-completed-first defensive copies of retained detail.
 func (s *Store) RecentExchanges(scope string, limit int) []model.TrafficExchange {
-	s.mu.RLock()
-	items := s.exchanges[scope]
-	if limit <= 0 || limit > len(items) {
-		limit = len(items)
-	}
-	result := make([]model.TrafficExchange, 0, limit)
-	for index := len(items) - 1; index >= len(items)-limit; index-- {
-		result = append(result, cloneExchange(items[index]))
-	}
-	s.mu.RUnlock()
-	return result
+	return s.recent(scope, limit, false)
 }
 
-// Exchange returns one retained live exchange by environment-local sequence.
+// ExchangeSummaries returns bounded metadata without cloning headers or message content.
+func (s *Store) ExchangeSummaries(scope string, limit int) []model.TrafficExchange {
+	return s.recent(scope, limit, true)
+}
+
+// Exchange looks up one retained exchange by sequence and copies only its detail.
 func (s *Store) Exchange(scope string, sequence int64) (model.TrafficExchange, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for index := len(s.exchanges[scope]) - 1; index >= 0; index-- {
-		if s.exchanges[scope][index].Sequence == sequence {
-			return cloneExchange(s.exchanges[scope][index]), true
-		}
+	window := s.window(scope)
+	window.mu.RLock()
+	entry := window.entries[sequence]
+	window.mu.RUnlock()
+	if entry == nil {
+		return model.TrafficExchange{}, false
 	}
-	return model.TrafficExchange{}, false
+	return cloneExchange(entry.exchange), true
 }
 
-// Traces returns newest-started-first trace projections rebuilt from the
-// current bounded exchange window.
-func (s *Store) Traces(scope string, limit int) []model.TrafficTrace {
-	items, active := s.traceInputs(scope)
-	traces := buildTraces(items)
-	markProvisionalTraces(traces, active)
-	sort.SliceStable(traces, func(left, right int) bool {
-		if traces[left].StartedAt.Equal(traces[right].StartedAt) {
-			return traces[left].Number > traces[right].Number
+// Trace returns a coherent detail projection for one trace, waiting only for the
+// requested revision and respecting cancellation during snapshot reconciliation.
+func (s *Store) Trace(ctx context.Context, scope string, number int64) (model.TrafficTrace, bool, error) {
+	window := s.window(scope)
+	for {
+		cache, err := s.projection(ctx, window)
+		if err != nil {
+			return model.TrafficTrace{}, false, err
 		}
-		return traces[left].StartedAt.After(traces[right].StartedAt)
-	})
-	if limit > 0 && limit < len(traces) {
-		traces = traces[:limit]
-	}
-	return traces
-}
-
-// Trace returns a full trace projection by environment-local trace number.
-func (s *Store) Trace(scope string, number int64) (model.TrafficTrace, bool) {
-	items, active := s.traceInputs(scope)
-	traces := buildTraces(items)
-	markProvisionalTraces(traces, active)
-	for _, trace := range traces {
-		if trace.Number == number {
-			return trace, true
+		index, exists := cache.byNumber[number]
+		if !exists {
+			return model.TrafficTrace{}, false, nil
 		}
-	}
-	return model.TrafficTrace{}, false
-}
-
-func (s *Store) traceInputs(scope string) ([]model.TrafficExchange, []activeHTTPRequest) {
-	s.mu.RLock()
-	items := append([]model.TrafficExchange(nil), s.exchanges[scope]...)
-	active := activeRequestsForScope(s.activeHTTPRequests, scope)
-	s.mu.RUnlock()
-	return items, active
-}
-
-func activeRequestsForScope(requests map[uint64]activeHTTPRequest, scope string) []activeHTTPRequest {
-	active := make([]activeHTTPRequest, 0, len(requests))
-	for _, request := range requests {
-		if request.scope == scope {
-			active = append(active, request)
+		trace := &cache.traces[index]
+		window.mu.RLock()
+		valid := !window.disposed && window.generation == cache.generation
+		entries := make([]*retainedExchange, len(trace.spans))
+		if valid {
+			for i, span := range trace.spans {
+				entries[i] = window.entries[span.sequence]
+				if entries[i] == nil {
+					valid = false
+					break
+				}
+			}
 		}
-	}
-	return active
-}
-
-func markProvisionalTraces(traces []model.TrafficTrace, active []activeHTTPRequest) {
-	for index := range traces {
-		trace := &traces[index]
-		if trace.Protocol != model.ProtocolTCP {
+		window.mu.RUnlock()
+		if !valid {
+			if err := ctx.Err(); err != nil {
+				return model.TrafficTrace{}, false, err
+			}
 			continue
 		}
-		for _, request := range active {
-			if request.target == trace.Source && !request.started.After(trace.StartedAt) {
-				trace.Provisional = true
-				break
-			}
+		result := trace.summary
+		result.Spans = make([]model.TrafficTraceSpan, len(trace.spans))
+		for i, span := range trace.spans {
+			result.Spans[i] = model.TrafficTraceSpan{Exchange: cloneExchange(entries[i].exchange), ParentSequence: span.parent, Depth: span.depth, StartOffsetMS: span.offset, Correlation: span.correlation, TransactionGroup: span.transactionGroup}
 		}
+		return result, true, nil
 	}
-}
-
-func traceContaining(traces []model.TrafficTrace, sequence int64) model.TrafficTrace {
-	for _, trace := range traces {
-		for _, span := range trace.Spans {
-			if span.Exchange.Sequence == sequence {
-				return trace
-			}
-		}
-	}
-	return model.TrafficTrace{}
-}
-
-func cloneExchange(exchange model.TrafficExchange) model.TrafficExchange {
-	exchange.RequestHeaders = cloneHeaders(exchange.RequestHeaders)
-	exchange.ResponseHeaders = cloneHeaders(exchange.ResponseHeaders)
-	if exchange.TCP != nil {
-		tcp := *exchange.TCP
-		tcp.RequestMessages = cloneMessages(tcp.RequestMessages)
-		tcp.ResponseMessages = cloneMessages(tcp.ResponseMessages)
-		exchange.TCP = &tcp
-	}
-	return exchange
-}
-
-func cloneMessages(messages []model.TrafficMessage) []model.TrafficMessage {
-	if messages == nil {
-		return nil
-	}
-	result := make([]model.TrafficMessage, len(messages))
-	for index, message := range messages {
-		result[index] = message
-		result[index].Fields = append([]model.TrafficMessageField(nil), message.Fields...)
-	}
-	return result
-}
-
-func exchangePayloadBytes(exchange model.TrafficExchange) int64 {
-	total := int64(len(exchange.RequestBody) + len(exchange.ResponseBody))
-	for _, headers := range []map[string][]string{exchange.RequestHeaders, exchange.ResponseHeaders} {
-		for name, values := range headers {
-			total += int64(len(name))
-			for _, value := range values {
-				total += int64(len(value))
-			}
-		}
-	}
-	if exchange.TCP == nil {
-		return total
-	}
-	for _, messages := range [][]model.TrafficMessage{exchange.TCP.RequestMessages, exchange.TCP.ResponseMessages} {
-		for _, message := range messages {
-			total += int64(len(message.Content) + len(message.Summary) + len(message.Type) + len(message.ContentType))
-			for _, field := range message.Fields {
-				total += int64(len(field.Name) + len(field.Value))
-			}
-		}
-	}
-	return total
-}
-
-func cloneHeaders(headers map[string][]string) map[string][]string {
-	if headers == nil {
-		return nil
-	}
-	result := make(map[string][]string, len(headers))
-	for name, values := range headers {
-		result[name] = append([]string(nil), values...)
-	}
-	return result
 }

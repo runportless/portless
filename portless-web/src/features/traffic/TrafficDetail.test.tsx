@@ -32,6 +32,18 @@ const exchange = {
 } as TrafficExchange
 
 describe('TrafficDetail', () => {
+  it('identifies WebSocket handshakes without presenting session payloads', () => {
+    const socket = { ...exchange, method: 'GET', status: 101, requestBytes: 0, responseBytes: 0, requestBody: '', responseBody: '', requestCapturedBytes: 0, responseCapturedBytes: 0,
+      responseHeaders: { Upgrade: ['websocket'], 'Sec-Websocket-Protocol': ['[REDACTED]'] } }
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: socket, onClose: () => undefined }))
+    expect(markup).toContain('WebSocket handshake — messages are not captured.')
+    expect(markup).toContain('class="traffic-detail__protocol-badge">WS</span>')
+    expect(markup).toContain('role="note"')
+    expect(defaultTrafficPayloadView(socket, 'response')).toBe('headers')
+    expect(rawTrafficMessage(socket, 'response')).toContain('HTTP 101')
+    expect(rawTrafficMessage(socket, 'response')).toContain('[REDACTED]')
+  })
+
   it.each(['http', 'tcp'] as const)('uses the shared red notice for a captured %s error', (protocol) => {
     const markup = renderToStaticMarkup(createElement(TrafficOverview, { exchange: { ...exchange, protocol, error: 'The upstream connection failed.' } }))
     expect(markup).toContain('class="action-error action-error--persistent" role="alert"')

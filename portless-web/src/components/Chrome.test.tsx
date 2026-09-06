@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Environment } from '../api/contracts/environments'
 import type { Project } from '../api/contracts/projects'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonStatus } from '../api/contracts/system'
-import { emptyProjectNavigationPreferences } from '../features/projects/projectNavigation'
 import { AppChrome, scrollCommandIntoView, type SettingsView } from './Chrome'
 import type { EnvironmentView } from '../features/environment/navigation'
 import { EnvironmentHeaderContext } from '../features/environment/EnvironmentHeader'
@@ -19,6 +18,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
   return renderToStaticMarkup(
     <AppChrome
       projects={[project]}
+      recentProjects={[project]}
       environments={[environment]}
       activeProject={activeEnvironment ? project : undefined}
       sidebarProject={project}
@@ -29,7 +29,6 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       viewCounts={{ mocks: 2, recordings: 1, faults: 2 }}
       settingsActive={settingsActive}
       settingsView={settingsView}
-      navigation={emptyProjectNavigationPreferences()}
       commands={[]}
       daemon={daemon}
       diagnostics={diagnostics}

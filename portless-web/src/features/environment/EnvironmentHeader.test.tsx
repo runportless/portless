@@ -69,24 +69,24 @@ describe('persistent environment header', () => {
     expect(render({ ...environment, primaryService: 'checkout', services: [{ ...service, endpoints: [{ kind: 'public', protocol: 'tcp', host: 'db.local.billing.localhost', port: 5432, url: 'tcp://db.local.billing.localhost:5432' }] }] })).not.toContain('OPEN APP')
     const markup = render({ ...environment, primaryService: 'checkout', services: [service] })
     expect(markup).toContain('<a class="button environment-open-app"')
-    expect(markup).toContain('title="Open checkout in a new tab">Open <span aria-hidden="true">↗</span></a>')
+    expect(markup).toContain('title="Open checkout in a new tab">OPEN</a>')
     expect(markup).not.toContain('environment-heading-actions')
     expect(markup).not.toContain('aria-haspopup="menu"')
   })
 
-  it('replaces Open with Start when the environment is stopped, even with retained public endpoints', () => {
+  it('replaces Open with Start All when the environment is stopped, even with retained public endpoints', () => {
     const value: Environment = { ...environment, status: 'stopped', primaryService: 'checkout', services: [{ ...service, status: 'stopped' }] }
     const render = (disabled = false) => renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={{ ...actions, disabled }} onNavigate={() => undefined} />)
-    expect(render()).toContain('class="button environment-lifecycle button--primary" type="button" aria-label="Start"')
-    expect(render()).toContain('title="Start billing/local">Start</button>')
+    expect(render()).toContain('class="button environment-lifecycle button--primary" type="button" aria-label="Start All"')
+    expect(render()).toContain('title="Start all services in billing/local">Start All</button>')
     expect(render()).not.toContain('OPEN APP')
     expect(render().match(/class="button /g)).toHaveLength(1)
-    expect(render(true)).toContain('aria-label="Start" disabled=""')
+    expect(render(true)).toContain('aria-label="Start All" disabled=""')
   })
 
   it('can start a stopped environment without a public HTTP endpoint', () => {
     const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status: 'stopped' }} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
-    expect(markup).toContain('aria-label="Start"')
+    expect(markup).toContain('aria-label="Start All"')
     expect(markup).not.toContain('OPEN APP')
   })
 
@@ -108,13 +108,13 @@ describe('persistent environment header', () => {
     expect(markup).not.toContain('environment-heading-actions')
   })
 
-  it('does not offer Start until shutdown has been confirmed', () => {
+  it('does not offer Start All until shutdown has been confirmed', () => {
     const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status: 'stopped' }} activity={{ recordings: [], faults: [] }} actions={{ ...actions, busy: 'down', disabled: true }} onNavigate={() => undefined} />)
-    expect(markup).not.toContain('aria-label="Start"')
+    expect(markup).not.toContain('aria-label="Start All"')
     expect(markup).toContain('role="status">Stopping…</span>')
   })
 
-  it.each(['stopped', 'starting', 'healthy'] as const)('keeps a pending Start action disabled while the snapshot is %s', (status) => {
+  it.each(['stopped', 'starting', 'healthy'] as const)('keeps a pending Start All action disabled while the snapshot is %s', (status) => {
     const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={{ ...environment, status, primaryService: 'checkout', services: [service] }} activity={{ recordings: [], faults: [] }} actions={{ ...actions, busy: 'up', disabled: true }} onNavigate={() => undefined} />)
     expect(markup).toContain('aria-label="Starting…" disabled=""')
     expect(markup).toContain('role="status">Starting…</span>')

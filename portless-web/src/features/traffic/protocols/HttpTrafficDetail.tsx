@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react'
 import type { TrafficExchange } from '../../../api/contracts/traffic'
 import { captureSummary, CompareIcon, CopyIcon, formatTrafficBytes, highlightedJSON, trafficBodyPresentation, trafficBodySummary } from '../detail/TrafficFormatting'
 import type { TrafficDetailView, TrafficDirection, TrafficPayloadView } from '../detail/trafficDetailTypes'
+import { isWebSocketHandshake } from '../trafficProtocol'
 
 export function formattedTrafficHeaders(headers: Record<string, string[]> | undefined, host?: string) {
   const values = Object.entries(headers || {}).filter(([name]) => !host || name.toLowerCase() !== 'host')
@@ -79,7 +80,8 @@ function TrafficMessageInspector({ exchange, direction, view, onView, compact = 
   const bodyPresentation = values.body ? trafficBodyPresentation(values.body, values.contentType || '') : { text: '', json: false }
   const formattedBody = bodyPresentation.text
   const raw = rawTrafficMessage(exchange, direction)
-  const copyValue = view === 'body' ? (formattedBody || trafficBodySummary(values.bytes, values.capturedBytes, direction)) : view === 'headers' ? values.headers : raw
+  const emptyBody = isWebSocketHandshake(exchange) ? 'WebSocket messages are not captured.' : trafficBodySummary(values.bytes, values.capturedBytes, direction)
+  const copyValue = view === 'body' ? (formattedBody || emptyBody) : view === 'headers' ? values.headers : raw
   const copy = () => navigator.clipboard.writeText(copyValue).catch(() => undefined)
 
   return <section className={`traffic-message-workbench traffic-message-workbench--${direction}${compact ? ' traffic-message-workbench--compact' : ''}`} aria-label={`${direction} details`}>
@@ -93,7 +95,7 @@ function TrafficMessageInspector({ exchange, direction, view, onView, compact = 
     <div className="traffic-payload" id={panelId} role="tabpanel">
       {view === 'body' && (formattedBody
         ? <><pre className={bodyPresentation.json ? 'traffic-json' : undefined}>{bodyPresentation.json ? highlightedJSON(formattedBody) : formattedBody}</pre>{values.truncated && <small>Showing the first {formatTrafficBytes(values.capturedBytes)} of the {direction} body.</small>}</>
-        : <div className="traffic-payload__empty"><strong>{trafficBodySummary(values.bytes, values.capturedBytes, direction)}</strong></div>)}
+        : <div className="traffic-payload__empty"><strong>{emptyBody}</strong></div>)}
       {view === 'headers' && <pre className="traffic-headers">{highlightedTrafficHeaders(values.headers)}</pre>}
       {view === 'raw' && <pre>{raw}</pre>}
     </div>
@@ -118,6 +120,7 @@ export function HttpTrafficDetail({ exchange, maximized, view, onView }: {
   }, [defaultRequestView, defaultResponseView, exchange.project, exchange.environment, exchange.sequence])
 
   return <>
+    {isWebSocketHandshake(exchange) && <div className="traffic-handshake-note" role="note">WebSocket handshake — messages are not captured.</div>}
     <nav className="traffic-detail__tabs" role="tablist" aria-label="Exchange payload">
       <button type="button" role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'is-active' : ''} onClick={() => onView('request')}>REQUEST</button>
       <button type="button" role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'is-active' : ''} onClick={() => onView('response')}>RESPONSE</button>

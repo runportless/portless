@@ -7,12 +7,16 @@ export interface MockScenarioActivation {
   enabledAt?: string
 }
 
+export type MockQueryMatcher =
+  | { match: 'exists' }
+  | { match: 'equals' | 'regex'; value: string }
+
 export interface MockRoute {
   name: string
   service: string
   method: string
   path: string
-  query?: Record<string, string>
+  query?: Record<string, MockQueryMatcher>
   status: number
   headers?: Record<string, string>
   body?: string
@@ -50,4 +54,19 @@ export interface MockPreview {
   headers?: Record<string, string>
   body?: string
   delayMs?: number
+}
+
+export interface MockRequest {
+  service: string
+  method: string
+  path: string
+  query?: Record<string, string[]>
+  headers?: Record<string, string[]>
+  body?: string
+}
+
+export interface PreviewMockRequest {
+  request: MockRequest
+  draft?: MockRoute
+  originalRoute?: string
 }

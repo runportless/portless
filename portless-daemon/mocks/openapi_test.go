@@ -40,7 +40,7 @@ components:
 		t.Fatalf("routes = %#v warnings = %#v", routes, warnings)
 	}
 	route := routes[0]
-	if route.Name != "getinventory" || route.Method != "GET" || route.Path != "/inventory/{sku}" || route.Query["warehouse"] != "central" || route.Status != 200 || route.Headers["Content-Type"] != "application/json" || route.Body != `{"available":false,"quantity":0}` {
+	if route.Name != "getinventory" || route.Method != "GET" || route.Path != "/inventory/{sku}" || route.Query["warehouse"].Match != "equals" || route.Query["warehouse"].Value != "central" || route.Status != 200 || route.Headers["Content-Type"] != "application/json" || route.Body != `{"available":false,"quantity":0}` {
 		t.Fatalf("route = %#v", route)
 	}
 }

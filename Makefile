@@ -15,6 +15,7 @@ RELAY_E2E_BINARY ?= bin/portless-relay-e2e
 RESOURCE_E2E_RUNTIME ?= auto
 DISPATCH_EXAMPLE := examples/dispatch
 STORE_EXAMPLE := examples/store
+CHAT_EXAMPLE := examples/chat
 WEB_PROJECT := portless-web
 SITE_PROJECT := portless-site
 CLI_PACKAGE := ./portless-cli/cmd/portless
@@ -36,6 +37,7 @@ SHELL_SCRIPTS := scripts/render-homebrew-formula.sh scripts/validate-release-ver
 
 # Declare command-style targets phony so matching files never suppress their recipes.
 .PHONY: build web site site-dev lint lint-go lint-web lint-shell lint-actions test test-go test-web test-site coverage coverage-clean coverage-go coverage-web coverage-site coverage-summary example-store-dependencies test-example-store example-dispatch-bootstrap example-dispatch-bootstrap-install test-example-dispatch e2e-binary relay-e2e-binary test-e2e test-e2e-cli test-e2e-ui test-e2e-resources test-e2e-store test-e2e-dispatch test-e2e-relay-destructive test-e2e-relay-destructive-resources install-e2e-browser install release-check release-snapshot clean reinstall-web-dependencies reinstall-site-dependencies
+.PHONY: example-chat-dependencies test-example-chat test-e2e-chat
 
 # Build the web control plane and the Portless executable.
 build: web
@@ -154,6 +156,17 @@ example-store-dependencies:
 # Validate the Store example applications.
 test-example-store:
 	$(MAKE) -C $(STORE_EXAMPLE) test
+
+# Install and validate the standalone in-memory Chat example.
+example-chat-dependencies:
+	$(MAKE) -C $(CHAT_EXAMPLE) dependencies
+
+test-example-chat:
+	$(MAKE) -C $(CHAT_EXAMPLE) test
+
+# Run Chat through real Portless proxies without the machine relay.
+test-e2e-chat: e2e-binary
+	PORTLESS_E2E_BINARY="$(abspath $(E2E_BINARY))" $(MAKE) -C $(CHAT_EXAMPLE) e2e
 
 # Materialize the Dispatch example and install its locked application dependencies.
 example-dispatch-bootstrap-install:

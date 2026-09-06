@@ -338,6 +338,26 @@ func isolatedMultiSourceFixture(t *testing.T) (string, map[string]string) {
 		if err := os.WriteFile(filepath.Join(path, "go.mod"), []byte(module), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		if sourceService == "checkout" || sourceService == "orders" {
+			// Each copied source is an independent module, including its fixture helper.
+			if err := copyDirectory(filepath.Join(filepath.Dir(fixture), "wstest"), filepath.Join(path, "wstest")); err != nil {
+				t.Fatal(err)
+			}
+			files, err := filepath.Glob(filepath.Join(path, "*.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range files {
+				content, err := os.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				updated := strings.ReplaceAll(string(content), "example.com/portless-e2e-store/wstest", "example.com/"+name+"/wstest")
+				if err := os.WriteFile(file, []byte(updated), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		canonical, err := filepath.EvalSymlinks(path)
 		if err != nil {
 			t.Fatal(err)

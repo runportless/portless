@@ -185,7 +185,7 @@ func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
 	if _, err := app.CreateMockScenario(ctx, "store", "local", model.MockScenario{Name: "sold-out"}, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusConflict, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false}`, Enabled: true}, "test"); err != nil {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", "lookup", model.MockRoute{Name: "lookup", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusConflict, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false}`, Enabled: true}, "test"); err != nil {
 		t.Fatal(err)
 	}
 	operation, err = app.SetMockScenarioEnabled(ctx, "store", "local", "sold-out", true, "test", "inventory-mock")
@@ -220,7 +220,7 @@ func TestActiveMockHandoffKeepsOtherStoreServicesRunning(t *testing.T) {
 	if _, active := app.mocks.Address("store/local", "inventory"); active {
 		t.Fatal("mock listener remained active after stopping the service")
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", model.MockRoute{Name: "lookup", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusGone, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false,"updated":true}`, Enabled: true}, "test"); err != nil {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "sold-out", "lookup", model.MockRoute{Name: "lookup", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: http.StatusGone, Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"available":false,"updated":true}`, Enabled: true}, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if stopped := scopedServiceSnapshot(t, app, "store", "local", "inventory"); stopped.Status != model.ServiceStopped {

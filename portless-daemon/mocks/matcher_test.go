@@ -16,15 +16,15 @@ func TestCompiledScenarioUsesDeterministicSpecificity(t *testing.T) {
 	scenario := model.MockScenario{Name: "inventory", Routes: []model.MockRoute{
 		{Name: "parameter", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Status: 200, Body: "parameter", Enabled: true},
 		{Name: "literal", Service: "inventory", Method: "GET", Path: "/inventory/featured", Status: 200, Body: "literal", Enabled: true},
-		{Name: "warehouse", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Query: map[string]string{"warehouse": "central"}, Status: 200, Body: "warehouse", Enabled: true},
+		{Name: "warehouse", Service: "inventory", Method: "GET", Path: "/inventory/{sku}", Query: map[string]model.MockQueryMatcher{"warehouse": {Match: "equals", Value: "central"}}, Status: 200, Body: "warehouse", Enabled: true},
 	}}
 	compiled, err := Compile(scenario)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scenario.Routes[2].Query["warehouse"] = "changed"
+	scenario.Routes[2].Query["warehouse"] = model.MockQueryMatcher{Match: "regex", Value: "changed"}
 	returned := compiled.Scenario()
-	returned.Routes[2].Query["warehouse"] = "also-changed"
+	returned.Routes[2].Query["warehouse"] = model.MockQueryMatcher{Match: "exists"}
 	cases := []struct {
 		path, query, route string
 	}{
@@ -132,6 +132,14 @@ func TestCompileBoundsScenarioSize(t *testing.T) {
 	}
 	if _, err := Compile(model.MockScenario{Name: "inventory", Routes: []model.MockRoute{{Name: "large", Service: "inventory", Method: "GET", Path: "/large", Status: 200, Body: strings.Repeat("x", MaxResponseBodyBytes+1), Enabled: true}}}); err == nil || !strings.Contains(err.Error(), "response body exceeds") {
 		t.Fatalf("body limit error = %v", err)
+	}
+	body := strings.Repeat("x", MaxResponseBodyBytes)
+	routes = make([]model.MockRoute, MaxScenarioBodyBytes/MaxResponseBodyBytes+1)
+	for index := range routes {
+		routes[index] = model.MockRoute{Name: "large-" + strconv.Itoa(index), Service: "inventory", Method: "GET", Path: "/" + strconv.Itoa(index), Status: 200, Body: body, Enabled: true}
+	}
+	if _, err := Compile(model.MockScenario{Name: "inventory", Routes: routes}); err == nil || !strings.Contains(err.Error(), "scenario response bodies exceed") {
+		t.Fatalf("combined body limit error = %v", err)
 	}
 }
 

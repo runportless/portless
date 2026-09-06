@@ -60,8 +60,19 @@ func TestRelayReturnsServiceUnavailableWhenDaemonSocketIsAbsent(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.sock")
 	go func() { _ = serveHTTPRelay(ctx, listener, missingPath, 4) }()
 
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 2 * time.Second}
-	response, err := client.Get("http://" + listener.Addr().String())
+	// Read explicitly after writing: a missing daemon can produce an immediate
+	// rejection before net/http registers its pending request under -race.
+	client, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+	_, err = io.WriteString(client, "GET / HTTP/1.1\r\nHost: portless.localhost\r\nConnection: close\r\n\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(client), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,4 +219,72 @@ func serveOneHTTPResponse(listener net.Listener, body string) {
 		}
 	}
 	_, _ = io.WriteString(connection, "HTTP/1.1 200 OK\r\nContent-Length: "+strconv.Itoa(len(body))+"\r\nConnection: close\r\n\r\n"+body)
+}
+
+func TestRelayForwardsWebSocketBytesAndClosesOnCancellation(t *testing.T) {
+	directory, err := os.MkdirTemp("/tmp", "portless-relay-ws-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(directory)
+	socketPath := filepath.Join(directory, "ingress.sock")
+	upstream, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") != "websocket" {
+			http.Error(w, "missing upgrade", 400)
+			return
+		}
+		c, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = io.WriteString(rw, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nfirst frame")
+		_ = rw.Flush()
+		_, _ = io.Copy(c, rw.Reader)
+	})}
+	go func() { _ = server.Serve(upstream) }()
+	defer server.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { _ = serveHTTPRelay(ctx, listener, socketPath, 4); close(done) }()
+	client, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = io.WriteString(client, "GET /ws HTTP/1.1\r\nHost: checkout.local.billing.localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	reader := bufio.NewReader(client)
+	response, err := http.ReadResponse(reader, nil)
+	if err != nil || response.StatusCode != 101 {
+		t.Fatalf("response %#v, error %v", response, err)
+	}
+	_, _ = io.WriteString(client, "client frame")
+	payload := make([]byte, len("first frameclient frame"))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != "first frameclient frame" {
+		t.Fatalf("changed bytes %q", payload)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not stop")
+	}
+	if _, err := reader.ReadByte(); err == nil {
+		t.Fatal("relay left WebSocket open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("relay timed out instead of closing")
+	}
 }

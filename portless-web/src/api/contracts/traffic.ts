@@ -99,6 +99,7 @@ export interface TrafficTraceSpan {
 export interface TrafficTrace {
   project: string
   environment: string
+  revision: number
   number: number
   lastSequence: number
   traceId?: string
@@ -123,6 +124,8 @@ export interface TrafficTrace {
 
 export interface TrafficTraceList {
   traces: TrafficTrace[]
+  revision: number
+  throughSequence: number
 }
 
 export interface TrafficActivity {
@@ -143,4 +146,5 @@ export interface TrafficActivity {
 export interface TrafficClearResponse {
   cleared: number
   throughSequence: number
+  revision: number
 }

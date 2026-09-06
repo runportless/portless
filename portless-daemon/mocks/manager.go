@@ -2,7 +2,6 @@ package mocks
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -146,22 +145,9 @@ func (r *runtime) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, "mock scenario is not loaded", http.StatusServiceUnavailable)
 		return
 	}
-	scenario := compiled.Scenario()
-	writer.Header().Set(ScenarioHeader, scenario.Name)
-	route, err := compiled.Match(r.service, request.Method, request.URL.Path, request.URL.Query())
-	if err != nil {
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusNotImplemented)
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"error": map[string]string{
-				"code":    "MOCK_ROUTE_NOT_MATCHED",
-				"message": "No enabled route in mock scenario " + scenario.Name + " for " + r.service + " matched " + request.Method + " " + request.URL.RequestURI(),
-			},
-		})
-		return
-	}
-	if route.DelayMS > 0 {
-		timer := time.NewTimer(time.Duration(route.DelayMS) * time.Millisecond)
+	response := compiled.response(r.service, request.Method, request.URL.Path, request.URL.Query(), request.URL.RequestURI())
+	if response.DelayMS > 0 {
+		timer := time.NewTimer(time.Duration(response.DelayMS) * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
@@ -169,13 +155,11 @@ func (r *runtime) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	for name, value := range route.Headers {
+	for name, value := range response.Headers {
 		writer.Header().Set(name, value)
 	}
-	writer.Header().Set(ScenarioHeader, scenario.Name)
-	writer.Header().Set(RouteHeader, route.Name)
-	writer.WriteHeader(route.Status)
-	_, _ = writer.Write([]byte(route.Body))
+	writer.WriteHeader(response.Status)
+	_, _ = writer.Write([]byte(response.Body))
 }
 
 func runtimeKey(scope, service string) string {

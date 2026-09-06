@@ -24,16 +24,20 @@ type TrafficExchangeList struct {
 	Exchanges []TrafficExchange `json:"exchanges"`
 }
 
-// TrafficTraceList is a collection of trace summaries.
+// TrafficTraceList contains filtered summaries and the complete environment
+// projection's watermarks, independent of the returned row count.
 type TrafficTraceList struct {
-	Traces []TrafficTrace `json:"traces"`
+	Traces          []TrafficTrace `json:"traces"`
+	Revision        uint64         `json:"revision"`
+	ThroughSequence int64          `json:"throughSequence"`
 }
 
 // TrafficClearResponse reports the live traffic window removed through an
 // environment-local exchange sequence. Durable recordings are not affected.
 type TrafficClearResponse struct {
-	Cleared         int   `json:"cleared"`
-	ThroughSequence int64 `json:"throughSequence"`
+	Cleared         int    `json:"cleared"`
+	ThroughSequence int64  `json:"throughSequence"`
+	Revision        uint64 `json:"revision"`
 }
 
 // RecordingList is a collection of retained traffic recordings.

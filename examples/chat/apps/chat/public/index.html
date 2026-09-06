@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Chat · Portless</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Chat home">
+        <svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><path d="M3 5h26v19H12l-9 6Z"/><path class="brand-lines" d="M9 12h14M9 18h9"/></svg>
+        <span>Chat</span>
+      </a>
+      <div class="header-actions">
+        <button id="theme" class="quiet" type="button" aria-label="Switch to dark theme">Dark theme</button>
+        <a id="another-tab" class="button secondary" href="/" target="_blank" rel="noopener">Open another tab <span aria-hidden="true">↗</span></a>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar" aria-label="Room and participants">
+        <div class="room-heading"><span class="eyebrow">ROOM</span><h1><span aria-hidden="true">#</span> lobby</h1></div>
+        <section class="identity">
+          <form id="join-form">
+            <label for="name">Your display name</label>
+            <input id="name" name="name" maxlength="24" placeholder="e.g. Alex" autocomplete="off" required>
+            <button class="primary" type="submit">Join room <span aria-hidden="true">→</span></button>
+            <p class="fine">No account needed. Pick a name for this tab.</p>
+          </form>
+          <div id="joined" hidden><span class="eyebrow">YOU’RE HERE AS</span><p id="identity-name"></p><button id="leave" class="secondary" type="button">Leave room</button></div>
+        </section>
+        <section class="participants">
+          <h2>In the room <span id="member-count">0</span></h2>
+          <ul id="members" aria-label="Members"></ul>
+          <p id="no-members" class="muted">Join to see who’s here.</p>
+        </section>
+        <details class="try-it">
+          <summary>Try the demo</summary>
+          <ol><li>Open another tab and join with another name.</li><li>Send a message or start typing.</li><li>Restart <code>rooms</code> in Portless. Both tabs reconnect.</li></ol>
+          <p>Portless Traffic shows the opening handshake for both connections. Chat messages stay here.</p>
+        </details>
+      </aside>
+
+      <section class="conversation" aria-label="Lobby chat">
+        <header class="conversation-header">
+          <h2>Messages</h2>
+          <span id="status" class="status" role="status" aria-live="polite" data-state="Disconnected">Disconnected</span>
+        </header>
+        <div id="notices" class="notices" hidden>
+          <p id="notice" hidden></p><p id="error" role="alert" hidden></p><p id="guidance" hidden>Still reconnecting. Check that chat and rooms are running in Portless, or leave and try again.</p>
+        </div>
+        <div id="transcript" class="transcript" role="region" aria-label="Conversation" tabindex="0">
+          <div id="empty" class="empty"><h3>No messages yet</h3><p>Open another tab to start a conversation.</p></div>
+          <ol id="messages" aria-label="Messages"></ol>
+        </div>
+        <button id="new-messages" class="secondary new-messages" hidden type="button">New messages ↓</button>
+        <div class="compose-area">
+          <p id="typing" class="typing" aria-live="polite"></p>
+          <section id="pending" class="pending" aria-label="Outgoing message" hidden>
+            <strong id="pending-label"></strong><p id="pending-text"></p>
+            <p id="pending-help" class="fine"></p>
+            <div id="pending-actions"><button id="copy" class="quiet" type="button">Copy text</button><button id="dismiss" class="quiet" type="button">Dismiss</button><span id="copy-status" role="status"></span></div>
+          </section>
+          <form id="compose-form">
+            <label class="sr-only" for="message">Message</label>
+            <textarea id="message" name="message" maxlength="2000" rows="2" placeholder="Join the room to send a message." aria-describedby="compose-hint" disabled></textarea>
+            <div class="compose-footer"><span id="compose-hint">Enter to send · Shift+Enter for a new line</span><button id="send" class="primary" type="submit" disabled>Send message <span aria-hidden="true">↑</span></button></div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

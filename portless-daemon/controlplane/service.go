@@ -188,5 +188,6 @@ func (s *Service) Close(ctx context.Context) {
 		defer cancel()
 	}
 	s.proxy.Close(closeContext)
+	s.traffic.Close()
 	_ = s.mocks.Close(closeContext)
 }

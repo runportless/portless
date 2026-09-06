@@ -172,6 +172,73 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  chat:
+    name: Chat (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: '22.12.0'
+            e2e: false
+          - os: ubuntu-latest
+            node: '24'
+            e2e: true
+          - os: macos-latest
+            node: '24'
+            e2e: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        if: matrix.e2e
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            examples/chat/package-lock.json
+            portless-web/package-lock.json
+
+      - name: Test Chat services and browser sessions
+        run: make test-example-chat
+
+      - name: Install Chat Chromium
+        if: matrix.e2e
+        timeout-minutes: 5
+        run: npm --prefix examples/chat exec -- playwright install --with-deps chromium
+
+      - name: Run isolated Chat browser journeys
+        if: matrix.e2e
+        timeout-minutes: 12
+        env:
+          PORTLESS_E2E_ARTIFACT_DIR: ${{ runner.temp }}/portless-chat-e2e
+        run: |
+          mkdir -p "$PORTLESS_E2E_ARTIFACT_DIR"
+          set -o pipefail
+          make test-e2e-chat 2>&1 | tee "$PORTLESS_E2E_ARTIFACT_DIR/test.log"
+
+      - name: Upload Chat failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chat-${{ matrix.os }}-node-${{ matrix.node }}-failure
+          path: |
+            ${{ runner.temp }}/portless-chat-e2e
+            examples/chat/test-results
+            examples/chat/playwright-report
+          if-no-files-found: warn
+          retention-days: 7
+
   release-snapshot:
     name: Release snapshot
     runs-on: ubuntu-latest

@@ -91,13 +91,13 @@ func TestMockScenarioRejectsOverlapAndCoverageChangesWhileActive(t *testing.T) {
 	if operation = waitForOperation(t, app, operation); operation.State != "failed" || !strings.Contains(operation.Error, "already controlled") {
 		t.Fatalf("overlapping activation = %#v", operation)
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "first", model.MockRoute{Name: "new-service", Service: "checkout", Method: "GET", Path: "/", Status: 200, Enabled: true}, "test"); err == nil || !strings.Contains(err.Error(), "which services") {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "first", "new-service", model.MockRoute{Name: "new-service", Service: "checkout", Method: "GET", Path: "/", Status: 200, Enabled: true}, "test"); err == nil || !strings.Contains(err.Error(), "which services") {
 		t.Fatalf("active target expansion was accepted: %v", err)
 	}
 	if _, err := app.DeleteMockRoute(ctx, "store", "local", "first", "inventory-health", "test"); err == nil || !strings.Contains(err.Error(), "final route") {
 		t.Fatalf("active target removal was accepted: %v", err)
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "first", model.MockRoute{Name: "inventory-health", Service: "inventory", Method: "GET", Path: "/health", Status: 503, Enabled: false}, "test"); err != nil {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "first", "inventory-health", model.MockRoute{Name: "inventory-health", Service: "inventory", Method: "GET", Path: "/health", Status: 503, Enabled: false}, "test"); err != nil {
 		t.Fatalf("same-coverage route update was rejected: %v", err)
 	}
 	if err := app.DeleteMockScenario(ctx, "store", "local", "first", "test"); err == nil {
@@ -242,7 +242,7 @@ func createTestMockScenario(t *testing.T, app *Service, name string, services ..
 		t.Fatal(err)
 	}
 	for _, service := range services {
-		if _, err := app.PutMockRoute(ctx, "store", "local", name, model.MockRoute{Name: service + "-health", Service: service, Method: "GET", Path: "/health", Status: 503, Enabled: true}, "test"); err != nil {
+		if _, err := app.PutMockRoute(ctx, "store", "local", name, service+"-health", model.MockRoute{Name: service + "-health", Service: service, Method: "GET", Path: "/health", Status: 503, Enabled: true}, "test"); err != nil {
 			t.Fatal(err)
 		}
 	}

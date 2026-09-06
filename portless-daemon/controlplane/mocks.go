@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -160,8 +161,9 @@ func (s *Service) DeleteMockScenario(ctx context.Context, project, environment, 
 	return nil
 }
 
-// PutMockRoute validates and creates or replaces one deterministic route.
-func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenarioName string, route model.MockRoute, actor string) (model.MockScenario, error) {
+// PutMockRoute validates and creates or replaces the addressed route. A different
+// route.Name renames the existing route while applying the rest of its configuration.
+func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenarioName, routeName string, route model.MockRoute, actor string) (model.MockScenario, error) {
 	lock := s.projectLock(model.EnvironmentSelector(project, environment))
 	lock.Lock()
 	defer lock.Unlock()
@@ -169,16 +171,30 @@ func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenar
 	if err != nil {
 		return model.MockScenario{}, err
 	}
+	if err := model.ValidateArtifactName(route.Name); err != nil {
+		return model.MockScenario{}, fmt.Errorf("invalid mock route name: %w", err)
+	}
 	service, err := s.validateMockService(ctx, project, route.Service)
 	if err != nil {
 		return model.MockScenario{}, err
 	}
 	route.Service = service
 	beforeServices := mockScenarioServices(scenario.Routes)
+	renaming := !strings.EqualFold(routeName, route.Name)
 	replaced := false
 	for index := range scenario.Routes {
-		if strings.EqualFold(scenario.Routes[index].Name, route.Name) {
-			route.Name = scenario.Routes[index].Name
+		if strings.EqualFold(scenario.Routes[index].Name, routeName) {
+			if renaming {
+				for _, other := range scenario.Routes {
+					if strings.EqualFold(other.Name, route.Name) {
+						return model.MockScenario{}, fmt.Errorf("mock route %s already exists: %w", route.Name, database.ErrAlreadyExists)
+					}
+				}
+			}
+			routeName = scenario.Routes[index].Name
+			if !renaming {
+				route.Name = routeName
+			}
 			route.CreatedAt = scenario.Routes[index].CreatedAt
 			scenario.Routes[index] = route
 			replaced = true
@@ -186,6 +202,9 @@ func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenar
 		}
 	}
 	if !replaced {
+		if renaming {
+			return model.MockScenario{}, fmt.Errorf("mock route %s: %w", routeName, database.ErrNotFound)
+		}
 		scenario.Routes = append(scenario.Routes, route)
 	}
 	if scenario.Activation.State != model.MockScenarioDisabled && !sameMockServices(beforeServices, mockScenarioServices(scenario.Routes)) {
@@ -194,7 +213,12 @@ func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenar
 	if _, err := mocks.Compile(scenario); err != nil {
 		return model.MockScenario{}, err
 	}
-	updated, err := s.database.PutMockRoute(ctx, project, environment, scenario.Name, route)
+	var updated model.MockScenario
+	if renaming {
+		updated, err = s.database.RenameMockRoute(ctx, project, environment, scenario.Name, routeName, route)
+	} else {
+		updated, err = s.database.PutMockRoute(ctx, project, environment, scenario.Name, route)
+	}
 	if err != nil {
 		return model.MockScenario{}, err
 	}
@@ -202,7 +226,11 @@ func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenar
 		return model.MockScenario{}, err
 	}
 	scope := model.EnvironmentSelector(project, environment)
-	_, _ = s.timeline(ctx, scope, actor, "mock.route_changed", updated.Name, "info", "Updated route "+route.Name+" in mock scenario "+updated.Name, map[string]any{"route": route.Name, "service": route.Service})
+	details := map[string]any{"route": route.Name, "service": route.Service}
+	if renaming {
+		details["previousRoute"] = routeName
+	}
+	_, _ = s.timeline(ctx, scope, actor, "mock.route_changed", updated.Name, "info", "Updated route "+route.Name+" in mock scenario "+updated.Name, details)
 	s.publish(scope, "mock.state", updated)
 	return updated, nil
 }
@@ -245,8 +273,10 @@ func (s *Service) DeleteMockRoute(ctx context.Context, project, environment, sce
 	return updated, nil
 }
 
-// PreviewMock evaluates one request against one service in a scenario.
-func (s *Service) PreviewMock(ctx context.Context, project, environment, scenarioName string, request model.MockRequest) (model.MockPreview, error) {
+// PreviewMock evaluates one request against saved scenario routes and an optional
+// draft without persisting changes or changing active providers. OriginalRoute
+// selects the saved route replaced by the draft; an empty name appends a new one.
+func (s *Service) PreviewMock(ctx context.Context, project, environment, scenarioName string, request model.MockRequest, draft *model.MockRoute, originalRoute string) (model.MockPreview, error) {
 	scenario, err := s.database.MockScenario(ctx, project, environment, scenarioName)
 	if err != nil {
 		return model.MockPreview{}, err
@@ -256,6 +286,34 @@ func (s *Service) PreviewMock(ctx context.Context, project, environment, scenari
 		return model.MockPreview{}, err
 	}
 	request.Service = service
+	if originalRoute != "" && draft == nil {
+		return model.MockPreview{}, errors.New("originalRoute requires a route draft")
+	}
+	if draft != nil {
+		candidate := *draft
+		candidate.Service, err = s.validateMockService(ctx, project, candidate.Service)
+		if err != nil {
+			return model.MockPreview{}, fmt.Errorf("validate preview draft service: %w", err)
+		}
+		// Keep the database snapshot and caller-owned draft untouched. Compile
+		// clones nested route maps before validating and evaluating the copy.
+		scenario.Routes = append([]model.MockRoute(nil), scenario.Routes...)
+		if originalRoute == "" {
+			scenario.Routes = append(scenario.Routes, candidate)
+		} else {
+			index := -1
+			for i, route := range scenario.Routes {
+				if strings.EqualFold(route.Name, originalRoute) {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				return model.MockPreview{}, fmt.Errorf("preview original route %s: %w", originalRoute, database.ErrNotFound)
+			}
+			scenario.Routes[index] = candidate
+		}
+	}
 	compiled, err := mocks.Compile(scenario)
 	if err != nil {
 		return model.MockPreview{}, err
@@ -370,25 +428,33 @@ func mockRoutesFromRecording(allowed map[string]string, exchanges []model.Traffi
 	seen := map[string]struct{}{}
 	names := map[string]int{}
 	routes := []model.MockRoute{}
-	duplicateCount, missingBodyCount, omittedCount := 0, 0, 0
+	duplicateCount, missingBodyCount, omittedCount, upgradeCount := 0, 0, 0, 0
 	for _, exchange := range exchanges {
 		service, allowedService := allowed[strings.ToLower(exchange.Target)]
 		if exchange.Protocol != model.ProtocolHTTP || !allowedService || exchange.Method == "" || exchange.Status < 100 {
+			continue
+		}
+		if exchange.Status == http.StatusSwitchingProtocols {
+			upgradeCount++
 			continue
 		}
 		requestURL, err := url.ParseRequestURI(exchange.RequestTarget)
 		if err != nil || requestURL.Path == "" {
 			requestURL = &url.URL{Path: exchange.Path}
 		}
-		query := map[string]string{}
+		query := map[string]model.MockQueryMatcher{}
 		for key, values := range requestURL.Query() {
 			if len(values) > 0 {
-				query[key] = values[0]
+				match := "equals"
+				if values[0] == "" {
+					match = "exists"
+				}
+				query[key] = model.MockQueryMatcher{Match: match, Value: values[0]}
 			}
 		}
 		normalizedQuery := url.Values{}
 		for key, value := range query {
-			normalizedQuery.Set(key, value)
+			normalizedQuery.Set(key, value.Value)
 		}
 		identity := strings.ToLower(service) + "\x00" + strings.ToUpper(exchange.Method) + "\x00" + requestURL.Path + "\x00" + normalizedQuery.Encode()
 		if _, exists := seen[identity]; exists {
@@ -421,6 +487,9 @@ func mockRoutesFromRecording(allowed map[string]string, exchanges []model.Traffi
 	warnings := []string{}
 	if len(routes) == 0 {
 		warnings = append(warnings, "The recording contained no eligible HTTP exchanges for the selected services.")
+	}
+	if upgradeCount > 0 {
+		warnings = append(warnings, fmt.Sprintf("Ignored %d WebSocket handshakes; WebSocket messages cannot become HTTP mock routes.", upgradeCount))
 	}
 	if duplicateCount > 0 {
 		warnings = append(warnings, fmt.Sprintf("Ignored %d older duplicate exchanges; the newest response for each exact request was used.", duplicateCount))

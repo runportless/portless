@@ -355,20 +355,27 @@ type MockScenario struct {
 	ModifiedAt  time.Time              `json:"modifiedAt"`
 }
 
+// MockQueryMatcher requires a query parameter using equals, exists, or regex.
+// Regex uses Go regular expression syntax and matches an entire decoded value.
+type MockQueryMatcher struct {
+	Match string `json:"match"`
+	Value string `json:"value,omitempty"`
+}
+
 // MockRoute matches one HTTP request and returns a fixed response.
 type MockRoute struct {
-	Name       string            `json:"name"`
-	Service    string            `json:"service"`
-	Method     string            `json:"method"`
-	Path       string            `json:"path"`
-	Query      map[string]string `json:"query,omitempty"`
-	Status     int               `json:"status"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Body       string            `json:"body,omitempty"`
-	DelayMS    int64             `json:"delayMs,omitempty"`
-	Enabled    bool              `json:"enabled"`
-	CreatedAt  time.Time         `json:"createdAt"`
-	ModifiedAt time.Time         `json:"modifiedAt"`
+	Name       string                      `json:"name"`
+	Service    string                      `json:"service"`
+	Method     string                      `json:"method"`
+	Path       string                      `json:"path"`
+	Query      map[string]MockQueryMatcher `json:"query,omitempty"`
+	Status     int                         `json:"status"`
+	Headers    map[string]string           `json:"headers,omitempty"`
+	Body       string                      `json:"body,omitempty"`
+	DelayMS    int64                       `json:"delayMs,omitempty"`
+	Enabled    bool                        `json:"enabled"`
+	CreatedAt  time.Time                   `json:"createdAt"`
+	ModifiedAt time.Time                   `json:"modifiedAt"`
 }
 
 // MockRequest is a request used to preview matching without sending traffic.
@@ -700,6 +707,7 @@ type TrafficTraceSpan struct {
 type TrafficTrace struct {
 	Project       string             `json:"project"`
 	Environment   string             `json:"environment"`
+	Revision      uint64             `json:"revision"`
 	Number        int64              `json:"number"`
 	LastSequence  int64              `json:"lastSequence"`
 	TraceID       string             `json:"traceId,omitempty"`

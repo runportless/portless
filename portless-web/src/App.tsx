@@ -9,7 +9,7 @@ import { boundMockScenarios, useEnvironmentActivity } from './features/environme
 import { useEnvironmentActions } from './features/environment/useEnvironmentActions'
 import { ProjectOverviewPage } from './features/projects/ProjectOverviewPage'
 import { ProjectsIndexPage } from './features/projects/ProjectsIndexPage'
-import { initialProjectDestination, projectDestination, pruneProjectNavigationPreferences, readProjectNavigationPreferences, recordProjectVisit, removeProjectNavigationPreferences, setProjectHidden, sidebarProjectFor, writeProjectNavigationPreferences } from './features/projects/projectNavigation'
+import { initialProjectDestination, projectDestination, pruneProjectNavigationPreferences, readProjectNavigationPreferences, recentProjects, recordProjectVisit, removeProjectNavigationPreferences, setProjectHidden, sidebarProjectFor, writeProjectNavigationPreferences } from './features/projects/projectNavigation'
 import { projectRoute } from './features/projects/projectOperations'
 import { SettingsPage, type SettingsTab } from './features/SettingsPage'
 import { applyTheme, readThemePreference, resolveTheme, writeThemePreference, type ResolvedTheme, type ThemePreference } from './theme'
@@ -171,6 +171,7 @@ export function App() {
     ? environments.find((environment) => environment.project === parsed.project && environment.name === parsed.environment)
     : undefined
   const sidebarProject = sidebarProjectFor(projects, activeProject, projectNavigation)
+  const recent = useMemo(() => recentProjects(projects, projectNavigation), [projects, projectNavigation])
   const environmentScope = session && !authRequired && daemonStatus?.instanceId ? activeEnvironment : undefined
   const environmentIdentity = environmentScope ? environmentSessionKey(environmentScope, daemonStatus) : ''
   const activity = useEnvironmentActivity(environmentScope, environmentIdentity, refresh)
@@ -268,7 +269,7 @@ export function App() {
     mocks: boundMockScenarios(activeEnvironment).length,
     ...(!activity.loading ? { recordings: activity.recordings.some((recording) => recording.status === 'active') ? 1 : 0, faults: activity.faults.filter((fault) => fault.enabled).length } : {}),
   } : undefined
-  return <AppChrome projects={projects} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.view} headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={navigate} />} headerActions={activeEnvironment && <EnvironmentHeaderActions key={environmentIdentity} environment={activeEnvironment} activity={activity} actions={environmentActions} onNavigate={navigate} />} viewCounts={viewCounts} settingsActive={parsed.settings} settingsView={parsed.settingsTab} navigation={projectNavigation} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
+  return <AppChrome projects={projects} recentProjects={recent} environments={environments} activeProject={activeProject} sidebarProject={sidebarProject} activeEnvironment={activeEnvironment} activeView={parsed.view} headerContext={activeEnvironment && <EnvironmentHeaderContext environment={activeEnvironment} live={live} onNavigate={navigate} />} headerActions={activeEnvironment && <EnvironmentHeaderActions key={environmentIdentity} environment={activeEnvironment} activity={activity} actions={environmentActions} onNavigate={navigate} />} viewCounts={viewCounts} settingsActive={parsed.settings} settingsView={parsed.settingsTab} runtime={runtimeStatus} daemon={daemonStatus} diagnostics={daemonDiagnostics} controlPlaneHealth={{ api: apiHealth, events: eventsHealth }} relay={relayStatus} onNavigate={navigate} onSwitchProject={switchProject} onEnvironmentChanged={refresh} onSettingsToggle={toggleSettings} commands={commands} live={live} onDaemonRefresh={refreshDaemon} onDaemonDiagnosticsRefresh={refreshDaemonDiagnostics} onDaemonHandoffVerify={verifyDaemonHandoff} onDaemonRestart={restartDaemon} onDaemonReconnected={refreshAfterDaemonRestart}>{content}</AppChrome>
 }
 
 export function environmentSessionKey(environment: Pick<Environment, 'project' | 'name'>, daemon: Pick<DaemonStatus, 'instanceId'> | null) {

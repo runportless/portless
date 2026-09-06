@@ -188,8 +188,8 @@ func openAPIExample(root, media map[string]any) (any, bool, error) {
 	return nil, false, nil
 }
 
-func openAPIQuery(root, pathItem, operation map[string]any) (map[string]string, error) {
-	result := map[string]string{}
+func openAPIQuery(root, pathItem, operation map[string]any) (map[string]model.MockQueryMatcher, error) {
+	result := map[string]model.MockQueryMatcher{}
 	for _, owner := range []map[string]any{pathItem, operation} {
 		parameters, _ := owner["parameters"].([]any)
 		for _, parameterValue := range parameters {
@@ -212,10 +212,10 @@ func openAPIQuery(root, pathItem, operation map[string]any) (map[string]string, 
 					}
 				}
 			}
-			if exists {
-				result[name] = fmt.Sprint(value)
+			if exists && fmt.Sprint(value) != "" {
+				result[name] = model.MockQueryMatcher{Match: "equals", Value: fmt.Sprint(value)}
 			} else {
-				result[name] = ""
+				result[name] = model.MockQueryMatcher{Match: "exists"}
 			}
 		}
 	}

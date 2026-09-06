@@ -66,7 +66,7 @@ func TestRecoverySkipsOutgoingProxiesForMockAndRemoteProviders(t *testing.T) {
 				if _, err := app.CreateMockScenario(ctx, "billing", "local", model.MockScenario{Name: "sold-out"}, "test"); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := app.PutMockRoute(ctx, "billing", "local", "sold-out", model.MockRoute{Name: "health", Service: "checkout", Method: "GET", Path: "/health", Status: http.StatusNoContent, Enabled: true}, "test"); err != nil {
+				if _, err := app.PutMockRoute(ctx, "billing", "local", "sold-out", "health", model.MockRoute{Name: "health", Service: "checkout", Method: "GET", Path: "/health", Status: http.StatusNoContent, Enabled: true}, "test"); err != nil {
 					t.Fatal(err)
 				}
 				operation, err = app.SetMockScenarioEnabled(ctx, "billing", "local", "sold-out", true, "test", "enable")

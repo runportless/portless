@@ -301,7 +301,7 @@ func TestProjectSourceRemovalRejectsReferencedMockScenarioRoutes(t *testing.T) {
 	if _, err := app.CreateMockScenario(ctx, "store", "local", model.MockScenario{Name: "empty-inventory"}, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.PutMockRoute(ctx, "store", "local", "empty-inventory", model.MockRoute{Name: "unavailable", Service: "inventory", Method: "GET", Path: "/", Status: 503, Enabled: true}, "test"); err != nil {
+	if _, err := app.PutMockRoute(ctx, "store", "local", "empty-inventory", "unavailable", model.MockRoute{Name: "unavailable", Service: "inventory", Method: "GET", Path: "/", Status: 503, Enabled: true}, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controlStore.CreateFault(ctx, model.FaultRule{Project: "store", Environment: "local", Name: "inventory-timeout", Source: "checkout", Target: "inventory", Abort: true}); err != nil {

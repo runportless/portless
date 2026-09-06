@@ -11,7 +11,14 @@ export function mergeExchanges(current: TrafficExchange[], incoming: TrafficExch
 
 export function mergeTraces(current: TrafficTrace[], incoming: TrafficTrace[], limit = 1000) {
   const byNumber = new Map(current.map((trace) => [trace.number, trace]))
-  for (const trace of incoming) byNumber.set(trace.number, { ...byNumber.get(trace.number), ...trace })
+  for (const trace of incoming) {
+    const existing = byNumber.get(trace.number)
+    if (existing && existing.revision > trace.revision) continue
+    // Detail belongs to one projection. A newer summary invalidates its spans,
+    // including parent changes that leave lastSequence unchanged.
+    const spans = trace.spans ?? (existing?.revision === trace.revision ? existing.spans : undefined)
+    byNumber.set(trace.number, { ...trace, spans })
+  }
   return [...byNumber.values()].sort((left, right) => {
     const time = new Date(right.startedAt).getTime()-new Date(left.startedAt).getTime()
     return time || right.number-left.number
@@ -24,14 +31,10 @@ export function reconcileExchanges(current: TrafficExchange[], snapshot: Traffic
   return mergeExchanges([], [...snapshot, ...newer], limit)
 }
 
-export function reconcileTraces(current: TrafficTrace[], snapshot: TrafficTrace[], exchangeHighWater: number, limit = 1000) {
-  const currentByNumber = new Map(current.map((trace) => [trace.number, trace]))
-  const reconciled = snapshot.map((trace) => {
-    const existing = currentByNumber.get(trace.number)
-    return existing?.lastSequence === trace.lastSequence && existing.spans?.length ? { ...trace, spans: existing.spans } : trace
-  })
-  const newer = current.filter((trace) => trace.lastSequence > exchangeHighWater)
-  return mergeTraces([], [...reconciled, ...newer], limit)
+export function reconcileTraces(current: TrafficTrace[], snapshot: TrafficTrace[], revision: number, limit = 1000) {
+  const numbers = new Set(snapshot.map((trace) => trace.number))
+  const retained = current.filter((trace) => numbers.has(trace.number) || trace.revision > revision)
+  return mergeTraces(retained, snapshot, limit)
 }
 
 export function filterExchanges(exchanges: TrafficExchange[], search: string, result: TrafficResultFilter, protocol: TrafficProtocolFilter) {

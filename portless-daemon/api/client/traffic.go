@@ -63,7 +63,7 @@ func (c *Client) TrafficExchange(ctx context.Context, project, environment strin
 	return result, err
 }
 
-// TrafficTraces returns trace summaries matching query.
+// TrafficTraces returns cached summaries and their complete projection watermarks.
 func (c *Client) TrafficTraces(ctx context.Context, project, environment string, query contract.TrafficTraceQuery) (contract.TrafficTraceList, error) {
 	var result contract.TrafficTraceList
 	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/traffic/traces?"+traceValues(query).Encode(), nil, &result)

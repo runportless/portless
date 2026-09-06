@@ -58,6 +58,22 @@ instantaneous cross-service traffic switch. Follow `operation.state` to its
 terminal state and reload the environment after a transition. Restoration
 bindings remain private and are never included in events.
 
+A route rename emits the same `mock.state` scenario snapshot with the new route
+name. Its `mock.route_changed` timeline entry includes `previousRoute` and `route`;
+it does not emit a deletion or a separate creation event. Historical traffic keeps
+the name under which the request was served.
+
+Route query matchers in API 15.0.0 scenario payloads use explicit `match` operators
+(`equals`, `exists`, `regex`) with an optional `value`, matching the HTTP schema.
+
+Mock route previews accept a sample request and an optional unsaved draft in
+the API 16.0.0 preview envelope. The draft is overlaid onto saved scenario
+routes in memory; other browser drafts are not included. Preview neither saves
+the route nor changes active bindings, and emits no mock.state, traffic,
+recording, operation, or timeline events. Preview results describe the evaluated
+snapshot only. Clients mark them outdated after changing the draft or sample
+request, or after receiving changed saved scenario routes.
+
 `traffic.exchange` carries a completed HTTP request, decoded TCP operation, or
 opaque TCP session summary. HTTP headers and bodies and decoded TCP message
 fields/content are omitted from this notification; clients load the full
@@ -65,14 +81,28 @@ exchange on demand. Mock-served HTTP exchanges identify `mockScenario` and
 `mockRoute`; the existing source and target still identify the service edge.
 The TCP summary retains its declared application protocol,
 operation, inspection state, outcome, and message counts. `traffic.trace`
-carries an updated trace summary whenever a newly completed exchange changes
-that projection. Exchange summaries explicitly classify successful browser and
+carries changed trace summaries after a shared metadata projection batch, with
+a maximum 50 ms scheduling delay before worker availability. Appends and active
+HTTP request begin/complete/abandon changes invalidate the projection. Snapshot
+reads request immediate processing and share existing work. Exchange summaries
+remain immediate and explicitly classify successful browser and
 connection housekeeping as `background`; the raw exchange remains available.
 Trace summaries identify the root `protocol`; a TCP-rooted
 summary is `provisional` while an active HTTP request can still absorb it during
-correlation. `traffic.cleared` reports the environment-local sequence through
-which live exchanges and derived traces were removed. Durable recordings remain
-available.
+correlation. Each trace has a `revision` identifying its most recent projection
+change; unchanged traces retain their revision. `traffic.cleared` reports
+`cleared`, `throughSequence`, and the new `revision` after removing live
+exchanges and derived traces. Durable recordings remain available.
+
+A successful application WebSocket upgrade produces one `traffic.exchange` with
+`protocol: http` and `status: 101` as soon as the downstream handshake has been
+flushed. Its duration measures the handshake; HTTP body byte counts are zero.
+The connection does not remain an active HTTP trace root. WebSocket frames,
+session throughput, and close events are not captured or published. A recording
+retains the handshake only if it is active when that handshake completes.
+WebSocket subprotocol header values are redacted in details and exports because
+applications may put credentials there. The control-plane event stream remains
+SSE. Applications reconnect their own sockets after provider or daemon changes.
 
 `traffic.tcp.activity` is an ephemeral live signal for open TCP connections. It
 reports `open`, `data`, `heartbeat`, and `close` phases with the current active
@@ -100,8 +130,9 @@ gracefully or infer missed state from daemon-local SSE identifiers.
 The broker is bounded and nonblocking. A slow UI cannot stall proxied
 application traffic. Subscriptions are isolated by project and environment.
 Snapshot endpoints are authoritative after a reconnect. Traffic clients merge
-snapshots and stream notifications by environment-local exchange sequence or
-trace number.
+snapshots and stream notifications by environment-local exchange sequence and
+trace number/revision. Revisions are local to a daemon instance; discard pending
+responses and establish a fresh snapshot baseline on reconnect.
 
 Browser clients derive event-stream health from the `EventSource` lifecycle:
 a newly opened or errored source is reconnecting, `open` marks it connected,
@@ -147,3 +178,17 @@ Trace summaries omit spans; trace detail returns the complete current tree and
 waterfall projection. Decoded operations from one explicit database transaction
 on one TCP connection share a trace-local `transactionGroup`; raw exchanges
 remain independent and inspectable.
+
+Trace list responses contain `traces`, `revision`, and `throughSequence`.
+The latter two describe the complete cached projection before filtering and
+limiting, including an empty result. They must not be inferred from the largest
+sequence or trace number in the returned rows. Reconcile missing rows through
+the snapshot revision, retain newer notifications, reject older updates, and
+reuse loaded spans only when the trace revision matches. Clear invalidates
+older in-flight responses even if they arrive after its notification.
+
+The browser coalesces summary requests and allows one in-flight expanded-trace
+detail request with one follow-up for newer revisions. Edge-filtered views use
+summary queries instead of fetching every trace's detail. Paused metadata is
+bounded to 5,000 exchanges and 5,000 trace summaries; resume always obtains an
+authoritative snapshot. Five-second polling also recovers dropped notifications.

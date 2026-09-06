@@ -30,6 +30,9 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 	var upstreamRequestBody string
 	var upstreamTraceparent string
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Connection") != "" || request.Header.Get("X-Request-Hop") != "" || request.Header.Get("X-Other-Hop") != "" {
+			t.Errorf("ordinary HTTP forwarded hop headers: %v", request.Header)
+		}
 		body, _ := io.ReadAll(request.Body)
 		upstreamRequestBody = string(body)
 		upstreamTraceparent = request.Header.Get("Traceparent")
@@ -37,6 +40,10 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 		writer.Header().Add("X-Upstream", "orders")
 		writer.Header().Set("Set-Cookie", "session=should-not-leak")
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Add("Connection", "keep-alive, X-Response-Hop")
+		writer.Header().Add("Connection", "x-other-hop")
+		writer.Header().Set("X-Response-Hop", "private")
+		writer.Header().Set("X-Other-Hop", "private")
 		writer.WriteHeader(http.StatusCreated)
 		_, _ = writer.Write([]byte(`{"created":true}`))
 	}))
@@ -44,13 +51,17 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 
 	request := httptest.NewRequest(http.MethodPost, "http://checkout.local.billing.localhost/orders/%2Fitem?sku=coffee%20mug&quantity=2", strings.NewReader(`{"sku":"coffee"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer should-not-leak")
+	request.Header.Add("Connection", "keep-alive, X-Request-Hop")
+	request.Header.Add("Connection", "x-other-hop")
+	request.Header.Set("X-Request-Hop", "private")
+	request.Header.Set("X-Other-Hop", "private")
 	request.Header.Set("X-Trace", "visible")
 	request.Header.Add("X-Trace", "also-visible")
 	request.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
@@ -58,6 +69,9 @@ func TestIngressTrafficCaptureRecordingAndFaultAreEnvironmentScoped(t *testing.T
 	manager.ServeIngress(response, request, scope, "checkout")
 	if response.Code != http.StatusCreated || len(response.Header().Values("X-Upstream")) != 2 || upstreamRequestBody != `{"sku":"coffee"}` {
 		t.Fatalf("response code=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
+	}
+	if response.Header().Get("Connection") != "" || response.Header().Get("X-Response-Hop") != "" || response.Header().Get("X-Other-Hop") != "" {
+		t.Fatalf("ordinary HTTP returned hop headers: %v", response.Header())
 	}
 	exchanges := trafficStore.RecentExchanges(scope, 10)
 	if len(exchanges) != 1 || exchanges[0].Project != "billing" || exchanges[0].Environment != "local" || exchanges[0].RequestTarget != "/orders/%2Fitem?sku=coffee%20mug&quantity=2" || exchanges[0].TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || exchanges[0].ParentSpanID != "00f067aa0ba902b7" || upstreamTraceparent != "00-"+exchanges[0].TraceID+"-"+exchanges[0].SpanID+"-01" || firstHeader(exchanges[0].RequestHeaders, "Authorization") != "[REDACTED]" || len(exchanges[0].RequestHeaders["X-Trace"]) != 2 || firstHeader(exchanges[0].RequestHeaders, "X-Trace") != "visible" || firstHeader(exchanges[0].ResponseHeaders, "Set-Cookie") != "[REDACTED]" || len(exchanges[0].ResponseHeaders["X-Upstream"]) != 2 || firstHeader(exchanges[0].ResponseHeaders, "X-Upstream") != "checkout" || exchanges[0].RequestBody != `{"sku":"coffee"}` || exchanges[0].ResponseBody != `{"created":true}` {
@@ -104,7 +118,7 @@ func TestPortlessInjectedTraceContextRemainsInternalToHeaderCapture(t *testing.T
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 
@@ -170,7 +184,7 @@ func TestHTTPBodyCaptureIsBoundedWithoutChangingForwardedPayloads(t *testing.T) 
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 
@@ -213,7 +227,7 @@ func TestMockProviderMetadataIsCapturedButNotExposed(t *testing.T) {
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTargetProvider(scope, "inventory", port, model.ProviderMock)
 
@@ -242,7 +256,7 @@ func TestRecordingBodyLimitCanExceedLiveTrafficLimit(t *testing.T) {
 	parsed, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(parsed.Port())
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	manager.SetTarget(scope, "checkout", port)
 	if _, err := controlStore.CreateRecording(ctx, model.Recording{Project: "billing", Environment: "local", Name: "mock-source", CapturePayloads: true, MaxPayloadBytes: int64(len(content))}); err != nil {
@@ -264,7 +278,7 @@ func TestMissingTargetReturnsBadGateway(t *testing.T) {
 	controlStore := environmentStore(t)
 	defer controlStore.Close()
 	scope := model.EnvironmentSelector("billing", "local")
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 
 	missing := httptest.NewRecorder()
 	manager.ServeIngress(missing, httptest.NewRequest(http.MethodGet, "http://checkout.local.billing.localhost/health", nil), scope, "checkout")
@@ -280,7 +294,7 @@ func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
 	}
 	defer controlStore.Close()
 	connection := model.Connection{Source: "checkout", Target: "orders", Protocol: model.ProtocolHTTP}
-	first := newManagerForTest(controlStore)
+	first := newManagerForTest(t, controlStore)
 	port, err := first.EnsureEdge(context.Background(), "billing/local", connection)
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +309,7 @@ func TestDependencyProxyCanBeRestoredAtItsPersistedPort(t *testing.T) {
 	if first.ListenerCount() != 0 {
 		t.Fatalf("listener count after close = %d, want 0", first.ListenerCount())
 	}
-	second := newManagerForTest(controlStore)
+	second := newManagerForTest(t, controlStore)
 	defer second.Close(context.Background())
 	restored, err := second.EnsureEdgeAtPort(context.Background(), "billing/local", connection, port)
 	if err != nil {
@@ -326,7 +340,7 @@ func TestTCPEdgeOutlivesTheOperationContextThatCreatedIt(t *testing.T) {
 		_, _ = io.Copy(connection, connection)
 	}()
 
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	defer manager.Close(context.Background())
 	manager.SetTarget("billing/local", "redis", upstream.Addr().(*net.TCPAddr).Port)
 	operationContext, cancelOperation := context.WithCancel(context.Background())
@@ -387,7 +401,7 @@ func TestStableTCPEdgesShareTheConventionalPortAndKeepSourceFaultsIsolated(t *te
 	checkoutAddress := net.JoinHostPort(firstIP, strconv.Itoa(sharedPort))
 	ordersAddress := net.JoinHostPort(secondIP, strconv.Itoa(sharedPort))
 
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	defer manager.Close(ctx)
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
 	if _, err := manager.EnsureEdgeAtAddress(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP}, checkoutAddress); err != nil {
@@ -452,7 +466,7 @@ func TestTCPFaultAppliesOnlyToItsDirectedSourceEdge(t *testing.T) {
 		}
 	}()
 
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	defer manager.Close(ctx)
 	manager.SetTarget(scope, "redis", upstream.Addr().(*net.TCPAddr).Port)
 	checkoutPort, err := manager.EnsureEdge(ctx, scope, model.Connection{Source: "checkout", Target: "redis", Protocol: model.ProtocolTCP})
@@ -514,7 +528,7 @@ func TestTCPEdgePublishesActivityBeforeTheConnectionCloses(t *testing.T) {
 	}()
 
 	broker := events.NewBroker()
-	manager := NewManager(controlStore, trafficstore.NewStore(broker), broker)
+	manager := NewManager(controlStore, newTestTrafficStore(t, broker), broker)
 	defer manager.Close(context.Background())
 	scope := model.EnvironmentSelector("billing", "local")
 	subscription := broker.Subscribe(context.Background(), scope, []string{"traffic.tcp.activity"})
@@ -575,7 +589,7 @@ func TestRedisOperationIsCapturedBeforeThePooledConnectionCloses(t *testing.T) {
 	}()
 
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	defer manager.Close(context.Background())
 	scope := model.EnvironmentSelector("billing", "local")
@@ -664,7 +678,7 @@ func TestRedisRecordingPayloadPolicyPreservesOperationMetadata(t *testing.T) {
 	}()
 
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	defer manager.Close(ctx)
 	scope := model.EnvironmentSelector("billing", "local")
@@ -807,7 +821,7 @@ func TestTCPEdgeDoesNotReportForcedCopyShutdownAsAnError(t *testing.T) {
 	}()
 
 	broker := events.NewBroker()
-	trafficStore := trafficstore.NewStore(broker)
+	trafficStore := newTestTrafficStore(t, broker)
 	manager := NewManager(controlStore, trafficStore, broker)
 	defer manager.Close(context.Background())
 	scope := model.EnvironmentSelector("billing", "local")
@@ -866,7 +880,7 @@ func TestLocalProcessResponseHeadersCanWaitForDebugger(t *testing.T) {
 		}
 	}()
 
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	defer manager.Close(context.Background())
 	if manager.localProcessTransport.ResponseHeaderTimeout != 0 {
 		t.Fatalf("local process response header timeout = %s, want no timeout", manager.localProcessTransport.ResponseHeaderTimeout)
@@ -924,7 +938,7 @@ func TestRemoteResponseHeadersRemainBounded(t *testing.T) {
 		}
 	}()
 
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	defer manager.Close(context.Background())
 	if manager.boundedTransport.ResponseHeaderTimeout != 30*time.Second {
 		t.Fatalf("remote response header timeout = %s, want 30s", manager.boundedTransport.ResponseHeaderTimeout)
@@ -979,7 +993,7 @@ func TestUpstreamRequestsHonorClientCancellation(t *testing.T) {
 				}
 			}()
 
-			manager := newManagerForTest(controlStore)
+			manager := newManagerForTest(t, controlStore)
 			defer manager.Close(context.Background())
 			if test.remote {
 				if err := manager.SetRemoteTarget(scope, "payments", model.RemoteTarget{URL: upstream.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly}); err != nil {
@@ -1031,7 +1045,7 @@ func TestRemoteTargetForwardsHTTPAndEnforcesReadOnlyPolicy(t *testing.T) {
 		writer.WriteHeader(http.StatusNoContent)
 	}))
 	defer remote.Close()
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	if err := manager.SetRemoteTarget(scope, "payments", model.RemoteTarget{URL: remote.URL + "/api", Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1068,7 +1082,7 @@ func TestRemotePreflightDoesNotReplaceServingTarget(t *testing.T) {
 		_, _ = writer.Write([]byte("remote"))
 	}))
 	defer remote.Close()
-	manager := newManagerForTest(controlStore)
+	manager := newManagerForTest(t, controlStore)
 	manager.SetTarget(scope, "payments", localPort)
 	if err := manager.CheckRemoteTarget(context.Background(), model.RemoteTarget{
 		URL: remote.URL, Classification: model.RemoteQA, WritePolicy: model.WriteReadOnly, HealthPath: "/health",
@@ -1103,9 +1117,9 @@ func environmentStore(t *testing.T) *database.Store {
 	return controlStore
 }
 
-func newManagerForTest(controlStore *database.Store) *Manager {
+func newManagerForTest(t *testing.T, controlStore *database.Store) *Manager {
 	broker := events.NewBroker()
-	return NewManager(controlStore, trafficstore.NewStore(broker), broker)
+	return NewManager(controlStore, newTestTrafficStore(t, broker), broker)
 }
 
 func firstHeader(headers map[string][]string, name string) string {
@@ -1113,4 +1127,10 @@ func firstHeader(headers map[string][]string, name string) string {
 		return ""
 	}
 	return headers[name][0]
+}
+
+func newTestTrafficStore(t *testing.T, broker *events.Broker) *trafficstore.Store {
+	store := trafficstore.NewStore(broker)
+	t.Cleanup(store.Close)
+	return store
 }
