@@ -7,7 +7,8 @@ import { mockPreviewRequest, newMockPreviewRequest, type MockPreviewRequestDraft
 export type RunMockPreview = (draft: MockRouteDraft, originalRoute: string | undefined, request: MockRequest, signal: AbortSignal) => Promise<MockPreview>
 
 export function useMockRoutePreview(draft: MockRouteDraft, scenario: MockScenario, originalRoute: string | undefined, onPreview: RunMockPreview) {
-  const [request, setRequest] = useState(() => newMockPreviewRequest(draft))
+  const [customRequest, setRequest] = useState<MockPreviewRequestDraft | null>(null)
+  const request = customRequest ?? newMockPreviewRequest(draft)
   const [result, setResult] = useState<{ fingerprint: string; value: MockPreview } | null>(null)
   const [error, setError] = useState<{ fingerprint: string; value: ActionErrorDetails } | null>(null)
   const [running, setRunning] = useState(false)
@@ -38,6 +39,7 @@ export function useMockRoutePreview(draft: MockRouteDraft, scenario: MockScenari
 
   const run = async () => {
     if (pending.current) return
+    setRequest(request)
     setError(null)
     let input: MockRequest
     try { input = mockPreviewRequest(request) }
@@ -67,7 +69,7 @@ export function useMockRoutePreview(draft: MockRouteDraft, scenario: MockScenari
   }
 
   return {
-    request, changeRequest, resetRequest: () => changeRequest(newMockPreviewRequest(draft)),
+    request, changeRequest, resetRequest: () => { setRequest(null); setError(null) },
     result: result?.value ?? null, outdated: !!result && result.fingerprint !== fingerprint,
     error: error?.fingerprint === fingerprint ? error.value : null,
     dismissError: () => setError(null), running, run, cancel,

@@ -189,34 +189,51 @@ The Playwright suite protects these browser journeys:
   service-selecting right-hand editor that respects focus mode, retained drafts
   while switching routes, save/discard and selected-route deletion, clickable
   and sortable routes paginated at ten rows, whole-scenario activation, stable
-  peer service PIDs, stationary tables and route panes throughout activation
+  visible disabled-route badges in the list and editor, muted request details,
+  and badge removal after re-enabling; peer service PIDs, stationary tables and route panes throughout activation
   and restoration, and traffic attribution;
 - reloading an edited mock route or navigating away from a new route without a
   native browser confirmation, with saved values restored after reload; explicit
   in-app Back navigation still offers its discard/keep-editing dialog;
 - separate Request and Response route-configuration tabs with keyboard arrows,
   Home/End navigation, contextual fields in the active panel, retained edits across
-  tabs, Preview returning to the selected configuration tab, and complete-draft saves
-  from either tab; fixed tabs and footer remain usable in both themes and narrow layouts;
-- in-pane mock request previews against unsaved new and existing routes in disabled
+  tabs, the editor remaining available alongside Preview, and complete-draft saves
+  from the shared footer; the footer appears only for edited drafts, disappears
+  after save, discard, or manual reversion, and stays hidden for preview-only changes;
+  fixed tabs and visible footer remain usable in both themes and narrow layouts;
+- mock request previews against unsaved new and existing routes in disabled
   scenarios, with saved-route precedence, unmatched 501 responses, disabled routes,
   repeated and empty query values, JSON/raw bodies, response headers, and unchanged
   saved scenarios, runtime providers, traffic, recordings, and timeline history;
-  draft/request retention across Edit and Preview, explicit stale-result reruns,
+  query section counts, keyboard expansion, add-row focus, retained values while folded,
+  and reopening folded query sections on validation errors; draft/request/result retention
+  while switching workspace views or configuration tabs, request suggestions that follow
+  an unedited draft, preserved tested samples, explicit stale-result reruns,
   recoverable validation errors, cancellation when switching routes, and usable
   response panes in light/dark themes, focus mode, and narrow layouts;
+- Routes/Preview workspace tabs with keyboard arrows and Home/End; Preview hides
+  the route list and places the editor on the left and test request/response on
+  the right, with retained selection, configuration tab, unsaved draft, request,
+  and result when returning to Routes and reopening Preview; disabled Preview
+  for empty scenarios and usable layouts in both themes and narrow viewports;
+- opening Preview from each route's ellipsis menu, selecting the correct route
+  and retained draft, moving keyboard focus into Preview, and preserving the
+  existing result when reopening the same route without automatically running it;
 - editable mock response header tables with a trailing blank row, keyboard focus
-  while adding names, tabbing to values, and removing rows; errors for duplicate
+  while adding names, tabbing to values, and removing rows; counted collapsible
+  headings, plus-button focus, empty-section defaults, retained collapsed state
+  across configuration tabs, and reopening the Response tab and headers for
+  validation errors from Save or Preview; errors for duplicate
   header names regardless of case and values without names; exact colon-containing
   values through preview and save; and retained header
-  drafts across route selection and Edit/Preview in light/dark and narrow layouts;
+  drafts across route selection and inline Preview in light/dark and narrow layouts;
 - attached Exact/Template path selectors and Equals/Exists query operators, with
   mode validation, disabled presence-value cells, save/reload persistence, and
   preview using the same match criteria in both themes and narrow layouts;
 - required and preview query parameter tables with editable rows, keyboard focus,
   removal, retained route drafts and request values, duplicate required-name and
   missing-name validation, repeated names and empty preview values, exact equals-sign
-  values, stale-result reruns, and Reset Request restoring the draft's requirements;
+  values, stale-result reruns, and Reset restoring the draft's requirements;
   query tables are checked in both themes and at narrow widths;
 - normal daemon restart with a mocked caller that has no outgoing proxy ports,
   healthy recovery without restarting peer processes, and browser-driven

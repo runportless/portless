@@ -15,6 +15,7 @@ const editorProps = {
   draft: newMockRouteDraft(2, 'inventory'),
   dirty: false,
   busy: false,
+  previewing: false,
   error: null,
   onDismissError: () => undefined,
   onChange: () => undefined,
@@ -31,8 +32,15 @@ describe('MockRouteEditor', () => {
     expect(html).toContain('aria-label="SERVICE"')
     expect(html).toContain('<option selected="">inventory</option><option>payments</option>')
     expect(html).toContain('autofocus="" aria-label="PATH"')
-    expect(html).toContain('>SAVE ROUTE</button>')
-    expect(html).toContain('>PREVIEW</button>')
+    expect(html).not.toContain('SAVE ROUTE')
+    expect(html).not.toContain('Cancel new route')
+    expect(html).toContain('aria-label="Mock request preview" hidden=""')
+    expect(html).toContain('aria-label="Query parameters" aria-expanded="false"')
+    expect(html).toContain('aria-label="Add query parameter"')
+    expect(html).toContain('aria-label="Mock request preview"')
+    expect(html.match(/<form /g)).toHaveLength(2)
+    expect(html).not.toContain('<footer ')
+    expect(html).not.toContain('>EDIT</button>')
     expect(html).toContain('role="tablist" aria-label="Mock route configuration"')
     expect(html).toMatch(/<button(?=[^>]*role="tab")(?=[^>]*aria-selected="true")(?=[^>]*tabindex="0")[^>]*>Request<\/button>/)
     expect(html).toMatch(/<button(?=[^>]*role="tab")(?=[^>]*aria-selected="false")(?=[^>]*tabindex="-1")[^>]*>Response<\/button>/)
@@ -44,8 +52,8 @@ describe('MockRouteEditor', () => {
     expect(html).toContain('Template {…}')
     expect(html).toContain('<th scope="col">MATCH</th>')
     expect(html).not.toContain('An empty value matches any value.')
-    expect(html).toContain('ROUTE ENABLED')
-    expect(html).toContain('aria-label="Required query parameters"')
+    expect(html).not.toContain('ROUTE ENABLED')
+    expect(html).toContain('aria-label="Query parameters"')
     expect(html).toContain('aria-label="New query parameter name"')
     for (const label of ['RESPONSE STATUS', 'DELAY (MS)', 'RESPONSE BODY', 'Response headers']) {
       expect(html).not.toContain(`aria-label="${label}"`)
@@ -53,6 +61,21 @@ describe('MockRouteEditor', () => {
     expect(html).not.toContain('ADVANCED OPTIONS')
     expect(html).not.toContain('role="dialog"')
     expect(html).not.toContain('BACK TO SCENARIO')
+  })
+
+  it('shows the same editor alongside preview with a route identity and shared save footer', () => {
+    const html = renderToStaticMarkup(<MockRouteEditor {...editorProps} previewing dirty routeName="lookup" draft={{ ...mockRouteDraft(scenario.routes[0]), body: 'changed', enabled: false }} />)
+    expect(html).toContain('class="mock-route-layout is-preview"')
+    expect(html).toContain('class="mock-route-configuration-name" title="lookup">lookup</span>')
+    expect(html).toContain('class="mock-route-disabled-state">DISABLED</span>')
+    expect(html).toContain('aria-label="Mock request preview"')
+    expect(html).not.toContain('aria-label="Mock request preview" hidden=""')
+    expect(html).toContain('role="tablist" aria-label="Mock route configuration"')
+    expect(html.match(/>SAVE ROUTE<\/button>/g)).toHaveLength(1)
+    expect(html.match(/<footer /g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Discard route changes"')
+    expect(html).toContain('Unsaved changes')
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*form="[^"]+"[^>]*>SAVE ROUTE<\/button>/)
   })
 
   it('loads an existing route with an editable name and preserves its service', () => {
@@ -65,7 +88,10 @@ describe('MockRouteEditor', () => {
     expect(html).toContain('<option value="template" selected="">Template {…}</option>')
     expect(html).toMatch(/<input(?=[^>]*aria-label="ROUTE NAME")(?=[^>]*value="lookup")(?![^>]*disabled=)[^>]*>/)
     expect(html).not.toContain('All changes saved')
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>SAVE ROUTE<\/button>/)
+    expect(html).not.toContain('mock-route-disabled-state')
+    expect(html).not.toContain('SAVE ROUTE')
+    expect(html).not.toContain('Discard route changes')
+    expect(html).not.toContain('<footer ')
     expect(html).toContain('role="tablist" aria-label="Mock route configuration"')
     expect(html).not.toContain('aria-label="RESPONSE BODY"')
   })
@@ -77,6 +103,7 @@ describe('MockRouteEditor', () => {
     expect(html).toContain('aria-label="Edit Route"')
     expect(html).toContain('value="renamed"')
     expect(html).not.toContain('ROUTE NOT FOUND')
+    expect(html).toContain('>SAVE ROUTE</button>')
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>SAVE ROUTE<\/button>/)
   })
 

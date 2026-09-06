@@ -292,8 +292,17 @@ ten-per-page route list on the left and the selected route's configuration on
 the right. Request and Response tabs separate the configuration: Request holds
 the route name, service, method, path, and required query parameters; Response
 holds status, delay, body, and response headers. The response body grows to use
-the available space. Save, Preview, and the enabled toggle stay available while
-switching tabs. Adding and saving routes stays in that workspace. Unsaved drafts
+the available space. The scenario header has Routes and Preview workspace tabs:
+Routes shows the route list and editor; Preview hides the list and places the
+Request/Response editor on the left and the preview on the right. A shared Save
+and Discard footer appears only while the route has unsaved edits and disappears
+after saving, discarding, or reverting to its saved values. Editing the preview
+request alone does not show it. Routes returns to the list without losing the selected
+route, configuration tab, draft, or preview request and result.
+Use each route's switch in the route list to enable or disable it. Disabled
+routes show a DISABLED badge and muted request details in the list. The badge
+also appears above the editor in both workspace views; the route remains editable.
+Adding and saving routes stays in that workspace. Unsaved drafts
 are retained while switching between routes in the scenario; Save applies a
 draft, and Discard restores its saved values. Refreshing or leaving the page
 discards unsaved drafts without a browser confirmation prompt. The panes scroll
@@ -312,8 +321,14 @@ literal path. Path wildcard and regex matching are not available.
 
 Response headers and required query parameters use editable
 Name/Value tables. Type in a blank row to add an entry, edit either cell directly,
-or remove a row with its minus button. Drafts are retained with the rest of the
-route and validated before Save or Preview. Required query names are unique and
+or remove a row with its minus button. Query Parameters and Response Headers
+each fold into a heading with an entry count. Populated sections start expanded
+and empty sections start collapsed; the plus button expands the section and
+focuses the blank row. Folding a section preserves its values and its state
+across configuration tabs. Validation errors reopen the affected section;
+header errors also select the Response tab.
+Drafts are retained with the rest of the route and validated before Save or
+Preview. Required query names are unique and
 case-sensitive. Their Match column selects Equals for a specific nonempty value,
 Exists for any value, or Regex for a pattern such as `coffee-.*` or `[1-9][0-9]*`.
 Exists disables the value cell. Regex uses Go/RE2 syntax, matches the entire decoded
@@ -324,18 +339,23 @@ value to test. At otherwise equal specificity, Equals takes precedence over Rege
 then Exists; equally specific regex routes are conservatively checked for ambiguity.
 The CLI accepts `--query-regex 'sku=coffee-.*'` alongside `--query warehouse=central`.
 
-PREVIEW beside Save Route opens a request tester in the same pane. Choose a
-service, method, concrete path, and optional query values in the same table
-layout (repeat a name for multiple values), then Run
-Preview to inspect the matched route, status, configured delay, body, and
+Select Preview in the scenario header to test the selected route, or choose
+Preview from any route's ellipsis menu to select that route and open Preview.
+The editor stays available alongside a test request and its expected response, and the route
+name stays visible above the editor. The workspace tabs support arrow keys and
+Home/End. At narrow widths the editor and preview stack with independent scrolling.
+Choose a service, method, concrete path, and optional query values in the same table
+layout (repeat a name for multiple values), then select Preview to inspect
+the matched route, status, configured delay, body, and
 headers. Preview uses the current route draft alongside the scenario's saved
 routes; drafts retained for other routes are not included. It works while the
 scenario is disabled and makes no saves, provider changes, application requests,
 or traffic/timeline entries. Disabled routes remain excluded from matching.
-Edit returns to the preserved draft and selected configuration tab; request inputs and results remain available
-when reopening Preview, with results marked outdated after relevant changes.
-Reset Request restores suggestions from the current draft. Delay is shown
-without waiting, and response bodies are displayed as formatted or raw text.
+Request samples follow the draft until you edit or run the sample. After that,
+editing either configuration tab retains the tested request and marks the result
+outdated until you rerun it. Reset restores suggestions from the current
+draft. Delay is shown without waiting, and response bodies are displayed as
+formatted or raw text.
 
 Topology service cards show a compact `MOCK` badge when their endpoint is bound
 to a mock scenario. Hovering or focusing a card identifies the scenario; the

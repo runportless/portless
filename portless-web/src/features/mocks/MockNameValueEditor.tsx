@@ -32,7 +32,7 @@ export function MockNameValueEditor({ rows, label, rowLabel, description, hideCa
   }
 
   return <table ref={table} className={`mock-name-value${matching ? ' mock-name-value--matching' : ''}`} aria-label={label}>
-    <caption><span className={hideCaption ? 'sr-only' : undefined}>{label}</span>{description && <span className="mock-name-value__description">{description}</span>}</caption>
+    <caption className={hideCaption && !description ? 'sr-only' : undefined}><span className={hideCaption ? 'sr-only' : undefined}>{label}</span>{description && <span className="mock-name-value__description">{description}</span>}</caption>
     <colgroup><col className="mock-name-value__name" />{matching && <col className="mock-name-value__match" />}<col /><col className="mock-name-value__actions" /></colgroup>
     <thead><tr><th scope="col">NAME</th>{matching && <th scope="col">MATCH</th>}<th scope="col">VALUE</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
     <tbody>{visibleRows.map((row, index) => {

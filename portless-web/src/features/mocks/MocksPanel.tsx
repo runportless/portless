@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath, jsonBody } from '../../api'
 import type { Environment, Operation } from '../../api/contracts/environments'
 import type { MockPreview, MockRoute, MockScenario, MockScenarioList, PreviewMockRequest } from '../../api/contracts/mocks'
@@ -16,7 +16,7 @@ import { mockRequiredQueryParameters } from './mockQueryParameters'
 import type { RunMockPreview } from './useMockRoutePreview'
 
 type MockScenarioSortField = 'state' | 'name' | 'services' | 'routes' | 'modifiedAt'
-type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'delay' | 'state'
+type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'state'
 
 const defaultMockScenarioSort: TableSort<MockScenarioSortField> = { key: 'state', direction: 'asc' }
 const defaultMockRouteSort: TableSort<MockRouteSortField> = { key: 'service', direction: 'asc' }
@@ -351,6 +351,9 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   const [routeSort, setRouteSort] = useState<TableSort<MockRouteSortField>>(defaultMockRouteSort)
   const [drafts, setDrafts] = useState<Record<string, MockRouteDraft>>({})
   const [leaveOpen, setLeaveOpen] = useState(false)
+  const [workspaceView, setWorkspaceView] = useState<'routes' | 'preview'>('routes')
+  const workspaceID = useId()
+  const workspaceTabs = useRef<HTMLDivElement>(null)
   const active = mockScenarioIsActive(scenario)
   const enableBlocked = !active && scenario.routes.length === 0
   const toggleBusy = busy === `${active ? 'disable' : 'enable'}:${scenario.name}`
@@ -363,6 +366,9 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   const draftKey = creatingRoute ? 'new' : routeName ? `route:${routeName}` : undefined
   const draft = draftKey && drafts[draftKey] || (existing ? mockRouteDraft(existing) : newMockRouteDraft(scenario.routes.length + 1, services[0] || ''))
   const dirty = !!draftKey && !!drafts[draftKey]
+  const canPreview = creatingRoute || !!existing
+  const previewing = workspaceView === 'preview' && canPreview
+  const activeView = previewing ? 'preview' : 'routes'
   const hasDrafts = Object.keys(drafts).length > 0
   const selectedPage = Math.max(0, Math.floor(orderedRoutes.findIndex((route) => route.name === routeName) / mockRoutePageSize))
 
@@ -386,12 +392,14 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     if (existing && !mockRouteDraftHasChanges(next, existing)) clearDraft(draftKey)
     else setDrafts((current) => ({ ...current, [draftKey]: next }))
   }
-  const selectRoute = (name?: string) => {
+  const selectRoute = (name?: string, view: 'routes' | 'preview' = 'routes') => {
     if (busy) return
+    setWorkspaceView(view)
     setRouteMenu('')
     onDismissDelete()
     onDismissError()
     if (creatingRoute || name !== selectedRoute) onSelectRoute(name)
+    if (view === 'preview') window.requestAnimationFrame(() => workspaceTabs.current?.querySelector<HTMLButtonElement>('[data-workspace-view="preview"]')?.focus())
   }
   const saveDraft = async (next: MockRouteDraft, originalName?: string) => {
     if (!draftKey || !await onSaveRoute(next, originalName)) return
@@ -402,7 +410,10 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     if (busy || !draftKey) return
     clearDraft(draftKey)
     onDismissError()
-    if (creatingRoute || !existing) onSelectRoute()
+    if (creatingRoute || !existing) {
+      setWorkspaceView('routes')
+      onSelectRoute()
+    }
   }
   const toggleRoute = async (route: MockRoute, enabled: boolean) => {
     if (!await onToggleRoute(route, enabled)) return
@@ -428,6 +439,11 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     setRouteMenu('')
     onDismissDelete()
   }
+  const selectWorkspaceView = (view: 'routes' | 'preview') => {
+    setWorkspaceView(view)
+    setRouteMenu('')
+    onDismissDelete()
+  }
 
   return <section className="panel mock-scenario-workspace" role="region" aria-label={`${scenario.name} mock scenario`}>
     <header className="mock-scenario-header">
@@ -440,6 +456,16 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
         <h2 id="mock-scenario-workspace-title">{scenario.name}</h2>
         {scenario.description && <p title={scenario.description}>{scenario.description}</p>}
       </div>
+      <div ref={workspaceTabs} className="mock-workspace-views" role="tablist" aria-label="Mock workspace view">
+        {(['routes', 'preview'] as const).map((view) => <button key={view} id={`${workspaceID}-tab-${view}`} data-workspace-view={view} type="button" role="tab" aria-selected={activeView === view} aria-controls={`${workspaceID}-panel`} tabIndex={activeView === view ? 0 : -1} disabled={view === 'preview' && !canPreview} onClick={() => selectWorkspaceView(view)} onKeyDown={(event) => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault()
+            const next = !canPreview || event.key === 'Home' ? 'routes' : event.key === 'End' ? 'preview' : view === 'routes' ? 'preview' : 'routes'
+            selectWorkspaceView(next)
+            workspaceTabs.current?.querySelector<HTMLButtonElement>(`[data-workspace-view="${next}"]`)?.focus()
+          }
+        }}>{view === 'routes' ? 'Routes' : 'Preview'}</button>)}
+      </div>
         <label className={`mock-scenario-toggle${active ? ' is-active' : ''}${toggleDisabled ? ' is-disabled' : ''}`} title={enableBlocked ? 'Add a route before enabling this scenario.' : undefined}>
           <span className="mock-scenario-toggle__label">{toggleBusy ? active ? 'DISABLING…' : 'ENABLING…' : scenario.activation.state.toUpperCase()}</span>
           <input className="sr-only" type="checkbox" role="switch" checked={active} disabled={toggleDisabled} aria-label={`${scenario.name} enabled`} onChange={(event) => onToggle(event.target.checked)} />
@@ -448,15 +474,15 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     </header>
     {scenario.activation.state === 'degraded' && <ActionErrorNotice error={{ title: 'Scenario is partially active', message: `${scenario.activation.activeServices.length} of ${scenario.activation.targetServices.length} services currently use this scenario. Disable it to restore the saved providers.` }} />}
     {error && !draftKey && <div className="mock-workspace-error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
-    <div className="mock-scenario-split">
-      <section className="mock-route-browser" aria-label={`${scenario.name} routes`}>
+    <div className={`mock-scenario-split${previewing ? ' is-preview' : ''}`} id={`${workspaceID}-panel`} role="tabpanel" aria-labelledby={`${workspaceID}-tab-${activeView}`}>
+      <section className="mock-route-browser" aria-label={`${scenario.name} routes`} hidden={previewing}>
         <div className="mock-route-browser__title">
           <span>ROUTES</span>
-          <button className="button button--primary button--small" type="button" disabled={!!busy || creatingRoute} onClick={() => { onDismissError(); onDismissDelete(); onAddRoute() }}>ADD ROUTE</button>
+          <button className="button button--primary button--small" type="button" disabled={!!busy || creatingRoute} onClick={() => { setWorkspaceView('routes'); onDismissError(); onDismissDelete(); onAddRoute() }}>ADD ROUTE</button>
         </div>
         {scenario.routes.length > 0 && <div className="mock-route-sort">
           <label><span>SORT BY</span><select aria-label="Sort routes by" value={routeSort.key} onChange={(event) => changeRouteSort({ key: event.target.value as MockRouteSortField, direction: 'asc' })}>
-            <option value="service">Service</option><option value="route">Route</option><option value="match">Match</option><option value="response">Response</option><option value="delay">Delay</option><option value="state">State</option>
+            <option value="service">Service</option><option value="route">Route</option><option value="match">Match</option><option value="response">Response</option><option value="state">State</option>
           </select></label>
           <button type="button" aria-label={`Sort routes ${routeSort.direction === 'asc' ? 'descending' : 'ascending'}`} onClick={() => changeRouteSort({ ...routeSort, direction: routeSort.direction === 'asc' ? 'desc' : 'asc' })}>{routeSort.direction === 'asc' ? '↑' : '↓'}</button>
         </div>}
@@ -464,8 +490,8 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
         <div className="mock-route-browser__scroll">
           <div className="mock-route-list" role="list" aria-label="Routes">
             {routePagination.items.map((route) => <div className={`mock-route-item${route.name === routeName ? ' is-selected' : ''}${route.enabled ? '' : ' is-off'}`} role="listitem" key={route.name} onClick={() => selectRoute(route.name)}>
-              <button className="mock-route-select" type="button" disabled={!!busy} aria-label={`Edit ${route.name} route`} aria-current={route.name === routeName ? 'true' : undefined} onClick={(event) => { event.stopPropagation(); selectRoute(route.name) }}>
-                <span className="mock-route-select__name"><strong title={route.name}>{route.name}</strong>{drafts[`route:${route.name}`] && <small title="Unsaved changes"><span className="sr-only">UNSAVED</span></small>}</span>
+              <button className="mock-route-select" type="button" disabled={!!busy} aria-label={`Edit ${route.name} route`} aria-current={route.name === routeName ? 'true' : undefined} aria-describedby={route.enabled ? undefined : `${workspaceID}-route-disabled-${route.name}`} onClick={(event) => { event.stopPropagation(); selectRoute(route.name) }}>
+                <span className="mock-route-select__name"><strong title={route.name}>{route.name}</strong>{drafts[`route:${route.name}`] && <small title="Unsaved changes"><span className="sr-only">UNSAVED</span></small>}{!route.enabled && <span id={`${workspaceID}-route-disabled-${route.name}`} className="mock-route-disabled-state">DISABLED</span>}</span>
                 <span className="mock-route-select__request">
                   <span className="mock-route-method">{route.method}</span>{' '}
                   <code title={`${route.method} ${route.path}${formatQuerySummary(route.query)}`}>{route.path}<span>{formatQuerySummary(route.query)}</span></code>
@@ -480,6 +506,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
               <div className="mock-route-item__actions table-row-actions">
                 <RowActionsMenu label={`Route actions for ${route.name}`} menuLabel={`${route.name} route actions`} open={routeMenu === route.name} disabled={!!busy} onOpenChange={(open) => { setRouteMenu(open ? route.name : ''); if (!open || routeMenu !== route.name) onDismissDelete() }}>
                   <button type="button" role="menuitem" disabled={!!busy} onClick={() => selectRoute(route.name)}>EDIT</button>
+                  <button type="button" role="menuitem" disabled={!!busy} onClick={() => selectRoute(route.name, 'preview')}>PREVIEW</button>
                   <button className={`is-danger${deleteName === `delete-route:${route.name}` ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy} aria-label={deleteName === `delete-route:${route.name}` ? `Confirm delete ${route.name}` : `Delete ${route.name}`} onClick={() => { void deleteRoute(route) }}>{busy === `delete-route:${route.name}` ? 'DELETING…' : deleteName === `delete-route:${route.name}` ? 'CONFIRM' : 'DELETE'}</button>
                 </RowActionsMenu>
                 <MockRouteEnabledToggle route={route} busy={busy === `toggle-route:${route.name}`} disabled={!!busy} onToggle={(enabled) => { void toggleRoute(route, enabled) }} />
@@ -490,7 +517,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
         </div>
         <PanelPagination label="routes" pagination={routePagination} onPage={(page) => { setRoutePage(page); setRouteMenu(''); onDismissDelete() }} />
       </section>
-      {draftKey ? <MockRouteEditor key={draftKey} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} onPreview={onPreviewRoute} /> : <div className="mock-route-editor-empty"><span>Add a route to configure its request and response.</span></div>}
+      {draftKey ? <MockRouteEditor key={draftKey} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} previewing={previewing} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} onPreview={onPreviewRoute} /> : <div className="mock-route-editor-empty"><span>Add a route to configure its request and response.</span></div>}
     </div>
     {leaveOpen && <FormDialog className="mock-scenario-leave-dialog" titleID="mock-scenario-leave-title" descriptionID="mock-scenario-leave-description" closeLabel="Keep editing routes" onClose={() => setLeaveOpen(false)} header={<h2 id="mock-scenario-leave-title">Discard unsaved changes?</h2>}>
       <p id="mock-scenario-leave-description">Your route drafts will be discarded when you leave this scenario.</p>
@@ -616,9 +643,6 @@ export function sortMockRoutes(routes: MockRoute[], sort: TableSort<MockRouteSor
         break
       case 'response':
         order = left.status - right.status || mockRouteBodyBytes(left) - mockRouteBodyBytes(right)
-        break
-      case 'delay':
-        order = (left.delayMs || 0) - (right.delayMs || 0)
         break
       case 'state':
         order = left.enabled === right.enabled ? 0 : left.enabled ? -1 : 1

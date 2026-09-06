@@ -4,7 +4,7 @@ import { MockPreviewResponse, MockRoutePreview } from './MockRoutePreview'
 
 describe('MockRoutePreview', () => {
   it('renders accessible request inputs, stale status, disabled route guidance, and structured errors', () => {
-    const markup = renderToStaticMarkup(<MockRoutePreview services={['inventory']} enabled={false} busy={false} dirty={true} existing={true} onEdit={() => undefined} onSave={() => undefined} preview={{
+    const markup = renderToStaticMarkup(<MockRoutePreview services={['inventory']} enabled={false} busy={false} hidden={false} preview={{
       request: { service: 'inventory', method: 'GET', path: '/items/sku-123', query: [{ id: 1, name: 'include', value: 'stock' }] },
       result: { service: 'inventory', matched: true, route: 'lookup', status: 200, body: '{"stock":0}', delayMs: 25 },
       outdated: true, error: { title: "Preview couldn't run", message: 'Request was invalid.' }, running: false,
@@ -12,11 +12,16 @@ describe('MockRoutePreview', () => {
     }} />)
     expect(markup).toContain('aria-label="Mock request preview"')
     for (const label of ['PREVIEW SERVICE', 'PREVIEW METHOD', 'PREVIEW PATH', 'Preview query parameters', 'Query parameter name 1', 'Query parameter value 1']) expect(markup).toContain(`aria-label="${label}"`)
-    expect(markup).toContain('Current route draft with saved scenario routes.')
+    expect(markup).toContain('<h3>PREVIEW</h3>')
+    expect(markup).toContain('>RESET</button>')
+    expect(markup).toContain('>PREVIEW</button>')
+    expect(markup).toContain('aria-label="Preview query parameters" aria-expanded="true"')
     expect(markup).toContain('This route is disabled and will not match.')
-    expect(markup).toContain('Preview is outdated. Run it again.')
+    expect(markup).toContain('OUTDATED')
     expect(markup).toContain('role="alert"')
-    expect(markup).toContain('>EDIT</button>')
+    expect(markup).not.toContain('>EDIT</button>')
+    expect(markup).not.toContain('>SAVE ROUTE</button>')
+    expect(markup).not.toContain('autofocus')
   })
 
   it('presents no match as an expected 501 response and escapes response content', () => {

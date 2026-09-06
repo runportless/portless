@@ -23,8 +23,8 @@ describe('MockNameValueEditor', () => {
   })
 
   it('provides query match operators and disables the value for presence matching', () => {
-    const html = renderToStaticMarkup(<MockNameValueEditor rows={[{ id: 1, name: 'include', value: '' }]} label="Required query parameters" rowLabel="Query parameter" matching disabled={false} onChange={() => undefined} />)
-    expect(html).toContain('aria-label="Required query parameters"')
+    const html = renderToStaticMarkup(<MockNameValueEditor rows={[{ id: 1, name: 'include', value: '' }]} label="Query parameters" rowLabel="Query parameter" matching disabled={false} onChange={() => undefined} />)
+    expect(html).toContain('aria-label="Query parameters"')
     expect(html).toContain('<th scope="col">MATCH</th>')
     expect(html).toContain('aria-label="Query parameter match 1"')
     expect(html).toContain('<option value="exists" selected="">Exists</option>')
@@ -37,7 +37,7 @@ describe('MockNameValueEditor', () => {
   })
 
   it('shows a selected Regex operator with an editable pattern cell', () => {
-    const html = renderToStaticMarkup(<MockNameValueEditor rows={[{ id: 1, name: 'sku', match: 'regex', value: 'coffee-.*' }]} label="Required query parameters" rowLabel="Query parameter" matching disabled={false} onChange={() => undefined} />)
+    const html = renderToStaticMarkup(<MockNameValueEditor rows={[{ id: 1, name: 'sku', match: 'regex', value: 'coffee-.*' }]} label="Query parameters" rowLabel="Query parameter" matching disabled={false} onChange={() => undefined} />)
     expect(html).toContain('<option value="regex" selected="">Regex</option>')
     expect(html).toMatch(/<input(?=[^>]*aria-label="Query parameter value 1")(?=[^>]*value="coffee-\.\*")(?![^>]*disabled=)[^>]*>/)
     expect(html).toContain('title="Go regex (RE2). Matches the entire query value."')
