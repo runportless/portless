@@ -49,7 +49,7 @@ possible before anything is started or restored.
 
 ### 3. Traffic replay and comparison
 
-The first slice is specified in the
+The implemented first slice follows the
 [HTTP request replay and response comparison plan](request-replay.md): replay
 one live HTTP exchange from its Traffic drawer, preserve its directed edge,
 and compare the response in the same workspace. Recording and whole-trace

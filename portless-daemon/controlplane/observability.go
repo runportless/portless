@@ -69,6 +69,7 @@ func (s *Service) TrafficTrace(ctx context.Context, project, environment string,
 // ClearTraffic removes the environment's live exchanges and derived traces.
 // Durable recording contents and the sequence high-water mark are preserved.
 func (s *Service) ClearTraffic(project, environment string) (int, int64, uint64) {
+	s.replays.Clear(project, environment)
 	return s.traffic.Clear(project, environment)
 }
 

@@ -32,12 +32,19 @@ func writeDecodeError(writer http.ResponseWriter, err error) {
 }
 
 func decodeJSON(request *http.Request, target any) error {
-	decoder := json.NewDecoder(io.LimitReader(request.Body, (1<<20)+1))
+	return decodeJSONReader(io.LimitReader(request.Body, (1<<20)+1), target)
+}
+
+func decodeJSONReader(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err != nil {
+			return err
+		}
 		return errors.New("request must contain exactly one JSON value")
 	}
 	return nil

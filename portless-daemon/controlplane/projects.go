@@ -331,6 +331,7 @@ func (s *Service) Forget(ctx context.Context, projectName string) error {
 		return err
 	}
 	for _, environment := range environments {
+		s.replays.Clear(projectName, environment.Name)
 		s.traffic.DisposeEnvironment(model.EnvironmentSelector(projectName, environment.Name))
 	}
 	return nil
@@ -407,6 +408,7 @@ func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmen
 		return err
 	}
 	s.traffic.DisposeEnvironment(model.EnvironmentSelector(projectName, environmentName))
+	s.replays.Clear(projectName, environmentName)
 	return nil
 }
 

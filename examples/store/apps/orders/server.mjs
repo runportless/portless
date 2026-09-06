@@ -19,6 +19,9 @@ const pool = new pg.Pool({
   connectionTimeoutMillis: 2_000,
   idleTimeoutMillis: 30_000,
 })
+// pg discards disconnected idle clients; handle their errors so a dependency
+// proxy restart does not terminate the HTTP server with an unhandled event.
+pool.on('error', (error) => console.error(`orders database connection: ${error.message}`))
 const redis = createClient({
   url: redisURL,
   disableOfflineQueue: true,

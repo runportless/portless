@@ -49,7 +49,7 @@ export function CommandResultLayout({ exchanges, view, renderMessage }: {
   renderMessage: (exchange: TrafficExchange, direction: TrafficDirection) => ReactNode
 }) {
   const label = view === 'request' ? 'Command' : view === 'response' ? 'Result' : 'Command and result'
-  return <section className={`traffic-command-results${view === 'compare' ? '' : ' traffic-command-results--single'}`} aria-label={label}>
+  return <section className={`traffic-command-results${view === 'side-by-side' ? '' : ' traffic-command-results--single'}`} aria-label={label}>
     <ol>
       {exchanges.map((exchange, index) => <li className="traffic-command-result" key={exchange.sequence}>
         <header><span>{String(index + 1).padStart(2, '0')}</span><strong>{exchange.tcp?.operation || 'COMMAND'}</strong><small>{duration(exchange.durationMs)}</small></header>

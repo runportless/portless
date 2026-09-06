@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import type { TrafficExchange } from '../../../api/contracts/traffic'
-import { captureSummary, CompareIcon, CopyIcon, formatTrafficBytes, highlightedJSON, trafficBodyPresentation, trafficBodySummary } from '../detail/TrafficFormatting'
+import { captureSummary, SideBySideIcon, CopyIcon, formatTrafficBytes, highlightedJSON, trafficBodyPresentation, trafficBodySummary } from '../detail/TrafficFormatting'
 import type { TrafficDetailView, TrafficDirection, TrafficPayloadView } from '../detail/trafficDetailTypes'
 import { isWebSocketHandshake } from '../trafficProtocol'
 
@@ -12,7 +12,7 @@ export function formattedTrafficHeaders(headers: Record<string, string[]> | unde
     : 'No headers captured'
 }
 
-function highlightedTrafficHeaders(headers: string) {
+export function highlightedTrafficHeaders(headers: string) {
   const lines = headers.split('\n')
   const nodes: ReactNode[] = []
   for (const [index, line] of lines.entries()) {
@@ -124,10 +124,10 @@ export function HttpTrafficDetail({ exchange, maximized, view, onView }: {
     <nav className="traffic-detail__tabs" role="tablist" aria-label="Exchange payload">
       <button type="button" role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'is-active' : ''} onClick={() => onView('request')}>REQUEST</button>
       <button type="button" role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'is-active' : ''} onClick={() => onView('response')}>RESPONSE</button>
-      {maximized && <button className="traffic-detail__compare" type="button" role="tab" aria-selected={view === 'compare'} onClick={() => onView('compare')}><CompareIcon />COMPARE</button>}
+      {maximized && <button className="traffic-detail__side-by-side" type="button" role="tab" aria-selected={view === 'side-by-side'} onClick={() => onView('side-by-side')}><SideBySideIcon />SIDE BY SIDE</button>}
     </nav>
     {view === 'request' && <div className="traffic-detail__message" role="tabpanel"><TrafficMessageInspector exchange={exchange} direction="request" view={requestView} onView={setRequestView} /></div>}
     {view === 'response' && <div className="traffic-detail__message" role="tabpanel"><TrafficMessageInspector exchange={exchange} direction="response" view={responseView} onView={setResponseView} /></div>}
-    {view === 'compare' && <div className="traffic-detail__comparison" role="tabpanel"><TrafficMessageInspector compact exchange={exchange} direction="request" view={requestView} onView={setRequestView} /><TrafficMessageInspector compact exchange={exchange} direction="response" view={responseView} onView={setResponseView} /></div>}
+    {view === 'side-by-side' && <div className="traffic-detail__side-by-side-layout" role="tabpanel"><TrafficMessageInspector compact exchange={exchange} direction="request" view={requestView} onView={setRequestView} /><TrafficMessageInspector compact exchange={exchange} direction="response" view={responseView} onView={setResponseView} /></div>}
   </>
 }

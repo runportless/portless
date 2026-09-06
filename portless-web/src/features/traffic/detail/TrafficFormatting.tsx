@@ -4,7 +4,7 @@ export function CopyIcon() {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="3" width="8" height="9" /><path d="M10 12v2H2V5h3" /></svg>
 }
 
-export function CompareIcon() {
+export function SideBySideIcon() {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="5" height="10" /><rect x="9" y="3" width="5" height="10" /></svg>
 }
 
@@ -32,7 +32,31 @@ export function trafficBodyPresentation(body: string, contentType = '') {
   const mediaType = contentType.split(';', 1)[0].trim().toLowerCase()
   const declaredJSON = mediaType === 'application/json' || mediaType === 'text/json' || mediaType.endsWith('+json')
   if (declaredJSON || trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try { return { text: JSON.stringify(JSON.parse(body), null, 2), json: true } } catch { /* Preserve malformed or streaming JSON as received. */ }
+    try {
+      // Validate syntax, then format the original tokens so numbers, duplicate
+      // keys, escapes and key order never pass through JavaScript serialization.
+      JSON.parse(body)
+      const tokens = body.match(/"(?:\\.|[^"\\])*"|[{}[\],:]|[^\s{}[\],:]+/g) || []
+      const output: string[] = []
+      let depth = 0
+      let length = 0
+      for (const [index, token] of tokens.entries()) {
+        let formatted = token
+        if (token === '{' || token === '[') {
+          depth++
+          if (depth > 100) return { text: body, json: false }
+          if (tokens[index + 1] !== (token === '{' ? '}' : ']')) formatted += `\n${'  '.repeat(depth)}`
+        } else if (token === '}' || token === ']') {
+          depth--
+          if (tokens[index - 1] !== (token === '}' ? '{' : '[')) formatted = `\n${'  '.repeat(depth)}${token}`
+        } else if (token === ',') formatted = `,\n${'  '.repeat(depth)}`
+        else if (token === ':') formatted = ': '
+        length += formatted.length
+        if (length > (1 << 20)) return { text: body, json: false }
+        output.push(formatted)
+      }
+      return { text: output.join(''), json: true }
+    } catch { /* Preserve malformed or streaming JSON as received. */ }
   }
   return { text: body, json: false }
 }

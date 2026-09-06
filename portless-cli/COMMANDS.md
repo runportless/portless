@@ -78,7 +78,9 @@ portless
 │   ├── list (ls)
 │   ├── show <sequence>
 │   ├── traces
-│   └── trace <number>
+│   ├── trace <number>
+│   └── replay [sequence]
+│       └── show <number>
 ├── project
 │   ├── list (ls)
 │   ├── show [project]
@@ -255,6 +257,40 @@ directed and retain caller identity.
 | `portless traffic show <sequence>` | Show one captured exchange by its sequence number. |
 | `portless traffic traces` | List correlated traces. `--limit <n>` defaults to `100`; filter with mutually exclusive `--service <name>` or `--edge <source:target>`; `--include-background` includes browser subresources and successful connection housekeeping. |
 | `portless traffic trace <number>` | Show one correlated trace by trace number. |
+| `portless traffic replay [sequence]` | Replay one live HTTP exchange and wait for its response comparison. With no sequence, display help. |
+| `portless traffic replay show <number>` | Inspect a workspace and its latest result in the current daemon. Use both `--expected-created-at <RFC3339>` and `--expected-daemon-started-at <RFC3339>` from a receipt to refuse a reused number after replacement. |
+
+Replay keeps the original project, source, target, and captured response fixed.
+`--against <project/environment>` selects another environment in that project.
+The destination must already be ready; this command does not start services.
+Only ordinary HTTP requests are supported. TCP, WebSocket, gRPC, streaming,
+binary, and multipart replay are excluded.
+
+| Replay option | Meaning |
+| --- | --- |
+| `--method <method>` | Replace the HTTP method with GET, HEAD, OPTIONS, POST, PUT, PATCH, or DELETE. |
+| `--path <path-and-query>` | Replace the escaped path and raw query, preserving repeated query keys. Absolute URLs are rejected. |
+| `--header 'Name: Value'` | Replace a header; repeat the same name to preserve multiple values in order. |
+| `--headers-file <file>` | Read a bounded JSON object of header value arrays. Use `-` for stdin. Header flags append to this file's replacement values. |
+| `--remove-header <name>` | Explicitly omit a captured header; repeat for several headers. |
+| `--body-file <file>` | Read a complete UTF-8 replacement body, at most 25 MiB. Use `-` for stdin. |
+| `--empty-body` | Explicitly send no body. Mutually exclusive with `--body-file`. |
+| `--yes` | Confirm the reviewed mutating request to a read-write remote provider. Read-only remote policy cannot be overridden. |
+
+Only one input file can use stdin. Captured redacted headers require an explicit
+replacement or omission. Routing, framing, browser security, and old trace
+headers cannot be reused; Portless constructs a fresh trace and forces identity
+response encoding. Truncated, omitted, unsupported, or incomplete request bodies
+cannot be sent as captured prefixes; provide a replacement or `--empty-body`.
+
+Normal output shows status, delivery outcome, duration change, and bounded
+header/body differences. `--json` emits one workspace result. A transport failure
+with unknown delivery exits nonzero and provides an identity-bound `replay show`
+command. It never automatically repeats the send. An HTTP error response remains
+an observed response and can be compared. Workspaces are cleaned up after one hour without activity;
+closing a CLI or browser does not cancel an admitted run, which has a 30-second
+deadline. Results retain at most 64 KiB of response text and state when the
+comparison covers only a prefix.
 
 Examples:
 

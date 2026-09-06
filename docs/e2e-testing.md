@@ -106,6 +106,8 @@ The CLI E2E suite protects these product contracts:
   session fallbacks for encrypted or incomplete protocol traffic;
 - bounded recordings and persistent fault creation, matching, disable,
   re-enable, export, and deletion;
+- single-request HTTP replay with CLI request overrides, retained receipts,
+  frozen-baseline response comparison, and remote-policy enforcement;
 - authenticated daemon restart within the fixed five-second readiness deadline,
   with adoption of the original service processes and proxy routes while live
   browser event streams reconnect;
@@ -134,6 +136,16 @@ The CLI E2E suite protects these product contracts:
 - forced reset when ordinary lifecycle state is from an incompatible model.
 
 The Playwright suite protects these browser journeys:
+
+- oversized replay bodies rejected before preparation or dispatch through the
+  shared, dismissible error notice, with editing and successful retry available;
+- replay preparation from exchange and trace drawers without dispatch, repeated
+  request headers and replacement text bodies, same-project destination
+  selection, frozen response comparison with lossless large JSON numbers,
+  formatted Body, Headers, and Raw tabs, trace colors in both themes, and
+  response panes that fill the available height and scroll internally,
+  explicit remote-write confirmation, and closing/reopening a pending run
+  without a second application request;
 
 - browser authentication and one-use claim consumption, including proof that
   requesting a claim path on an application host neither consumes the claim
@@ -275,6 +287,12 @@ The Playwright suite protects these browser journeys:
 - daemon details, restart timing, and logs; full-screen drawer behavior;
   blocked-handoff stop guidance and force-restart confirmation; five-second
   restart failure messaging, reconnect, and runtime adoption.
+
+Replay journeys also verify close cleanup and fresh reopening, continued delivery
+of an already admitted request after close, no workspace/expiry label, activity
+renewal across two hours, and cleanup after one idle hour using the browser clock.
+Daemon tests advance an injected clock to verify server idle retention and that
+receipt polling and activity never extend prepared credential retention.
 
 ## WebSocket coverage
 

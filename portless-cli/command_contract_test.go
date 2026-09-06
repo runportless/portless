@@ -78,6 +78,8 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless traffic show":          showHelp,
 		"portless traffic traces":        runAction,
 		"portless traffic trace":         showHelp,
+		"portless traffic replay":        showHelp,
+		"portless traffic replay show":   showHelp,
 		"portless service":               showHelp,
 		"portless service list":          runAction,
 		"portless service show":          showHelp,

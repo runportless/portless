@@ -17,6 +17,10 @@ import (
 )
 
 func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request, project, environment string, segments []string) {
+	if len(segments) >= 5 && segments[4] == "replays" {
+		s.handleTrafficReplay(writer, request, project, environment, segments)
+		return
+	}
 	if len(segments) == 4 {
 		if request.Method != http.MethodDelete {
 			methodNotAllowed(writer, http.MethodDelete)
@@ -307,7 +311,7 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.json"`, name))
-		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 3, Project: project, Environment: environment, Recording: name, Exchanges: exchanges})
+		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 4, Project: project, Environment: environment, Recording: name, Exchanges: exchanges})
 		return
 	}
 	writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "recording route not found"})

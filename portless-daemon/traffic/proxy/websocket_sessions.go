@@ -145,15 +145,18 @@ func (m *Manager) setTarget(scope, service string, configured target) bool {
 	key := targetKey(scope, service)
 	current, exists := m.targets[key]
 	var closing []*websocketSession
+	var replays []*replayAttempt
 	if exists && sameWebSocketTarget(current, configured) {
 		configured.generation = current.generation
 	} else {
 		m.targetGeneration++
 		configured.generation = m.targetGeneration
 		closing = m.invalidateWebSocketsLocked(scope, service)
+		replays = m.invalidateReplaysLocked(scope, service)
 	}
 	m.targets[key] = configured
 	m.mu.Unlock()
 	closeWebSockets(closing)
+	closeReplays(replays)
 	return true
 }

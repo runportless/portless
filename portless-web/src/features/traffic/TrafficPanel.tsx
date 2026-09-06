@@ -12,8 +12,19 @@ import { traceNavigationItems, type TraceNavigationItem } from './TraceWaterfall
 import { useTrafficStream } from './useTrafficStream'
 import { useTrafficViewModel, useTrafficViewState } from './useTrafficView'
 import { WaterfallTraceDrawer } from './WaterfallTraceDrawer'
+import { useTrafficReplay } from './replay/useTrafficReplay'
+import { TrafficReplayEditor } from './replay/TrafficReplayEditor'
 
-export function TrafficPanel({ environment }: { environment: Environment }) {
+export function TrafficPanel({ environment, environments = [environment] }: { environment: Environment; environments?: Environment[] }) {
+  const replay = useTrafficReplay(environment)
+  const replayPending = replay.state.busy || replay.state.awaitingReceipt || replay.state.workspace?.run?.state === 'running'
+  const replayNavigationBlocked = replay.state.visible || replayPending
+  const clearReplay = replay.clear
+  const replayTrigger = useRef<HTMLElement | null>(null)
+  const openReplay = (exchange: TrafficExchange) => {
+    replayTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    void replay.open(exchange)
+  }
   const view = useTrafficViewState()
   const [selectedExchange, setSelectedExchange] = useState<TrafficExchange | null>(null)
   const [selectedTrace, setSelectedTrace] = useState<TrafficTrace | null>(null)
@@ -54,6 +65,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   useEffect(() => {
     const throughSequence = stream.lastClearedThroughSequence
     if (throughSequence === null) return
+    clearReplay()
     selectionRequest.current += 1
     setSelectedExchange((current) => current && current.sequence <= throughSequence ? null : current)
     setSelectedTrace((current) => current && current.lastSequence <= throughSequence ? null : current)
@@ -62,7 +74,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
     setSelectedTraceNavigationKey(null)
     setExpandedTrace((current) => current !== null && current <= throughSequence ? null : current)
     resetPages()
-  }, [resetPages, stream.lastClearedThroughSequence])
+  }, [clearReplay, resetPages, stream.lastClearedThroughSequence])
 
   useEffect(() => {
     if (view.tracePage !== traffic.tracePagination.page) setTracePage(traffic.tracePagination.page)
@@ -84,6 +96,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   }
 
   const inspectExchange = async (exchange: TrafficExchange, traceHint?: TrafficTrace, navigationKey?: string) => {
+    if (replayNavigationBlocked) return
     const request = ++selectionRequest.current
     setDetailNavigationPending(true)
     if (!traceHint) setSelectedTrace(null)
@@ -107,6 +120,7 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
   }
 
   const inspectTraceItem = (item: TraceNavigationItem, trace: TrafficTrace) => {
+    if (replayNavigationBlocked) return
     if (item.kind === 'exchange') {
       void inspectExchange(item.exchange, trace, item.key)
       return
@@ -186,7 +200,10 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
       ? <ExchangeTraceDrawer
         exchange={selectedExchange}
         exchanges={traffic.visibleExchanges}
-        navigationPending={detailNavigationPending}
+        navigationPending={detailNavigationPending || replayNavigationBlocked}
+        suspended={replay.state.visible}
+        replayDisabled={detailNavigationPending}
+        onReplay={openReplay}
         targetBinding={environment.bindings?.find((binding) => binding.service.toLowerCase() === selectedExchange.target.toLowerCase())}
         onNavigate={inspectVisibleExchange}
         onClose={closeExchange}
@@ -196,10 +213,14 @@ export function TrafficPanel({ environment }: { environment: Environment }) {
         trace={selectedTrace}
         traceNavigationItems={selectedTraceNavigationItems}
         traceNavigationItem={selectedTraceNavigationItem}
-        navigationPending={detailNavigationPending}
+        navigationPending={detailNavigationPending || replayNavigationBlocked}
+        suspended={replay.state.visible}
+        replayDisabled={detailNavigationPending}
+        onReplay={openReplay}
         targetBinding={environment.bindings?.find((binding) => binding.service.toLowerCase() === (selectedTraceNavigationItem?.exchange.target || selectedExchange.target).toLowerCase())}
         onNavigate={(item) => traceNavigationScoped && selectedTrace ? inspectTraceItem(item, selectedTrace) : void inspectExchange(item.exchange, selectedTrace || undefined)}
         onClose={closeExchange}
       />)}
+    {replay.state.visible && <TrafficReplayEditor replay={replay} environments={environments} restoreFocusRef={replayTrigger} onClose={replay.close} />}
   </div>
 }

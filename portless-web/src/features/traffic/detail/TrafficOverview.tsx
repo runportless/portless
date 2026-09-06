@@ -45,8 +45,9 @@ export function TrafficOverview({ exchange, targetBinding }: { exchange: Traffic
 
 export function TrafficInterventionBadges({ exchange }: { exchange: TrafficExchange }) {
 	const mock = [exchange.mockScenario, exchange.mockRoute].filter(Boolean).join(' / ')
-  if (!exchange.fault && !exchange.recording && !mock) return null
+  if (!exchange.fault && !exchange.recording && !mock && !exchange.replay) return null
   return <div className="traffic-intervention-badges" role="list" aria-label="Exchange interventions">
+    {exchange.replay && <span className="traffic-intervention-badge traffic-intervention-badge--replay" role="listitem" aria-label="REPLAY" title={`Replayed from ${exchange.replay.project}/${exchange.replay.environment} request #${exchange.replay.sequence}`}><b>REPLAY</b></span>}
     {exchange.fault && <span className="traffic-intervention-badge traffic-intervention-badge--fault" role="listitem" aria-label={`FAULT ${exchange.fault}`}><b>FAULT</b><span>{exchange.fault}</span></span>}
     {exchange.recording && <span className="traffic-intervention-badge traffic-intervention-badge--recording" role="listitem" aria-label={`RECORDING ${exchange.recording}`}><b>RECORDING</b><span>{exchange.recording}</span></span>}
     {mock && <span className="traffic-intervention-badge traffic-intervention-badge--mock" role="listitem" aria-label={`MOCK ${mock}`}><b>MOCK</b><span>{mock}</span></span>}

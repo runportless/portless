@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { DrawerSizeButton } from '../../../components/DrawerSizeButton'
 import { duration } from '../../../components/Status'
 import type { ComponentBinding } from '../../../api/contracts/topology'
@@ -10,6 +10,8 @@ import { formatTrafficBytes } from './TrafficFormatting'
 import { TrafficInterventionBadges, TrafficOverview } from './TrafficOverview'
 import type { TrafficDetailView } from './trafficDetailTypes'
 import { isWebSocketHandshake } from '../trafficProtocol'
+import { useOverlayDismiss } from '../../../components/overlays/useOverlayDismiss'
+import { replayEntryReason } from '../replay/trafficReplayDraft'
 
 export function defaultTrafficDetailView(_exchange: TrafficExchange): TrafficDetailView {
   return 'request'
@@ -21,11 +23,14 @@ function statusTone(exchange: TrafficExchange) {
   return 'is-success'
 }
 
-export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, targetBinding, onClose }: {
+export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, targetBinding, suspended = false, replayDisabled = false, onReplay, onClose }: {
   exchange: TrafficExchange
   traceNavigationItem?: TraceNavigationItem
   navigation?: ReactNode
   targetBinding?: ComponentBinding
+  suspended?: boolean
+  replayDisabled?: boolean
+  onReplay?: (exchange: TrafficExchange) => void
   onClose: () => void
 }) {
   const transaction = traceNavigationItem?.kind === 'transaction' ? traceNavigationItem : undefined
@@ -38,28 +43,24 @@ export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, 
   const defaultView = defaultTrafficDetailView(detailExchange)
   const [maximized, setMaximized] = useState(false)
   const [view, setView] = useState<TrafficDetailView>(() => defaultView)
+  const surface = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    setView((current) => current === 'compare' && (http || semanticTCP) ? current : defaultView)
+    setView((current) => current === 'side-by-side' && (http || semanticTCP) ? current : defaultView)
   }, [defaultView, detailExchange.project, detailExchange.environment, detailExchange.sequence, http, semanticTCP, traceNavigationItem?.key])
 
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (maximized) { setMaximized(false); setView((current) => current === 'compare' ? 'request' : current) } else onClose()
-    }
-    window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
-  }, [maximized, onClose])
+  useOverlayDismiss({ containerRef: surface, initialFocusRef: surface, dismissBlocked: false, enabled: !suspended, onDismiss: onClose, onEscape: () => {
+    if (maximized) { setMaximized(false); setView((current) => current === 'side-by-side' ? 'request' : current) } else onClose()
+  } })
 
   const toggleMaximized = () => {
     if (maximized) {
       setMaximized(false)
-      setView((current) => current === 'compare' ? 'request' : current)
+      setView((current) => current === 'side-by-side' ? 'request' : current)
       return
     }
     setMaximized(true)
-    if (http || semanticTCP) setView('compare')
+    if (http || semanticTCP) setView('side-by-side')
   }
 
   const tcpStatus = detailExchange.tcp?.outcome === 'success' ? 'OK' : detailExchange.tcp?.outcome === 'one-way' ? 'SENT' : detailExchange.tcp?.outcome === 'incomplete' ? 'INCOMPLETE' : detailExchange.tcp?.outcome === 'error' ? 'ERROR' : 'SESSION'
@@ -72,11 +73,11 @@ export function TrafficDrawerShell({ exchange, traceNavigationItem, navigation, 
   const commandLabel = `${commandCount} ${commandCount === 1 ? 'command' : 'commands'}`
   const protocolBadge = isWebSocketHandshake(detailExchange) ? 'WS' : http ? 'HTTP' : 'TCP'
 
-  return <aside className={`traffic-detail${maximized ? ' traffic-detail--maximized' : ''}`} role="dialog" aria-label={`Traffic request and response ${detailExchange.sequence}`}>
+  return <aside ref={surface} style={suspended ? { display: 'none' } : undefined} className={`traffic-detail${maximized ? ' traffic-detail--maximized' : ''}`} role="dialog" aria-modal="true" tabIndex={-1} aria-label={`Traffic request and response ${detailExchange.sequence}`}>
     <header className="traffic-detail__header">
       <div className="traffic-detail__heading"><span className="traffic-detail__protocol-badge">{protocolBadge}</span><h3><span>{http ? detailExchange.method || 'HTTP' : applicationProtocol}</span><code>{transaction ? 'TRANSACTION' : http ? requestTarget : operation}</code></h3><small>{transaction && <><span className="traffic-detail__transaction-count">{commandLabel}</span><i aria-hidden="true">·</i></>}<code>{detailExchange.source}</code><i>→</i><code>{detailExchange.target}</code></small></div>
       <div className="traffic-detail__outcome"><b className={statusTone(detailExchange)}>{status}</b><span><strong>{duration(detailExchange.durationMs)}</strong></span><span><strong>{formatTrafficBytes(totalBytes)}</strong></span></div>
-      <div className="traffic-detail__actions"><DrawerSizeButton fullScreen={maximized} subject="traffic details" onToggle={toggleMaximized} /><button type="button" onClick={onClose} aria-label="Close traffic details" title="Close">×</button></div>
+      <div className="traffic-detail__actions">{http && !isWebSocketHandshake(detailExchange) && onReplay && <button type="button" disabled={replayDisabled || !!replayEntryReason(detailExchange)} title={replayEntryReason(detailExchange) || 'Edit this request before sending a replay'} onClick={() => onReplay(detailExchange)}>REPLAY</button>}<DrawerSizeButton fullScreen={maximized} subject="traffic details" onToggle={toggleMaximized} /><button className="icon-button" type="button" onClick={onClose} aria-label="Close traffic details" title="Close">×</button></div>
       <div className="traffic-detail__header-context">
         {navigation}
         <TrafficInterventionBadges exchange={detailExchange} />

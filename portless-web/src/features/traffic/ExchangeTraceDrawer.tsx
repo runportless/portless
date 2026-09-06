@@ -30,16 +30,19 @@ function ExchangeNavigator({ exchange, items, pending, onNavigate }: {
   </nav>
 }
 
-export function ExchangeTraceDrawer({ exchange, exchanges = [], navigationPending = false, targetBinding, onNavigate, onClose }: {
+export function ExchangeTraceDrawer({ exchange, exchanges = [], navigationPending = false, targetBinding, suspended, replayDisabled, onReplay, onNavigate, onClose }: {
   exchange: TrafficExchange
   exchanges?: TrafficExchange[]
   navigationPending?: boolean
   targetBinding?: ComponentBinding
+  suspended?: boolean
+  replayDisabled?: boolean
+  onReplay?: (exchange: TrafficExchange) => void
   onNavigate?: (exchange: TrafficExchange) => void
   onClose: () => void
 }) {
   const navigation = onNavigate
     ? <ExchangeNavigator exchange={exchange} items={exchanges} pending={navigationPending} onNavigate={onNavigate} />
     : undefined
-  return <TrafficDrawerShell exchange={exchange} navigation={navigation} targetBinding={targetBinding} onClose={onClose} />
+  return <TrafficDrawerShell exchange={exchange} navigation={navigation} targetBinding={targetBinding} suspended={suspended} replayDisabled={replayDisabled} onReplay={onReplay} onClose={onClose} />
 }

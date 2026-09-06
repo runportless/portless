@@ -40,7 +40,7 @@ func (c *Commands) trafficCommand() *cobra.Command {
 		return c.showTrace(cmd.Context(), args[0])
 	}}
 	trace.ValidArgsFunction = c.Complete(shared.CompletionTraces)
-	root.AddCommand(list, show, traces, trace)
+	root.AddCommand(list, show, traces, trace, c.replayCommand())
 	return root
 }
 

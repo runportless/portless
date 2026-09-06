@@ -17,8 +17,9 @@ import { TopologyPanel } from './topology/TopologyPanel'
 import type { EnvironmentActivity } from './useEnvironmentActivity'
 import type { EnvironmentActions } from './useEnvironmentActions'
 
-export function EnvironmentPage({ environment, project, view, activity, actions, mockScenario, mockCreateRoute, mockRoute, onNavigate, onChanged }: {
+export function EnvironmentPage({ environment, environments, project, view, activity, actions, mockScenario, mockCreateRoute, mockRoute, onNavigate, onChanged }: {
   environment: Environment
+  environments?: Environment[]
   project?: Project
   view: EnvironmentView
   activity: EnvironmentActivity
@@ -50,7 +51,7 @@ export function EnvironmentPage({ environment, project, view, activity, actions,
     {view === 'overview' && <OverviewPanel environment={environment} actions={actions} timeline={activity.timeline} ready={ready} faults={activeFaults} activeRecording={activeRecording} trafficCount={trafficCount} onService={setSelectedService} onNavigate={navigateView} onChanged={onChanged} />}
     {view === 'topology' && <TopologyPanel environment={environment} faults={activeFaults} onService={setSelectedService} onEdge={(edge) => navigateView('traffic', { edge: `${edge.source}:${edge.target}`, protocol: edge.protocol === 'http' ? 'http' : 'tcp' })} />}
     {view === 'bindings' && <BindingsPanel environment={environment} project={project} onNavigate={onNavigate} onChanged={onChanged} />}
-    {view === 'traffic' && <TrafficPanel environment={environment} />}
+    {view === 'traffic' && <TrafficPanel environment={environment} environments={environments} />}
     {view === 'mocks' && <MocksPanel environment={environment} selectedScenario={mockScenario} creatingRoute={mockCreateRoute} selectedRoute={mockRoute} onSelectRoute={(scenario, route) => navigateView('mocks', { scenario, route })} onCreateRoute={(scenario) => navigateView('mocks', { scenario, createRoute: true })} onSelectScenario={(scenario) => navigateView('mocks', { scenario })} onChanged={onChanged} />}
     {view === 'recordings' && <RecordingsPanel environment={environment} recordings={activity.recordings} refresh={activity.refresh} />}
     {view === 'faults' && <FaultsPanel environment={environment} faults={activity.faults} refresh={activity.refresh} />}

@@ -64,6 +64,7 @@ type Manager struct {
 	boundedTransport        *http.Transport
 	websocketTransport      *http.Transport
 	websocketSessions       map[*websocketSession]struct{}
+	replayAttempts          map[*replayAttempt]struct{}
 	targetGeneration        uint64
 	contexts                injectedTraceContextRegistry
 	protocols               *protocol.Registry
@@ -79,13 +80,19 @@ const (
 )
 
 type bodyCapture struct {
-	body  []byte
-	total int64
-	limit int
+	mu        sync.Mutex
+	body      []byte
+	total     int64
+	limit     int
+	complete  bool
+	supported bool
+	encoding  string
 }
 
 // Write records a bounded prefix while preserving the original byte count.
 func (c *bodyCapture) Write(content []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	written := len(content)
 	c.total += int64(written)
 	if remaining := c.limit - len(c.body); remaining > 0 {
@@ -98,14 +105,21 @@ func (c *bodyCapture) Write(content []byte) (int, error) {
 }
 
 func (c *bodyCapture) text() string {
-	if c == nil || len(c.body) == 0 {
+	if c == nil {
 		return ""
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return strings.ToValidUTF8(string(c.body), "�")
 }
 
 func (c *bodyCapture) truncated() bool {
-	return c != nil && c.total > int64(len(c.body))
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.supported && c.total > int64(len(c.body))
 }
 
 type capturingReadCloser struct {
@@ -118,6 +132,9 @@ func (r *capturingReadCloser) Read(content []byte) (int, error) {
 	read, err := r.ReadCloser.Read(content)
 	if read > 0 {
 		_, _ = r.capture.Write(content[:read])
+	}
+	if err == io.EOF {
+		r.capture.finish(true)
 	}
 	return read, err
 }
@@ -200,8 +217,10 @@ func (m *Manager) RemoveTarget(scope, service string) {
 	m.mu.Lock()
 	delete(m.targets, targetKey(scope, service))
 	closing := m.invalidateWebSocketsLocked(scope, service)
+	replays := m.invalidateReplaysLocked(scope, service)
 	m.mu.Unlock()
 	closeWebSockets(closing)
+	closeReplays(replays)
 }
 
 // EnsureEdge creates or reuses a source-scoped proxy on an ephemeral loopback port.
@@ -356,8 +375,10 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 		}
 	}
 	sessions := m.invalidateWebSocketsLocked(scope, "")
+	replays := m.invalidateReplaysLocked(scope, "")
 	m.mu.Unlock()
 	closeWebSockets(sessions)
+	closeReplays(replays)
 	for _, current := range closing {
 		if current.cancel != nil {
 			current.cancel()
@@ -371,6 +392,7 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 		_ = current.listener.Close()
 	}
 	waitWebSockets(ctx, sessions)
+	waitReplays(ctx, replays)
 }
 
 // Close idempotently closes all environment proxies and idle upstream connections.
@@ -380,6 +402,7 @@ func (m *Manager) Close(ctx context.Context) {
 	}
 	m.mu.Lock()
 	sessions := m.invalidateWebSocketsLocked("", "")
+	replays := m.invalidateReplaysLocked("", "")
 	projects := make(map[string]struct{})
 	for _, current := range m.edges {
 		projects[current.scope] = struct{}{}
@@ -390,6 +413,7 @@ func (m *Manager) Close(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	closeWebSockets(sessions)
+	closeReplays(replays)
 	for project := range projects {
 		m.CloseEnvironment(ctx, project)
 	}
@@ -397,9 +421,11 @@ func (m *Manager) Close(ctx context.Context) {
 	m.boundedTransport.CloseIdleConnections()
 	m.websocketTransport.CloseIdleConnections()
 	waitWebSockets(ctx, sessions)
+	waitReplays(ctx, replays)
 }
 
 func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request, scope, source, targetName string) {
+	replay := replayFrom(request.Context())
 	started := time.Now().UTC()
 	activeRequest := m.traffic.BeginHTTPRequest(scope, targetName, started)
 	defer m.traffic.AbandonHTTPRequest(activeRequest)
@@ -415,6 +441,9 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	}
 	requestCapture := captureRequestBody(request, captureLimit)
 	var upstream target
+	if replay != nil {
+		upstream = replay.upstream
+	}
 	var session *websocketSession
 	if isHTTPUpgrade(request.Header) {
 		failure := validateWebSocketRequest(request)
@@ -442,21 +471,32 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 			if session != nil {
 				m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, "WebSocket handshake canceled", upstream, nil, nil, nil, traceContext)
 			}
+			if replay != nil {
+				replay.failure = errors.New("replay canceled before dispatch")
+				m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, replay.failure.Error(), upstream, nil, requestCapture, nil, traceContext)
+			}
 			return
 		}
 		if fault.StatusCode != 0 {
+			if replay != nil {
+				replay.responseReceived = true
+			}
 			writer.Header().Set("X-Portless-Fault", fault.Name)
 			http.Error(writer, "Portless fault "+fault.Name, fault.StatusCode)
 			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, fault.StatusCode, 0, fault.Name, "", upstream, writer.Header(), requestCapture, nil, traceContext)
 			return
 		}
 		if fault.Abort {
-			m.abortHTTP(writer)
+			if replay == nil {
+				m.abortHTTP(writer)
+			} else {
+				replay.failure = errors.New("connection aborted by fault")
+			}
 			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, fault.Name, "connection aborted by fault", upstream, nil, requestCapture, nil, traceContext)
 			return
 		}
 	}
-	ok := session != nil
+	ok := session != nil || replay != nil
 	if !ok {
 		upstream, ok = m.target(scope, targetName)
 	}
@@ -466,10 +506,20 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		return
 	}
 	if upstream.provider == model.ProviderRemote && upstream.writePolicy == model.WriteReadOnly && !safeMethod(request.Method) {
+		if replay != nil {
+			replay.failure = errors.New("remote target is read-only")
+		}
 		writer.Header().Set("X-Portless-Remote-Policy", string(model.WriteReadOnly))
 		http.Error(writer, "Portless: remote target is read-only", http.StatusForbidden)
 		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusForbidden, 0, faultName(fault), "remote target is read-only", upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
+	}
+	if replay != nil {
+		if err := replay.check(); err != nil {
+			replay.failure = err
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, faultName(fault), err.Error(), upstream, nil, requestCapture, nil, traceContext)
+			return
+		}
 	}
 	outgoing := request.Clone(request.Context())
 	outgoing.RequestURI = ""
@@ -478,12 +528,8 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	if upstream.provider == model.ProviderRemote {
 		outgoing.URL.Scheme = upstream.baseURL.Scheme
 		outgoing.URL.Host = upstream.baseURL.Host
-		outgoing.URL.Path = joinURLPath(upstream.baseURL.Path, request.URL.Path)
-		outgoing.URL.RawPath = ""
-		if session != nil {
-			outgoing.URL.RawPath = joinURLPath(upstream.baseURL.EscapedPath(), request.URL.EscapedPath())
-			outgoing.URL.Path, _ = url.PathUnescape(outgoing.URL.RawPath)
-		}
+		outgoing.URL.RawPath = joinURLPath(upstream.baseURL.EscapedPath(), request.URL.EscapedPath())
+		outgoing.URL.Path, _ = url.PathUnescape(outgoing.URL.RawPath)
 		outgoing.Host = upstream.baseURL.Host
 	} else {
 		outgoing.URL.Scheme = "http"
@@ -491,6 +537,9 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	}
 	removeHopHeaders(outgoing.Header)
 	transport := m.upstreamTransport(upstream)
+	if replay != nil {
+		transport = replay.transport
+	}
 	if session != nil {
 		outgoing.Header.Set("Connection", "Upgrade")
 		outgoing.Header.Set("Upgrade", "websocket")
@@ -502,15 +551,32 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 		if session != nil {
 			message = "WebSocket upstream request failed"
 		}
+		if replay != nil {
+			message = "replay upstream request failed"
+			if request.Context().Err() != nil {
+				message = "replay request timed out or was interrupted"
+			}
+			replay.failure = errors.New(message)
+		}
 		http.Error(writer, "Portless upstream error: "+message, http.StatusBadGateway)
 		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), message, upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
+	if replay != nil {
+		replay.responseReceived = true
+	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusSwitchingProtocols {
 		if session == nil {
+			if replay != nil {
+				replay.failure = errors.New("unsolicited protocol upgrade")
+			}
 			http.Error(writer, "Portless: unsolicited protocol upgrade", http.StatusBadGateway)
-			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "unsolicited protocol upgrade", upstream, writer.Header(), requestCapture, nil, traceContext)
+			status := http.StatusBadGateway
+			if replay != nil {
+				status = http.StatusSwitchingProtocols
+			}
+			m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, status, 0, faultName(fault), "unsolicited protocol upgrade", upstream, writer.Header(), requestCapture, nil, traceContext)
 		} else {
 			switchWebSocket(writer, request, response, session, func(status int, message string, headers http.Header) {
 				m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, status, 0, faultName(fault), message, upstream, headers, nil, nil, traceContext)
@@ -532,20 +598,32 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	if responseCapture != nil {
 		destination = io.MultiWriter(writer, responseCapture)
 	}
-	written, copyErr := io.Copy(destination, response.Body)
+	written, copyErr := copyHTTPResponse(destination, response.Body, replay)
+	responseCapture.finish(copyErr == nil)
 	errorText := ""
 	if copyErr != nil {
 		errorText = copyErr.Error()
+		if replay != nil {
+			errorText = "replay response was interrupted"
+			if errors.Is(copyErr, errReplayResponseLimit) {
+				errorText = errReplayResponseLimit.Error()
+			}
+			replay.failure = errors.New(errorText)
+		}
 	}
 	m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, response.StatusCode, written, faultName(fault), errorText, upstream, response.Header, requestCapture, responseCapture, traceContext)
 }
 
 func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, source, targetName string, request *http.Request, started time.Time, status int, responseBytes int64, fault, errorText string, upstream target, responseHeaders http.Header, requestCapture, responseCapture *bodyCapture, traceContext exchangeTraceContext) {
+	requestCapture, responseCapture = freezeCapture(requestCapture), freezeCapture(responseCapture)
+	if replay := replayFrom(ctx); replay != nil && !replay.responseReceived && errorText != "" {
+		status = 0
+	}
 	completed := time.Now().UTC()
 	project, environment := scopeNames(scope)
 	requestBytes := request.ContentLength
-	if requestCapture != nil && requestCapture.total > requestBytes {
-		requestBytes = requestCapture.total
+	if requestCapture != nil && requestCapture.observed() > requestBytes {
+		requestBytes = requestCapture.observed()
 	}
 	if requestBytes < 0 {
 		requestBytes = 0
@@ -564,10 +642,14 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 		RequestHeaders:     captureRequestHeaders(request.Header, traceContext.portlessFormats), ResponseHeaders: captureHeaders(responseHeaders),
 		RequestBody: requestCapture.text(), ResponseBody: responseCapture.text(),
 		RequestBodyTruncated: requestCapture.truncated(), ResponseBodyTruncated: responseCapture.truncated(),
+		RequestCapture: captureMetadata(requestCapture), ResponseCapture: captureMetadata(responseCapture),
 	}
 	var persistBodies bool
 	var maxPayloadBytes int64
 	exchange.Recording, persistBodies, maxPayloadBytes = m.matchRecording(ctx, scope, source, targetName)
+	if replay := replayFrom(ctx); replay != nil {
+		replay.redactExchange(&exchange)
+	}
 	persisted := exchange
 	if !persistBodies {
 		persisted.RequestBody = ""
@@ -576,22 +658,31 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 		persisted.ResponseBodyTruncated = false
 		persisted.RequestCapturedBytes = 0
 		persisted.ResponseCapturedBytes = 0
+		persisted.RequestCapture = omittedCapture(persisted.RequestCapture)
+		persisted.ResponseCapture = omittedCapture(persisted.ResponseCapture)
 	} else {
 		persisted.RequestBody, persisted.RequestBodyTruncated = boundedBody(persisted.RequestBody, persisted.RequestBodyTruncated, maxPayloadBytes)
 		persisted.ResponseBody, persisted.ResponseBodyTruncated = boundedBody(persisted.ResponseBody, persisted.ResponseBodyTruncated, maxPayloadBytes)
 		persisted.RequestCapturedBytes = boundedCapturedBytes(persisted.RequestCapturedBytes, maxPayloadBytes)
 		persisted.ResponseCapturedBytes = boundedCapturedBytes(persisted.ResponseCapturedBytes, maxPayloadBytes)
+		persisted.RequestCapture = boundedCapture(persisted.RequestCapture, maxPayloadBytes)
+		persisted.ResponseCapture = boundedCapture(persisted.ResponseCapture, maxPayloadBytes)
 	}
 	exchange.RequestBody, exchange.RequestBodyTruncated = boundedBody(exchange.RequestBody, exchange.RequestBodyTruncated, trafficBodyLimit)
 	exchange.ResponseBody, exchange.ResponseBodyTruncated = boundedBody(exchange.ResponseBody, exchange.ResponseBodyTruncated, trafficBodyLimit)
 	exchange.RequestCapturedBytes = boundedCapturedBytes(exchange.RequestCapturedBytes, trafficBodyLimit)
 	exchange.ResponseCapturedBytes = boundedCapturedBytes(exchange.ResponseCapturedBytes, trafficBodyLimit)
+	exchange.RequestCapture = boundedCapture(exchange.RequestCapture, trafficBodyLimit)
+	exchange.ResponseCapture = boundedCapture(exchange.ResponseCapture, trafficBodyLimit)
 	exchange = m.traffic.CompleteHTTPRequest(activeRequest, exchange)
+	if replay := replayFrom(ctx); replay != nil {
+		replay.exchange = exchange
+	}
 	if exchange.Recording != "" {
 		persisted.Sequence = exchange.Sequence
 		persisted.Background = exchange.Background
 		persistContext := context.Background()
-		if isHTTPUpgrade(request.Header) {
+		if isHTTPUpgrade(request.Header) || replayFrom(ctx) != nil {
 			var cancel context.CancelFunc
 			persistContext, cancel = context.WithTimeout(ctx, time.Second)
 			defer cancel()
@@ -1098,7 +1189,11 @@ func (m *Manager) matchFault(ctx context.Context, project, source, target, metho
 		if fault.Probability < 1 && rand.Float64() >= fault.Probability {
 			continue
 		}
-		_ = m.database.IncrementFaultMatch(context.Background(), project, fault.Name)
+		accountContext := context.Background()
+		if replayFrom(ctx) != nil {
+			accountContext = ctx
+		}
+		_ = m.database.IncrementFaultMatch(accountContext, project, fault.Name)
 		return &fault
 	}
 	return nil
@@ -1122,19 +1217,17 @@ func (m *Manager) matchRecording(ctx context.Context, project, source, target st
 }
 
 func captureRequestBody(request *http.Request, limit int) *bodyCapture {
-	if request.Body == nil || !inspectableBody(request.Header.Get("Content-Type")) {
-		return nil
+	capture := newBodyCapture(request.Header, limit)
+	if request.Body == nil || request.Body == http.NoBody {
+		capture.finish(true)
+		return capture
 	}
-	capture := &bodyCapture{limit: limit}
 	request.Body = &capturingReadCloser{ReadCloser: request.Body, capture: capture}
 	return capture
 }
 
 func captureResponseBody(headers http.Header, limit int) *bodyCapture {
-	if !inspectableBody(headers.Get("Content-Type")) {
-		return nil
-	}
-	return &bodyCapture{limit: limit}
+	return newBodyCapture(headers, limit)
 }
 
 func boundedBody(body string, alreadyTruncated bool, limit int64) (string, bool) {

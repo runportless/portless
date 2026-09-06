@@ -143,6 +143,10 @@ Valkey can be discarded and rebuilt. An ordinary `portless down` followed by
 volumes. Use `portless down --volumes --yes` only when you explicitly want to
 delete that data.
 
+Daemon restarts preserve the application processes while replacing dependency
+proxies. Orders handles disconnected idle PostgreSQL clients and reconnects
+on the next query, so a transient connection loss does not crash the service.
+
 To debug checkout, start Portless from its service directory:
 
 ```bash

@@ -407,5 +407,7 @@ func capturedBytes(capture *bodyCapture) int64 {
 	if capture == nil {
 		return 0
 	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
 	return int64(len(capture.body))
 }

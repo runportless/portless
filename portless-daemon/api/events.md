@@ -94,6 +94,28 @@ change; unchanged traces retain their revision. `traffic.cleared` reports
 `cleared`, `throughSequence`, and the new `revision` after removing live
 exchanges and derived traces. Durable recordings remain available.
 
+API 17.0.0 adds optional `requestCapture` and `responseCapture` metadata to HTTP
+exchanges, recording observed/captured bytes, content encoding, completeness,
+and byte fidelity. Bodies remain omitted from summary events. A replayed
+exchange includes `replay` provenance: the original project, environment,
+sequence and start time, plus public workspace/run numbers. It is a fresh
+foreground trace root; ordinary downstream calls correlate with that root.
+Replay execution uses the same traffic, fault, mock, and recording paths and
+emits their normal events. JSON recording export schema 4 retains these fields.
+
+Preparing and editing `/traffic/replays` workspaces and recording editor activity
+through `POST /{number}/activity` emits no application traffic or lifecycle events.
+Activity renews a one-hour idle timeout; GET polling does not. There is no fixed
+session lifetime. Closing the editor releases its payloads through DELETE, even
+while an admitted run continues. Run admission returns a compact receipt, and clients poll
+the workspace with both expected identity timestamps. There is no replay SSE
+topic. An uncertain POST response must be reconciled using GET, never an
+automatic resend. Clear disposes workspaces originating in the cleared
+environment and suppresses later workspace result publication from admitted
+runs; their receipt metadata remains available until idle cleanup, at most one hour after the last activity. Actual
+requests can still complete through the normal traffic path. All workspaces
+are ephemeral and disappear on daemon replacement.
+
 A successful application WebSocket upgrade produces one `traffic.exchange` with
 `protocol: http` and `status: 101` as soon as the downstream handshake has been
 flushed. Its duration measures the handshake; HTTP body byte counts are zero.

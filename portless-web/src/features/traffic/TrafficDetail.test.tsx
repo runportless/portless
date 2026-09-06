@@ -32,6 +32,19 @@ const exchange = {
 } as TrafficExchange
 
 describe('TrafficDetail', () => {
+  it('offers Replay for an HTTP request even when its body needs an explicit replacement', () => {
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: { ...exchange, requestCapture: { state: 'truncated', observedBytes: 100, capturedBytes: 10, exact: false } }, onReplay: () => undefined, onClose: () => undefined }))
+    expect(markup).toContain('>REPLAY</button>')
+    expect(markup).not.toMatch(/disabled=""[^>]*>REPLAY/)
+  })
+
+  it('does not offer HTTP Replay for TCP exchanges or WebSocket handshakes', () => {
+    for (const candidate of [{ ...exchange, protocol: 'tcp' }, { ...exchange, method: 'GET', status: 101 }]) {
+      const markup = renderToStaticMarkup(createElement(TrafficDetail, { exchange: candidate, onReplay: () => undefined, onClose: () => undefined }))
+      expect(markup).not.toContain('>REPLAY</button>')
+    }
+  })
+
   it('identifies WebSocket handshakes without presenting session payloads', () => {
     const socket = { ...exchange, method: 'GET', status: 101, requestBytes: 0, responseBytes: 0, requestBody: '', responseBody: '', requestCapturedBytes: 0, responseCapturedBytes: 0,
       responseHeaders: { Upgrade: ['websocket'], 'Sec-Websocket-Protocol': ['[REDACTED]'] } }
@@ -76,7 +89,7 @@ describe('TrafficDetail', () => {
     expect(markup.indexOf('traffic-intervention-badges')).toBeLessThan(markup.indexOf('</header>'))
     expect(markup.indexOf('</header>')).toBeLessThan(markup.indexOf('traffic-overview__context'))
     expect(markup.indexOf('traffic-overview__context')).toBeLessThan(markup.indexOf('aria-label="Exchange payload"'))
-    expect(markup).not.toContain('>COMPARE<')
+    expect(markup).not.toContain('>SIDE BY SIDE<')
     expect(markup).toContain('traffic-message-workbench--request')
     expect(markup).toContain('<span>application/json</span><span>42 B</span>')
     expect(markup).not.toContain('<span>42 B captured</span>')

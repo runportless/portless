@@ -20,6 +20,7 @@ type traceInput struct {
 	method, requestTarget                string
 	status                               int
 	error, faulted, background           bool
+	replayRoot                           bool
 	session, transaction                 uint64
 }
 
@@ -36,6 +37,7 @@ func traceInputFor(exchange model.TrafficExchange) traceInput {
 		method: exchange.Method, requestTarget: requestTarget, status: exchange.Status,
 		error: exchange.Error != "" || exchange.Status >= 500, faulted: exchange.Fault != "",
 		background: backgroundExchange(exchange),
+		replayRoot: exchange.Replay != nil,
 	}
 	if exchange.TCP != nil {
 		input.session, input.transaction = exchange.TCP.SessionSequence, exchange.TCP.TransactionSequence
@@ -172,6 +174,10 @@ func buildProjection(inputs []traceInput) []projectedTrace {
 		}
 		for index := first; index < end; index++ {
 			node, input := &nodes[index], &inputs[index]
+			if input.replayRoot {
+				node.correlation = model.TrafficCorrelationExact
+				continue
+			}
 			if parent, exists := spanOwners[input.traceID+"\x00"+input.parentSpanID]; input.traceID != "" && input.parentSpanID != "" && exists && parent != index {
 				node.parent, node.correlation = parent, model.TrafficCorrelationExact
 				set.union(parent, index)
@@ -346,6 +352,9 @@ func weakerCorrelation(current, candidate model.TrafficCorrelation) model.Traffi
 }
 
 func backgroundExchange(exchange model.TrafficExchange) bool {
+	if exchange.Replay != nil {
+		return false
+	}
 	if exchange.Error != "" || exchange.Fault != "" || exchange.Status >= 500 || exchange.TCP != nil && exchange.TCP.Outcome == model.TrafficTCPOutcomeError {
 		return false
 	}

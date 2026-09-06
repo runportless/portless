@@ -92,7 +92,13 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, 
 		return err
 	}
 	defer response.Body.Close()
-	content, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	limit := int64(16 << 20)
+	if _, replay := output.(*contract.TrafficReplayWorkspace); replay && response.StatusCode >= 200 && response.StatusCode < 300 {
+		// Replay state can include both the current draft and the last submitted
+		// body. Allow their JSON encoding without raising other response limits.
+		limit += 12 * contract.TrafficReplayMaxBodyBytes
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	if err != nil {
 		return err
 	}

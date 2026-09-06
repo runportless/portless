@@ -474,7 +474,7 @@ PostgreSQL, Redis/Valkey, MySQL, and NATS connections are decoded into bounded
 logical operations while their TCP connections remain open, so queries,
 commands, results, subjects, and message payloads can be inspected from the
 same traffic drawer. Decoded TCP spans use Command and Result views parallel to
-HTTP's Request and Response views, with a side-by-side Compare view when the
+HTTP's Request and Response views, with a Side by side view when the
 drawer is maximized. Decoded PostgreSQL and MySQL result sets render as compact
 database rows with captured column names instead of their JSON representation.
 Result tables show at most ten rows per page, while Copy exports every captured
@@ -518,6 +518,51 @@ reuse the resulting metadata and opening a trace loads only that trace's
 captured exchanges. Pausing the view keeps a bounded notification buffer, and
 resuming reloads the retained history, including merges and evictions that
 occurred while paused.
+
+Open an HTTP exchange or an HTTP trace span and choose **Replay** to edit its
+method, escaped path/query, repeated headers, and text body. Select the current
+environment or another environment in the same project. Opening the editor
+does not send a request; **Send replay** submits one request to the original
+source-to-target edge. The expanded drawer keeps the original response frozen
+and shows the latest response alongside a status, header, and JSON or text diff.
+Response panes offer Body, Headers, and Raw tabs with the trace inspector's
+colors. Body formats JSON while preserving exact number tokens and duplicate
+keys; Raw shows the status, headers, and unformatted body. Copy preserves the
+captured content. Unknown, redacted, or truncated content is marked partial or
+unavailable rather than treated as equal.
+
+The destination service must already be ready. Replay preserves ordinary
+routing, mocks, faults, recordings, and remote write policy, and starts a fresh
+foreground trace. Writes to a read-write remote target require confirmation of
+the reviewed destination; read-only remote targets block them locally. Replace
+or explicitly omit redacted credential headers. Incomplete bodies require a
+complete replacement or an explicit empty body. Request bodies are bounded to
+25 MiB of UTF-8 text; an oversized edited body is rejected in the editor through
+the standard error notice and by the daemon before dispatch. Binary, multipart,
+WebSocket, gRPC, TCP, and stream replay
+are excluded. Selecting a trace span sends only that request.
+
+Replay sessions stay in daemon memory while in use, retaining a maximum of
+32 explicit run receipts and the latest result. Closing the editor releases its
+captured request, draft, and comparison; opening Replay again starts a fresh
+session. Sessions are also cleaned up after one hour without replay activity.
+Typing, pointer interaction, scrolling, and sending requests reset that idle
+timeout; background receipt polling does not. Prepared credentials expire
+within 60 seconds and are not returned in inspection responses. A run has a
+30-second deadline and retains up to 64 KiB of response text, consuming at most
+1 MiB. Closing the drawer does not cancel an admitted request. A lost response
+is recovered by inspecting the receipt; Portless does not automatically resend.
+Clearing traffic disposes originating workspace payloads while preserving
+compact admitted receipts until idle cleanup for duplicate suppression. Sessions
+do not survive daemon replacement.
+
+The CLI uses the same workflow:
+
+```bash
+portless traffic replay 42
+portless traffic replay 42 --against billing/qa --body-file request.json
+portless traffic replay show 1 --json
+```
 
 The [command reference](portless-cli/COMMANDS.md) contains complete CLI usage.
 Traffic payloads can contain application data; see

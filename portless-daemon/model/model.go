@@ -688,6 +688,9 @@ type TrafficExchange struct {
 	ResponseBody          string                    `json:"responseBody,omitempty"`
 	RequestBodyTruncated  bool                      `json:"requestBodyTruncated,omitempty"`
 	ResponseBodyTruncated bool                      `json:"responseBodyTruncated,omitempty"`
+	RequestCapture        *HTTPCapture              `json:"requestCapture,omitempty"`
+	ResponseCapture       *HTTPCapture              `json:"responseCapture,omitempty"`
+	Replay                *TrafficReplay            `json:"replay,omitempty"`
 	TCP                   *TrafficTCPExchange       `json:"tcp,omitempty"`
 }
 

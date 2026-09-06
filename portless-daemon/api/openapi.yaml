@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 16.0.0
+  version: 17.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -36,7 +36,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '16.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '17.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -801,13 +801,135 @@ paths:
     parameters: *environmentParameters
     delete:
       operationId: clearTraffic
-      description: Clears the live exchange buffer and derived traces without deleting durable recordings or resetting sequence numbers.
+      description: Clears the live exchange buffer and derived traces, and disposes originating replay workspace payloads. Admitted replay receipts remain until idle cleanup. Does not delete durable recordings or reset sequence numbers.
       responses:
         '200':
           description: Live traffic was cleared through the reported environment-local sequence.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TrafficClearResponse' }
+  /environments/{projectName}/{environmentName}/traffic/replays:
+    parameters: *environmentParameters
+    post:
+      operationId: prepareTrafficReplay
+      description: Freeze one ordinary HTTP exchange from the live traffic window. Exact sequence and startedAt must match; recordings are not a fallback. Preparation sends no application requests and does not probe or start services. Replay routes require the existing authenticated browser/CLI contract and are denied to MCP callers. All responses use Cache-Control no-store. JSON input is bounded to 1 MiB and rejects unknown fields and trailing data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrepareTrafficReplayRequest' }
+      responses:
+        '201':
+          description: Frozen baseline and initial safe draft. PUT a complete draft before sending.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficReplayWorkspace' }
+        '400': { description: Unsupported exchange or invalid input }
+        '403': { description: Caller lacks replay capability }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Original exchange start time no longer matches }
+        '413': { description: Input or captured observation exceeds replay limits }
+        '429': { description: Workspace or memory capacity reached }
+  /environments/{projectName}/{environmentName}/traffic/replays/{replayNumber}:
+    parameters: &replayParameters
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: path
+        name: replayNumber
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getTrafficReplay
+      description: Inspect metadata without sending traffic. Clients following a receipt must supply both expected timestamps. With neither timestamp, inspect a number explicitly selected in the current daemon. Metadata omits baseline, draft, and result payloads. Disposed workspaces return retained receipts without payloads until idle cleanup. Inspection and background polling do not renew the idle timeout.
+      parameters:
+        - in: query
+          name: expectedCreatedAt
+          schema: { type: string, format: date-time }
+        - in: query
+          name: expectedDaemonStartedAt
+          schema: { type: string, format: date-time }
+        - in: query
+          name: include
+          schema: { type: string, enum: [result] }
+          description: Include frozen baseline, safe draft and latest result once needed; credentials remain redacted.
+      responses:
+        '200':
+          description: Workspace metadata or full safe result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficReplayWorkspace' }
+        '400': { description: Invalid or partial expected identity }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { description: Expired workspace or mismatched daemon/workspace identity }
+    delete:
+      operationId: deleteTrafficReplay
+      description: Release workspace payloads and unused prepared credentials when the editor closes. Admitted requests continue independently; their compact receipts suppress duplicate sends for the remainder of the idle retention window. Completed results are not republished into a closed session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TrafficReplayIdentity' }
+      responses:
+        '204': { description: Workspace payloads released }
+        '410': { description: Expired workspace or mismatched identity }
+  /environments/{projectName}/{environmentName}/traffic/replays/{replayNumber}/activity:
+    parameters: *replayParameters
+    post:
+      operationId: touchTrafficReplay
+      description: Record replay editor activity and renew the one-hour idle timeout for the matching open session. Requires both identity timestamps; a closed or inactive session cannot be revived. Does not alter the draft, retain prepared credentials longer, send application traffic, or emit lifecycle events. Browser clients batch actual keyboard, pointer, input and scroll activity at most once every 30 seconds; they do not send unconditional keepalives.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TrafficReplayIdentity' }
+      responses:
+        '204': { description: Activity recorded }
+        '400': { description: Invalid or missing identity }
+        '403': { description: Authentication, CSRF or replay capability required }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { description: Closed or inactive session, or mismatched identity }
+  /environments/{projectName}/{environmentName}/traffic/replays/{replayNumber}/draft:
+    parameters: *replayParameters
+    put:
+      operationId: updateTrafficReplayDraft
+      description: Validate a complete request and snapshot the ready service's registered provider generation and current topology. Same-project environments only; original source and target are fixed. No application I/O. Successful preparation increments revision and retains runtime credential values for less than 60 seconds. Responses contain only redacted values. Requires optimistic revision and both identity timestamps. The decoded UTF-8 body is limited to 25 MiB; the JSON envelope allows 151 MiB for worst-case string escaping. Oversized bodies return a structured 413 replay_input_limit error without changing the prepared draft or dispatching a request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTrafficReplayDraftRequest' }
+      responses:
+        '200':
+          description: Revised safe draft and reviewed public destination
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficReplayWorkspace' }
+        '400': { description: Invalid, unsupported or unresolved request inputs }
+        '403': { description: Remote policy blocks the selected method }
+        '409': { description: Stale revision, active run or unavailable service edge }
+        '410': { description: Expired workspace or mismatched identity }
+        '413': { description: Request input exceeds a byte or row limit }
+        '429': { description: Replay memory capacity reached }
+  /environments/{projectName}/{environmentName}/traffic/replays/{replayNumber}/runs:
+    parameters: *replayParameters
+    post:
+      operationId: runTrafficReplay
+      description: Admit one explicit request using the prepared revision, next run number and both identity timestamps. Revalidate the destination binding and proxy generation, enforce remote policy, and require reviewed confirmation for remote writes. Identical repeated admission arguments return that run's receipt without dispatching again; conflicting arguments fail. Runs continue independently of the initiating HTTP connection, with a 30-second deadline, 64 KiB retained response and 1 MiB consumption cap. No redirect following or automatic application retry. After a lost POST response, inspect the known workspace with GET instead of resending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunTrafficReplayRequest' }
+      responses:
+        '202':
+          description: Compact admission receipt, possibly already completed for a duplicate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficReplayWorkspace' }
+        '403': { description: Missing reviewed remote-write confirmation or blocked policy }
+        '409': { description: Stale revision or destination, conflicting run, active run or expired preparation }
+        '410': { description: Expired workspace or mismatched identity }
+        '429': { description: Concurrent run, workspace run or aggregate capacity limit }
   /environments/{projectName}/{environmentName}/traffic/exchanges:
     parameters: *environmentParameters
     get:
@@ -1425,7 +1547,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '16.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '17.0.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -2019,7 +2141,165 @@ components:
         responseBody: { type: string, description: Bounded inspectable response-body prefix. WebSocket messages are never included. }
         requestBodyTruncated: { type: boolean }
         responseBodyTruncated: { type: boolean }
+        requestCapture: { $ref: '#/components/schemas/HTTPCapture' }
+        responseCapture: { $ref: '#/components/schemas/HTTPCapture' }
+        replay: { $ref: '#/components/schemas/TrafficReplay' }
         tcp: { $ref: '#/components/schemas/TrafficTCPExchange' }
+    HTTPCapture:
+      type: object
+      required: [state, observedBytes, capturedBytes, encoding, exact]
+      properties:
+        state: { type: string, enum: [empty, complete, truncated, omitted, unsupported, incomplete] }
+        observedBytes: { type: integer, format: int64, minimum: 0 }
+        capturedBytes: { type: integer, format: int64, minimum: 0 }
+        encoding: { type: string, description: HTTP Content-Encoding; identity when absent. }
+        exact: { type: boolean, description: Complete retained UTF-8 bytes are identical to observed body bytes; redaction still makes values unknown. }
+    TrafficReplay:
+      type: object
+      required: [project, environment, sequence, startedAt, workspace, run]
+      properties:
+        project: { $ref: '#/components/schemas/ProjectName' }
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        sequence: { type: integer, format: int64, minimum: 1 }
+        startedAt: { type: string, format: date-time }
+        workspace: { type: integer, format: int64, minimum: 1 }
+        run: { type: integer, format: int64, minimum: 1 }
+      description: Original exchange identity and public replay numbers. Replay is a fresh foreground trace root.
+    TrafficReplayIdentity:
+      type: object
+      required: [createdAt, daemonStartedAt]
+      properties:
+        createdAt: { type: string, format: date-time }
+        daemonStartedAt: { type: string, format: date-time }
+      description: Both timestamps from the workspace response are required on every mutation. Numbers alone are not durable identities.
+    PrepareTrafficReplayRequest:
+      type: object
+      additionalProperties: false
+      required: [sequence, startedAt]
+      properties:
+        sequence: { type: integer, format: int64, minimum: 1 }
+        startedAt: { type: string, format: date-time }
+    TrafficReplayDraft:
+      type: object
+      additionalProperties: false
+      required: [environment, method, requestTarget, headers, bodyMode, body]
+      properties:
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        method: { type: string, enum: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE] }
+        requestTarget: { type: string, description: Escaped origin-form path and raw query, at most 8192 bytes. Absolute URLs, fragments, invalid escapes and authority-form targets are rejected. }
+        headers:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+          description: Case-insensitive names with ordered repeated values; at most 128 rows and 32 KiB. Routing, framing, browser security, Portless and old trace carriers are prohibited. Accept-Encoding is identity. Redacted credentials require replacement or explicit omission.
+        bodyMode: { type: string, enum: [captured, replacement, empty] }
+        body: { type: string, description: Complete UTF-8 text, at most 25 MiB of decoded bytes. Captured requires complete exact original bytes; replacement supplies complete new text; empty requires an empty string. Oversized bodies return a structured 413 replay_input_limit error before dispatch. }
+        omittedHeaders: { type: array, maxItems: 128, items: { type: string }, description: Explicitly omitted captured headers, including unresolved credentials. Cannot also be supplied in headers. }
+    UpdateTrafficReplayDraftRequest:
+      allOf:
+        - { $ref: '#/components/schemas/TrafficReplayIdentity' }
+        - type: object
+          required: [revision, draft]
+          properties:
+            revision: { type: integer, format: int64, minimum: 1 }
+            draft: { $ref: '#/components/schemas/TrafficReplayDraft' }
+      unevaluatedProperties: false
+    RunTrafficReplayRequest:
+      allOf:
+        - { $ref: '#/components/schemas/TrafficReplayIdentity' }
+        - type: object
+          required: [revision, runNumber, confirmRemoteWrite]
+          properties:
+            revision: { type: integer, format: int64, minimum: 1 }
+            runNumber: { type: integer, format: int64, minimum: 1, maximum: 32 }
+            confirmRemoteWrite: { type: boolean, description: Required true for reviewed mutating requests to a read-write remote target. Cannot override read-only policy. }
+      unevaluatedProperties: false
+    TrafficReplayDestination:
+      type: object
+      required: [environment, provider, url, requiresConfirmation]
+      properties:
+        environment: { $ref: '#/components/schemas/EnvironmentName' }
+        provider: { type: string, enum: [local, container, remote, mock] }
+        classification: { type: string, enum: [development, qa, staging, unknown] }
+        writePolicy: { type: string, enum: [read-only, read-write] }
+        url: { type: string, format: uri, description: Stable public service URL; never a private upstream address. }
+        requiresConfirmation: { type: boolean }
+    TrafficReplayLimitation:
+      type: object
+      required: [field, code, message]
+      properties:
+        field: { type: string }
+        code: { type: string }
+        message: { type: string }
+    TrafficReplayRun:
+      type: object
+      required: [number, revision, state, outcome, startedAt, deadline]
+      properties:
+        number: { type: integer, format: int64, minimum: 1, maximum: 32 }
+        revision: { type: integer, format: int64, minimum: 1 }
+        state: { type: string, enum: [running, completed, failed, interrupted] }
+        outcome: { type: string, enum: [not-sent, response-received, unknown], description: A running receipt is not final delivery evidence. Unknown means the application may have received a request; it is never automatically retried. }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        deadline: { type: string, format: date-time }
+        error: { type: string, description: Safe classified failure with no raw application or transport error. }
+    TrafficReplayChange:
+      type: object
+      required: [path, kind]
+      properties:
+        path: { type: string, description: JSON Pointer for structural JSON differences; header name or line location for other formats. }
+        kind: { type: string, enum: [added, removed, changed, type-changed] }
+        before: { type: string, description: Retained scalar spelling; numeric tokens are never converted to floating point. }
+        after: { type: string }
+    TrafficComparisonSection:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [equal, different, partial, unavailable] }
+        format: { type: string, enum: [json, text, headers] }
+        reason: { type: string }
+        changes: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/TrafficReplayChange' } }
+    TrafficResponseComparison:
+      type: object
+      required: [state, originalStatus, replayStatus, statusChanged, durationDeltaMs, headers, body]
+      properties:
+        state: { type: string, enum: [equal, different, partial, unavailable] }
+        originalStatus: { type: integer }
+        replayStatus: { type: integer }
+        statusChanged: { type: boolean }
+        durationDeltaMs: { type: integer, format: int64 }
+        headers: { $ref: '#/components/schemas/TrafficComparisonSection' }
+        body: { $ref: '#/components/schemas/TrafficComparisonSection' }
+      description: Compares bounded redacted observations. JSON ignores object-key order while preserving numeric spelling and array order. Duplicate keys, invalid JSON and structural limits use bounded text comparison with a reason. Unknown content cannot establish equality.
+    TrafficReplayResult:
+      type: object
+      required: [runNumber, request, destination, comparison]
+      properties:
+        runNumber: { type: integer, format: int64, minimum: 1 }
+        request: { $ref: '#/components/schemas/TrafficReplayDraft' }
+        destination: { $ref: '#/components/schemas/TrafficReplayDestination' }
+        exchange: { $ref: '#/components/schemas/TrafficExchange' }
+        comparison: { $ref: '#/components/schemas/TrafficResponseComparison' }
+        limitations: { type: array, items: { $ref: '#/components/schemas/TrafficReplayLimitation' } }
+    TrafficReplayWorkspace:
+      allOf:
+        - { $ref: '#/components/schemas/TrafficReplayIdentity' }
+        - type: object
+          required: [project, environment, number, revision, nextRunNumber]
+          properties:
+            project: { $ref: '#/components/schemas/ProjectName' }
+            environment: { $ref: '#/components/schemas/EnvironmentName' }
+            number: { type: integer, format: int64, minimum: 1 }
+            preparedUntil: { type: string, format: date-time }
+            revision: { type: integer, format: int64, minimum: 1 }
+            nextRunNumber: { type: integer, format: int64, minimum: 1 }
+            baseline: { $ref: '#/components/schemas/TrafficExchange' }
+            draft: { $ref: '#/components/schemas/TrafficReplayDraft' }
+            destination: { $ref: '#/components/schemas/TrafficReplayDestination' }
+            limitations: { type: array, items: { $ref: '#/components/schemas/TrafficReplayLimitation' } }
+            run: { $ref: '#/components/schemas/TrafficReplayRun' }
+            receipts: { type: array, maxItems: 32, items: { $ref: '#/components/schemas/TrafficReplayRun' } }
+            result: { $ref: '#/components/schemas/TrafficReplayResult' }
+      description: Ephemeral workspace in the original project/environment. At most 32 active sessions per daemon, 8 per origin, 1 GiB aggregate state, 4 concurrent runs and 1 per workspace. Sessions have no fixed lifetime. Explicit activity, successful draft preparation and run admission renew a one-hour idle timeout. Closing releases payloads immediately; compact admitted receipts remain until idle cleanup and count only toward the aggregate memory budget. Prepared secret values expire within 60 seconds and are never returned. Baseline is frozen; result is the latest completed observation.
     TrafficClearResponse:
       type: object
       required: [cleared, throughSequence, revision]
@@ -2193,7 +2473,7 @@ components:
       type: object
       required: [schemaVersion, project, environment, recording, exchanges]
       properties:
-        schemaVersion: { type: integer, const: 3 }
+        schemaVersion: { type: integer, const: 4 }
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         recording: { $ref: '#/components/schemas/ArtifactName' }

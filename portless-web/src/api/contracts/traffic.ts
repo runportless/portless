@@ -7,6 +7,23 @@ export type TrafficInspection = 'decoded' | 'opaque' | 'encrypted' | 'unsupporte
 export type TrafficTCPOutcome = 'success' | 'error' | 'one-way' | 'incomplete'
 export type TrafficMessageEncoding = 'utf8' | 'base64'
 
+export interface HTTPCapture {
+  state: 'empty' | 'complete' | 'truncated' | 'omitted' | 'unsupported' | 'incomplete'
+  observedBytes: number
+  capturedBytes: number
+  encoding?: string
+  exact: boolean
+}
+
+export interface TrafficReplayProvenance {
+  project: string
+  environment: string
+  sequence: number
+  startedAt: string
+  workspace: number
+  run: number
+}
+
 export interface TrafficMessageField {
   name: string
   value: string
@@ -80,6 +97,9 @@ export interface TrafficExchange {
   responseBody?: string
   requestBodyTruncated?: boolean
   responseBodyTruncated?: boolean
+  requestCapture?: HTTPCapture
+  responseCapture?: HTTPCapture
+  replay?: TrafficReplayProvenance
   tcp?: TrafficTCPExchange
 }
 

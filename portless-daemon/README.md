@@ -52,6 +52,7 @@ Adjacent products keep separate responsibilities:
 | `runtime` | Process supervisors, containers, debugging, health checks, and log storage. |
 | `networking`, `dns` | Stable endpoint allocation, fixed localhost answers, and authoritative `portless.test` DNS data. |
 | `traffic`, `mocks` | Source-aware proxies, traffic and trace capture, and deterministic HTTP responses. |
+| `traffic/replay` | Bounded ephemeral request workspaces, explicit admission receipts, input validation, secret expiry, and lossless response comparison. |
 | `events` | Bounded, nonblocking environment event publication. |
 | `auth`, `identity`, `lifecycle` | Local authentication, private daemon identity, and guarded replacement or shutdown. |
 | `system` | Standard-library installation layout and operating-system integration helpers. |
@@ -61,6 +62,14 @@ feature packages do not import the CLI, relay implementation, API server, or
 daemon composition root. The API client depends only on the API contract, and
 the server receives control-plane and lifecycle behavior through injected
 capabilities.
+
+`controlplane/replay.go` resolves live baselines and current destination bindings
+and injects resolution/execution capabilities into `traffic/replay`. The replay
+domain depends only on the stable model and API contract. It does not access the
+database, proxy manager, API server, or lifecycle controller directly.
+`traffic/proxy` owns request dispatch through the existing forwarding pipeline,
+capture fidelity, provider generation checks, and fresh replay trace roots.
+The control plane drains replay workers before closing proxies and traffic.
 
 ## Runtime model
 

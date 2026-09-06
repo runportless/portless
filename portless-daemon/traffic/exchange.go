@@ -3,6 +3,7 @@ package traffic
 import "github.com/runportless/portless/portless-daemon/model"
 
 func exchangeSummary(exchange model.TrafficExchange) model.TrafficExchange {
+	exchange = cloneHTTPMetadata(exchange)
 	exchange.RequestHeaders = nil
 	exchange.ResponseHeaders = nil
 	exchange.RequestBody = ""
@@ -19,6 +20,7 @@ func exchangeSummary(exchange model.TrafficExchange) model.TrafficExchange {
 }
 
 func cloneExchange(exchange model.TrafficExchange) model.TrafficExchange {
+	exchange = cloneHTTPMetadata(exchange)
 	exchange.RequestHeaders = cloneHeaders(exchange.RequestHeaders)
 	exchange.ResponseHeaders = cloneHeaders(exchange.ResponseHeaders)
 	if exchange.TCP != nil {
@@ -26,6 +28,22 @@ func cloneExchange(exchange model.TrafficExchange) model.TrafficExchange {
 		tcp.RequestMessages = cloneMessages(tcp.RequestMessages)
 		tcp.ResponseMessages = cloneMessages(tcp.ResponseMessages)
 		exchange.TCP = &tcp
+	}
+	return exchange
+}
+
+func cloneHTTPMetadata(exchange model.TrafficExchange) model.TrafficExchange {
+	if exchange.RequestCapture != nil {
+		capture := *exchange.RequestCapture
+		exchange.RequestCapture = &capture
+	}
+	if exchange.ResponseCapture != nil {
+		capture := *exchange.ResponseCapture
+		exchange.ResponseCapture = &capture
+	}
+	if exchange.Replay != nil {
+		replay := *exchange.Replay
+		exchange.Replay = &replay
 	}
 	return exchange
 }
@@ -44,6 +62,14 @@ func cloneMessages(messages []model.TrafficMessage) []model.TrafficMessage {
 
 func exchangePayloadBytes(exchange model.TrafficExchange) int64 {
 	total := int64(len(exchange.RequestBody) + len(exchange.ResponseBody))
+	for _, capture := range []*model.HTTPCapture{exchange.RequestCapture, exchange.ResponseCapture} {
+		if capture != nil {
+			total += int64(48 + len(capture.State) + len(capture.Encoding))
+		}
+	}
+	if exchange.Replay != nil {
+		total += int64(64 + len(exchange.Replay.Project) + len(exchange.Replay.Environment))
+	}
 	for _, headers := range []map[string][]string{exchange.RequestHeaders, exchange.ResponseHeaders} {
 		for name, values := range headers {
 			total += int64(len(name))

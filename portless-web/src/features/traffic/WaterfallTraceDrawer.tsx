@@ -68,13 +68,16 @@ function TraceNavigator({ trace, exchange, items, itemKey, pending, onNavigate }
   </nav>
 }
 
-export function WaterfallTraceDrawer({ exchange, trace, traceNavigationItems, traceNavigationItem, navigationPending = false, targetBinding, onNavigate, onClose }: {
+export function WaterfallTraceDrawer({ exchange, trace, traceNavigationItems, traceNavigationItem, navigationPending = false, targetBinding, suspended, replayDisabled, onReplay, onNavigate, onClose }: {
   exchange: TrafficExchange
   trace?: TrafficTrace | null
   traceNavigationItems?: TraceNavigationItem[]
   traceNavigationItem?: TraceNavigationItem
   navigationPending?: boolean
   targetBinding?: ComponentBinding
+  suspended?: boolean
+  replayDisabled?: boolean
+  onReplay?: (exchange: TrafficExchange) => void
   onNavigate?: (item: TraceNavigationItem) => void
   onClose: () => void
 }) {
@@ -92,6 +95,9 @@ export function WaterfallTraceDrawer({ exchange, trace, traceNavigationItems, tr
     traceNavigationItem={traceNavigationItem}
     navigation={navigation}
     targetBinding={targetBinding}
+    suspended={suspended}
+    replayDisabled={replayDisabled}
+    onReplay={onReplay}
     onClose={onClose}
   />
 }

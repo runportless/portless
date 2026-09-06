@@ -1,6 +1,10 @@
 # HTTP request replay and response comparison
 
-Status: proposed; not implemented.
+Status: implemented, 2026-09-06. The scope and rationale below remain the design
+record; current wire details are authoritative in the API contract and OpenAPI
+document. Validation includes full lint, unit/build and isolated CLI/UI E2E
+suites, plus focused race and replay journey tests. The normal daemon restart
+was verified with the rebuilt checkout.
 
 Created: 2026-09-05.
 
@@ -13,7 +17,7 @@ environment, and compare the new response with the captured response.
 The browser journey is:
 
 ```text
-Traffic → Exchanges or an HTTP trace span → Replay…
+Traffic → Exchanges or an HTTP trace span → Replay
         → Edit request and select environment → Send replay
         → Original response / Replay response / Response diff
 ```
@@ -80,7 +84,7 @@ Important constraints found in the current implementation:
 
 ### Entry and layout
 
-Add a labelled **Replay…** action beside the size/close actions in the shared
+Add a labelled **Replay** action beside the size/close actions in the shared
 HTTP drawer. Show it for ordinary HTTP exchanges, with an explanatory disabled
 state when capture metadata proves the exchange cannot yet be prepared. TCP
 operations/transactions and upgrade handshakes do not offer replay.
@@ -90,7 +94,7 @@ the drawer. Retain the inspection selection and scroll position for **Back to
 exchange**. Use this layout:
 
 ```text
-Replay request #142                     Back to exchange       Close
+Replay request #142                                            Close
 checkout → orders     Destination: store / local
 Provider: Local       http://orders.local.store.localhost
 
@@ -144,8 +148,8 @@ model repeated values.
 
 Use one `useTrafficReplay` owner in TrafficPanel, not component-local state that
 disappears when the drawer selection changes. Keep one browser workspace active
-at a time and retain it while returning temporarily to ordinary inspection.
-Replay on its original exchange resumes that workspace. Replay on another
+at a time. Closing Replay releases its captured request, draft and comparison;
+opening Replay again creates a fresh session. Replay on another
 exchange resumes the existing pending run if one is active; otherwise, explicitly
 offer to keep the existing draft or replace it, dispose the old workspace, and
 only then prepare the new one. Do not accumulate hidden abandoned workspaces.
@@ -154,13 +158,20 @@ On Send: validate and prepare the complete draft with the daemon, show the
 specific remote-write confirmation when required, then submit the reviewed
 revision once. Preparing the draft does not contact the application or remote
 health endpoint. While pending, disable Send, editor/destination changes, and
-previous/next exchange navigation. The drawer may be closed; closing changes
-presentation and does not claim to cancel the request. Keep an in-memory
-pending indicator and a way to reopen it while remaining in Traffic.
-Presentation close clears browser credential fields immediately. Any unused
-daemon-side credential preparation expires within 60 seconds; closing the UI
-does not itself guarantee immediate server-side erasure. Reopening requires
-re-entering credentials and preparing again before another run.
+previous/next exchange navigation. The drawer may be closed; closing releases
+browser state and issues DELETE to release server payloads and unused prepared
+credentials. An admitted request continues independently and its result is not
+republished into the closed session. Keep compact admission receipts for
+duplicate suppression until idle cleanup. If close delivery is interrupted,
+server idle cleanup remains the fallback. Reopening starts a fresh baseline
+and requires re-entering credentials and preparing before a run.
+
+Sessions have no fixed lifetime and display no workspace number or countdown.
+Batch actual pointer, keyboard, input and scroll activity at most once every
+30 seconds; release browser state and the server session after one hour without
+activity. Do not send unconditional keepalives or count background receipt polls
+as user activity. Page exit makes a keepalive DELETE request, and late creation
+responses are released instead of resurrecting a closed editor.
 
 After completion, preserve the editor and the result associated with the exact
 submitted draft. Editing marks that result **From previous request**. Each
@@ -173,7 +184,7 @@ Clear has explicit behavior: it discards non-running workspace payloads and
 drafts in that origin environment; an already admitted run is allowed to finish
 but its cleared workspace cannot republish its baseline/result into the UI.
 Its newly completed traffic follows the ordinary post-Clear capture rules.
-Keep a small run receipt until expiry so a delayed duplicate cannot resend.
+Keep a small run receipt until idle cleanup so a delayed duplicate cannot resend.
 
 Browser reload/navigation away discards draft secrets. Store no request body or
 headers in URLs, localStorage, sessionStorage, or durable replay history. A
@@ -375,13 +386,13 @@ a mismatch expires the old UI session rather than replacing its baseline.
 
 | Budget | Initial enforced limit |
 | --- | --- |
-| Workspace lifetime | 15 minutes from creation; expired sessions cannot admit runs |
-| Workspaces | 32 per daemon, 8 per origin environment |
-| Aggregate replay state | 64 MiB including baselines, prepared drafts, results, comparison structures, and in-flight buffers |
+| Workspace lifetime | No fixed lifetime; release payloads on close or after one hour without activity. Explicit activity, successful preparation and run admission renew the idle timeout; metadata polling does not. |
+| Workspaces | 32 active sessions per daemon, 8 per origin environment; closed receipts count only toward the aggregate memory budget |
+| Aggregate replay state | 1 GiB including baselines, prepared drafts, results, comparison structures, and in-flight buffers; accommodates full-size UTF-8 request bodies and JSON escaping |
 | Concurrent runs | 4 per daemon, 1 per workspace; reject excess admission instead of queueing |
 | Runs per workspace | 32; retain compact terminal receipts for all admitted run numbers |
-| Request body | 64 KiB of UTF-8 bytes, including replacements |
-| Control request envelope | 1 MiB of JSON, enforced before decoding; individual field limits still apply |
+| Request body | 25 MiB of UTF-8 bytes, including replacements; no size label in the editor, with oversized input using the standard error notice |
+| Control request envelope | 151 MiB of JSON for draft updates to allow worst-case string escaping; other replay commands retain a 1 MiB envelope. Enforce before decoding; decoded field limits still apply |
 | Request/header input | 128 rows and 32 KiB total header bytes; path/query 8 KiB |
 | Upstream response headers | 64 KiB; reject over-limit headers through bounded transport parsing |
 | Retained response body | 64 KiB prefix with explicit completeness metadata |
@@ -449,11 +460,12 @@ checks, explicit body-size limits, strict JSON decoding, and no-store responses.
 
 | Method and suffix | Behavior |
 | --- | --- |
-| `POST /` | Prepare a workspace from a live sequence plus expected exchange/daemon timestamps. Return 201 with frozen baseline, initial safe draft, unresolved omissions, number, creation time and expiry. No application I/O. |
+| `POST /` | Prepare a workspace from a live sequence plus expected exchange/daemon timestamps. Return 201 with frozen baseline, initial safe draft, unresolved omissions, number and identity timestamps. No application I/O. |
 | `PUT /{number}/draft` | Accept expected workspace identity/revision, complete edited request and destination. Validate, normalize and prepare a new revision with current policy and destination generation; return safe data and whether remote-write confirmation is required. Reject while a run is active. |
 | `POST /{number}/runs` | Accept expected workspace identity, prepared revision, next run number, and confirmation when required. Atomically admit once and return 202/receipt; a duplicate returns its existing receipt. |
 | `GET /{number}` | Return identity timestamps, workspace/run metadata, compact admitted-run receipts, prepared revision, deadline, limitations and next run number. Support expected identity for reconciliation. `include=result` adds the frozen baseline, latest redacted submitted request/result, and bounded comparison; no prepared credential values. |
-| `DELETE /{number}` | Release a non-running workspace's payloads and draft secrets. Retain compact receipts until expiry. Return conflict while a run is active; browser closing is not DELETE/cancellation. |
+| `POST /{number}/activity` | Record user activity using both identity timestamps; renew idle retention without changing the request, retaining prepared credentials longer or sending traffic. |
+| `DELETE /{number}` | Release workspace payloads and unused draft secrets on editor close, even while a run is active. The admitted run continues; retain compact receipts until idle cleanup without republishing results. |
 
 Expected wire types in `api/contract/traffic_replay.go`:
 `PrepareTrafficReplayRequest`, `TrafficReplayWorkspace`, `TrafficReplayDraft`,
@@ -485,9 +497,8 @@ result only at completion or explicit reopening. No replay-specific SSE topic
 is required initially. Real executed exchanges continue through the existing
 destination traffic/trace stream. Document reconciliation in `events.md`.
 
-The inspected API version is 16.0.0. Plan an additive 16.1.0 version for the new
-resources and optional capture/provenance fields, rechecking the current version
-before implementation. Daemon lifecycle and supervisor protocols do not change.
+API 17.0.0 removes the fixed workspace expiry field and adds explicit activity
+renewal and close cleanup. All callers use the current contract. Daemon lifecycle and supervisor protocols do not change.
 Recording export advances from schema 3 to schema 4 to define body availability
 and replay provenance consistently; update the current import/export consumers
 and fixtures together. Do not add retired-format compatibility adapters.
@@ -523,15 +534,19 @@ tokens rather than silently accepting binary64 rounding.
 [RFC 8259, numbers](https://www.rfc-editor.org/rfc/rfc8259.html#section-6).
 
 The result UI provides Original, Replayed, and Response diff views, each with
-Body/Headers. Wide diff shows original and replay values beside one another;
-narrow diff stacks labelled sides. Reuse/factor the existing traffic message
-inspector, copy controls, capture notices, and literal content rendering.
-The current `trafficBodyPresentation` uses `JSON.parse`/`JSON.stringify`, which
-can round large numbers and collapse duplicate keys. Do not pass replay baselines
-or results through that formatter. Provide a lossless token formatter or a raw
-fallback for Original/Replayed panes, Copy and the optional editor Format action.
-Copy raw content by default; any separately offered formatted copy must preserve
-number tokens and ambiguity. Test displayed values as well as diff records.
+Body, Headers, and Raw tabs. Wide diff shows original and replay values beside
+one another; narrow diff stacks labelled sides. Raw shows the captured status,
+headers, and unformatted body; its diff view places both messages side by side.
+Response panes fill the available height with a small bottom gap and scroll
+internally. Their surfaces, text, header values, and JSON syntax colors match
+the trace inspector.
+
+The shared `trafficBodyPresentation` validates JSON and indents the original
+tokens, preserving number spellings, duplicate keys, escapes, and key order.
+Malformed JSON, excessive nesting, and excessive formatting expansion fall back
+to the captured text. Original and Replayed use this lossless formatter; Copy
+always retains the original content for the selected representation. Test
+displayed values as well as diff records.
 
 ## 9. CLI and MCP
 
@@ -628,7 +643,7 @@ is complete only after the full single-request journey and its limits ship.
 | Delivery | Double click, concurrent same-run POST, conflicting reuse, response lost after admission, repeated/stale GET, old run tombstone, expiry, Clear, daemon restart and timestamp collision, ordered shutdown; exactly one Portless dispatch per admitted run. |
 | Transport | Redirect not followed, no control cookies/token leakage, no automatic retry on failed/reused-connection paths, valid/untrusted TLS, timeout before versus after send, abort fault preserved, unexpected 101, SSE/stream consumption cap. |
 | Comparison | Status/errors, zero-duration baseline, headers by case/array order, unknown redacted values, object order, arrays, null/missing, duplicate JSON keys, big numbers, invalid JSON/text, partial captures, depth/node/diff limits. |
-| Browser | Entry from both inspection paths, immutable baseline, repeated edits/runs, stale-result label, pending controls, close/reopen and credential clearing, workspace replacement, late responses, Clear/navigation, exact destination exchange selection/expiry, lossless display/copy, focus restoration, keyboard tabs, input arrows, dark/light, narrow/focus/fullscreen layouts. |
+| Browser | Entry from both inspection paths, immutable baseline, repeated edits/runs, stale-result label, pending controls, close cleanup, fresh reopening, idle activity renewal and credential clearing, workspace replacement, late responses, Clear/navigation, exact destination exchange selection/expiry, lossless display/copy, focus restoration, keyboard tabs, input arrows, dark/light, narrow/focus/fullscreen layouts. |
 | Capacity | Maximum sessions/runs/header/body/diff sizes, full live ring, slow upstream, dropped polls, four simultaneous runs, session expiry and shutdown. Verify bounded memory, cleanup, no proxy-wide lock during I/O and no starvation of ordinary traffic. |
 
 Use real local HTTP fixtures and upstream call counters for side-effect,

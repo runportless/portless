@@ -20,6 +20,7 @@ import (
 	processruntime "github.com/runportless/portless/portless-daemon/runtime/process"
 	"github.com/runportless/portless/portless-daemon/traffic"
 	"github.com/runportless/portless/portless-daemon/traffic/proxy"
+	"github.com/runportless/portless/portless-daemon/traffic/replay"
 )
 
 // NameConflictError reports a project-name collision and safe alternative names.
@@ -112,6 +113,7 @@ type Service struct {
 	processes            *processruntime.Manager
 	containers           *container.Manager
 	proxy                *proxy.Manager
+	replays              *replay.Manager
 	mocks                *mocks.Manager
 	dataDirectory        string
 	installationKey      string
@@ -153,6 +155,7 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 		discoverer: discoverer, resources: resources,
 	}
 	service.proxy = proxy.NewManager(controlStore, trafficStore, broker)
+	service.replays = replay.New(service.resolveReplayTarget, service.executeReplay)
 	service.mocks = mocks.NewManager()
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
 	service.containers = container.NewManager(
@@ -179,14 +182,15 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 
 // Close stops runtime managers and closes all active proxy listeners.
 func (s *Service) Close(ctx context.Context) {
-	s.processes.Close()
-	s.containers.Close()
 	closeContext := ctx
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
 		closeContext, cancel = context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 	}
+	s.replays.Close(closeContext)
+	s.processes.Close()
+	s.containers.Close()
 	s.proxy.Close(closeContext)
 	s.traffic.Close()
 	_ = s.mocks.Close(closeContext)
