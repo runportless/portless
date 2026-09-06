@@ -510,7 +510,9 @@ next exchange controls, following the table's active filters across pages.
 
 The trace list is HTTP-rooted while retaining decoded TCP dependency spans
 inside those requests. Standalone TCP operations remain available through the
-raw Exchanges view and its TCP protocol filter.
+raw Exchanges view and its TCP protocol filter. The maximized waterfall's header
+shows the root request, project/environment, source-to-target route, result,
+duration, and start time.
 
 Live traffic retains up to 5,000 exchanges and 64 MiB of captured payloads per
 environment. Trace correlation runs in shared background batches; summary lists
@@ -520,15 +522,22 @@ resuming reloads the retained history, including merges and evictions that
 occurred while paused.
 
 Open an HTTP exchange or an HTTP trace span and choose **Replay** to edit its
-method, escaped path/query, repeated headers, and text body. Select the current
+method, escaped path/query, repeated headers, and text body. The Replay icon
+beside Maximize in an expanded waterfall opens its root HTTP request directly;
+it is also available in the maximized waterfall's toolbar. Select the current
 environment or another environment in the same project. Opening the editor
-does not send a request; **Send replay** submits one request to the original
+does not send a request; **Send** submits one request to the original
 source-to-target edge. The expanded drawer keeps the original response frozen
 and shows the latest response alongside a status, header, and JSON or text diff.
+The status and duration comparison appears on the Response diff tab.
+The Request and Response columns begin directly below the replay header, with
+destination, endpoint, method, path, and send controls inside Request so the
+response comparison can use the full column height.
 Captured and replacement request bodies fill the available height with the
 same bottom gap and internal scrolling as the response panes.
-Response panes offer Body, Headers, and Raw tabs with the trace inspector's
-colors. Body formats JSON while preserving exact number tokens and duplicate
+Response panes use the trace inspector's HTTP status header, content metadata,
+and Body, Headers, and Raw tabs directly above the payload. The two Response diff
+panes keep their representation tabs synchronized. Body formats JSON while preserving exact number tokens and duplicate
 keys; Raw shows the status, headers, and unformatted body. Copy preserves the
 captured content. Unknown, redacted, or truncated content is marked partial or
 unavailable rather than treated as equal.

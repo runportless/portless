@@ -139,10 +139,18 @@ The Playwright suite protects these browser journeys:
 
 - oversized replay bodies rejected before preparation or dispatch through the
   shared, dismissible error notice, with editing and successful retry available;
-- replay preparation from exchange and trace drawers without dispatch, repeated
+- replay preparation from exchange and trace drawers and the expanded or maximized
+  waterfall's root-request icon without dispatch, keyboard focus restoration,
+  maximized trace summaries with readable metadata and accessible controls in
+  both themes and narrow windows, repeated
   request headers and replacement text bodies, same-project destination
   selection, frozen response comparison with lossless large JSON numbers,
-  formatted Body, Headers, and Raw tabs, trace colors in both themes, and
+  replay summary shown only on Response diff,
+  formatted Body, Headers, and Raw tabs inside each response pane beneath its
+  HTTP header, synchronized diff-pane tabs, matching trace tab geometry,
+  typography, and colors in both themes,
+  Request and Response columns aligned beneath the replay header with destination
+  controls and request errors confined to Request, and
   captured/replacement request bodies and response panes that fill the available
   height and scroll internally,
   explicit remote-write confirmation, and closing/reopening a pending run

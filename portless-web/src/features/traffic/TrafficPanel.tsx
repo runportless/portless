@@ -22,6 +22,7 @@ export function TrafficPanel({ environment, environments = [environment] }: { en
   const clearReplay = replay.clear
   const replayTrigger = useRef<HTMLElement | null>(null)
   const openReplay = (exchange: TrafficExchange) => {
+    if (replayNavigationBlocked) return
     replayTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     void replay.open(exchange)
   }
@@ -192,6 +193,8 @@ export function TrafficPanel({ environment, environments = [environment] }: { en
           expandedTrace={expandedTrace}
           onToggleTrace={(trace) => void toggleTrace(trace)}
           onInspect={inspectTraceItem}
+          onReplay={openReplay}
+          replayDisabled={detailNavigationPending || replayNavigationBlocked}
           onPage={view.setTracePage}
         />
         : <TrafficExchangeList pagination={traffic.exchangePagination} onInspect={inspectVisibleExchange} onPage={view.setExchangePage} />}

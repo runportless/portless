@@ -1,6 +1,10 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { duration } from '../../components/Status'
 import type { TrafficCorrelation, TrafficExchange, TrafficTrace, TrafficTraceSpan } from '../../api/contracts/traffic'
+import { trafficStartedTime } from './detail/TrafficOverview'
+import { replayEntryReason } from './replay/trafficReplayDraft'
+import { traceRequest, trafficResultTone } from './TrafficListPresentation'
+import { isWebSocketHandshake } from './trafficProtocol'
 
 function spanOperation(exchange: TrafficExchange) {
   if (exchange.protocol === 'http') return `${exchange.method || 'HTTP'} ${exchange.requestTarget || exchange.path || '/'}`
@@ -144,9 +148,11 @@ function TraceSpanRow({ span, total, depth = span.depth, className = '', depende
   </button>
 }
 
-export function TraceWaterfall({ trace, onItem }: {
+export function TraceWaterfall({ trace, onItem, onReplay, replayDisabled = false }: {
   trace: TrafficTrace
   onItem: (item: TraceNavigationItem) => void
+  onReplay?: (exchange: TrafficExchange) => void
+  replayDisabled?: boolean
 }) {
   const [maximized, setMaximized] = useState(false)
   useEffect(() => {
@@ -159,10 +165,25 @@ export function TraceWaterfall({ trace, onItem }: {
   }, [maximized])
   const total = Math.max(1, trace.durationMs)
   const inspect = (item: TraceNavigationItem) => onItem(item)
+  const rootExchange = trace.spans?.find((span) => span.exchange.sequence === trace.rootSequence)?.exchange
+  const replayReason = rootExchange ? replayEntryReason(rootExchange) : 'The root request is no longer available.'
+  const replayButton = onReplay && trace.protocol === 'http' && (!rootExchange || !isWebSocketHandshake(rootExchange)) && <button className="trace-waterfall__action" type="button" title={replayReason || 'Replay trace'} aria-label="Replay trace" disabled={replayDisabled || !!replayReason} onClick={() => { if (rootExchange) onReplay(rootExchange) }}><TraceReplayIcon /></button>
   return <div className={`trace-waterfall${maximized ? ' panel trace-waterfall--maximized' : ''}`} role="region" aria-label="Trace waterfall">
-    {maximized && <div className="panel-title trace-waterfall__toolbar"><span>TRACE WATERFALL</span><div><button className="icon-button" type="button" title="Restore trace" aria-label="Restore trace" aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div></div>}
+    {maximized && <div className="panel-title trace-waterfall__toolbar">
+      <div className="trace-waterfall__heading" role="group" aria-label="Trace summary">
+        <h3 title={traceRequest(trace)}>{traceRequest(trace)}</h3>
+        <div className="trace-waterfall__metadata">
+          <span title="Environment">{trace.project}/{trace.environment}</span>
+          <span className="trace-waterfall__route" title="Root service route">{trace.source} <i>→</i> {trace.target}</span>
+          <span className={trafficResultTone(trace.error, trace.status)} title="Result">{trace.error ? 'ERR' : trace.status || 'OK'}</span>
+          <span title="Duration">{duration(trace.durationMs)}</span>
+          <time dateTime={trace.startedAt} title={`Started ${new Date(trace.startedAt).toLocaleString()}`}>{trafficStartedTime(trace.startedAt)}</time>
+        </div>
+      </div>
+      <div className="trace-waterfall__actions">{replayButton}<button className="icon-button" type="button" title="Restore trace" aria-label="Restore trace" aria-pressed="true" onClick={() => setMaximized(false)}>×</button></div>
+    </div>}
     <div className="trace-waterfall__content">
-    <div className="trace-waterfall__axis"><span>SERVICE / OPERATION</span><div><i>0</i><i>{duration(Math.round(total / 2))}</i><i>{duration(total)}</i></div>{!maximized && <button className="trace-waterfall__size" type="button" title="Maximize trace" aria-label="Maximize trace" aria-pressed="false" onClick={() => setMaximized(true)}><TraceSizeIcon /></button>}</div>
+    <div className="trace-waterfall__axis"><span>SERVICE / OPERATION</span><div className="trace-waterfall__scale"><i>0</i><i>{duration(Math.round(total / 2))}</i><i>{duration(total)}</i></div>{!maximized && <div className="trace-waterfall__actions">{replayButton}<button className="trace-waterfall__action" type="button" title="Maximize trace" aria-label="Maximize trace" aria-pressed="false" onClick={() => setMaximized(true)}><TraceSizeIcon /></button></div>}</div>
     {traceWaterfallItems(trace).map((item) => {
       if (item.kind === 'span') return <TraceSpanRow key={item.span.exchange.sequence} span={item.span} total={total} onInspect={(exchange) => inspect(exchangeNavigationItem(exchange))} />
 
@@ -181,6 +202,10 @@ export function TraceWaterfall({ trace, onItem }: {
     })}
     </div>
   </div>
+}
+
+function TraceReplayIcon() {
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6A5.5 5.5 0 1 1 3 11M2.5 2v4h4" /></svg>
 }
 
 function TraceSizeIcon() {

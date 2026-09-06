@@ -4,7 +4,7 @@ import type { TrafficExchange } from '../../../api/contracts/traffic'
 import type { TrafficReplayWorkspace } from '../../../api/contracts/traffic_replay'
 import { TrafficReplayResult } from './TrafficReplayResult'
 
-it('renders replay JSON losslessly with trace syntax highlighting and all three representation tabs', () => {
+it('renders replay JSON losslessly with the trace response header and representation tabs inside the pane', () => {
   const baseline: TrafficExchange = {
     project: 'store', environment: 'local', sequence: 1, source: 'external', target: 'checkout', background: false,
     startedAt: '2026-09-06T12:00:00Z', completedAt: '2026-09-06T12:00:00.012Z', requestBytes: 0, responseBytes: 52,
@@ -18,4 +18,12 @@ it('renders replay JSON losslessly with trace syntax highlighting and all three 
   expect(html).toContain('>Body</button>')
   expect(html).toContain('>Headers</button>')
   expect(html).toContain('>Raw</button>')
+  expect(html).toContain('<code>HTTP 201<span>Original · 12 ms</span></code>')
+  expect(html).toContain('<span>application/json</span><span>52 B</span>')
+  const heading = html.indexOf('traffic-message-workbench__summary')
+  const tabs = html.indexOf('class="traffic-payload-tabs"')
+  const body = html.indexOf('class="replay-response__body"')
+  expect(heading).toBeGreaterThan(html.indexOf('class="replay-response"'))
+  expect(tabs).toBeGreaterThan(heading)
+  expect(body).toBeGreaterThan(tabs)
 })

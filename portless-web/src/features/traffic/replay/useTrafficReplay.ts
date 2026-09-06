@@ -141,7 +141,7 @@ export function createTrafficReplaySession(environment: Pick<Environment, 'proje
       const workspace = merge(metadata)
       // A failed POST may not have been admitted. A GET never resubmits it.
       if (expectedRun && metadata.run?.number !== expectedRun && metadata.nextRunNumber === expectedRun) {
-        set({ workspace, awaitingReceipt: false, busy: false, error: actionError('Replay was not admitted', new Error('The daemon has no receipt for this attempt. Review the request before choosing Send replay again.')) })
+        set({ workspace, awaitingReceipt: false, busy: false, error: actionError('Replay was not admitted', new Error('The daemon has no receipt for this attempt. Review the request before choosing Send again.')) })
         return
       }
       set({ workspace, awaitingReceipt: false, error: null })

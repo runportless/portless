@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import type { Environment, Operation } from '../src/api/contracts/environments'
+import type { TrafficTrace } from '../src/api/contracts/traffic'
 import type { TrafficReplayWorkspace } from '../src/api/contracts/traffic_replay'
 import { applicationRequest, authenticate, controlAPI, environmentPath } from './helpers'
 import { runCLI } from './process'
@@ -25,10 +26,11 @@ test('rejects oversized edited bodies with the shared error notice before sendin
   page.on('request', (request) => { if (/\/traffic\/replays\/\d+\/(draft|runs)$/.test(request.url())) writes.push(request.url()) })
   const body = editor.getByRole('textbox', { name: 'Replay request body' })
   await body.fill('é'.repeat(25 * 1024 * 1024 / 2) + 'x')
-  await editor.getByRole('button', { name: 'SEND REPLAY', exact: true }).click()
+  await editor.getByRole('button', { name: 'SEND', exact: true }).click()
   const error = editor.getByRole('alert')
   await expect(error).toHaveClass(/action-error/)
   await expect(error).toContainText('The request body is too large. Reduce its size and try again.')
+  await expectReplayColumnsStartAtHeader(editor)
   expect(writes).toHaveLength(0)
   await expect(editor.getByText(/MAXIMUM|25\s*M(?:i)?B/)).toHaveCount(0)
   await error.getByRole('button', { name: 'Dismiss error' }).click()
@@ -53,9 +55,10 @@ async function echoRequest(path: string, body: string) {
 
 async function sendAndInspect(page: Page) {
   const response = page.waitForResponse((candidate) => candidate.request().method() === 'POST' && /\/traffic\/replays\/\d+\/runs$/.test(candidate.url()))
-  await page.getByRole('button', { name: 'SEND REPLAY', exact: true }).click()
+  await page.getByRole('button', { name: 'SEND', exact: true }).click()
   const accepted = await (await response).json() as TrafficReplayWorkspace
-  await expect(page.locator('.replay-status')).toContainText('Replay complete.')
+  await expect(page.getByRole('region', { name: 'Replay response comparison', exact: true }).locator('.replay-section-heading').getByRole('status')).toHaveText(`Run ${accepted.run!.number}`)
+  await expect(page.getByRole('region', { name: 'Replay request editor', exact: true }).getByRole('status')).toHaveCount(0)
   const query = new URLSearchParams({ include: 'result', expectedCreatedAt: accepted.createdAt, expectedDaemonStartedAt: accepted.daemonStartedAt })
   return await controlAPI<TrafficReplayWorkspace>(`/api/v1/environments/${accepted.project}/${accepted.environment}/traffic/replays/${accepted.number}?${query}`)
 }
@@ -104,6 +107,55 @@ async function expectResponseFillsHeight(editor: Locator) {
   expect(layout.bottomGap).toBeLessThanOrEqual(18)
   expect(layout.bodyHeight).toBeGreaterThan(30)
   expect(layout.headingHeights[0]).toBe(layout.headingHeights[1])
+  for (const response of await editor.locator('.replay-response').all()) {
+    const header = await response.evaluate((element) => {
+      const summary = element.querySelector('.traffic-message-workbench__summary')!
+      const tabs = element.querySelector('[role="tablist"]')!
+      const body = element.querySelector('[role="tabpanel"]')!
+      return {
+        summaryBottom: summary.getBoundingClientRect().bottom,
+        tabsTop: tabs.getBoundingClientRect().top,
+        tabsBottom: tabs.getBoundingClientRect().bottom,
+        bodyTop: body.getBoundingClientRect().top,
+        controlsBody: [...tabs.querySelectorAll('button')].every((tab) => tab.getAttribute('aria-controls') === body.id),
+      }
+    })
+    expect(header.tabsTop).toBeCloseTo(header.summaryBottom, 0)
+    expect(header.bodyTop).toBeCloseTo(header.tabsBottom, 0)
+    expect(header.controlsBody).toBe(true)
+  }
+}
+
+async function expectDiffSummary(editor: Locator, visible: boolean) {
+  await expect(editor.locator('.replay-result__summary')).toHaveCount(visible ? 1 : 0)
+}
+
+async function expectReplayColumnsStartAtHeader(editor: Locator) {
+  const request = editor.getByRole('region', { name: 'Replay request editor', exact: true })
+  await expect(request.getByRole('combobox', { name: 'Replay destination environment' })).toBeVisible()
+  await expect(request.getByRole('combobox', { name: 'Replay method', exact: true })).toBeVisible()
+  await expect(request.getByRole('textbox', { name: 'Replay path and query' })).toBeVisible()
+  await expect(request.getByRole('button', { name: 'SEND', exact: true })).toBeVisible()
+  const layout = await editor.evaluate((element) => {
+    const header = element.querySelector('.replay-header')!.getBoundingClientRect()
+    const request = element.querySelector('.replay-request')!
+    const requestBox = request.getBoundingClientRect()
+    const response = element.querySelector('.replay-result')!.getBoundingClientRect()
+    return {
+      headerBottom: header.bottom, requestTop: requestBox.top, responseTop: response.top,
+      requestRight: requestBox.right, responseLeft: response.left,
+      controlsFit: [...request.querySelectorAll('.replay-destination input, .replay-destination select, .replay-destination button, .replay-destination a')].every((control) => {
+        const box = control.getBoundingClientRect()
+        return box.left >= requestBox.left && box.right <= requestBox.right
+      }),
+      errorsInRequest: [...element.querySelectorAll('.replay-error')].every((notice) => request.contains(notice)),
+    }
+  })
+  expect(layout.requestTop).toBeCloseTo(layout.headerBottom, 0)
+  expect(layout.responseTop).toBeCloseTo(layout.headerBottom, 0)
+  expect(layout.responseLeft).toBeCloseTo(layout.requestRight, 0)
+  expect(layout.controlsFit).toBe(true)
+  expect(layout.errorsInRequest).toBe(true)
 }
 
 async function expectRequestBodyFillsHeight(editor: Locator) {
@@ -136,7 +188,19 @@ async function responsePalette(body: Locator, tabs: Locator) {
       const tokenColor = (kind: string) => getComputedStyle(element.querySelector(`.traffic-json__${kind}`)!).color
       return { background: getComputedStyle(element).backgroundColor, text: style.color, fontSize: style.fontSize, lineHeight: style.lineHeight, key: tokenColor('key'), string: tokenColor('string'), number: tokenColor('number') }
     }),
-    tabs: await tabs.evaluate((element) => ({ background: getComputedStyle(element).backgroundColor, active: getComputedStyle(element.querySelector('[aria-selected="true"]')!).color, inactive: getComputedStyle(element.querySelector('[aria-selected="false"]')!).color })),
+    tabs: await tabs.evaluate((element) => {
+      const container = getComputedStyle(element)
+      const active = element.querySelector('[aria-selected="true"]')!
+      const button = getComputedStyle(active)
+      const underline = getComputedStyle(active, '::after')
+      return {
+        background: container.backgroundColor, height: element.getBoundingClientRect().height,
+        padding: container.padding, gap: container.gap, border: container.border,
+        active: button.color, inactive: getComputedStyle(element.querySelector('[aria-selected="false"]')!).color,
+        font: button.font, letterSpacing: button.letterSpacing, buttonPadding: button.padding,
+        underline: { height: underline.height, bottom: underline.bottom, background: underline.backgroundColor },
+      }
+    }),
   }
 }
 
@@ -171,7 +235,11 @@ test('opens without sending, edits one live HTTP request, and compares the real 
   await expect(requestPath).toHaveValue(path)
   await expect(requestPath).toBeFocused()
   await expect(editor).not.toContainText(/Workspace \d+|expires \d/)
-  await expect(editor.locator('.replay-status')).toHaveCount(0)
+  await expect(editor.getByRole('region', { name: 'Replay request editor', exact: true }).getByRole('status')).toHaveCount(0)
+  await expectReplayColumnsStartAtHeader(editor)
+  const endpoint = editor.getByRole('region', { name: 'Replay request editor', exact: true }).locator('.replay-endpoint a')
+  await editor.getByRole('button', { name: 'Copy replay endpoint', exact: true }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(await endpoint.getAttribute('href'))
   await expectResponseFillsHeight(editor)
   await expect(editor.getByRole('region', { name: 'Original body', exact: true }).locator('pre')).toHaveClass('traffic-json')
   await editor.getByRole('tab', { name: 'Replayed', exact: true }).click()
@@ -219,9 +287,12 @@ test('opens without sending, edits one live HTTP request, and compares the real 
   expect(completed.baseline?.requestBody).toBe(capturedBody)
   await expect(editor.getByRole('tab', { name: 'Response diff', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(editor.getByRole('table', { name: 'body changes' })).toContainText('/body')
+  await expectDiffSummary(editor, true)
+  await expectReplayColumnsStartAtHeader(editor)
   await page.screenshot({ path: testInfo.outputPath('replay-response-diff.png'), animations: 'disabled' })
   await editor.getByRole('tab', { name: 'Original', exact: true }).click()
   await expect(editor.getByRole('region', { name: 'Original body', exact: true })).toContainText('9007199254740993')
+  await expectDiffSummary(editor, false)
   await expectRequestBodyFillsHeight(editor)
   await editor.getByRole('button', { name: 'Copy original response body' }).click()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(completed.baseline!.responseBody)
@@ -243,6 +314,15 @@ test('opens without sending, edits one live HTTP request, and compares the real 
   await editor.getByRole('tab', { name: 'Response diff', exact: true }).click()
   await expect(editor.getByRole('region', { name: 'Original raw', exact: true })).toBeVisible()
   await expect(editor.getByRole('region', { name: 'Replayed raw', exact: true })).toBeVisible()
+  const originalTabs = editor.getByRole('region', { name: 'Original raw', exact: true }).getByRole('tablist')
+  await originalTabs.getByRole('tab', { name: 'Headers', exact: true }).click()
+  await expect(editor.locator('.replay-diff__panes .traffic-headers')).toHaveCount(2)
+  const replayedTabs = editor.getByRole('region', { name: 'Replayed headers', exact: true }).getByRole('tablist')
+  await expect(replayedTabs.getByRole('tab', { name: 'Headers', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await replayedTabs.getByRole('tab', { name: 'Headers', exact: true }).press('End')
+  await expect(editor.getByRole('region', { name: 'Original raw', exact: true }).getByRole('tab', { name: 'Raw', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(editor.getByRole('region', { name: 'Replayed raw', exact: true }).getByRole('tab', { name: 'Raw', exact: true })).toBeFocused()
+  await expectDiffSummary(editor, true)
   await expectResponseFillsHeight(editor)
   await page.keyboard.press('Escape')
   await expect(editor).toHaveCount(0)
@@ -251,6 +331,77 @@ test('opens without sending, edits one live HTTP request, and compares the real 
   await expect(page.getByRole('textbox', { name: 'Replay path and query' })).toHaveValue(path)
   await expect(editor.getByRole('tab', { name: 'Original', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect(runRequests).toBe(1)
+})
+
+test('opens the root request from expanded and maximized waterfall replay icons without sending', async ({ page }, testInfo) => {
+  const state = readE2EState()
+  const base = `/api/v1/environments/${state.project}/${state.environment}`
+  const marker = randomUUID()
+  const requestTarget = `/checkout?sku=coffee-mug&quantity=1&waterfall-replay=${marker}`
+  expect((await applicationRequest(requestTarget)).status).toBe(200)
+  await authenticate(page, environmentPath('traffic'))
+  await page.getByPlaceholder('filter path, service, edge, status…').fill(marker)
+  await page.locator('button.trace-row').filter({ hasText: marker }).click()
+  const waterfall = page.getByRole('region', { name: 'Trace waterfall', exact: true })
+  const replay = waterfall.getByRole('button', { name: 'Replay trace', exact: true })
+  const editor = page.getByRole('dialog', { name: /Replay request/ })
+  const snapshot = await controlAPI<{ traces: TrafficTrace[] }>(`${base}/traffic/traces?background=include&limit=1000`)
+  const trace = snapshot.traces.find((candidate) => candidate.requestTarget === requestTarget)!
+  expect(trace.rootSequence).toBeGreaterThan(0)
+  expect(trace.spanCount).toBeGreaterThan(1)
+  let runRequests = 0
+  page.on('request', (request) => { if (request.method() === 'POST' && /\/traffic\/replays\/\d+\/runs$/.test(request.url())) runRequests++ })
+
+  for (const maximized of [false, true]) {
+    if (maximized) await waterfall.getByRole('button', { name: 'Maximize trace', exact: true }).click()
+    await expect(replay).toBeEnabled()
+    await replay.focus()
+    await page.screenshot({ path: testInfo.outputPath(`waterfall-replay-${maximized ? 'maximized' : 'expanded'}.png`), animations: 'disabled' })
+    const opening = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith('/traffic/replays'))
+    await page.keyboard.press('Enter')
+    const workspace = await (await opening).json() as TrafficReplayWorkspace
+    expect(workspace.baseline).toMatchObject({ sequence: trace.rootSequence, source: 'external', target: 'checkout', requestTarget })
+    await expect(editor.getByRole('textbox', { name: 'Replay path and query' })).toHaveValue(requestTarget)
+    await expect(editor.getByRole('button', { name: 'SEND', exact: true })).toBeEnabled()
+    await expect(page.getByRole('dialog', { name: /Traffic request and response/ })).toHaveCount(0)
+    expect(runRequests).toBe(0)
+    const closing = page.waitForResponse((response) => response.request().method() === 'DELETE' && response.url().endsWith(`/traffic/replays/${workspace.number}`))
+    await page.keyboard.press('Escape')
+    expect((await closing).status()).toBe(204)
+    await expect(editor).toHaveCount(0)
+    await expect(replay).toBeFocused()
+    if (maximized) await expect(waterfall).toHaveClass(/trace-waterfall--maximized/)
+  }
+  const summary = waterfall.getByRole('group', { name: 'Trace summary', exact: true })
+  await expect(summary.getByRole('heading')).toHaveText(`GET ${requestTarget}`)
+  await expect(summary.getByRole('heading')).toHaveAttribute('title', `GET ${requestTarget}`)
+  await expect(summary.getByTitle('Result', { exact: true })).toHaveText('200')
+  await expect(summary.locator('time')).toHaveAttribute('datetime', trace.startedAt)
+  for (const [colorScheme, width] of [['dark', 1280], ['light', 580]] as const) {
+    await page.emulateMedia({ colorScheme })
+    await page.setViewportSize({ width, height: 800 })
+    await expect(replay).toBeInViewport()
+    const layout = await waterfall.locator('.trace-waterfall__toolbar').evaluate((element) => {
+      const heading = element.querySelector('h3')!.getBoundingClientRect()
+      const summary = element.querySelector('.trace-waterfall__heading')!.getBoundingClientRect()
+      const actions = element.querySelector('.trace-waterfall__actions')!.getBoundingClientRect()
+      const toolbar = element.getBoundingClientRect()
+      return { headingRight: heading.right, actionsLeft: actions.left, actionsRight: actions.right, toolbarRight: toolbar.right, summaryBottom: summary.bottom, toolbarBottom: toolbar.bottom }
+    })
+    expect(layout.headingRight).toBeLessThan(layout.actionsLeft)
+    expect(layout.actionsRight).toBeLessThan(layout.toolbarRight)
+    expect(layout.summaryBottom).toBeLessThan(layout.toolbarBottom)
+    await page.screenshot({ path: testInfo.outputPath(`waterfall-summary-${colorScheme}.png`), animations: 'disabled' })
+  }
+  await page.keyboard.press('Escape')
+  await expect(waterfall).not.toHaveClass(/trace-waterfall--maximized/)
+  await page.setViewportSize({ width: 900, height: 800 })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(replay).toBeInViewport()
+  await expect(waterfall.getByRole('button', { name: 'Maximize trace', exact: true })).toBeInViewport()
+  await page.screenshot({ path: testInfo.outputPath('waterfall-replay-narrow-light.png'), animations: 'disabled' })
+  const after = await controlAPI<{ traces: TrafficTrace[] }>(`${base}/traffic/traces?background=include&limit=1000`)
+  expect(after.traces.filter((candidate) => candidate.requestTarget === requestTarget)).toHaveLength(1)
 })
 
 test('replays a waterfall HTTP span into a second isolated environment with a changed mock response', async ({ page }, testInfo) => {
@@ -277,6 +428,13 @@ test('replays a waterfall HTTP span into a second isolated environment with a ch
     await page.getByRole('region', { name: 'Trace waterfall' }).getByRole('button', { name: /Inspect external to checkout GET \/checkout/ }).click()
     const detail = page.getByRole('dialog', { name: /Traffic request and response/ })
     await detail.getByRole('tab', { name: 'RESPONSE', exact: true }).click()
+    const tracePalettes = new Map<string, Awaited<ReturnType<typeof responsePalette>>>()
+    const trace = detail.locator('.traffic-message-workbench--response')
+    for (const colorScheme of ['dark', 'light'] as const) {
+      await page.emulateMedia({ colorScheme })
+      await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme)
+      tracePalettes.set(colorScheme, await responsePalette(trace.locator('.traffic-payload'), trace.locator('.traffic-payload-tabs')))
+    }
     await detail.getByRole('button', { name: 'REPLAY', exact: true }).click()
     const editor = page.getByRole('dialog', { name: /Replay request/ })
     await editor.getByRole('combobox', { name: 'Replay destination environment' }).selectOption(name)
@@ -287,6 +445,7 @@ test('replays a waterfall HTTP span into a second isolated environment with a ch
     await expect(editor).toContainText('200 → 201')
     await expect(editor.getByRole('table', { name: 'body changes' })).toContainText('9007199254740993')
     await editor.getByRole('tab', { name: 'Replayed', exact: true }).click()
+    await expectDiffSummary(editor, false)
     const responseBody = editor.getByRole('region', { name: 'Replayed body', exact: true }).locator('.replay-response__body')
     await expect(responseBody.locator('.traffic-json__number').first()).toHaveText('9007199254740993')
     await expect(responseBody.locator('.traffic-json__number').filter({ hasText: /^1\.00$/ })).toHaveCount(80)
@@ -298,8 +457,8 @@ test('replays a waterfall HTTP span into a second isolated environment with a ch
     await responseBody.evaluate((element) => element.scrollTo(0, 0))
     for (const colorScheme of ['dark', 'light'] as const) {
       await page.emulateMedia({ colorScheme })
-      const trace = page.locator('.traffic-message-workbench--response')
-      expect(await responsePalette(responseBody, editor.getByRole('tablist', { name: 'Replay response representation' }))).toEqual(await responsePalette(trace.locator('.traffic-payload'), trace.locator('.traffic-payload-tabs')))
+      await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme)
+      expect(await responsePalette(responseBody, editor.getByRole('tablist', { name: 'Replay response representation' }))).toEqual(tracePalettes.get(colorScheme))
       await page.screenshot({ path: testInfo.outputPath(`replay-body-${colorScheme}.png`), animations: 'disabled' })
     }
     await editor.getByRole('button', { name: 'Copy replayed response body' }).click()
@@ -310,7 +469,7 @@ test('replays a waterfall HTTP span into a second isolated environment with a ch
     await expectResponseFillsHeight(editor)
     await page.emulateMedia({ colorScheme: 'light' })
     await page.setViewportSize({ width: 580, height: 900 })
-    await expect(editor.getByRole('button', { name: 'SEND REPLAY', exact: true })).toBeVisible()
+    await expect(editor.getByRole('button', { name: 'SEND', exact: true })).toBeVisible()
     await expect(editor.getByRole('textbox', { name: 'Replay path and query' })).toBeVisible()
     await responseBody.scrollIntoViewIfNeeded()
     expect(await responseBody.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
@@ -357,9 +516,9 @@ test('reviews a real remote write and releases a closed session while its admitt
     await detail.getByRole('button', { name: 'REPLAY', exact: true }).click()
     const opened = await (await preparedResponse).json() as TrafficReplayWorkspace
     const editor = page.getByRole('dialog', { name: /Replay request/ })
-    await expect(editor.getByRole('button', { name: 'SEND REPLAY', exact: true })).toBeEnabled()
+    await expect(editor.getByRole('button', { name: 'SEND', exact: true })).toBeEnabled()
     expect(writes).toBe(0)
-    await editor.getByRole('button', { name: 'SEND REPLAY', exact: true }).click()
+    await editor.getByRole('button', { name: 'SEND', exact: true }).click()
     const confirmation = page.getByRole('alertdialog', { name: 'Confirm remote replay' })
     await expect(confirmation).toContainText('POST /api/orders')
     await expect(confirmation).toContainText('qa')
@@ -368,7 +527,7 @@ test('reviews a real remote write and releases a closed session while its admitt
     await expect(confirmation).toHaveCount(0)
     await expect(editor).toBeVisible()
     expect(writes).toBe(0)
-    await editor.getByRole('button', { name: 'SEND REPLAY', exact: true }).click()
+    await editor.getByRole('button', { name: 'SEND', exact: true }).click()
     await confirmation.getByRole('button', { name: 'SEND REMOTE REPLAY', exact: true }).click()
     await expect.poll(() => writes).toBe(1)
     await expect(editor.getByRole('button', { name: 'SENDING…', exact: true })).toBeDisabled()
@@ -389,7 +548,7 @@ test('reviews a real remote write and releases a closed session while its admitt
     await expect.poll(async () => (await inspect()).run?.state).toBe('completed')
     expect((await inspect()).result).toBeUndefined()
     await detail.getByRole('button', { name: 'REPLAY', exact: true }).click()
-    await expect(editor.getByRole('button', { name: 'SEND REPLAY', exact: true })).toBeEnabled()
+    await expect(editor.getByRole('button', { name: 'SEND', exact: true })).toBeEnabled()
     await expect(editor.getByRole('region', { name: 'Replayed body', exact: true })).toHaveCount(0)
     expect(writes).toBe(1)
   } finally {

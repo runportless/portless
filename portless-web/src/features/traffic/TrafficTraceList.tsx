@@ -1,7 +1,7 @@
 import type { Pagination } from '../../components/PanelPagination'
 import { PanelPagination } from '../../components/PanelPagination'
 import { duration } from '../../components/Status'
-import type { TrafficTrace } from '../../api/contracts/traffic'
+import type { TrafficExchange, TrafficTrace } from '../../api/contracts/traffic'
 import { trafficStartedTime } from './detail/TrafficOverview'
 import { traceRequest, trafficResultTone } from './TrafficListPresentation'
 import { TrafficTableHeader } from './TrafficTableHeader'
@@ -13,18 +13,20 @@ export function TraceSummaryRow({ trace, expanded, onToggle }: { trace: TrafficT
   </button>
 }
 
-export function TrafficTraceList({ pagination, expandedTrace, onToggleTrace, onInspect, onPage }: {
+export function TrafficTraceList({ pagination, expandedTrace, onToggleTrace, onInspect, onReplay, replayDisabled, onPage }: {
   pagination: Pagination<TrafficTrace>
   expandedTrace: number | null
   onToggleTrace: (trace: TrafficTrace) => void
   onInspect: (item: TraceNavigationItem, trace: TrafficTrace) => void
+  onReplay?: (exchange: TrafficExchange) => void
+  replayDisabled?: boolean
   onPage: (page: number) => void
 }) {
   return <div className="trace-list">
     <TrafficTableHeader mode="traces" />
     {pagination.items.map((trace) => <div className={`trace-card${expandedTrace === trace.number ? ' is-expanded' : ''}`} key={trace.number}>
       <TraceSummaryRow trace={trace} expanded={expandedTrace === trace.number} onToggle={() => onToggleTrace(trace)} />
-      {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onItem={(item) => onInspect(item, trace)} /> : <div className="trace-loading">Loading trace spans…</div>)}
+      {expandedTrace === trace.number && (trace.spans?.length ? <TraceWaterfall trace={trace} onItem={(item) => onInspect(item, trace)} onReplay={onReplay} replayDisabled={replayDisabled} /> : <div className="trace-loading">Loading trace spans…</div>)}
     </div>)}
     {pagination.total === 0 && <div className="empty-row">No matching traces yet. Open an application endpoint or exercise a service connection to capture one.</div>}
     <PanelPagination label="traces" pagination={pagination} onPage={onPage} />

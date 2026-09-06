@@ -8,6 +8,38 @@ const waterfallProps = {
 }
 
 describe('trace waterfall', () => {
+  it.each([
+    { name: 'ordinary HTTP root', root: { method: 'POST' }, disabled: false, visible: true },
+    { name: 'unsupported root with a replayable child', root: { method: 'CONNECT' }, disabled: true, visible: true },
+    { name: 'unavailable root with a replayable child', root: null, disabled: true, visible: true },
+    { name: 'TCP root with an HTTP child', root: { protocol: 'tcp' }, disabled: false, visible: false },
+    { name: 'WebSocket root', root: { method: 'GET', status: 101 }, disabled: false, visible: false },
+  ])('offers replay according to the $name', ({ root, disabled, visible }) => {
+    const exchange: TrafficExchange = {
+      project: 'store', environment: 'local', sequence: 11, protocol: 'http', source: 'external', target: 'checkout',
+      method: 'POST', requestTarget: '/checkout', status: 200, background: false,
+      startedAt: '2026-09-06T12:00:00Z', completedAt: '2026-09-06T12:00:00.100Z', durationMs: 100, requestBytes: 0, responseBytes: 12,
+    }
+    const trace: TrafficTrace = {
+      ...exchange, protocol: root?.protocol || 'http', rootSequence: 11,
+      revision: 1, number: 11, lastSequence: 12, error: false, faulted: false, provisional: false, spanCount: root ? 2 : 1, correlation: 'exact',
+      spans: [
+        { exchange: { ...exchange, sequence: 12, source: 'checkout', target: 'orders', method: 'GET' }, depth: 1, startOffsetMs: 20, correlation: 'exact' },
+        ...(root ? [{ exchange: { ...exchange, ...root }, depth: 0, startOffsetMs: 0, correlation: 'exact' as const }] : []),
+      ],
+    }
+    const markup = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} onReplay={() => undefined} />)
+    const button = markup.match(/<button[^>]*aria-label="Replay trace"[^>]*>/)?.[0]
+    if (!visible) {
+      expect(button).toBeUndefined()
+      return
+    }
+    expect(button).toBeDefined()
+    expect(button?.includes('disabled=""')).toBe(disabled)
+    const pending = renderToStaticMarkup(<TraceWaterfall trace={trace} {...waterfallProps} onReplay={() => undefined} replayDisabled />)
+    expect(pending).toMatch(/aria-label="Replay trace" disabled=""/)
+  })
+
   it('renders nested, protocol-aware spans with correlation confidence', () => {
     const base = {
       project: 'store', environment: 'local', protocol: 'http',
