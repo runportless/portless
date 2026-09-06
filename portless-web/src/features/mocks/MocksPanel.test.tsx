@@ -80,7 +80,8 @@ describe('MocksPanel', () => {
     const empty = { ...scenario, activation: { state: 'disabled' as const, targetServices: [], activeServices: [] }, routes: [] }
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={empty} />)
     expect(html).toContain('aria-label="checkout-failure mock scenario"')
-    expect(html).toContain('aria-label="Back to mock scenarios"')
+    expect(html).toContain('aria-label="Back to mock scenarios from checkout-failure"')
+    expect(html).toContain('<h2 title="Routes">Routes</h2>')
     expect(html).not.toContain('NO SERVICES YET')
     expect(html).not.toContain('mock-scenario-service-eyebrow')
     expect(html).toContain('<div class="empty-row">No routes. Add one to define a request and response for a service.</div>')
@@ -93,7 +94,12 @@ describe('MocksPanel', () => {
 
   it('renders a compact route list beside the first route configuration', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, routes: [route, { ...scenario.routes[1], method: 'POST', enabled: false, delayMs: 150 }] }} />)
-    expect(html).toContain('SERVICES / inventory · payments')
+    expect(html).toContain('class="mock-scenario-header__context"')
+    expect(html).toContain('<span title="checkout-failure">checkout-failure</span>')
+    expect(html).toContain('<h2 title="lookup">lookup</h2>')
+    expect(html).toContain('class="mock-route-heading__endpoint" title="GET /inventory/{sku}"')
+    expect(html).not.toContain('SERVICES /')
+    expect(html).not.toContain(scenario.description)
     expect(html).not.toContain('class="empty-row"')
     expect(html).toContain('class="mock-scenario-split"')
     expect(html).toContain('role="tablist" aria-label="Mock workspace view"')
@@ -142,15 +148,17 @@ describe('MocksPanel', () => {
   })
 
   it('selects a linked route while retaining the route list', () => {
-    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} selectedRoute="decline" />)
+    const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, routes: [route, { ...scenario.routes[1], enabled: false }] }} selectedRoute="decline" />)
     expect(html).toContain('aria-label="Edit decline route" aria-current="true"')
     expect(html).toContain('value="/payments"')
     expect(html).toContain('class="mock-route-browser"')
+    expect(html).toContain('<h2 title="decline">decline</h2><span class="mock-route-disabled-state">DISABLED</span>')
   })
 
   it('creates routes in the right pane without replacing the saved route list', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} creatingRoute />)
     expect(html).toContain('aria-label="Create Route"')
+    expect(html).toContain('<h2 title="get-route-3">get-route-3</h2>')
     expect(html).toContain('class="mock-route-new is-selected"')
     expect(html).toContain('aria-label="Edit lookup route"')
     expect(html).toContain('aria-label="Edit decline route"')
@@ -161,6 +169,8 @@ describe('MocksPanel', () => {
   it('keeps the route list available for a missing route selection', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} selectedRoute="missing" />)
     expect(html).toContain('ROUTE NOT FOUND')
+    expect(html).toContain('<h2 title="missing">missing</h2>')
+    expect(html).not.toContain('mock-route-heading__endpoint')
     expect(html).toContain('aria-label="Edit lookup route"')
   })
 

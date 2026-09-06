@@ -188,10 +188,11 @@ The Playwright suite protects these browser journeys:
   scenario split workspaces with URL-addressable route selection, a
   service-selecting right-hand editor that respects focus mode, retained drafts
   while switching routes, save/discard and selected-route deletion, clickable
-  and sortable routes paginated at ten rows, whole-scenario activation, stable
-  visible disabled-route badges in the list and editor, muted request details,
-  and badge removal after re-enabling; peer service PIDs, stationary tables and route panes throughout activation
-  and restoration, and traffic attribution;
+  and sortable routes paginated at ten rows, whole-scenario activation,
+  visible disabled-route badges in the list and beside the main route title,
+  muted request details, and badge removal after re-enabling; stable peer service
+  PIDs, stationary tables and route panes throughout activation and restoration,
+  and traffic attribution;
 - reloading an edited mock route or navigating away from a new route without a
   native browser confirmation, with saved values restored after reload; explicit
   in-app Back navigation still offers its discard/keep-editing dialog;
@@ -216,6 +217,9 @@ The Playwright suite protects these browser journeys:
   the right, with retained selection, configuration tab, unsaved draft, request,
   and result when returning to Routes and reopening Preview; disabled Preview
   for empty scenarios and usable layouts in both themes and narrow viewports;
+  a separate scenario back link and activation row above the prominent selected
+  route title and method/path, following selection and unsaved edits across views,
+  with long names and paths fitting the header without covering its controls;
 - opening Preview from each route's ellipsis menu, selecting the correct route
   and retained draft, moving keyboard focus into Preview, and preserving the
   existing result when reopening the same route without automatically running it;

@@ -63,11 +63,11 @@ describe('MockRouteEditor', () => {
     expect(html).not.toContain('BACK TO SCENARIO')
   })
 
-  it('shows the same editor alongside preview with a route identity and shared save footer', () => {
+  it('shows the same editor alongside preview with a shared save footer', () => {
     const html = renderToStaticMarkup(<MockRouteEditor {...editorProps} previewing dirty routeName="lookup" draft={{ ...mockRouteDraft(scenario.routes[0]), body: 'changed', enabled: false }} />)
     expect(html).toContain('class="mock-route-layout is-preview"')
-    expect(html).toContain('class="mock-route-configuration-name" title="lookup">lookup</span>')
-    expect(html).toContain('class="mock-route-disabled-state">DISABLED</span>')
+    expect(html).not.toContain('mock-route-configuration-identity')
+    expect(html).not.toContain('mock-route-disabled-state')
     expect(html).toContain('aria-label="Mock request preview"')
     expect(html).not.toContain('aria-label="Mock request preview" hidden=""')
     expect(html).toContain('role="tablist" aria-label="Mock route configuration"')

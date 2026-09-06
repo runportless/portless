@@ -292,7 +292,11 @@ ten-per-page route list on the left and the selected route's configuration on
 the right. Request and Response tabs separate the configuration: Request holds
 the route name, service, method, path, and required query parameters; Response
 holds status, delay, body, and response headers. The response body grows to use
-the available space. The scenario header has Routes and Preview workspace tabs:
+the available space. A compact header row shows the scenario name as a back link
+and its enable/disable control. Below it, the selected route's name, method, and
+path remain visible in both workspace views and follow unsaved edits. The scenario
+list shows its services; hovering a scenario name reveals its description. Routes
+and Preview tabs sit to the right of the route title:
 Routes shows the route list and editor; Preview hides the list and places the
 Request/Response editor on the left and the preview on the right. A shared Save
 and Discard footer appears only while the route has unsaved edits and disappears
@@ -301,7 +305,7 @@ request alone does not show it. Routes returns to the list without losing the se
 route, configuration tab, draft, or preview request and result.
 Use each route's switch in the route list to enable or disable it. Disabled
 routes show a DISABLED badge and muted request details in the list. The badge
-also appears above the editor in both workspace views; the route remains editable.
+also appears beside the main route title in both workspace views; the route remains editable.
 Adding and saving routes stays in that workspace. Unsaved drafts
 are retained while switching between routes in the scenario; Save applies a
 draft, and Discard restores its saved values. Refreshing or leaving the page

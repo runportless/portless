@@ -106,10 +106,6 @@ export function MockRouteEditor({ scenario, services, routeName, draft, dirty, b
             }
           }}>{tab === 'request' ? 'Request' : 'Response'}</button>)}
         </div>
-        {(previewing || !draft.enabled) && <div className="mock-route-configuration-identity">
-          {previewing && <span className="mock-route-configuration-name" title={draft.name}>{draft.name || 'New route'}</span>}
-          {!draft.enabled && <span className="mock-route-disabled-state">DISABLED</span>}
-        </div>}
       </div>
       <div className="mock-route-form__scroll" role="tabpanel" id={`${configurationID}-panel-request`} aria-labelledby={`${configurationID}-tab-request`} hidden={configurationTab !== 'request'} tabIndex={0}>
         {configurationTab === 'request' && <>

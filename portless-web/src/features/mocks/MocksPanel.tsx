@@ -299,7 +299,7 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
       const services = scenario.activation.targetServices
       return <div className="mock-scenario-row" key={scenario.name} onClick={() => { if (!busy) onOpen(scenario) }}>
         <MockEnabledState state={scenario.activation.state} />
-        <div className="mock-scenario-row__name"><button type="button" disabled={!!busy} aria-label={`Open ${scenario.name} mock scenario`} onClick={(event) => { event.stopPropagation(); onOpen(scenario) }}><strong>{scenario.name}</strong></button></div>
+        <div className="mock-scenario-row__name"><button type="button" disabled={!!busy} aria-label={`Open ${scenario.name} mock scenario`} title={scenario.description} onClick={(event) => { event.stopPropagation(); onOpen(scenario) }}><strong>{scenario.name}</strong></button></div>
         <span className="mock-scenario-services" title={services.join(', ')}>{services.length ? services.join(', ') : '—'}</span>
         <span>{scenario.routes.length}</span>
         <MockTimestamp className="mock-scenario-row__modified" value={scenario.modifiedAt} />
@@ -367,6 +367,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   const draft = draftKey && drafts[draftKey] || (existing ? mockRouteDraft(existing) : newMockRouteDraft(scenario.routes.length + 1, services[0] || ''))
   const dirty = !!draftKey && !!drafts[draftKey]
   const canPreview = creatingRoute || !!existing
+  const workspaceTitle = canPreview ? draft.name.trim() || routeName || 'New route' : routeName || 'Routes'
   const previewing = workspaceView === 'preview' && canPreview
   const activeView = previewing ? 'preview' : 'routes'
   const hasDrafts = Object.keys(drafts).length > 0
@@ -447,30 +448,36 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
 
   return <section className="panel mock-scenario-workspace" role="region" aria-label={`${scenario.name} mock scenario`}>
     <header className="mock-scenario-header">
-      <button className="mock-workspace-back" type="button" disabled={!!busy} aria-label="Back to mock scenarios" onClick={() => { if (hasDrafts) setLeaveOpen(true); else onBack() }}>
+      <div className="mock-scenario-header__context">
+        <button className="mock-workspace-back" type="button" disabled={!!busy} aria-label={`Back to mock scenarios from ${scenario.name}`} title="Back to mock scenarios" onClick={() => { if (hasDrafts) setLeaveOpen(true); else onBack() }}>
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M7 3 2 8l5 5" /><path d="M2 8h12" /></svg>
-          <span>BACK</span>
-      </button>
-      <div className="mock-scenario-heading">
-        {scenario.activation.targetServices.length > 0 && <div className="eyebrow mock-scenario-service-eyebrow">SERVICES / {scenario.activation.targetServices.join(' · ')}</div>}
-        <h2 id="mock-scenario-workspace-title">{scenario.name}</h2>
-        {scenario.description && <p title={scenario.description}>{scenario.description}</p>}
-      </div>
-      <div ref={workspaceTabs} className="mock-workspace-views" role="tablist" aria-label="Mock workspace view">
-        {(['routes', 'preview'] as const).map((view) => <button key={view} id={`${workspaceID}-tab-${view}`} data-workspace-view={view} type="button" role="tab" aria-selected={activeView === view} aria-controls={`${workspaceID}-panel`} tabIndex={activeView === view ? 0 : -1} disabled={view === 'preview' && !canPreview} onClick={() => selectWorkspaceView(view)} onKeyDown={(event) => {
-          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-            event.preventDefault()
-            const next = !canPreview || event.key === 'Home' ? 'routes' : event.key === 'End' ? 'preview' : view === 'routes' ? 'preview' : 'routes'
-            selectWorkspaceView(next)
-            workspaceTabs.current?.querySelector<HTMLButtonElement>(`[data-workspace-view="${next}"]`)?.focus()
-          }
-        }}>{view === 'routes' ? 'Routes' : 'Preview'}</button>)}
-      </div>
+          <span title={scenario.name}>{scenario.name}</span>
+        </button>
         <label className={`mock-scenario-toggle${active ? ' is-active' : ''}${toggleDisabled ? ' is-disabled' : ''}`} title={enableBlocked ? 'Add a route before enabling this scenario.' : undefined}>
           <span className="mock-scenario-toggle__label">{toggleBusy ? active ? 'DISABLING…' : 'ENABLING…' : scenario.activation.state.toUpperCase()}</span>
           <input className="sr-only" type="checkbox" role="switch" checked={active} disabled={toggleDisabled} aria-label={`${scenario.name} enabled`} onChange={(event) => onToggle(event.target.checked)} />
           <span className="mock-scenario-toggle__track" aria-hidden="true"><span /></span>
         </label>
+      </div>
+      <div className="mock-scenario-header__route">
+        <div className={`mock-route-heading${canPreview && !draft.enabled ? ' is-off' : ''}`}>
+          <div className="mock-route-heading__identity">
+            <h2 title={workspaceTitle}>{workspaceTitle}</h2>
+            {canPreview && !draft.enabled && <span className="mock-route-disabled-state">DISABLED</span>}
+          </div>
+          {canPreview && <div className="mock-route-heading__endpoint" title={`${draft.method} ${draft.path}`}><span className="mock-route-method">{draft.method}</span><code>{draft.path || '…'}</code></div>}
+        </div>
+        <div ref={workspaceTabs} className="mock-workspace-views" role="tablist" aria-label="Mock workspace view">
+          {(['routes', 'preview'] as const).map((view) => <button key={view} id={`${workspaceID}-tab-${view}`} data-workspace-view={view} type="button" role="tab" aria-selected={activeView === view} aria-controls={`${workspaceID}-panel`} tabIndex={activeView === view ? 0 : -1} disabled={view === 'preview' && !canPreview} onClick={() => selectWorkspaceView(view)} onKeyDown={(event) => {
+            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+              event.preventDefault()
+              const next = !canPreview || event.key === 'Home' ? 'routes' : event.key === 'End' ? 'preview' : view === 'routes' ? 'preview' : 'routes'
+              selectWorkspaceView(next)
+              workspaceTabs.current?.querySelector<HTMLButtonElement>(`[data-workspace-view="${next}"]`)?.focus()
+            }
+          }}>{view === 'routes' ? 'Routes' : 'Preview'}</button>)}
+        </div>
+      </div>
     </header>
     {scenario.activation.state === 'degraded' && <ActionErrorNotice error={{ title: 'Scenario is partially active', message: `${scenario.activation.activeServices.length} of ${scenario.activation.targetServices.length} services currently use this scenario. Disable it to restore the saved providers.` }} />}
     {error && !draftKey && <div className="mock-workspace-error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
