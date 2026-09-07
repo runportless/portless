@@ -51,6 +51,36 @@ func runReplay(t *testing.T, manager *Manager, ctx context.Context, method, path
 	return manager.ReplayHTTP(ctx, "billing/local", "checkout", "orders", method, path, headers, body, generation, model.TrafficReplay{Project: "billing", Environment: "local", Sequence: 42, StartedAt: time.Unix(1, 0), Workspace: 1, Run: 1})
 }
 
+func TestReplayRequestCaptureCompletesWithLastBytes(t *testing.T) {
+	const body = `{"order":1}`
+	request, err := replayRequest(t.Context(), "billing/local", "orders", "POST", "/orders", nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = request.Body.Close() })
+	if request.ContentLength != int64(len(body)) || request.GetBody != nil {
+		t.Fatalf("content length=%d retryable=%v", request.ContentLength, request.GetBody != nil)
+	}
+	capture := captureRequestBody(request, trafficBodyLimit)
+	// A transport can receive the response as soon as ContentLength bytes have
+	// been written, before it asks the request body for another read.
+	for index := range len(body) {
+		var content [1]byte
+		read, err := request.Body.Read(content[:])
+		if read != 1 || content[0] != body[index] || err != nil && err != io.EOF {
+			t.Fatalf("byte %d: read=%d content=%q err=%v", index, read, content, err)
+		}
+		metadata := captureMetadata(freezeCapture(capture))
+		if index < len(body)-1 {
+			if err != nil || metadata.State != "incomplete" || metadata.Exact {
+				t.Fatalf("partial capture=%#v err=%v", metadata, err)
+			}
+		} else if metadata.State != "complete" || !metadata.Exact || metadata.ObservedBytes != int64(len(body)) || capture.text() != body {
+			t.Fatalf("final capture=%#v body=%q", metadata, capture.text())
+		}
+	}
+}
+
 func TestReplaySendsFullSizeBodyAndRejectsOversizeBeforeDispatch(t *testing.T) {
 	var calls, received atomic.Int64
 	manager, _, _, _ := replayFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -100,8 +130,14 @@ func TestReplayPreservesEdgeAndExactRequestAndRedactsBeforeRetention(t *testing.
 	if err != nil || outcome != "response-received" || exchange.Status != 201 || calls.Load() != 1 {
 		t.Fatalf("exchange=%#v outcome=%s err=%v calls=%d", exchange, outcome, err, calls.Load())
 	}
-	if exchange.Replay == nil || exchange.Replay.Sequence != 42 || exchange.Source != "checkout" || exchange.Target != "orders" || exchange.ParentSpanID != "" || exchange.RequestCapture.State != "complete" || !exchange.RequestCapture.Exact || exchange.ResponseCapture.Exact {
-		t.Fatalf("capture/provenance=%#v", exchange)
+	if exchange.Replay == nil || exchange.Replay.Sequence != 42 || exchange.Source != "checkout" || exchange.Target != "orders" || exchange.ParentSpanID != "" {
+		t.Fatalf("replay provenance=%#v exchange=%#v", exchange.Replay, exchange)
+	}
+	if exchange.RequestCapture == nil || exchange.RequestCapture.State != "complete" || !exchange.RequestCapture.Exact {
+		t.Fatalf("request capture=%#v", exchange.RequestCapture)
+	}
+	if exchange.ResponseCapture == nil || exchange.ResponseCapture.Exact {
+		t.Fatalf("redacted response capture=%#v", exchange.ResponseCapture)
 	}
 	recorded, err := db.RecordedTraffic(t.Context(), "billing/local", "replay-test", 10)
 	if err != nil || len(recorded) != 1 {

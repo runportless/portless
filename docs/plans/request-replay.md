@@ -334,6 +334,11 @@ requests whose bodies were never read, HEAD/204/304 body semantics, and an
 invalid UTF-8 boundary at the retention limit. Do not increase ordinary body
 capture limits to make replay convenient.
 
+The in-memory replay request reader reports EOF together with its final bytes.
+This lets capture prove completeness before the transport writes those bytes;
+a fast upstream response cannot freeze a fully consumed replay body as incomplete
+while a separate EOF read is still pending.
+
 Auto-prefill a sendable captured body only for proven empty bodies or complete,
 identity-encoded UTF-8 text within the request limit. Unknown or incompatible
 captures need an explicit user-authored replacement/empty decision. The output

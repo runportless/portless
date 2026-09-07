@@ -147,11 +147,15 @@ func replayRequest(ctx context.Context, scope, target, method, requestTarget str
 	}
 	host := target + "." + environment + "." + project + ".localhost"
 	parsed.Scheme, parsed.Host = "http", host
-	request, err := http.NewRequestWithContext(ctx, method, parsed.String(), strings.NewReader(body))
+	bodyReader := strings.NewReader(body)
+	request, err := http.NewRequestWithContext(ctx, method, parsed.String(), bodyReader)
 	if err != nil {
 		return nil, errors.New("invalid replay request")
 	}
 	request.GetBody = nil
+	if body != "" {
+		request.Body = io.NopCloser(&replayBodyReader{reader: bodyReader})
+	}
 	count, size := 0, 0
 	for name, values := range headers {
 		if !validReplayHeaderName(name) {
@@ -190,6 +194,20 @@ func replayRequest(ctx context.Context, scope, target, method, requestTarget str
 	}
 	request.Header.Set("Accept-Encoding", "identity")
 	return request, nil
+}
+
+type replayBodyReader struct {
+	reader *strings.Reader
+}
+
+// Read reports EOF with the final replay bytes so capture completion does not
+// depend on another transport read after an upstream response has arrived.
+func (r *replayBodyReader) Read(content []byte) (int, error) {
+	read, err := r.reader.Read(content)
+	if err == nil && r.reader.Len() == 0 {
+		err = io.EOF
+	}
+	return read, err
 }
 
 func validReplayHeaderName(name string) bool {
