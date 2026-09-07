@@ -58,8 +58,8 @@ describe('MocksPanel', () => {
     const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectScenario={() => undefined} onSelectRoute={() => undefined} onCreateRoute={() => undefined} onChanged={() => undefined} />)
     expect(html).toContain('<span>SCENARIOS</span>')
     expect(html).toContain('CREATE SCENARIO')
-    expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>State</span>')
-    for (const label of ['Scenario', 'Services', 'Routes', 'Modified']) expect(html).toContain(`<span>${label}</span>`)
+    expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>Scenario</span>')
+    for (const label of ['State', 'Services', 'Routes', 'Modified']) expect(html).toContain(`aria-sort="none"><span>${label}</span>`)
     expect(html.match(/class="sortable-grid-header/g)).toHaveLength(5)
     expect(html).toContain('Loading mock scenarios')
     expect(html).not.toContain('mock-scenario-workspace')
@@ -247,12 +247,15 @@ describe('MocksPanel', () => {
     expect(html).toMatch(/<button(?=[^>]*disabled="")(?=[^>]*aria-label="Mock scenario actions for active")[^>]*>/)
   })
 
-  it('sorts scenarios by every displayed data column', () => {
+  it('sorts scenarios by name by default and supports every displayed data column', () => {
     const scenarios: MockScenario[] = [
       { ...scenario, name: 'bravo', activation: { state: 'disabled', targetServices: ['zeta'], activeServices: [] }, routes: [route, route, route], modifiedAt: '2026-08-18T11:00:00Z' },
       { ...scenario, name: 'alpha', activation: { state: 'enabled', targetServices: ['orders'], activeServices: ['orders'] }, routes: [route], modifiedAt: '2026-08-18T14:00:00Z' },
       { ...scenario, name: 'charlie', activation: { state: 'degraded', targetServices: ['billing'], activeServices: [] }, routes: [route, route], modifiedAt: '2026-08-18T13:00:00Z' },
     ]
+    const html = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={scenarios} />)
+    const renderedNames = [...html.matchAll(/<strong>([^<]+)<\/strong>/g)].map((match) => match[1])
+    expect(renderedNames).toEqual(['alpha', 'bravo', 'charlie'])
     const names = (key: Parameters<typeof sortMockScenarios>[1]['key'], direction: 'asc' | 'desc') => sortMockScenarios(scenarios, { key, direction }).map((item) => item.name)
     expect(names('state', 'asc')).toEqual(['alpha', 'charlie', 'bravo'])
     expect(names('name', 'desc')).toEqual(['charlie', 'bravo', 'alpha'])

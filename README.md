@@ -390,6 +390,10 @@ sequence, keeping scenarios, routes, and route enabled flags saved. Controls sta
 locked while restoration runs. If a scenario fails, the batch stops and reports
 the scenario and completed count; retrying targets the scenarios still active.
 
+Mock scenarios and faults sort by name (A–Z) by default, so enabling or disabling
+one keeps its row in place. Use the column sort controls to choose a different
+order.
+
 Each browser tab stays focused on one project. The sidebar shows only that
 project's environments. The project switcher puts running environments at the
 top for direct access to a specific project/environment. Below, Recent projects

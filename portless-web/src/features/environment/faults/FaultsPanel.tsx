@@ -25,7 +25,7 @@ interface CreateFaultInput {
 type FaultSortField = 'state' | 'name' | 'connection' | 'fault' | 'matches' | 'lifetime' | 'enabledAt' | 'createdAt'
 type FaultEffect = 'latency' | 'status' | 'abort'
 
-const defaultFaultSort: TableSort<FaultSortField> = { key: 'state', direction: 'asc' }
+const defaultFaultSort: TableSort<FaultSortField> = { key: 'name', direction: 'asc' }
 const faultEffects: ReadonlyArray<{ value: FaultEffect; label: string; description: string }> = [
   { value: 'latency', label: 'Latency', description: 'Delay the response' },
   { value: 'status', label: 'HTTP status', description: 'Return an error' },

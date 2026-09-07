@@ -19,7 +19,7 @@ import type { RunMockPreview } from './useMockRoutePreview'
 type MockScenarioSortField = 'state' | 'name' | 'services' | 'routes' | 'modifiedAt'
 type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'state'
 
-const defaultMockScenarioSort: TableSort<MockScenarioSortField> = { key: 'state', direction: 'asc' }
+const defaultMockScenarioSort: TableSort<MockScenarioSortField> = { key: 'name', direction: 'asc' }
 const defaultMockRouteSort: TableSort<MockRouteSortField> = { key: 'service', direction: 'asc' }
 const mockRoutePageSize = 10
 const mockStatusLabels = new Map<number, string>(httpStatusGroups.flatMap((group) => group.statuses.map(([code, label]) => [code, label] as const)))

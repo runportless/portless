@@ -50,6 +50,10 @@ test('disables all scenarios with sequential restoration, partial failure recove
     await page.emulateMedia({ colorScheme: 'dark' })
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     const panel = page.locator('.mock-scenarios-panel')
+    const scenarioNames = panel.locator('.mock-scenario-row__name strong')
+    const expectedOrder = [names[2], names[0], names[1]]
+    await expect(panel.getByRole('columnheader', { name: /^Scenario/ })).toHaveAttribute('aria-sort', 'ascending')
+    await expect(scenarioNames).toHaveText(expectedOrder)
     const bulkAction = panel.locator('.mock-scenarios-bulk-actions').getByRole('button')
     const scenarioSwitch = (name: string) => panel.getByRole('switch', { name: `${name} enabled`, exact: true })
     await expect(bulkAction).toHaveText('DISABLE ALL')
@@ -102,6 +106,7 @@ test('disables all scenarios with sequential restoration, partial failure recove
     await expect(page.getByRole('alert')).toContainText(`1 of 2 scenarios disabled. Stopped at ${second}.`)
     await expect(scenarioSwitch(first)).not.toBeChecked()
     await expect(scenarioSwitch(second)).toBeChecked()
+    await expect(scenarioNames).toHaveText(expectedOrder)
     await expect(bulkAction).toHaveText('DISABLE ALL')
     await expect(bulkAction).toBeEnabled()
     expect(requests).toEqual([first, second])
@@ -118,6 +123,7 @@ test('disables all scenarios with sequential restoration, partial failure recove
       expect(current.activation.state).toBe('disabled')
       expect(current.routes).toEqual(saved.find((scenario) => scenario.name === name)!.routes)
     }
+    await expect(scenarioNames).toHaveText(expectedOrder)
     const restored = await controlAPI<Environment>(base)
     expect(restored.status).toBe('healthy')
     expect(restored.services.find(({ name }) => name === 'checkout')?.pid).toBe(before.services.find(({ name }) => name === 'checkout')?.pid)
@@ -132,6 +138,15 @@ test('disables all scenarios with sequential restoration, partial failure recove
     await page.reload()
     await expect(bulkAction).toBeDisabled()
     for (const name of names) await expect(scenarioSwitch(name)).not.toBeChecked()
+    await expect(scenarioNames).toHaveText(expectedOrder)
+
+    await page.unroute(activationPattern)
+    await scenarioSwitch(names[0]).focus()
+    await page.keyboard.press('Space')
+    await expect(scenarioSwitch(names[0])).toBeChecked({ timeout: 30_000 })
+    await expect(scenarioSwitch(names[0])).toBeEnabled({ timeout: 30_000 })
+    await expect(scenarioNames).toHaveText(expectedOrder)
+    await expect(page).toHaveURL(new RegExp(`${environmentPath('mocks').replace('?', '\\?')}$`))
   } finally {
     releaseFirst()
     if (firstStarted) await firstFinished

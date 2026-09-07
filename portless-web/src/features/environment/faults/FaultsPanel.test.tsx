@@ -36,8 +36,8 @@ describe('FaultsPanel', () => {
     expect(html).toMatch(/<button[^>]*class="button button--primary button--small panel-create-button"[^>]*>CREATE FAULT<\/button>/)
     expect(html).toContain('class="fault-table"')
     expect(html).toContain('<tr class="sortable-header-row is-default-sort">')
-    expect(html).toContain('aria-sort="ascending"><span>State</span>')
-    expect(html).toContain('aria-sort="none"><span>Name</span>')
+    expect(html).toContain('aria-sort="none"><span>State</span>')
+    expect(html).toContain('aria-sort="ascending"><span>Name</span>')
     for (const label of ['Connection', 'Fault', 'Matches', 'Lifetime', 'Enabled at', 'Created at']) {
       expect(html).toContain(`aria-sort="none"><span>${label}</span>`)
     }
@@ -53,12 +53,12 @@ describe('FaultsPanel', () => {
     expect(html).not.toContain('class="form-modal')
   })
 
-  it('puts active rules first and distinguishes reusable disabled rules', () => {
-    const disabled = fault('old-latency', false)
-    const active = fault('current-latency', true, 1)
-    const html = renderToStaticMarkup(<FaultsPanel environment={environment} faults={[disabled, active]} refresh={async () => undefined} />)
+  it('sorts rules by name regardless of state and distinguishes reusable disabled rules', () => {
+    const disabled = fault('alpha-latency', false)
+    const active = fault('zeta-latency', true, 1)
+    const html = renderToStaticMarkup(<FaultsPanel environment={environment} faults={[active, disabled]} refresh={async () => undefined} />)
 
-    expect(html.indexOf('current-latency')).toBeLessThan(html.indexOf('old-latency'))
+    expect(html.indexOf('alpha-latency')).toBeLessThan(html.indexOf('zeta-latency'))
     expect(html).toContain('class="fault-table__state is-active"')
     expect(html).toContain('>active</span>')
     expect(html).toContain('>disabled</span>')
@@ -73,8 +73,8 @@ describe('FaultsPanel', () => {
     expect(html).toContain('class="faults-bulk-actions"')
     expect(html).toContain('class="faults-disable-all-link"')
     expect(html.indexOf('CREATE FAULT')).toBeLessThan(html.indexOf('DISABLE ALL'))
-    expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*checked="")(?=[^>]*aria-label="current-latency fault enabled")[^>]*>/)
-    expect(html).toMatch(/<input(?=[^>]*role="switch")(?![^>]*checked="")(?=[^>]*aria-label="old-latency fault enabled")[^>]*>/)
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*checked="")(?=[^>]*aria-label="zeta-latency fault enabled")[^>]*>/)
+    expect(html).toMatch(/<input(?=[^>]*role="switch")(?![^>]*checked="")(?=[^>]*aria-label="alpha-latency fault enabled")[^>]*>/)
     expect(html.match(/class="sortable-column-sort-control"/g)).toHaveLength(8)
   })
 

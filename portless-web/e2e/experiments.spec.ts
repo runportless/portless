@@ -493,6 +493,13 @@ test('creates a multi-service scenario, edits routes, and restores providers wit
 })
 
 test('applies, disables, re-enables, and deletes a persistent fault', async ({ page }, testInfo) => {
+  const state = readE2EState()
+  const faultsPath = `/api/v1/environments/${state.project}/${state.environment}/faults`
+  await controlAPI(faultsPath, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'ui-alpha-fault', source: 'checkout', target: 'orders', probability: 1, latencyMs: 1 }),
+  })
+  await controlAPI(`${faultsPath}/ui-alpha-fault/disable`, { method: 'POST' })
   await authenticate(page, environmentPath('faults'))
   await page.getByRole('button', { name: 'CREATE FAULT', exact: true }).click()
   const faultDialog = page.getByRole('dialog', { name: 'Create Fault' })
@@ -508,6 +515,10 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
   await expect(page.getByRole('button', { name: 'Faults', exact: true })).toHaveAccessibleDescription('1 active fault')
 
   const row = page.locator('.fault-table tbody tr').filter({ hasText: 'ui-orders-fault' })
+  const faultNames = page.locator('.fault-table tbody tr td:nth-child(2) strong')
+  const expectedOrder = ['ui-alpha-fault', 'ui-orders-fault']
+  await expect(page.getByRole('columnheader', { name: /^Name/ })).toHaveAttribute('aria-sort', 'ascending')
+  await expect(faultNames).toHaveText(expectedOrder)
   const faultSwitch = row.getByRole('switch', { name: 'ui-orders-fault fault enabled', exact: true })
   await expect(faultSwitch).toBeChecked()
   await expect(row).toContainText('until disabled')
@@ -551,6 +562,7 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
   }
   await expect(faultSwitch).not.toBeChecked()
   await expect(faultSwitch).toBeEnabled()
+  await expect(faultNames).toHaveText(expectedOrder)
   await expect(row.locator('td').nth(4)).toHaveText('1')
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
   await page.emulateMedia({ colorScheme: 'light' })
@@ -562,6 +574,7 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
   await expect(faultSwitch).toBeChecked()
   await expect(faultSwitch).toBeEnabled()
   await expect(faultSwitch).toHaveAttribute('aria-busy', 'false')
+  await expect(faultNames).toHaveText(expectedOrder)
   await page.emulateMedia({ colorScheme: 'dark' })
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await page.screenshot({ path: testInfo.outputPath('fault-switch-on-dark.png'), animations: 'disabled' })
@@ -570,6 +583,7 @@ test('applies, disables, re-enables, and deletes a persistent fault', async ({ p
   await faultMenu.getByRole('menuitem', { name: 'Delete ui-orders-fault' }).click()
   await faultMenu.getByRole('menuitem', { name: 'Confirm delete ui-orders-fault' }).click()
   await expect(row).toHaveCount(0)
+  await controlAPI(`${faultsPath}/ui-alpha-fault`, { method: 'DELETE' })
 })
 
 async function watchMockPanelLayout(panel: Locator) {

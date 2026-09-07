@@ -238,7 +238,8 @@ The Playwright suite protects these browser journeys:
   keyboard toggling without opening the scenario or changing the selected route;
   fault switches keep their saved state after a failed browser request and show
   pending progress while the real request is held, blocking repeat actions until
-  it finishes; switch states are inspected in dark and light themes;
+  it finishes; mock scenarios and faults default to name order and keep their row
+  positions when toggled; switch states are inspected in dark and light themes;
 - Disable All in the mock scenarios table, with sequential provider restoration,
   pending control locks, a reported partial failure and retry of remaining active
   scenarios, preserved routes and disabled scenarios, unchanged peer processes,
