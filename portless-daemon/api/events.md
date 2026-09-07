@@ -214,3 +214,21 @@ detail request with one follow-up for newer revisions. Edge-filtered views use
 summary queries instead of fetching every trace's detail. Paused metadata is
 bounded to 5,000 exchanges and 5,000 trace summaries; resume always obtains an
 authoritative snapshot. Five-second polling also recovers dropped notifications.
+
+## MCP parity and conditional changes
+
+Native MCP requests preserve the authenticated `MCP` actor on lifecycle and
+binding operations and discovery, clone, source and rescan timeline entries.
+Replay uses the existing traffic/replay provenance and trace events, with a
+fixed versioned opt-in capability declaration on its HTTP routes. The metadata
+status and recording export chunk endpoints introduce no persistent event
+subscription or new execution engine.
+
+Preview operations produce no state events. Conditional traffic clear retains
+exchanges above `throughSequence`; clients must honor the existing watermark
+when discarding cached traffic and refetch projected traces. Conditional
+artifact/configuration deletes reject changed creation identities, revisions
+or affected-state digests before committing; rejected applies emit no success
+event. Export cursors freeze retained recording events and do not subscribe to
+later capture. All existing browser and CLI event consumers use these same
+changes.

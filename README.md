@@ -373,8 +373,11 @@ Both can inspect services and effective connections, tail structured logs,
 follow raw exchanges and correlated traces, retain bounded recordings, apply
 edge-scoped faults, and configure deterministic mocks.
 
-Recording history keeps Export and Delete in each row's ellipsis menu. Start a
-new recording from the form above the history table.
+Recording history keeps Export and Delete in each row's ellipsis menu. Its
+header's ellipsis menu offers DELETE ALL for completed recordings across all
+pages, followed by CONFIRM; closing the menu cancels confirmation. Active
+recordings are retained. Start a new recording from the form above the history
+table.
 
 Mock scenarios, individual mock routes, and faults use the same on/off switches.
 Changes apply immediately without a Save step. A spinner in the switch shows a
@@ -418,8 +421,11 @@ fixed width, including disabled Starting… progress, so the action does not
 resize during startup. Stop environment is available
 through Search (`Command-K` or `Control-K`). The header has no environment action menu, and
 Search keeps its visible label beside the keyboard shortcut at every screen size.
-Overview's Services header offers Start All when the environment is stopped or
-Stop All when every service is ready; mixed and empty states show neither action.
+Overview's Services header offers Start All when the environment is stopped.
+When every service is ready, its ellipsis menu contains STOP ALL. Selecting it
+changes the menu item to CONFIRM; only selecting CONFIRM stops the services.
+Closing the menu cancels confirmation. Mixed and empty states show neither
+action. During shutdown, a muted Stopping… label appears beside the disabled menu.
 Lifecycle controls and command-palette actions share pending operation state
 until its outcome is confirmed, with live header health and accessible progress
 announcements.
@@ -530,6 +536,9 @@ does not send a request; **Send** submits one request to the original
 source-to-target edge. The expanded drawer keeps the original response frozen
 and shows the latest response alongside a status, header, and JSON or text diff.
 The status and duration comparison appears on the Response diff tab.
+The differences section starts expanded and can be collapsed to give the
+response panes more room. Its comparison status stays visible, and the editor
+remembers the expanded state while switching response views and representations.
 The Request and Response columns begin directly below the replay header, with
 destination, endpoint, method, path, and send controls inside Request so the
 response comparison can use the full column height.
@@ -603,12 +612,16 @@ Open the control plane with `portless ui`, then choose **Settings → MCP** to
 generate a client configuration. The MCP server is launched by the client over
 stdio; the daemon does not expose an MCP network endpoint.
 
-The default tool set is read-only and workspace-scoped. Environment-wide
-visibility, lifecycle mutations, bounded traffic control, and sensitive
-traffic detail are separate immutable capabilities selected when the client
-process starts. See the
-[MCP README](portless-mcp/README.md) for configuration examples, the tool
-inventory, permission boundaries, limits, and troubleshooting.
+The default exposes 24 inspection tools in workspace scope. Pin an environment,
+select a whole project with `--project`, or opt into installation scope. Separate
+startup flags enable lifecycle, sensitive traffic, traffic control, replay, and
+configuration; all enabled exposes 63 tools. MCP supports project discovery and
+sources, mock authoring and restoration, complete recording export, reviewed
+HTTP replay/comparison, and preview/apply cleanup through the same daemon state.
+Replay requires sensitive traffic; provider changes require lifecycle access.
+New checkout paths require authorized source roots. See the
+[MCP README](portless-mcp/README.md) for client configuration, exact permissions,
+examples, limits and the complete tool inventory.
 
 ## Local data and safety
 

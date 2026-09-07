@@ -26,6 +26,33 @@ func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request
 			methodNotAllowed(writer, http.MethodDelete)
 			return
 		}
+		if request.URL.Query().Get("mode") == "preview" {
+			preview, err := s.app.PreviewTrafficClear(request.Context(), project, environment)
+			if err != nil {
+				s.writeError(writer, err, environmentSubject(project, environment))
+				return
+			}
+			writeJSON(writer, 200, preview)
+			return
+		}
+		if request.URL.Query().Has("throughSequence") || request.Header.Get(contract.ClientKindHeader) == string(contract.ClientKindMCP) {
+			expected, ok := requestResourceVersion(writer, request, true)
+			if !ok {
+				return
+			}
+			through, err := strconv.ParseInt(request.URL.Query().Get("throughSequence"), 10, 64)
+			if err != nil || through < 0 {
+				pageError(writer, fmt.Errorf("throughSequence must be a non-negative integer"))
+				return
+			}
+			result, err := s.app.ClearTrafficThrough(request.Context(), project, environment, through, *expected)
+			if err != nil {
+				s.writeError(writer, err, environmentSubject(project, environment))
+				return
+			}
+			writeJSON(writer, 200, result)
+			return
+		}
 		if _, err := s.app.Environment(request.Context(), project, environment); err != nil {
 			s.writeError(writer, err, environmentSubject(project, environment))
 			return
@@ -130,6 +157,10 @@ func (s *Server) handleTrafficTraces(writer http.ResponseWriter, request *http.R
 		number, err := positiveTrafficNumber(segments[5], "trace")
 		if err != nil {
 			writeAPIError(writer, http.StatusBadRequest, *err)
+			return
+		}
+		if request.URL.Query().Get("view") == "page" {
+			s.writeTracePage(writer, request, project, environment, number)
 			return
 		}
 		trace, findErr := s.app.TrafficTrace(request.Context(), project, environment, number)
@@ -285,7 +316,20 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 			}
 			writeJSON(writer, http.StatusOK, recording)
 		case http.MethodDelete:
-			if err := s.app.DeleteRecording(ctx, project, environment, name, principal.Actor); err != nil {
+			if request.URL.Query().Get("mode") == "preview" {
+				result, err := s.app.PreviewRecordingDeletion(ctx, project, environment, name)
+				if err != nil {
+					s.writeError(writer, err, environmentSubject(project, environment))
+					return
+				}
+				writeJSON(writer, 200, result)
+				return
+			}
+			expected, ok := requestResourceVersion(writer, request, principal.Actor == "MCP")
+			if !ok {
+				return
+			}
+			if err := s.app.DeleteRecording(ctx, project, environment, name, principal.Actor, expected); err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}
@@ -304,16 +348,11 @@ func (s *Server) handleRecordings(writer http.ResponseWriter, request *http.Requ
 		writeJSON(writer, http.StatusOK, recording)
 		return
 	}
-	if len(segments) == 6 && segments[5] == "export" && request.Method == http.MethodGet {
-		exchanges, err := s.app.RecordedTraffic(ctx, project, environment, name, 10_000)
-		if err != nil {
-			s.writeError(writer, err, environmentSubject(project, environment))
-			return
-		}
-		writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.json"`, name))
-		writeJSON(writer, http.StatusOK, contract.RecordingExport{SchemaVersion: 4, Project: project, Environment: environment, Recording: name, Exchanges: exchanges})
+	if request.Method == http.MethodGet && len(segments) >= 6 && segments[5] == "export" && (len(segments) == 6 || (len(segments) == 7 && segments[6] == "chunks")) {
+		s.handleRecordingExport(writer, request, project, environment, name, len(segments) == 7)
 		return
 	}
+
 	writeAPIError(writer, http.StatusNotFound, contract.APIError{Code: "ROUTE_NOT_FOUND", Message: "recording route not found"})
 }
 
@@ -364,7 +403,11 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 		name := segments[4]
 		switch segments[5] {
 		case "enable":
-			fault, err := s.app.EnableFault(ctx, project, environment, name, principal.Actor)
+			expected, ok := requestResourceVersion(writer, request, principal.Actor == "MCP")
+			if !ok {
+				return
+			}
+			fault, err := s.app.EnableFault(ctx, project, environment, name, principal.Actor, expected)
 			if err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
@@ -392,7 +435,20 @@ func (s *Server) handleFaults(writer http.ResponseWriter, request *http.Request,
 			return
 		}
 		if request.Method == http.MethodDelete {
-			if err := s.app.DeleteFault(ctx, project, environment, name, principal.Actor); err != nil {
+			if request.URL.Query().Get("mode") == "preview" {
+				result, err := s.app.PreviewFaultDeletion(ctx, project, environment, name)
+				if err != nil {
+					s.writeError(writer, err, environmentSubject(project, environment))
+					return
+				}
+				writeJSON(writer, 200, result)
+				return
+			}
+			expected, ok := requestResourceVersion(writer, request, principal.Actor == "MCP")
+			if !ok {
+				return
+			}
+			if err := s.app.DeleteFault(ctx, project, environment, name, principal.Actor, expected); err != nil {
 				s.writeError(writer, err, environmentSubject(project, environment))
 				return
 			}

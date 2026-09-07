@@ -53,7 +53,8 @@ type EnvironmentMutation struct {
 // SetSourceCheckoutRequest replaces the filesystem path for one project source
 // in a single environment.
 type SetSourceCheckoutRequest struct {
-	Path string `json:"path"`
+	Path        string `json:"path"`
+	AllowedRoot string `json:"allowedRoot,omitempty"`
 }
 
 // ServiceList is a collection of environment services.

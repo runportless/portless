@@ -20,6 +20,7 @@ import (
 	processruntime "github.com/runportless/portless/portless-daemon/runtime/process"
 	"github.com/runportless/portless/portless-daemon/traffic"
 	"github.com/runportless/portless/portless-daemon/traffic/proxy"
+	"github.com/runportless/portless/portless-daemon/traffic/recordingexport"
 	"github.com/runportless/portless/portless-daemon/traffic/replay"
 )
 
@@ -114,6 +115,7 @@ type Service struct {
 	containers           *container.Manager
 	proxy                *proxy.Manager
 	replays              *replay.Manager
+	recordingExporter    *recordingexport.Exporter
 	mocks                *mocks.Manager
 	dataDirectory        string
 	installationKey      string
@@ -157,6 +159,7 @@ func New(controlStore *database.Store, broker *events.Broker, config Config) *Se
 	service.proxy = proxy.NewManager(controlStore, trafficStore, broker)
 	service.replays = replay.New(service.resolveReplayTarget, service.executeReplay)
 	service.mocks = mocks.NewManager()
+	service.recordingExporter = recordingexport.New(controlStore)
 	temporaryRoot := filepath.Join(config.DataDirectory, "tmp")
 	service.containers = container.NewManager(
 		filepath.Join(config.DataDirectory, "runtime.json"),

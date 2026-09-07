@@ -96,20 +96,34 @@ VALUES(?, ?, ?, ?, ?)`, key, scenario.Name, scenario.Description, now, now)
 }
 
 // DeleteMockScenario removes a disabled scenario and all of its routes.
-func (s *Store) DeleteMockScenario(ctx context.Context, project, environment, name string) error {
+func (s *Store) DeleteMockScenario(ctx context.Context, project, environment, name string, expected *model.ResourceVersion) error {
 	key, err := s.PrivateEnvironmentKey(ctx, project, environment)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM mock_scenarios WHERE environment_key = ? AND name = ? COLLATE NOCASE`, key, name)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	count, _ := result.RowsAffected()
-	if count == 0 {
-		return ErrNotFound
+	defer tx.Rollback()
+	actual, err := mockVersionTx(ctx, tx, key, name)
+	if err != nil {
+		return err
 	}
-	return nil
+	if err := checkResourceVersion(expected, actual); err != nil {
+		return err
+	}
+	var active bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM mock_scenario_activations WHERE environment_key=? AND scenario_name=? COLLATE NOCASE)`, key, name).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return fmt.Errorf("disable the mock scenario before deleting it: %w", ErrConflict)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mock_scenarios WHERE environment_key=? AND name=? COLLATE NOCASE`, key, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // PutMockRoute creates or replaces a named route within a scenario.
@@ -237,21 +251,45 @@ ON CONFLICT(environment_key, scenario_name, name) DO UPDATE SET
 }
 
 // DeleteMockRoute removes one named route from a mock scenario.
-func (s *Store) DeleteMockRoute(ctx context.Context, project, environment, scenarioName, routeName string) (model.MockScenario, error) {
+func (s *Store) DeleteMockRoute(ctx context.Context, project, environment, scenarioName, routeName string, expected *model.ResourceVersion) (model.MockScenario, error) {
 	key, err := s.PrivateEnvironmentKey(ctx, project, environment)
 	if err != nil {
 		return model.MockScenario{}, err
 	}
-	result, err := s.db.ExecContext(ctx, `
-DELETE FROM mock_scenario_routes WHERE environment_key = ? AND scenario_name = ? COLLATE NOCASE AND name = ? COLLATE NOCASE`, key, scenarioName, routeName)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.MockScenario{}, err
 	}
-	count, _ := result.RowsAffected()
-	if count == 0 {
-		return model.MockScenario{}, ErrNotFound
+	defer tx.Rollback()
+	actual, err := mockVersionTx(ctx, tx, key, scenarioName)
+	if err != nil {
+		return model.MockScenario{}, err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE mock_scenarios SET modified_at = ? WHERE environment_key = ? AND name = ? COLLATE NOCASE`, nowText(), key, scenarioName); err != nil {
+	if err := checkResourceVersion(expected, actual); err != nil {
+		return model.MockScenario{}, err
+	}
+	var service string
+	if err := tx.QueryRowContext(ctx, `SELECT service_name FROM mock_scenario_routes WHERE environment_key=? AND scenario_name=? COLLATE NOCASE AND name=? COLLATE NOCASE`, key, scenarioName, routeName).Scan(&service); err != nil {
+		return model.MockScenario{}, mapSQLError(err)
+	}
+	var active bool
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM mock_scenario_activations WHERE environment_key=? AND scenario_name=? COLLATE NOCASE)`, key, scenarioName).Scan(&active); err != nil {
+		return model.MockScenario{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM mock_scenario_routes WHERE environment_key=? AND scenario_name=? COLLATE NOCASE AND service_name=? COLLATE NOCASE`, key, scenarioName, service).Scan(&count); err != nil {
+		return model.MockScenario{}, err
+	}
+	if active && count == 1 {
+		return model.MockScenario{}, fmt.Errorf("disable the mock scenario before deleting the final route for a service: %w", ErrConflict)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mock_scenario_routes WHERE environment_key=? AND scenario_name=? COLLATE NOCASE AND name=? COLLATE NOCASE`, key, scenarioName, routeName); err != nil {
+		return model.MockScenario{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE mock_scenarios SET modified_at=? WHERE environment_key=? AND name=? COLLATE NOCASE`, nowText(), key, scenarioName); err != nil {
+		return model.MockScenario{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return model.MockScenario{}, err
 	}
 	return s.MockScenario(ctx, project, environment, scenarioName)
@@ -309,14 +347,18 @@ WHERE environment_key = ? AND service_name = ? COLLATE NOCASE`, key, service).Sc
 }
 
 func (s *Store) hydrateMockScenario(ctx context.Context, environmentKey string, scenario *model.MockScenario) error {
-	scenario.Activation = model.MockScenarioActivation{TargetServices: []string{}, ActiveServices: []string{}}
 	routes, err := s.mockRoutes(ctx, environmentKey, scenario.Name)
 	if err != nil {
 		return err
 	}
 	scenario.Routes = routes
+	return s.hydrateMockActivation(ctx, environmentKey, scenario)
+}
+
+func (s *Store) hydrateMockActivation(ctx context.Context, environmentKey string, scenario *model.MockScenario) error {
+	scenario.Activation = model.MockScenarioActivation{TargetServices: []string{}, ActiveServices: []string{}}
 	targets := map[string]string{}
-	for _, route := range routes {
+	for _, route := range scenario.Routes {
 		targets[strings.ToLower(route.Service)] = route.Service
 	}
 	for _, service := range targets {
@@ -370,10 +412,15 @@ ORDER BY a.service_name COLLATE NOCASE`, environmentKey, scenario.Name)
 }
 
 func (s *Store) mockRoutes(ctx context.Context, environmentKey, scenarioName string) ([]model.MockRoute, error) {
+	return s.mockRoutesMatching(ctx, environmentKey, scenarioName, "")
+}
+
+func (s *Store) mockRoutesMatching(ctx context.Context, environmentKey, scenarioName, routeName string) ([]model.MockRoute, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT name, service_name, method, path, query_json, status, headers_json, body, delay_ms, enabled, created_at, modified_at
 FROM mock_scenario_routes WHERE environment_key = ? AND scenario_name = ? COLLATE NOCASE
-ORDER BY service_name COLLATE NOCASE, name COLLATE NOCASE`, environmentKey, scenarioName)
+AND (? = '' OR name = ? COLLATE NOCASE)
+ORDER BY service_name COLLATE NOCASE, name COLLATE NOCASE`, environmentKey, scenarioName, routeName, routeName)
 	if err != nil {
 		return nil, err
 	}

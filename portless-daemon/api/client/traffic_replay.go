@@ -56,6 +56,14 @@ func (c *Client) TrafficReplay(ctx context.Context, project, environment string,
 	return result, err
 }
 
+// TrafficReplayStatus reads payload-free workspace destinations and admission receipts.
+func (c *Client) TrafficReplayStatus(ctx context.Context, project, environment string, number int64, expected contract.TrafficReplayIdentity) (contract.TrafficReplayStatus, error) {
+	values := url.Values{"expectedCreatedAt": {expected.CreatedAt.Format(time.RFC3339Nano)}, "expectedDaemonStartedAt": {expected.DaemonStartedAt.Format(time.RFC3339Nano)}}
+	var result contract.TrafficReplayStatus
+	err := c.do(ctx, http.MethodGet, replayPath(project, environment, number)+"/status?"+values.Encode(), nil, &result)
+	return result, err
+}
+
 // TouchTrafficReplay records user activity without preparing or sending an application request.
 func (c *Client) TouchTrafficReplay(ctx context.Context, project, environment string, number int64, expected contract.TrafficReplayIdentity) error {
 	return c.do(ctx, http.MethodPost, replayPath(project, environment, number)+"/activity", expected, nil)

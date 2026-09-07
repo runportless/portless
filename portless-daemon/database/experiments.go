@@ -39,6 +39,7 @@ func (s *Store) CreateRecording(ctx context.Context, recording model.Recording) 
 	if recording.StartedAt.IsZero() {
 		recording.StartedAt = time.Now().UTC()
 	}
+	recording.StartedAt = recording.StartedAt.UTC()
 	if recording.MaxEvents <= 0 {
 		recording.MaxEvents = DefaultRecordingEventLimit
 	}
@@ -168,7 +169,7 @@ WHERE environment_key = ? AND name = ? COLLATE NOCASE AND status = 'active'`, st
 }
 
 // DeleteRecording removes a recording and its captured traffic atomically.
-func (s *Store) DeleteRecording(ctx context.Context, selector, name string) error {
+func (s *Store) DeleteRecording(ctx context.Context, selector, name string, expected *model.ResourceVersion) error {
 	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
@@ -178,9 +179,14 @@ func (s *Store) DeleteRecording(ctx context.Context, selector, name string) erro
 		return err
 	}
 	defer tx.Rollback()
-	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM recordings WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name).Scan(&status); err != nil {
+	var status, started, parent string
+	actual := model.ResourceVersion{}
+	if err := tx.QueryRowContext(ctx, `SELECT r.status,r.started_at,e.created_at FROM recordings r JOIN environments e ON e.private_key=r.environment_key WHERE r.environment_key = ? AND r.name = ? COLLATE NOCASE`, environmentKey, name).Scan(&status, &started, &parent); err != nil {
 		return mapSQLError(err)
+	}
+	actual.CreatedAt, actual.ParentCreatedAt = parseTime(started), parseTime(parent)
+	if err := checkResourceVersion(expected, actual); err != nil {
+		return err
 	}
 	if status == "active" {
 		return fmt.Errorf("active recording must be stopped before deletion")
@@ -386,37 +392,69 @@ func (s *Store) DisableFault(ctx context.Context, selector, name string) error {
 }
 
 // EnableFault activates a rule and advances its revision.
-func (s *Store) EnableFault(ctx context.Context, selector, name string) error {
-	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+func (s *Store) EnableFault(ctx context.Context, selector, name string, expected *model.ResourceVersion) error {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE fault_rules SET enabled = 1, enabled_at = ?, revision = revision + 1 WHERE environment_key = ? AND name = ? COLLATE NOCASE`, nowText(), environmentKey, name)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	changed, _ := result.RowsAffected()
-	if changed == 0 {
-		return ErrNotFound
+	defer tx.Rollback()
+	actual, expires, enabled, err := faultVersionTx(ctx, tx, key, name)
+	if err != nil {
+		return err
 	}
-	return nil
+	if err := checkResourceVersion(expected, actual); err != nil {
+		return err
+	}
+	if expires != nil && !expires.After(time.Now()) {
+		return fmt.Errorf("fault has expired: %w", ErrConflict)
+	}
+	if !enabled {
+		if _, err := tx.ExecContext(ctx, `UPDATE fault_rules SET enabled=1,enabled_at=?,revision=revision+1 WHERE environment_key=? AND name=? COLLATE NOCASE`, nowText(), key, name); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
-// DeleteFault permanently removes a fault rule.
-func (s *Store) DeleteFault(ctx context.Context, selector, name string) error {
-	environmentKey, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
+// DeleteFault permanently removes a fault rule after validating its reviewed identity.
+func (s *Store) DeleteFault(ctx context.Context, selector, name string, expected *model.ResourceVersion) error {
+	key, err := s.PrivateEnvironmentKeyForSelector(ctx, selector)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM fault_rules WHERE environment_key = ? AND name = ? COLLATE NOCASE`, environmentKey, name)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	changed, _ := result.RowsAffected()
-	if changed == 0 {
-		return ErrNotFound
+	defer tx.Rollback()
+	actual, _, _, err := faultVersionTx(ctx, tx, key, name)
+	if err != nil {
+		return err
 	}
-	return nil
+	if err := checkResourceVersion(expected, actual); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM fault_rules WHERE environment_key=? AND name=? COLLATE NOCASE`, key, name); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func faultVersionTx(ctx context.Context, tx *sql.Tx, key, name string) (model.ResourceVersion, *time.Time, bool, error) {
+	var result model.ResourceVersion
+	var created, parent string
+	var expires sql.NullString
+	var enabled bool
+	err := tx.QueryRowContext(ctx, `SELECT f.created_at,f.revision,f.expires_at,f.enabled,e.created_at FROM fault_rules f JOIN environments e ON e.private_key=f.environment_key WHERE f.environment_key=? AND f.name=? COLLATE NOCASE`, key, name).Scan(&created, &result.Revision, &expires, &enabled, &parent)
+	if err != nil {
+		return result, nil, false, mapSQLError(err)
+	}
+	result.CreatedAt, result.ParentCreatedAt = parseTime(created), parseTime(parent)
+	return result, parseOptionalTime(expires), enabled, nil
 }
 
 // DisableAllFaults deactivates every enabled rule and returns the affected count.

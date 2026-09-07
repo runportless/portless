@@ -12,27 +12,27 @@ import (
 )
 
 func (r *runtime) registerTrafficControlTools(server *mcp.Server) {
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_start_recording",
-		"Start a named metadata-only traffic recording with a mandatory finite duration no longer than one hour.",
+		"Start a named bounded recording with a mandatory finite duration no longer than one hour. Payload capture requires sensitive-traffic permission.",
 		false,
 	), r.startRecording)
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_stop_recording",
 		"Stop one named recording while retaining its captured events and metadata.",
 		false,
 	), r.stopRecording)
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_apply_fault",
 		"Create a named scoped fault with a mandatory finite duration no longer than one hour and at least one explicit effect.",
 		false,
 	), r.applyFault)
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_disable_fault",
 		"Disable one named fault without deleting its audit history.",
 		false,
 	), r.disableFault)
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_disable_all_faults",
 		"Atomically disable all active fault rules in one scoped environment without deleting history.",
 		false,
@@ -41,6 +41,15 @@ func (r *runtime) registerTrafficControlTools(server *mcp.Server) {
 
 func (r *runtime) startRecording(ctx context.Context, _ *mcp.CallToolRequest, input startRecordingInput) (*mcp.CallToolResult, recordingOutput, error) {
 	var output recordingOutput
+	if err := requireSensitive(r, input.CapturePayloads); err != nil {
+		return nil, output, r.toolError(err)
+	}
+	if input.MaxPayloadBytes < 0 || input.MaxPayloadBytes > 1<<20 || (!input.CapturePayloads && input.MaxPayloadBytes != 0) {
+		return nil, output, r.toolError(codedError{code: "INVALID_ARGUMENT", message: "maxPayloadBytes requires capturePayloads and must be at most 1 MiB"})
+	}
+	if input.CapturePayloads && input.MaxPayloadBytes == 0 {
+		input.MaxPayloadBytes = 64 << 10
+	}
 	if err := validateArtifactName(input.Recording, "recording"); err != nil {
 		return nil, output, r.toolError(err)
 	}
@@ -78,7 +87,7 @@ func (r *runtime) startRecording(ctx context.Context, _ *mcp.CallToolRequest, in
 	expires := time.Now().UTC().Add(time.Duration(input.DurationSeconds) * time.Second)
 	requested := contract.Recording{
 		Name: input.Recording, Source: input.Source, Target: input.Target,
-		CapturePayloads: false, MaxEvents: input.MaxEvents, ExpiresAt: &expires,
+		CapturePayloads: input.CapturePayloads, MaxPayloadBytes: input.MaxPayloadBytes, MaxEvents: input.MaxEvents, ExpiresAt: &expires,
 	}
 	recording, err := selected.client.StartRecording(ctx, selected.project, selected.environment, requested)
 	if err != nil {
@@ -87,7 +96,7 @@ func (r *runtime) startRecording(ctx context.Context, _ *mcp.CallToolRequest, in
 			return nil, output, r.toolError(err)
 		}
 		recording, err = selected.client.Recording(ctx, selected.project, selected.environment, input.Recording)
-		if err != nil || recording.Source != input.Source || recording.Target != input.Target || recording.MaxEvents != input.MaxEvents || recording.Status != "active" {
+		if err != nil || recording.Source != input.Source || recording.Target != input.Target || recording.MaxEvents != input.MaxEvents || recording.Status != "active" || recording.CapturePayloads != input.CapturePayloads || (input.CapturePayloads && recording.MaxPayloadBytes != input.MaxPayloadBytes) {
 			if err == nil {
 				err = codedError{code: "IDEMPOTENCY_CONFLICT", message: "recording name already exists with different bounds or scope"}
 			}

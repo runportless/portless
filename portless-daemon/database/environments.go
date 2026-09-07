@@ -95,7 +95,7 @@ func (s *Store) CloneEnvironment(ctx context.Context, projectName, sourceName, t
 		return model.Environment{}, err
 	}
 	if err := s.cloneMockScenarios(ctx, projectName, sourceName, targetName); err != nil {
-		_ = s.ForgetEnvironment(context.Background(), projectName, targetName)
+		_ = s.ForgetEnvironment(context.Background(), projectName, targetName, nil)
 		return model.Environment{}, err
 	}
 	return s.Environment(ctx, created.Project, created.Name)
@@ -227,7 +227,7 @@ WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, projectName, env
 }
 
 // ReplaceEnvironmentConfiguration atomically replaces stopped-environment configuration at a revision.
-func (s *Store) ReplaceEnvironmentConfiguration(ctx context.Context, projectName, environmentName string, expectedRevision int64, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
+func (s *Store) ReplaceEnvironmentConfiguration(ctx context.Context, projectName, environmentName string, expectedRevision int64, definition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding, expected *model.ResourceVersion) (model.Environment, error) {
 	modelJSON, err := encodeProjectModel(definition)
 	if err != nil {
 		return model.Environment{}, err
@@ -241,6 +241,9 @@ func (s *Store) ReplaceEnvironmentConfiguration(ctx context.Context, projectName
 		return model.Environment{}, err
 	}
 	defer tx.Rollback()
+	if err := checkConfigurationTx(ctx, tx, projectName, environmentName, expected, false); err != nil {
+		return model.Environment{}, err
+	}
 	var key string
 	var revision int64
 	var status string
@@ -427,7 +430,7 @@ ON CONFLICT(environment_key, service_name) DO NOTHING`, key, service.Name, model
 }
 
 // ReplaceProjectAndEnvironmentConfiguration atomically extends project topology and one stopped environment.
-func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environmentName string, expectedEnvironmentRevision int64, environmentDefinition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding) (model.Environment, error) {
+func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environmentName string, expectedEnvironmentRevision int64, environmentDefinition model.ProjectModel, sources []model.SourceBinding, bindings []model.ComponentBinding, expected *model.ResourceVersion) (model.Environment, error) {
 	projectDefinition.SuggestedName = projectName
 	projectJSON, err := encodeProjectModel(logicalDefinition(projectDefinition))
 	if err != nil {
@@ -450,6 +453,9 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 		return model.Environment{}, err
 	}
 	defer tx.Rollback()
+	if err := checkConfigurationTx(ctx, tx, projectName, "", expected, false); err != nil {
+		return model.Environment{}, err
+	}
 	var projectKey string
 	var projectRevision int64
 	if err := tx.QueryRowContext(ctx, `SELECT private_key, revision FROM projects WHERE name = ? COLLATE NOCASE`, projectName).Scan(&projectKey, &projectRevision); err != nil {
@@ -516,7 +522,7 @@ func (s *Store) ReplaceProjectAndEnvironmentConfiguration(ctx context.Context, p
 // ReplaceProjectConfiguration atomically replaces one project's logical
 // topology and every stopped environment derived from it. Removed service
 // names are used to discard service-scoped mocks and disable obsolete faults.
-func (s *Store) ReplaceProjectConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environments []ProjectEnvironmentConfiguration, removedServices []string) ([]model.Environment, error) {
+func (s *Store) ReplaceProjectConfiguration(ctx context.Context, projectName string, expectedProjectRevision int64, projectDefinition model.ProjectModel, projectSources []model.ProjectSource, environments []ProjectEnvironmentConfiguration, removedServices []string, expected *model.ResourceVersion) ([]model.Environment, error) {
 	projectDefinition.SuggestedName = projectName
 	projectJSON, err := encodeProjectModel(logicalDefinition(projectDefinition))
 	if err != nil {
@@ -556,6 +562,9 @@ func (s *Store) ReplaceProjectConfiguration(ctx context.Context, projectName str
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := checkConfigurationTx(ctx, tx, projectName, "", expected, false); err != nil {
+		return nil, err
+	}
 	var projectKey string
 	var projectRevision int64
 	if err := tx.QueryRowContext(ctx, `SELECT private_key, revision FROM projects WHERE name = ? COLLATE NOCASE`, projectName).Scan(&projectKey, &projectRevision); err != nil {
@@ -682,7 +691,7 @@ func (s *Store) SetEnvironmentBinding(ctx context.Context, projectName, environm
 	if err != nil {
 		return model.Environment{}, err
 	}
-	return s.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, definition, environment.Sources, environment.Bindings)
+	return s.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, definition, environment.Sources, environment.Bindings, nil)
 }
 
 // SetContextSelection binds the closest registered source root containing path to an environment.
@@ -800,27 +809,24 @@ func (s *Store) ClearContextSelection(ctx context.Context, path string) (bool, e
 }
 
 // ForgetEnvironment deletes a stopped environment and all cascaded application state.
-func (s *Store) ForgetEnvironment(ctx context.Context, projectName, environmentName string) error {
-	environment, err := s.Environment(ctx, projectName, environmentName)
+func (s *Store) ForgetEnvironment(ctx context.Context, projectName, environmentName string, expected *model.ResourceVersion) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if environment.Status != model.EnvironmentStopped {
-		return errors.New("environment must be stopped before it can be forgotten")
+	defer tx.Rollback()
+	if err := checkConfigurationTx(ctx, tx, projectName, environmentName, expected, true); err != nil {
+		return err
 	}
-	key, err := s.PrivateEnvironmentKey(ctx, projectName, environmentName)
+	result, err := tx.ExecContext(ctx, `DELETE FROM environments WHERE private_key = (SELECT e.private_key FROM environments e JOIN projects p ON p.private_key=e.project_key WHERE p.name=? COLLATE NOCASE AND e.name=? COLLATE NOCASE)`, projectName, environmentName)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM environments WHERE private_key = ?`, key)
-	if err != nil {
-		return err
-	}
-	changed, _ := result.RowsAffected()
-	if changed == 0 {
+	count, _ := result.RowsAffected()
+	if count == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // SetEnvironmentStatus updates an environment's aggregate runtime status and reason.

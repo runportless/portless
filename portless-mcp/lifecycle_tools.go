@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,17 +16,17 @@ import (
 )
 
 func (r *runtime) registerLifecycleTools(server *mcp.Server) {
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_start_environment",
 		"Start an existing scoped environment, optionally selecting explicit debug services. This never discovers or creates a project.",
 		false,
 	), r.startEnvironment)
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_stop_environment",
 		"Stop exactly one scoped environment while always preserving managed volumes and retained data.",
 		true,
 	), r.stopEnvironment)
-	mcp.AddTool(server, mutationTool(
+	registerTool(r, server, mutationTool(
 		"portless_change_service_state",
 		"Start, stop, restart, debug, or manage one explicitly named service. The daemon validates provider and debugger eligibility.",
 		true,
@@ -62,18 +63,7 @@ func (r *runtime) startEnvironment(ctx context.Context, _ *mcp.CallToolRequest, 
 	operation, err := selected.client.UpEnvironment(ctx, selected.project, selected.environment, contract.UpRequest{
 		DebugServices: nonNilStrings(input.DebugServices), Managed: input.Managed,
 	}, persistedKey)
-	if err != nil {
-		return nil, output, r.toolError(err)
-	}
-	operation, timedOut, err := waitForOperation(ctx, selected.client, operation, wait)
-	if err != nil {
-		return nil, output, r.toolError(err)
-	}
-	output = lifecycleOutput{Project: selected.project, Environment: selected.environment, UntrustedData: true, Operation: operation, IdempotencyKey: callerKey, TimedOutWaiting: timedOut}
-	if err := r.checkOutput(output); err != nil {
-		return nil, lifecycleOutput{}, r.toolError(err)
-	}
-	return nil, output, nil
+	return r.lifecycleResponse(ctx, selected, operation, callerKey, wait, err)
 }
 
 func (r *runtime) stopEnvironment(ctx context.Context, _ *mcp.CallToolRequest, input stopEnvironmentInput) (*mcp.CallToolResult, lifecycleOutput, error) {
@@ -96,18 +86,7 @@ func (r *runtime) stopEnvironment(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, output, r.toolError(err)
 	}
 	operation, err := selected.client.DownEnvironment(ctx, selected.project, selected.environment, false, persistedKey)
-	if err != nil {
-		return nil, output, r.toolError(err)
-	}
-	operation, timedOut, err := waitForOperation(ctx, selected.client, operation, wait)
-	if err != nil {
-		return nil, output, r.toolError(err)
-	}
-	output = lifecycleOutput{Project: selected.project, Environment: selected.environment, UntrustedData: true, Operation: operation, IdempotencyKey: callerKey, TimedOutWaiting: timedOut}
-	if err := r.checkOutput(output); err != nil {
-		return nil, lifecycleOutput{}, r.toolError(err)
-	}
-	return nil, output, nil
+	return r.lifecycleResponse(ctx, selected, operation, callerKey, wait, err)
 }
 
 func (r *runtime) changeServiceState(ctx context.Context, _ *mcp.CallToolRequest, input serviceStateInput) (*mcp.CallToolResult, lifecycleOutput, error) {
@@ -139,18 +118,7 @@ func (r *runtime) changeServiceState(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, output, r.toolError(err)
 	}
 	operation, err := selected.client.ServiceAction(ctx, selected.project, selected.environment, input.Service, input.Action, persistedKey)
-	if err != nil {
-		return nil, output, r.toolError(err)
-	}
-	operation, timedOut, err := waitForOperation(ctx, selected.client, operation, wait)
-	if err != nil {
-		return nil, output, r.toolError(err)
-	}
-	output = lifecycleOutput{Project: selected.project, Environment: selected.environment, UntrustedData: true, Operation: operation, IdempotencyKey: callerKey, TimedOutWaiting: timedOut}
-	if err := r.checkOutput(output); err != nil {
-		return nil, lifecycleOutput{}, r.toolError(err)
-	}
-	return nil, output, nil
+	return r.lifecycleResponse(ctx, selected, operation, callerKey, wait, err)
 }
 
 func waitDuration(value *int) (time.Duration, error) {
@@ -198,4 +166,35 @@ func prepareIdempotency(tool, target, callerKey string) (string, string, error) 
 	}
 	digest := sha256.Sum256([]byte(tool + "\x00" + target + "\x00" + callerKey))
 	return callerKey, "mcp-" + hex.EncodeToString(digest[:]), nil
+}
+
+func uncertainMutation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiError *client.ClientError
+	return !errors.As(err, &apiError) || apiError.Status >= 500
+}
+func (r *runtime) lifecycleResponse(ctx context.Context, selected selectedEnvironment, operation contract.Operation, key string, wait time.Duration, admissionError error) (*mcp.CallToolResult, lifecycleOutput, error) {
+	output := lifecycleOutput{Project: selected.project, Environment: selected.environment, UntrustedData: true, Operation: operation, IdempotencyKey: key}
+	if admissionError != nil {
+		if !uncertainMutation(admissionError) {
+			return nil, lifecycleOutput{}, r.toolError(admissionError)
+		}
+		output.AdmissionUnknown = true
+		output.Warning = "Admission response was lost. Inspect operations before explicitly retrying with this idempotency key."
+		return nil, output, nil
+	}
+	current, pending, err := waitForOperation(ctx, selected.client, operation, wait)
+	if err != nil {
+		output.TimedOutWaiting = true
+		output.Warning = "Waiting ended after admission; inspect the returned operation."
+	} else {
+		output.Operation = current
+		output.TimedOutWaiting = pending
+	}
+	if err := r.checkOutput(output); err != nil {
+		output.Operation.Error = "Operation details exceeded the display budget; inspect the operation by number."
+	}
+	return nil, output, nil
 }

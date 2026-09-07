@@ -108,15 +108,19 @@ type serviceStateInput struct {
 }
 
 type lifecycleOutput struct {
-	Project         string             `json:"project"`
-	Environment     string             `json:"environment"`
-	UntrustedData   bool               `json:"untrustedData"`
-	Operation       contract.Operation `json:"operation"`
-	IdempotencyKey  string             `json:"idempotencyKey"`
-	TimedOutWaiting bool               `json:"timedOutWaiting"`
+	AdmissionUnknown bool               `json:"admissionUnknown"`
+	Warning          string             `json:"warning,omitempty"`
+	Project          string             `json:"project"`
+	Environment      string             `json:"environment"`
+	UntrustedData    bool               `json:"untrustedData"`
+	Operation        contract.Operation `json:"operation"`
+	IdempotencyKey   string             `json:"idempotencyKey"`
+	TimedOutWaiting  bool               `json:"timedOutWaiting"`
 }
 
 type startRecordingInput struct {
+	CapturePayloads bool   `json:"capturePayloads,omitempty"`
+	MaxPayloadBytes int64  `json:"maxPayloadBytes,omitempty" jsonschema:"per-exchange capture bytes, default 65536, maximum 1048576; requires capturePayloads"`
 	Environment     string `json:"environment" jsonschema:"target environment in project/environment form"`
 	Recording       string `json:"recording" jsonschema:"public recording name"`
 	Source          string `json:"source,omitempty" jsonschema:"optional source service"`
@@ -387,24 +391,46 @@ type logEntryView struct {
 	Truncated  bool      `json:"truncated"`
 }
 
+type tcpSummaryView struct {
+	Kind                 string `json:"kind"`
+	ApplicationProtocol  string `json:"applicationProtocol"`
+	Operation            string `json:"operation"`
+	Inspection           string `json:"inspection"`
+	Outcome              string `json:"outcome"`
+	RequestMessageCount  int    `json:"requestMessageCount"`
+	ResponseMessageCount int    `json:"responseMessageCount"`
+	RequestTruncated     bool   `json:"requestTruncated"`
+	ResponseTruncated    bool   `json:"responseTruncated"`
+}
+
 type trafficSummaryView struct {
-	Sequence             int64     `json:"sequence"`
-	Protocol             string    `json:"protocol"`
-	Source               string    `json:"source"`
-	Target               string    `json:"target"`
-	TargetProvider       string    `json:"targetProvider,omitempty"`
-	RemoteClassification string    `json:"remoteClassification,omitempty"`
-	StartedAt            time.Time `json:"startedAt"`
-	CompletedAt          time.Time `json:"completedAt"`
-	Method               string    `json:"method,omitempty"`
-	Path                 string    `json:"path,omitempty"`
-	Status               int       `json:"status,omitempty"`
-	DurationMS           int64     `json:"durationMs"`
-	RequestBytes         int64     `json:"requestBytes"`
-	ResponseBytes        int64     `json:"responseBytes"`
-	Fault                string    `json:"fault,omitempty"`
-	Recording            string    `json:"recording,omitempty"`
-	Error                string    `json:"error,omitempty"`
+	Background           bool                              `json:"background"`
+	RequestKind          string                            `json:"requestKind,omitempty"`
+	MockScenario         string                            `json:"mockScenario,omitempty"`
+	MockRoute            string                            `json:"mockRoute,omitempty"`
+	TraceID              string                            `json:"traceId,omitempty"`
+	SpanID               string                            `json:"spanId,omitempty"`
+	ParentSpanID         string                            `json:"parentSpanId,omitempty"`
+	TraceContextSource   string                            `json:"traceContextSource,omitempty"`
+	Replay               *contract.TrafficReplayProvenance `json:"replay,omitempty"`
+	TCP                  *tcpSummaryView                   `json:"tcp,omitempty"`
+	Sequence             int64                             `json:"sequence"`
+	Protocol             string                            `json:"protocol"`
+	Source               string                            `json:"source"`
+	Target               string                            `json:"target"`
+	TargetProvider       string                            `json:"targetProvider,omitempty"`
+	RemoteClassification string                            `json:"remoteClassification,omitempty"`
+	StartedAt            time.Time                         `json:"startedAt"`
+	CompletedAt          time.Time                         `json:"completedAt"`
+	Method               string                            `json:"method,omitempty"`
+	Path                 string                            `json:"path,omitempty"`
+	Status               int                               `json:"status,omitempty"`
+	DurationMS           int64                             `json:"durationMs"`
+	RequestBytes         int64                             `json:"requestBytes"`
+	ResponseBytes        int64                             `json:"responseBytes"`
+	Fault                string                            `json:"fault,omitempty"`
+	Recording            string                            `json:"recording,omitempty"`
+	Error                string                            `json:"error,omitempty"`
 }
 
 func environmentResult(value contract.Environment) environmentView {
@@ -501,13 +527,21 @@ func endpointResult(kind, protocol, host string, port int, url string) endpointV
 }
 
 func trafficSummaryResult(value contract.TrafficExchange) trafficSummaryView {
-	return trafficSummaryView{
+	result := trafficSummaryView{
+		Background: value.Background, RequestKind: string(value.RequestKind), MockScenario: value.MockScenario, MockRoute: value.MockRoute,
+		TraceID: value.TraceID, SpanID: value.SpanID, ParentSpanID: value.ParentSpanID, TraceContextSource: string(value.TraceContextSource), Replay: value.Replay,
 		Sequence: value.Sequence, Protocol: string(value.Protocol), Source: value.Source, Target: value.Target,
 		TargetProvider: string(value.TargetProvider), RemoteClassification: string(value.RemoteClassification),
-		StartedAt: value.StartedAt, CompletedAt: value.CompletedAt, Method: value.Method, Path: value.Path,
+		StartedAt: value.StartedAt, CompletedAt: value.CompletedAt, Method: value.Method, Path: safeTrafficPath(value.Path),
 		Status: value.Status, DurationMS: value.DurationMS, RequestBytes: value.RequestBytes,
 		ResponseBytes: value.ResponseBytes, Fault: value.Fault, Recording: value.Recording, Error: value.Error,
 	}
+	result.Error, _ = truncateUTF8(result.Error, 1024)
+	if value.TCP != nil {
+		tcp := value.TCP
+		result.TCP = &tcpSummaryView{Kind: string(tcp.Kind), ApplicationProtocol: string(tcp.ApplicationProtocol), Operation: tcp.Operation, Inspection: string(tcp.Inspection), Outcome: string(tcp.Outcome), RequestMessageCount: tcp.RequestMessageCount, ResponseMessageCount: tcp.ResponseMessageCount, RequestTruncated: tcp.RequestTruncated, ResponseTruncated: tcp.ResponseTruncated}
+	}
+	return result
 }
 
 func bounded(value, defaultValue, maximum int, label string) (int, error) {
@@ -609,6 +643,12 @@ func capabilityNames(config Config) []string {
 	if config.AllowTrafficControl {
 		result = append(result, "traffic-control")
 	}
+	if config.AllowReplay {
+		result = append(result, "replay")
+	}
+	if config.AllowConfiguration {
+		result = append(result, "configuration")
+	}
 	return result
 }
 
@@ -616,6 +656,8 @@ func scopeName(config Config) string {
 	switch {
 	case config.Environment != "":
 		return "environment:" + config.Environment
+	case config.Project != "":
+		return "project:" + config.Project
 	case config.AllEnvironments:
 		return "all-environments"
 	default:

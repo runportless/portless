@@ -72,7 +72,7 @@ func TestSourceRelocationPreservesRuntimeAndRejectsActiveOrStaleWrites(t *testin
 	if err := store.SetEnvironmentStatus(ctx, "billing", "local", model.EnvironmentStopped, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReplaceEnvironmentConfiguration(ctx, "billing", "local", updated.Revision, definition, updated.Sources, updated.Bindings); err != nil {
+	if _, err := store.ReplaceEnvironmentConfiguration(ctx, "billing", "local", updated.Revision, definition, updated.Sources, updated.Bindings, nil); err != nil {
 		t.Fatal(err)
 	}
 	if selected, err := store.ContextSelection(ctx, source.Path); err != nil || selected.Name != "local" {

@@ -16,8 +16,9 @@ import (
 
 // SourceInput identifies a named filesystem source used to create a project.
 type SourceInput struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	AllowedRoot string `json:"allowedRoot,omitempty"`
 }
 
 // ProjectSourceRemoval describes the project-wide topology removed with one
@@ -30,14 +31,17 @@ type ProjectSourceRemoval struct {
 }
 
 // Discover resolves a path to an existing environment or creates a single-source project.
-func (s *Service) Discover(ctx context.Context, path, requestedName string) (model.Project, model.Environment, []string, error) {
-	result, err := s.discoverer.Discover(ctx, path)
+func (s *Service) Discover(ctx context.Context, path, requestedName string, policy DiscoveryPolicy, actor string) (model.Project, model.Environment, []string, error) {
+	result, err := s.discoverSource(ctx, path, policy.AllowedRoot)
 	if err != nil {
 		return model.Project{}, model.Environment{}, nil, err
 	}
 	if known, err := s.database.EnvironmentsByPath(ctx, result.Root); err == nil && len(known) > 0 {
 		environment := known[0]
 		project, projectErr := s.Project(ctx, environment.Project)
+		if policy.RequiredProject != "" && !strings.EqualFold(environment.Project, policy.RequiredProject) {
+			return model.Project{}, model.Environment{}, nil, errors.New("discovered project is outside the configured project scope")
+		}
 		return project, s.decorateEnvironment(environment), result.Warnings, projectErr
 	} else if err != nil {
 		return model.Project{}, model.Environment{}, nil, err
@@ -54,11 +58,14 @@ func (s *Service) Discover(ctx context.Context, path, requestedName string) (mod
 	if model.ValidateSourceName(sourceName) != nil {
 		sourceName = name
 	}
-	return s.CreateProject(ctx, name, []SourceInput{{Name: sourceName, Path: result.Root}})
+	if policy.RequiredProject != "" && !strings.EqualFold(name, policy.RequiredProject) {
+		return model.Project{}, model.Environment{}, nil, errors.New("project name is outside the configured project scope")
+	}
+	return s.CreateProject(ctx, name, []SourceInput{{Name: sourceName, Path: result.Root, AllowedRoot: policy.AllowedRoot}}, policy.RequiredAssociationPath, actor)
 }
 
 // CreateProject discovers the supplied sources and creates a project with its local environment.
-func (s *Service) CreateProject(ctx context.Context, name string, inputs []SourceInput) (model.Project, model.Environment, []string, error) {
+func (s *Service) CreateProject(ctx context.Context, name string, inputs []SourceInput, requiredAssociationPath, actor string) (model.Project, model.Environment, []string, error) {
 	name = model.NormalizeDNSName(name)
 	if err := model.ValidateProjectName(name); err != nil {
 		return model.Project{}, model.Environment{}, nil, err
@@ -76,13 +83,28 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 		if !filepath.IsAbs(input.Path) {
 			return model.Project{}, model.Environment{}, warnings, fmt.Errorf("source %s path must be absolute", input.Name)
 		}
-		result, err := s.discoverer.Discover(ctx, input.Path)
+		result, err := s.discoverSource(ctx, input.Path, input.AllowedRoot)
 		if err != nil {
 			return model.Project{}, model.Environment{}, warnings, fmt.Errorf("discover source %s: %w", input.Name, err)
 		}
 		warnings = append(warnings, result.Warnings...)
 		now := time.Now().UTC()
 		sources = append(sources, model.SourceBinding{Name: input.Name, Path: result.Root, Status: "ready", Warnings: result.Warnings, CreatedAt: now, ScannedAt: now, Definition: result.Model})
+	}
+	if requiredAssociationPath != "" {
+		if _, err := s.database.ContextSelection(ctx, requiredAssociationPath); err == nil {
+			return model.Project{}, model.Environment{}, warnings, errors.New("creation is outside the workspace's saved environment selection; use an explicit project or installation scope")
+		} else if !errors.Is(err, database.ErrNotFound) {
+			return model.Project{}, model.Environment{}, warnings, fmt.Errorf("inspect workspace selection before creation: %w", err)
+		}
+		associated := false
+		for _, source := range sources {
+			relative, err := filepath.Rel(source.Path, requiredAssociationPath)
+			associated = associated || (err == nil && filepath.IsLocal(relative))
+		}
+		if !associated {
+			return model.Project{}, model.Environment{}, warnings, errors.New("creation requires a source associated with the startup workspace")
+		}
 	}
 	definition, projectSources, bindings, err := compiler.InitialProject(name, sources)
 	if err != nil {
@@ -97,22 +119,22 @@ func (s *Service) CreateProject(ctx context.Context, name string, inputs []Sourc
 	}
 	compiled := compiler.Compile(definition, sources, bindings)
 	if len(compiled.Issues) > 0 {
-		_ = s.database.ForgetProject(ctx, name)
+		_ = s.database.ForgetProject(ctx, name, nil)
 		return model.Project{}, model.Environment{}, warnings, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
 	environment, err := s.database.CreateEnvironment(ctx, name, "local", compiled.Definition, sources, compiled.Bindings)
 	if err != nil {
-		_ = s.database.ForgetProject(ctx, name)
+		_ = s.database.ForgetProject(ctx, name, nil)
 		return model.Project{}, model.Environment{}, warnings, err
 	}
 	scope := model.EnvironmentSelector(name, "local")
-	_, _ = s.timeline(ctx, scope, "CLI", "environment.discovered", scope, "info", "Discovered local environment", map[string]any{"sources": len(sources)})
+	_, _ = s.timeline(ctx, scope, actor, "environment.discovered", scope, "info", "Discovered local environment", map[string]any{"sources": len(sources)})
 	project, _ := s.database.Project(ctx, name)
 	return s.decorateProject(project), s.decorateEnvironment(environment), warnings, nil
 }
 
 // AddProjectSource discovers and atomically adds a source to a project and one environment.
-func (s *Service) AddProjectSource(ctx context.Context, projectName, environmentName, sourceName, path, actor string) (model.Project, model.Environment, []string, error) {
+func (s *Service) AddProjectSource(ctx context.Context, projectName, environmentName, sourceName, path, actor, allowedRoot string) (model.Project, model.Environment, []string, error) {
 	sourceName = model.NormalizeDNSName(sourceName)
 	if err := model.ValidateSourceName(sourceName); err != nil {
 		return model.Project{}, model.Environment{}, nil, err
@@ -133,7 +155,7 @@ func (s *Service) AddProjectSource(ctx context.Context, projectName, environment
 		return model.Project{}, model.Environment{}, nil, err
 	}
 
-	result, err := s.discoverer.Discover(ctx, path)
+	result, err := s.discoverSource(ctx, path, allowedRoot)
 	if err != nil {
 		return model.Project{}, model.Environment{}, nil, fmt.Errorf("discover source %s: %w", sourceName, err)
 	}
@@ -156,7 +178,7 @@ func (s *Service) AddProjectSource(ctx context.Context, projectName, environment
 	}
 	updated, err := s.database.ReplaceProjectAndEnvironmentConfiguration(
 		ctx, projectName, project.Revision, projectDefinition, projectSources,
-		environmentName, environment.Revision, compiled.Definition, sources, compiled.Bindings,
+		environmentName, environment.Revision, compiled.Definition, sources, compiled.Bindings, nil,
 	)
 	if err != nil {
 		return model.Project{}, model.Environment{}, result.Warnings, err
@@ -172,7 +194,7 @@ func (s *Service) AddProjectSource(ctx context.Context, projectName, environment
 
 // RemoveProjectSource removes one logical source and its owned topology from
 // every stopped environment in the project.
-func (s *Service) RemoveProjectSource(ctx context.Context, projectName, sourceName, actor string) (ProjectSourceRemoval, error) {
+func (s *Service) RemoveProjectSource(ctx context.Context, projectName, sourceName, actor string, expected *model.ResourceVersion) (ProjectSourceRemoval, error) {
 	if err := model.ValidateSourceName(sourceName); err != nil {
 		return ProjectSourceRemoval{}, err
 	}
@@ -230,7 +252,7 @@ func (s *Service) RemoveProjectSource(ctx context.Context, projectName, sourceNa
 			Sources: sources, Bindings: compiled.Bindings,
 		})
 	}
-	updatedEnvironments, err := s.database.ReplaceProjectConfiguration(ctx, projectName, project.Revision, definition, projectSources, configurations, removedServices)
+	updatedEnvironments, err := s.database.ReplaceProjectConfiguration(ctx, projectName, project.Revision, definition, projectSources, configurations, removedServices, expected)
 	if err != nil {
 		return ProjectSourceRemoval{}, err
 	}
@@ -263,7 +285,7 @@ func sourceRemovalCanBeSaved(issues []model.ConfigurationIssue) bool {
 }
 
 // Rescan refreshes a stopped environment from its currently bound filesystem sources.
-func (s *Service) Rescan(ctx context.Context, projectName, environmentName string) (model.Environment, []string, error) {
+func (s *Service) Rescan(ctx context.Context, projectName, environmentName string, actor string, expected *model.ResourceVersion) (model.Environment, []string, error) {
 	environment, err := s.database.Environment(ctx, projectName, environmentName)
 	if err != nil {
 		return model.Environment{}, nil, err
@@ -273,7 +295,7 @@ func (s *Service) Rescan(ctx context.Context, projectName, environmentName strin
 	}
 	var warnings []string
 	for index := range environment.Sources {
-		result, err := s.discoverer.Discover(ctx, environment.Sources[index].Path)
+		result, err := s.discoverSource(ctx, environment.Sources[index].Path, environment.Sources[index].Path)
 		if err != nil {
 			return model.Environment{}, warnings, fmt.Errorf("rescan source %s: %w", environment.Sources[index].Name, err)
 		}
@@ -299,35 +321,38 @@ func (s *Service) Rescan(ctx context.Context, projectName, environmentName strin
 		environment.Issues = compiled.Issues
 		return environment, warnings, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.database.ReplaceProjectAndEnvironmentConfiguration(ctx, projectName, project.Revision, projectDefinition, project.Sources, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings)
+	updated, err := s.database.ReplaceProjectAndEnvironmentConfiguration(ctx, projectName, project.Revision, projectDefinition, project.Sources, environmentName, environment.Revision, compiled.Definition, environment.Sources, compiled.Bindings, expected)
 	if err != nil {
 		return model.Environment{}, warnings, err
 	}
 	scope := model.EnvironmentSelector(projectName, environmentName)
-	_, _ = s.timeline(ctx, scope, "CLI", "environment.rescanned", scope, "info", "Environment sources refreshed", nil)
+	_, _ = s.timeline(ctx, scope, actor, "environment.rescanned", scope, "info", "Environment sources refreshed", nil)
 	return s.decorateEnvironment(updated), warnings, nil
 }
 
 // Rename changes a project name using optimistic concurrency.
-func (s *Service) Rename(ctx context.Context, projectName, newName string, revision int64, actor string) (model.Project, error) {
+func (s *Service) Rename(ctx context.Context, projectName, newName string, revision int64, actor string, expected *model.ResourceVersion) (model.Project, error) {
 	newName = model.NormalizeDNSName(newName)
 	if err := model.ValidateProjectName(newName); err != nil {
 		return model.Project{}, err
 	}
-	project, err := s.database.RenameProject(ctx, projectName, newName, revision)
+	project, err := s.database.RenameProject(ctx, projectName, newName, revision, expected)
 	if err != nil {
 		return model.Project{}, err
+	}
+	for _, environment := range project.Environments {
+		_, _ = s.timeline(ctx, model.EnvironmentSelector(project.Name, environment.Name), actor, "project.renamed", project.Name, "info", "Renamed project", map[string]any{"previousName": projectName})
 	}
 	return s.decorateProject(project), nil
 }
 
 // Forget removes a stopped project and all of its application state.
-func (s *Service) Forget(ctx context.Context, projectName string) error {
+func (s *Service) Forget(ctx context.Context, projectName string, expected *model.ResourceVersion) error {
 	environments, err := s.database.ListEnvironments(ctx, projectName)
 	if err != nil {
 		return err
 	}
-	if err := s.database.ForgetProject(ctx, projectName); err != nil {
+	if err := s.database.ForgetProject(ctx, projectName, expected); err != nil {
 		return err
 	}
 	for _, environment := range environments {
@@ -394,17 +419,18 @@ func (s *Service) Environment(ctx context.Context, projectName, environmentName 
 }
 
 // CloneEnvironment creates a stopped environment from another environment's bindings.
-func (s *Service) CloneEnvironment(ctx context.Context, projectName, from, name string) (model.Environment, error) {
+func (s *Service) CloneEnvironment(ctx context.Context, projectName, from, name, actor string) (model.Environment, error) {
 	created, err := s.database.CloneEnvironment(ctx, projectName, from, name)
 	if err != nil {
 		return model.Environment{}, err
 	}
+	_, _ = s.timeline(ctx, model.EnvironmentSelector(projectName, name), actor, "environment.cloned", name, "info", "Cloned environment", map[string]any{"from": from})
 	return s.decorateEnvironment(created), nil
 }
 
 // ForgetEnvironment removes a stopped environment and its retained application state.
-func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmentName string) error {
-	if err := s.database.ForgetEnvironment(ctx, projectName, environmentName); err != nil {
+func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmentName string, expected *model.ResourceVersion) error {
+	if err := s.database.ForgetEnvironment(ctx, projectName, environmentName, expected); err != nil {
 		return err
 	}
 	s.traffic.DisposeEnvironment(model.EnvironmentSelector(projectName, environmentName))
@@ -413,7 +439,7 @@ func (s *Service) ForgetEnvironment(ctx context.Context, projectName, environmen
 }
 
 // SetSourceCheckout rebinds one environment checkout to a newly discovered filesystem path.
-func (s *Service) SetSourceCheckout(ctx context.Context, projectName, environmentName, sourceName, path, actor string) (model.Environment, []string, error) {
+func (s *Service) SetSourceCheckout(ctx context.Context, projectName, environmentName, sourceName, path, actor, allowedRoot string) (model.Environment, []string, error) {
 	lock := s.projectLock(model.EnvironmentSelector(projectName, environmentName))
 	lock.Lock()
 	defer lock.Unlock()
@@ -442,7 +468,7 @@ func (s *Service) SetSourceCheckout(ctx context.Context, projectName, environmen
 	if environment.Status != model.EnvironmentStopped {
 		return model.Environment{}, nil, errors.New("environment must be stopped before a source changes")
 	}
-	result, err := s.discoverer.Discover(ctx, path)
+	result, err := s.discoverSource(ctx, path, allowedRoot)
 	if err != nil {
 		return model.Environment{}, nil, fmt.Errorf("discover source %s: %w", sourceName, err)
 	}
@@ -486,7 +512,7 @@ func (s *Service) SetSourceCheckout(ctx context.Context, projectName, environmen
 	if !configurationCanBeSaved(compiled.Issues) {
 		return model.Environment{}, result.Warnings, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, environment.Bindings)
+	updated, err := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, environment.Sources, environment.Bindings, nil)
 	if err != nil {
 		return model.Environment{}, result.Warnings, err
 	}
@@ -498,7 +524,7 @@ func (s *Service) SetSourceCheckout(ctx context.Context, projectName, environmen
 
 // RemoveSourceCheckout removes one environment's filesystem checkout without
 // changing the project source or any other environment.
-func (s *Service) RemoveSourceCheckout(ctx context.Context, projectName, environmentName, sourceName, actor string) (model.Environment, error) {
+func (s *Service) RemoveSourceCheckout(ctx context.Context, projectName, environmentName, sourceName, actor string, expected *model.ResourceVersion) (model.Environment, error) {
 	lock := s.projectLock(model.EnvironmentSelector(projectName, environmentName))
 	lock.Lock()
 	defer lock.Unlock()
@@ -557,7 +583,7 @@ func (s *Service) RemoveSourceCheckout(ctx context.Context, projectName, environ
 	if !configurationCanBeSaved(compiled.Issues) {
 		return model.Environment{}, compiler.ConfigurationError{Issues: compiled.Issues}
 	}
-	updated, err := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, remaining, compiled.Bindings)
+	updated, err := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, environment.Revision, compiled.Definition, remaining, compiled.Bindings, expected)
 	if err != nil {
 		return model.Environment{}, err
 	}

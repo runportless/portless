@@ -252,26 +252,56 @@ func (s *Store) EnsureSequence(scope string, sequence int64) {
 // Clear removes live history and invalidates older projection work while
 // preserving active requests, durable recordings, and the sequence high-water mark.
 func (s *Store) Clear(project, environment string) (int, int64, uint64) {
+	return s.ClearThrough(project, environment, 1<<63-1)
+}
+
+// ClearWatermark returns a count and high-water mark without copying traffic payloads.
+func (s *Store) ClearWatermark(project, environment string) (int, int64) {
+	window := s.window(model.EnvironmentSelector(project, environment))
+	window.mu.RLock()
+	defer window.mu.RUnlock()
+	return window.count, window.sequence
+}
+
+// ClearThrough removes live exchanges at or below through while retaining newer observations.
+func (s *Store) ClearThrough(project, environment string, through int64) (int, int64, uint64) {
 	window := s.window(model.EnvironmentSelector(project, environment))
 	window.mu.Lock()
-	count, sequence := window.count, window.sequence
+	through = min(through, window.sequence)
+	count := 0
 	window.revision++
 	window.generation++
-	clear(window.ring)
-	clear(window.entries)
-	window.head, window.count, window.payloadBytes = 0, 0, 0
-	window.cache = emptyProjection(window.revision, window.generation, window.sequence)
+	for window.count > 0 {
+		entry := window.ring[window.head]
+		if entry.exchange.Sequence > through {
+			break
+		}
+		delete(window.entries, entry.exchange.Sequence)
+		window.payloadBytes -= entry.bytes
+		window.ring[window.head] = nil
+		window.head = (window.head + 1) % len(window.ring)
+		window.count--
+		count++
+	}
+	revision := window.revision
+	if window.count == 0 {
+		window.cache = emptyProjection(revision, window.generation, window.sequence)
+	} else {
+		window.cache = emptyProjection(revision-1, window.generation, through)
+	}
 	close(window.changed)
 	window.changed = make(chan struct{})
-	revision := window.revision
+	remaining := window.count
 	window.mu.Unlock()
 	if s.broker != nil {
 		window.publishMu.Lock()
-		s.broker.Publish(events.Event{Type: "traffic.cleared", Project: project, Environment: environment,
-			Data: map[string]any{"cleared": count, "throughSequence": sequence, "revision": revision}})
+		s.broker.Publish(events.Event{Type: "traffic.cleared", Project: project, Environment: environment, Data: map[string]any{"cleared": count, "throughSequence": through, "revision": revision}})
 		window.publishMu.Unlock()
 	}
-	return count, sequence, revision
+	if remaining > 0 {
+		s.schedule(window, true)
+	}
+	return count, through, revision
 }
 
 // RetentionStats returns usage without cloning exchanges or taking a long global lock.
@@ -343,22 +373,35 @@ func (s *Store) Exchange(scope string, sequence int64) (model.TrafficExchange, b
 // Trace returns a coherent detail projection for one trace, waiting only for the
 // requested revision and respecting cancellation during snapshot reconciliation.
 func (s *Store) Trace(ctx context.Context, scope string, number int64) (model.TrafficTrace, bool, error) {
+	trace, _, found, err := s.tracePage(ctx, scope, number, 0, int(^uint(0)>>1), false)
+	return trace, found, err
+}
+
+// TracePage copies only a bounded page of span metadata, without captured payloads.
+func (s *Store) TracePage(ctx context.Context, scope string, number int64, offset, limit int) (model.TrafficTrace, int, bool, error) {
+	return s.tracePage(ctx, scope, number, offset, limit, true)
+}
+
+func (s *Store) tracePage(ctx context.Context, scope string, number int64, offset, limit int, metadata bool) (model.TrafficTrace, int, bool, error) {
 	window := s.window(scope)
 	for {
 		cache, err := s.projection(ctx, window)
 		if err != nil {
-			return model.TrafficTrace{}, false, err
+			return model.TrafficTrace{}, 0, false, err
 		}
 		index, exists := cache.byNumber[number]
 		if !exists {
-			return model.TrafficTrace{}, false, nil
+			return model.TrafficTrace{}, 0, false, nil
 		}
 		trace := &cache.traces[index]
+		start := min(max(offset, 0), len(trace.spans))
+		end := start + min(max(limit, 0), len(trace.spans)-start)
+		spans := trace.spans[start:end]
 		window.mu.RLock()
 		valid := !window.disposed && window.generation == cache.generation
-		entries := make([]*retainedExchange, len(trace.spans))
+		entries := make([]*retainedExchange, len(spans))
 		if valid {
-			for i, span := range trace.spans {
+			for i, span := range spans {
 				entries[i] = window.entries[span.sequence]
 				if entries[i] == nil {
 					valid = false
@@ -369,15 +412,23 @@ func (s *Store) Trace(ctx context.Context, scope string, number int64) (model.Tr
 		window.mu.RUnlock()
 		if !valid {
 			if err := ctx.Err(); err != nil {
-				return model.TrafficTrace{}, false, err
+				return model.TrafficTrace{}, 0, false, err
 			}
 			continue
 		}
 		result := trace.summary
-		result.Spans = make([]model.TrafficTraceSpan, len(trace.spans))
-		for i, span := range trace.spans {
-			result.Spans[i] = model.TrafficTraceSpan{Exchange: cloneExchange(entries[i].exchange), ParentSequence: span.parent, Depth: span.depth, StartOffsetMS: span.offset, Correlation: span.correlation, TransactionGroup: span.transactionGroup}
+		result.Spans = make([]model.TrafficTraceSpan, len(spans))
+		for i, span := range spans {
+			exchange := exchangeSummary(entries[i].exchange)
+			if !metadata {
+				exchange = cloneExchange(entries[i].exchange)
+			}
+			result.Spans[i] = model.TrafficTraceSpan{Exchange: exchange, ParentSequence: span.parent, Depth: span.depth, StartOffsetMS: span.offset, Correlation: span.correlation, TransactionGroup: span.transactionGroup}
 		}
-		return result, true, nil
+		next := 0
+		if end < len(trace.spans) {
+			next = end
+		}
+		return result, next, true, nil
 	}
 }

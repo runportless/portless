@@ -61,6 +61,120 @@ test('creates, captures, exports, and deletes recordings from the history menu',
   await expect(row).toHaveCount(0)
 })
 
+test('confirms deleting all recording history from its header menu and preserves the active recording', async ({ page }, testInfo) => {
+  const state = readE2EState()
+  const base = `/api/v1/environments/${state.project}/${state.environment}/recordings`
+  const completedNames = Array.from({ length: 7 }, (_, index) => `ui-history-${index + 1}`)
+  const activeName = 'ui-history-active'
+  for (const name of [...completedNames, activeName]) {
+    await controlAPI(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, maxEvents: 10000 }) })
+    if (name !== activeName) await controlAPI(`${base}/${name}/stop`, { method: 'POST' })
+  }
+  await authenticate(page, environmentPath('recordings'))
+  const history = page.locator('.recording-history-panel')
+  const title = history.locator('.recording-history-title')
+  const trigger = title.getByRole('button', { name: 'Recording history actions', exact: true })
+  const menu = title.getByRole('menu', { name: 'Recording history actions', exact: true })
+  const deleteAll = menu.getByRole('menuitem', { name: 'Delete all 7 completed recordings', exact: true })
+  const confirm = menu.getByRole('menuitem', { name: 'Confirm delete all 7 completed recordings', exact: true })
+  const deleted: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'DELETE' && path.startsWith(`${base}/`)) deleted.push(path.slice(base.length + 1))
+  })
+  await expect(trigger).toBeEnabled()
+  await expect(title.getByRole('button')).toHaveCount(1)
+  await expect(deleteAll).toHaveCount(0)
+  await expect(history.getByLabel('recordings pagination')).toContainText('1–6 of 7')
+
+  await trigger.focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await expect(deleteAll).toBeFocused()
+  await expect(deleteAll).toHaveCSS('outline-style', 'solid')
+  await deleteAll.press('Enter')
+  await expect(confirm).toBeFocused()
+  await expect(confirm).toHaveText('CONFIRM')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+  await page.keyboard.press('Space')
+  await deleteAll.click()
+  await title.getByText('HISTORY', { exact: true }).click()
+  await expect(menu).toHaveCount(0)
+  await trigger.click()
+  await deleteAll.click()
+  await history.getByRole('button', { name: 'Next recordings page' }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(history.getByLabel('recordings pagination')).toContainText('7–7 of 7')
+  await history.locator('tbody .row-actions-menu__trigger').click()
+  await expect(history.locator('tbody').getByRole('menu')).toBeVisible()
+  await trigger.click()
+  await expect(history.locator('tbody').getByRole('menu')).toHaveCount(0)
+  await expect(deleteAll).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  for (const theme of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: theme })
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await trigger.click()
+      await expect(deleteAll).toHaveText('DELETE ALL')
+      const bounds = await menu.boundingBox()
+      expect(bounds!.x).toBeGreaterThanOrEqual(0)
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+      expect(await trigger.boundingBox()).toMatchObject({ width: 40, height: 29 })
+      await history.screenshot({ path: testInfo.outputPath(`recording-history-menu-${theme}-${width}.png`) })
+      await deleteAll.click()
+      await expect(confirm).toHaveText('CONFIRM')
+      expect(await menu.boundingBox()).toMatchObject({ width: bounds!.width, height: bounds!.height })
+      await expect(confirm).toBeInViewport({ ratio: 1 })
+      await history.screenshot({ path: testInfo.outputPath(`recording-history-confirm-${theme}-${width}.png`) })
+      await page.keyboard.press('Escape')
+    }
+  }
+  expect(deleted).toEqual([])
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await expect(page.locator('.shell')).not.toHaveClass(/shell--overlay-navigation/)
+  const sidebarWidth = await page.locator('.shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--sidebar').trim())
+  await expect(page.locator('.stage')).toHaveCSS('margin-left', sidebarWidth)
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await page.route(`**${base}/*`, async (route) => {
+    if (route.request().method() !== 'DELETE') return route.continue()
+    const response = await route.fetch()
+    await gate
+    await route.fulfill({ response })
+  })
+  try {
+    await trigger.click()
+    const titleBounds = await title.boundingBox()
+    await deleteAll.click()
+    await expect(confirm).toBeVisible()
+    expect(deleted).toEqual([])
+    await confirm.press('Enter')
+    await expect(trigger).toBeDisabled()
+    await expect(menu).toHaveCount(0)
+    await expect(title.getByRole('status')).toHaveText('DELETING…')
+    expect(await title.boundingBox()).toEqual(titleBounds)
+    await expect(history.locator('tbody .row-actions-menu__trigger:not(:disabled)')).toHaveCount(0)
+    await expect(page.locator('.recording-active-control')).toContainText(activeName)
+    release()
+    await expect(history).toContainText('No recording history yet.')
+    await expect(title.getByRole('status')).toHaveCount(0)
+    await expect(trigger).toBeDisabled()
+    expect([...deleted].sort()).toEqual(completedNames)
+    const remaining = await controlAPI<{ recordings: Array<{ name: string; status: string }> }>(base)
+    expect(remaining.recordings).toMatchObject([{ name: activeName, status: 'active' }])
+  } finally {
+    release()
+    await page.unrouteAll({ behavior: 'wait' })
+    await controlAPI(`${base}/${activeName}/stop`, { method: 'POST' })
+    await controlAPI(`${base}/${activeName}`, { method: 'DELETE' })
+  }
+})
+
 test('creates a multi-service scenario, edits routes, and restores providers without restarting peers', async ({ page }, testInfo) => {
   const state = readE2EState()
   type Runtime = { name: string; pid?: number; generation: number; status: string }

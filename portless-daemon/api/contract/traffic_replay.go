@@ -126,3 +126,17 @@ type TrafficReplayWorkspace struct {
 	Receipts      []TrafficReplayRun        `json:"receipts,omitempty"`
 	Result        *TrafficReplayResult      `json:"result,omitempty"`
 }
+
+// TrafficReplayStatus returns admission metadata without copying captured or edited payloads.
+type TrafficReplayStatus struct {
+	TrafficReplayIdentity
+	Project       string             `json:"project"`
+	Environment   string             `json:"environment"`
+	Number        int64              `json:"number"`
+	Revision      uint64             `json:"revision"`
+	NextRunNumber int64              `json:"nextRunNumber"`
+	Closed        bool               `json:"closed"`
+	Destinations  []string           `json:"destinations"`
+	Run           *TrafficReplayRun  `json:"run,omitempty"`
+	Receipts      []TrafficReplayRun `json:"receipts"`
+}

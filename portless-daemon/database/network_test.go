@@ -84,7 +84,7 @@ func TestNetworkAllocationsFollowProjectRenameWithoutChangingAddresses(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controlStore.RenameProject(ctx, "store", "shop", project.Revision); err != nil {
+	if _, err := controlStore.RenameProject(ctx, "store", "shop", project.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	after, err := controlStore.NetworkAllocations(ctx, "shop/local")

@@ -3,10 +3,16 @@
 package contract
 
 // APIVersion is the semantic version of the daemon HTTP contract.
-const APIVersion = "17.0.0"
+const APIVersion = "18.0.0"
 
 // ClientKindHeader identifies the authenticated Portless client category.
 const ClientKindHeader = "Portless-Client-Kind"
+
+// MCPReplayCapabilityHeader declares the trusted MCP adapter's replay opt-in.
+const MCPReplayCapabilityHeader = "Portless-MCP-Replay-Capability"
+
+// MCPReplayCapabilityVersion identifies the supported MCP replay permission contract.
+const MCPReplayCapabilityVersion = "1"
 
 // ClientKind identifies a fixed authenticated Portless API client category.
 type ClientKind string

@@ -45,6 +45,11 @@ func (s *Service) TrafficReplay(project, environment string, number int64, expec
 	return s.replays.Get(project, environment, number, expected, result)
 }
 
+// TrafficReplayStatus returns scoped replay admission metadata without payloads.
+func (s *Service) TrafficReplayStatus(project, environment string, number int64, expected contract.TrafficReplayIdentity) (contract.TrafficReplayStatus, error) {
+	return s.replays.Status(project, environment, number, expected)
+}
+
 // DeleteTrafficReplay releases workspace payloads while preserving duplicate-suppression receipts.
 func (s *Service) DeleteTrafficReplay(project, environment string, number int64, expected contract.TrafficReplayIdentity) error {
 	return s.replays.Delete(project, environment, number, expected)

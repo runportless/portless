@@ -6,6 +6,7 @@ import (
 
 	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/auth"
+	"github.com/runportless/portless/portless-daemon/controlplane"
 	"github.com/runportless/portless/portless-daemon/model"
 )
 
@@ -14,6 +15,10 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 	if len(segments) == 1 {
 		switch request.Method {
 		case http.MethodGet:
+			if request.URL.Query().Get("view") == "metadata" {
+				s.handleProjectMetadata(writer, request, "")
+				return
+			}
 			limit, limitErr := queryLimit(request, 100, 1000)
 			if limitErr != nil {
 				writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_LIMIT", Message: limitErr.Error()})
@@ -31,7 +36,12 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 				writeDecodeError(writer, err)
 				return
 			}
-			project, environment, warnings, err := s.app.CreateProject(ctx, input.Name, applicationSourceInputs(input.Sources))
+			for _, source := range input.Sources {
+				if !requireSourceRoot(writer, request, source.AllowedRoot) {
+					return
+				}
+			}
+			project, environment, warnings, err := s.app.CreateProject(ctx, input.Name, applicationSourceInputs(input.Sources), input.RequiredAssociationPath, principal.Actor)
 			if err != nil {
 				s.writeError(writer, err, map[string]any{"project": input.Name})
 				return
@@ -56,7 +66,10 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			writeDecodeError(writer, err)
 			return
 		}
-		project, environment, warnings, err := s.app.Discover(ctx, input.Path, input.Name)
+		if !requireSourceRoot(writer, request, input.AllowedRoot) {
+			return
+		}
+		project, environment, warnings, err := s.app.Discover(ctx, input.Path, input.Name, controlplane.DiscoveryPolicy{AllowedRoot: input.AllowedRoot, RequiredAssociationPath: input.RequiredAssociationPath, RequiredProject: input.RequiredProject}, principal.Actor)
 		if err != nil {
 			s.writeError(writer, err, nil)
 			return
@@ -74,6 +87,10 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if len(segments) == 3 && segments[2] == "declaration" && request.Method == http.MethodGet {
+		if request.URL.Query().Get("view") == "chunk" {
+			s.handleProjectDeclarationChunk(writer, request, project)
+			return
+		}
 		content, err := s.app.ExportProject(ctx, project)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project})
@@ -99,7 +116,10 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_ENVIRONMENT_NAME", Message: err.Error(), Subject: map[string]any{"project": project, "environment": input.Environment}})
 			return
 		}
-		updatedProject, environment, warnings, err := s.app.AddProjectSource(ctx, project, input.Environment, input.Name, input.Path, principal.Actor)
+		if !requireSourceRoot(writer, request, input.AllowedRoot) {
+			return
+		}
+		updatedProject, environment, warnings, err := s.app.AddProjectSource(ctx, project, input.Environment, input.Name, input.Path, principal.Actor, input.AllowedRoot)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project, "environment": input.Environment, "source": input.Name})
 			return
@@ -131,7 +151,11 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "INVALID_SOURCE_NAME", Message: err.Error(), Subject: map[string]any{"project": project, "source": segments[3]}})
 			return
 		}
-		removed, err := s.app.RemoveProjectSource(ctx, project, segments[3], principal.Actor)
+		expected, ok := s.configurationCondition(writer, request, project, "", segments[3])
+		if !ok {
+			return
+		}
+		removed, err := s.app.RemoveProjectSource(ctx, project, segments[3], principal.Actor, expected)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project, "source": segments[3]})
 			return
@@ -148,6 +172,10 @@ func (s *Server) handleProjects(writer http.ResponseWriter, request *http.Reques
 func (s *Server) handleProject(writer http.ResponseWriter, request *http.Request, project string, principal auth.Principal) {
 	switch request.Method {
 	case http.MethodGet:
+		if request.URL.Query().Get("view") == "metadata" {
+			s.handleProjectMetadata(writer, request, project)
+			return
+		}
 		result, err := s.app.Project(request.Context(), project)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project})
@@ -160,14 +188,22 @@ func (s *Server) handleProject(writer http.ResponseWriter, request *http.Request
 			writeDecodeError(writer, err)
 			return
 		}
-		result, err := s.app.Rename(request.Context(), project, input.Name, input.Revision, principal.Actor)
+		expected, ok := requestResourceVersion(writer, request, request.Header.Get(contract.ClientKindHeader) == string(contract.ClientKindMCP))
+		if !ok {
+			return
+		}
+		result, err := s.app.Rename(request.Context(), project, input.Name, input.Revision, principal.Actor, expected)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project})
 			return
 		}
 		writeJSON(writer, http.StatusOK, result)
 	case http.MethodDelete:
-		if err := s.app.Forget(request.Context(), project); err != nil {
+		expected, ok := s.configurationCondition(writer, request, project, "", "")
+		if !ok {
+			return
+		}
+		if err := s.app.Forget(request.Context(), project, expected); err != nil {
 			s.writeError(writer, err, map[string]any{"project": project})
 			return
 		}

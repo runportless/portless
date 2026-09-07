@@ -28,11 +28,14 @@ type runtime struct {
 	toolSlots     chan struct{}
 	mutationSlots chan struct{}
 	limiter       tokenBucket
+	replayMu      sync.Mutex
+	replays       map[replayKey]struct{}
 }
 
 func newRuntime(config Config, connector Connector, logger *slog.Logger) *runtime {
 	return &runtime{
-		config: config, gateway: &gateway{connector: connector}, logger: logger,
+		config: config, gateway: &gateway{connector: connector, replay: config.AllowReplay && config.AllowSensitiveTraffic}, logger: logger,
+		replays:   make(map[replayKey]struct{}),
 		toolSlots: make(chan struct{}, 8), mutationSlots: make(chan struct{}, 2),
 		limiter: tokenBucket{tokens: 40, last: time.Now()},
 	}
@@ -51,15 +54,19 @@ func (r *runtime) server() *mcp.Server {
 	r.registerInspectionTools(server)
 	r.registerObservationTools(server)
 	r.registerTrafficInspectionTools(server)
-	if r.config.AllowSensitiveTraffic {
-		r.registerSensitiveTrafficTool(server)
-	}
-	if r.config.AllowLifecycle {
-		r.registerLifecycleTools(server)
-	}
-	if r.config.AllowTrafficControl {
-		r.registerTrafficControlTools(server)
-	}
+	r.registerProjectInspectionTools(server)
+	r.registerTraceTools(server)
+	r.registerMockInspectionTools(server)
+	r.registerSensitiveTrafficTool(server)
+	r.registerRecordingExportTool(server)
+	r.registerLifecycleTools(server)
+	r.registerTrafficControlTools(server)
+	r.registerMockMutationTools(server)
+	r.registerMockDeletionTools(server)
+	r.registerArtifactMutationTools(server)
+	r.registerTrafficClearTool(server)
+	r.registerReplayTools(server)
+	r.registerConfigurationTools(server)
 	return server
 }
 
@@ -67,6 +74,7 @@ type gateway struct {
 	connector Connector
 	mu        sync.Mutex
 	instance  string
+	replay    bool
 }
 
 func (g *gateway) client(ctx context.Context) (*apiclient.Client, error) {
@@ -80,7 +88,11 @@ func (g *gateway) client(ctx context.Context) (*apiclient.Client, error) {
 	g.mu.Lock()
 	g.instance = identity.InstanceID
 	g.mu.Unlock()
-	return client.WithClientKind(contract.ClientKindMCP), nil
+	client = client.WithClientKind(contract.ClientKindMCP)
+	if g.replay {
+		client = client.WithMCPReplayCapability()
+	}
+	return client, nil
 }
 
 func (r *runtime) enter(ctx context.Context, mutation bool) (func(), error) {
@@ -113,7 +125,13 @@ func (r *runtime) checkOutput(value any) error {
 	if err != nil {
 		return err
 	}
-	if len(encoded) > maximumResultSize {
+	// AddTool emits both structured content and a JSON text fallback. Bound both,
+	// including escaping inside the text block and the surrounding MCP envelope.
+	textContent, err := json.Marshal(string(encoded))
+	if err != nil {
+		return err
+	}
+	if len(encoded)+len(textContent)+1024 > maximumResultSize {
 		return codedError{code: "RESULT_TOO_LARGE", message: "result exceeds the 1 MiB MCP budget; reduce the limit or add a filter"}
 	}
 	return nil

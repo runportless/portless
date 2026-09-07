@@ -2,15 +2,19 @@ package contract
 
 // SourceInput identifies a source tree to discover and attach to a project.
 type SourceInput struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	AllowedRoot string `json:"allowedRoot,omitempty"`
 }
 
 // DiscoverProjectRequest identifies a source path and optional project name to
 // discover.
 type DiscoverProjectRequest struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
+	Path                    string `json:"path"`
+	Name                    string `json:"name"`
+	AllowedRoot             string `json:"allowedRoot,omitempty"`
+	RequiredAssociationPath string `json:"requiredAssociationPath,omitempty"`
+	RequiredProject         string `json:"requiredProject,omitempty"`
 }
 
 // ProjectMutation returns a project, its initial environment, and warnings.
@@ -22,8 +26,9 @@ type ProjectMutation struct {
 
 // CreateProjectRequest defines a logical project from named source trees.
 type CreateProjectRequest struct {
-	Name    string        `json:"name"`
-	Sources []SourceInput `json:"sources"`
+	Name                    string        `json:"name"`
+	Sources                 []SourceInput `json:"sources"`
+	RequiredAssociationPath string        `json:"requiredAssociationPath,omitempty"`
 }
 
 // AddProjectSourceRequest defines a source to attach and the environment whose
@@ -32,6 +37,7 @@ type AddProjectSourceRequest struct {
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Environment string `json:"environment"`
+	AllowedRoot string `json:"allowedRoot,omitempty"`
 }
 
 // ProjectSourceMutation returns updated project state and services requiring

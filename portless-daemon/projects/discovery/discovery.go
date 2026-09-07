@@ -31,6 +31,8 @@ type Discoverer interface {
 	FindRoot(ctx context.Context, start string) (string, error)
 	// Discover scans the project containing start and returns its topology.
 	Discover(ctx context.Context, start string) (Result, error)
+	// DiscoverWithin confines ancestor selection and all filesystem reads to an authorized root.
+	DiscoverWithin(ctx context.Context, start, allowedRoot string) (Result, error)
 }
 
 // New constructs a discovery engine from explicit detectors and analyzers.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -23,11 +25,15 @@ type codedError struct {
 // Error returns the stable JSON representation exposed as MCP tool content.
 func (e codedError) Error() string {
 	message, _ := truncateUTF8(e.message, 4<<10)
+	code, _ := truncateUTF8(e.code, 128)
 	encoded, _ := json.Marshal(errorEnvelope{Error: errorValue{
-		Code: e.code, Message: message, Status: e.status,
+		Code: code, Message: message, Status: e.status,
 		Subject: safeErrorMap(e.subject), Details: safeErrorMap(e.details),
-		Remediation: nonNilRemediation(e.remediation),
+		Remediation: boundedRemediation(e.remediation),
 	}})
+	if len(encoded) > 64<<10 {
+		encoded, _ = json.Marshal(errorEnvelope{Error: errorValue{Code: code, Message: message, Status: e.status, Details: map[string]any{"truncated": true}, Remediation: boundedRemediation(e.remediation)}})
+	}
 	return string(encoded)
 }
 
@@ -57,7 +63,7 @@ func (r *runtime) toolError(err error) error {
 			remediation: clientError.Remediation,
 		}
 	}
-	r.logger.Error("MCP tool failed", "error", err)
+	r.logger.Error("MCP tool failed", "errorType", fmt.Sprintf("%T", err))
 	return codedError{code: "INTERNAL", message: "the Portless MCP tool failed unexpectedly; inspect MCP stderr for local diagnostics"}
 }
 
@@ -74,13 +80,6 @@ type errorValue struct {
 	Remediation []contract.Remediation `json:"remediation"`
 }
 
-func nonNilRemediation(values []contract.Remediation) []contract.Remediation {
-	if values == nil {
-		return []contract.Remediation{}
-	}
-	return values
-}
-
 func safeErrorMap(values map[string]any) map[string]any {
 	if len(values) == 0 {
 		return nil
@@ -90,8 +89,8 @@ func safeErrorMap(values map[string]any) map[string]any {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	if len(keys) > 64 {
-		keys = keys[:64]
+	if len(keys) > 8 {
+		keys = keys[:8]
 	}
 	result := make(map[string]any, len(keys))
 	for _, key := range keys {
@@ -108,22 +107,22 @@ func safeErrorMap(values map[string]any) map[string]any {
 }
 
 func safeErrorValue(value any, depth int) any {
-	if depth >= 4 {
+	if depth >= 3 {
 		return "[TRUNCATED]"
 	}
 	switch typed := value.(type) {
 	case nil, bool, float64, json.Number:
 		return typed
 	case string:
-		value, truncated := truncateUTF8(typed, 4<<10)
+		value, truncated := truncateUTF8(typed, 512)
 		if truncated {
 			return value + "…"
 		}
 		return value
 	case []any:
 		maximum := len(typed)
-		if maximum > 100 {
-			maximum = 100
+		if maximum > 8 {
+			maximum = 8
 		}
 		result := make([]any, 0, maximum)
 		for _, item := range typed[:maximum] {
@@ -138,7 +137,7 @@ func safeErrorValue(value any, depth int) any {
 }
 
 func safeErrorMapAtDepth(values map[string]any, depth int) map[string]any {
-	if depth >= 4 {
+	if depth >= 3 {
 		return map[string]any{"truncated": true}
 	}
 	keys := make([]string, 0, len(values))
@@ -146,8 +145,8 @@ func safeErrorMapAtDepth(values map[string]any, depth int) map[string]any {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	if len(keys) > 64 {
-		keys = keys[:64]
+	if len(keys) > 8 {
+		keys = keys[:8]
 	}
 	result := make(map[string]any, len(keys))
 	for _, key := range keys {
@@ -159,6 +158,25 @@ func safeErrorMapAtDepth(values map[string]any, depth int) map[string]any {
 			continue
 		}
 		result[key] = safeErrorValue(values[key], depth)
+	}
+	return result
+}
+
+func boundedRemediation(values []contract.Remediation) []contract.Remediation {
+	result := []contract.Remediation{}
+	for _, value := range values[:min(8, len(values))] {
+		value.Label, _ = truncateUTF8(value.Label, 512)
+		value.Command, _ = truncateUTF8(value.Command, 1024)
+		if parsed, err := url.Parse(value.URL); err == nil {
+			parsed.User = nil
+			parsed.RawQuery = ""
+			parsed.Fragment = ""
+			value.URL = parsed.String()
+		} else {
+			value.URL = ""
+		}
+		value.URL, _ = truncateUTF8(value.URL, 1024)
+		result = append(result, value)
 	}
 	return result
 }

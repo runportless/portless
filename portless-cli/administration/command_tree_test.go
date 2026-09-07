@@ -293,3 +293,21 @@ func TestMCPServeRejectsJSONBeforeStartingDaemon(t *testing.T) {
 		t.Fatalf("invalid mcp invocation contacted or started the daemon: %v", statErr)
 	}
 }
+
+func TestMCPReleaseFlagsAndInvalidStartup(t *testing.T) {
+	app, _, _ := newTestCommands(t)
+	root := app.mcpCommand()
+	serve, _, err := root.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"project", "source-root", "allow-replay", "allow-configuration", "allow-lifecycle", "allow-sensitive-traffic", "allow-traffic-control", "all-environments"} {
+		if serve.Flags().Lookup(flag) == nil {
+			t.Fatalf("missing MCP flag --%s", flag)
+		}
+	}
+	root.SetArgs([]string{"serve", "--project", "shop", "--allow-replay"})
+	if err := root.ExecuteContext(t.Context()); err == nil || !strings.Contains(err.Error(), "--allow-replay requires --allow-sensitive-traffic") {
+		t.Fatalf("invalid replay startup=%v", err)
+	}
+}

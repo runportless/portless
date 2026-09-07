@@ -129,8 +129,12 @@ func TestDoHonorsCancellationAndResponseLimit(t *testing.T) {
 		t.Fatalf("cancellation error = %v", err)
 	}
 	var response map[string]string
-	if err := client.do(context.Background(), http.MethodGet, "/large", nil, &response); err == nil || !strings.Contains(err.Error(), "decode daemon response") {
+	if err := client.do(context.Background(), http.MethodGet, "/large", nil, &response); err == nil || !strings.Contains(err.Error(), "response exceeds") {
 		t.Fatalf("oversized response error = %v", err)
+	}
+	var raw []byte
+	if err := client.do(context.Background(), http.MethodGet, "/large", nil, &raw); err == nil || len(raw) != 0 {
+		t.Fatalf("raw export was silently shortened: bytes=%d error=%v", len(raw), err)
 	}
 }
 

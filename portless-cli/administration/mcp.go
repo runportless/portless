@@ -10,10 +10,14 @@ import (
 )
 
 type mcpOptions struct {
+	project               string
+	sourceRoots           []string
 	allEnvironments       bool
 	allowLifecycle        bool
 	allowTrafficControl   bool
 	allowSensitiveTraffic bool
+	allowReplay           bool
+	allowConfiguration    bool
 }
 
 type mcpConnector struct {
@@ -47,11 +51,13 @@ func (c *Commands) mcpCommand() *cobra.Command {
 				return shared.UsageError("--all-environments cannot be combined with --env")
 			}
 			config := portlessmcp.Config{
+				Project: options.project, AllowedSourceRoots: options.sourceRoots,
+				AllowReplay: options.allowReplay, AllowConfiguration: options.allowConfiguration,
 				Environment: c.EnvironmentOverride, AllEnvironments: options.allEnvironments,
 				AllowLifecycle: options.allowLifecycle, AllowTrafficControl: options.allowTrafficControl,
 				AllowSensitiveTraffic: options.allowSensitiveTraffic, Version: cmd.Root().Version,
 			}
-			if config.Environment == "" && !config.AllEnvironments {
+			if config.Environment == "" && config.Project == "" && !config.AllEnvironments {
 				root, err := c.CurrentSourceRoot(cmd.Context())
 				if err != nil {
 					return err
@@ -64,8 +70,12 @@ func (c *Commands) mcpCommand() *cobra.Command {
 		},
 	}
 	serve.Flags().BoolVar(&options.allEnvironments, "all-environments", false, "permit inspection of every environment in this Portless installation")
+	serve.Flags().StringVar(&options.project, "project", "", "limit access to every environment in one named project")
+	serve.Flags().StringArrayVar(&options.sourceRoots, "source-root", nil, "authorize discovery and new checkout paths inside this directory (repeatable)")
+	serve.Flags().BoolVar(&options.allowReplay, "allow-replay", false, "enable reviewed HTTP replay; requires --allow-sensitive-traffic")
+	serve.Flags().BoolVar(&options.allowConfiguration, "allow-configuration", false, "enable project topology, checkout, clone, and guarded application-state configuration")
 	serve.Flags().BoolVar(&options.allowLifecycle, "allow-lifecycle", false, "enable environment and service lifecycle tools")
-	serve.Flags().BoolVar(&options.allowTrafficControl, "allow-traffic-control", false, "enable bounded recording and fault-control tools")
+	serve.Flags().BoolVar(&options.allowTrafficControl, "allow-traffic-control", false, "enable bounded recordings, faults, mock authoring, and traffic artifact cleanup")
 	serve.Flags().BoolVar(&options.allowSensitiveTraffic, "allow-sensitive-traffic", false, "enable detailed traffic access that may contain sensitive application data")
 	root.AddCommand(serve)
 	return root

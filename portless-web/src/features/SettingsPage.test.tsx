@@ -59,7 +59,7 @@ describe('settings page', () => {
     expect(markup).toContain('portless-store-local')
     expect(markup).toContain('&quot;--env&quot;')
     expect(markup).toContain('&quot;store/local&quot;')
-    expect(markup).toContain('READ ONLY · 15 TOOLS')
+    expect(markup).toContain('READ ONLY · 24 TOOLS')
     expect(markup).not.toContain('--allow-lifecycle')
     expect(markup).not.toContain('--allow-traffic-control')
     expect(markup).not.toContain('--allow-sensitive-traffic')

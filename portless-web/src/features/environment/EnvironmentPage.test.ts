@@ -105,17 +105,26 @@ describe('overview services lifecycle controls', () => {
       services: statuses.map((state, index): Service => ({ name: `service-${index}`, kind: 'process', status: state, launchMode: 'managed', generation: 1, required: true, health: { kind: 'tcp', timeout: 0, interval: 0 }, restartCount: 0, recentRequests: 0, endpoints: [] })),
     }
     const markup = renderToStaticMarkup(createElement(EnvironmentPage, { environment, activity, actions: { ...actions, ...actionOverrides }, view: 'overview', onNavigate: () => undefined, onChanged: () => undefined }))
-    return { markup, button: markup.match(/<button class="button button--small services-lifecycle[^>]*>[^<]*<\/button>/)?.[0] }
+    return { markup, button: markup.match(/<button class="button button--small services-lifecycle[^>]*>[^<]*<\/button>/)?.[0], menu: markup.match(/<button[^>]*aria-label="Services actions"[^>]*>/)?.[0] }
   }
 
   it.each([
     ['stopped', ['stopped', 'stopped'], 'Start All'],
     ['stopped', ['planned', 'planned'], 'Start All'],
-    ['healthy', ['ready', 'ready'], 'Stop All'],
   ] as const)('offers the bulk action for a %s environment without a workload count', (status, statuses, label) => {
     const { markup, button } = render(status, statuses)
     expect(button).toContain(`>${label}</button>`)
     expect(button).not.toContain('disabled=""')
+    expect(markup).not.toContain('workloads')
+  })
+
+  it('puts STOP ALL behind a neutral Services actions menu when all services are ready', () => {
+    const { markup, button, menu } = render('healthy', ['ready', 'ready'])
+    expect(button).toBeUndefined()
+    expect(menu).toContain('aria-haspopup="menu"')
+    expect(menu).toContain('aria-expanded="false"')
+    expect(menu).not.toContain('disabled=""')
+    expect(markup).not.toContain('>STOP ALL</button>')
     expect(markup).not.toContain('workloads')
   })
 
@@ -127,7 +136,9 @@ describe('overview services lifecycle controls', () => {
     ['failed', ['failed', 'failed']],
     ['unknown', ['ready', 'unknown']],
   ] as const)('omits the bulk action for mixed, empty, or unverified services in %s state', (status, statuses) => {
-    expect(render(status, statuses).button).toBeUndefined()
+    const { button, menu } = render(status, statuses)
+    expect(button).toBeUndefined()
+    expect(menu).toBeUndefined()
   })
 
   it.each([
@@ -138,18 +149,26 @@ describe('overview services lifecycle controls', () => {
     ['degraded', ['ready', 'stopped'], 'up', 'Starting…'],
     ['degraded', ['ready', 'stopped'], 'down', 'Stopping…'],
   ] as const)('keeps confirmed progress disabled during %s, including mixed service snapshots', (status, statuses, busy, label) => {
-    const { markup, button } = render(status, statuses, { busy, disabled: true })
-    expect(button).toContain(`>${label}</button>`)
-    expect(button).toContain('disabled=""')
+    const { markup, button, menu } = render(status, statuses, { busy, disabled: true })
+    if (label === 'Starting…') {
+      expect(button).toContain(`>${label}</button>`)
+      expect(button).toContain('disabled=""')
+      expect(menu).toBeUndefined()
+    } else {
+      expect(button).toBeUndefined()
+      expect(menu).toContain('disabled=""')
+      expect(menu).toContain('aria-expanded="false"')
+      expect(markup).toContain('class="services-lifecycle-progress" role="status">Stopping…</span>')
+    }
     const serviceMenus = markup.match(/<button class="service-row__menu-trigger"[^>]*>/g)
     expect(serviceMenus).toHaveLength(2)
     for (const menu of serviceMenus!) expect(menu).toContain('disabled=""')
   })
 
   it('disables the bulk action while the daemon is disconnected', () => {
-    const { button } = render('healthy', ['ready', 'ready'], { disabled: true })
-    expect(button).toContain('>Stop All</button>')
-    expect(button).toContain('disabled=""')
+    const { button, menu } = render('healthy', ['ready', 'ready'], { disabled: true })
+    expect(button).toBeUndefined()
+    expect(menu).toContain('disabled=""')
   })
 })
 

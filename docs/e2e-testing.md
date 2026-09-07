@@ -83,6 +83,16 @@ does not install a browser or run E2E tests.
 
 The CLI E2E suite protects these product contracts:
 
+- MCP stdio negotiation, immutable inventory and scope, JSON-RPC-only stdout,
+  durable lifecycle idempotency and MCP actor attribution;
+- a full MCP application journey through fresh discovery/start, traces,
+  payload recording and chunk reassembly, mock authoring/preview/activation,
+  replay comparison and deduplication, provider restoration, finite fault
+  reactivation, guarded artifact cleanup, clone and project cleanup;
+- an MCP configuration journey through multi-source creation, clone, source
+  addition, checkout changes, classified remote binding, rescan, logical-source
+  removal, project rename with immutable scope, and guarded environment/project
+  cleanup;
 - zero-configuration discovery and a complete `up`, request, inspect, logs,
   `down` lifecycle;
 - application `/api/` and `/auth/` ingress with preserved query strings, POST
@@ -145,7 +155,8 @@ The Playwright suite protects these browser journeys:
   both themes and narrow windows, repeated
   request headers and replacement text bodies, same-project destination
   selection, frozen response comparison with lossless large JSON numbers,
-  replay summary shown only on Response diff,
+  replay summary shown only on Response diff, collapsible difference details
+  with keyboard controls and retained expansion state across response tabs,
   formatted Body, Headers, and Raw tabs inside each response pane beneath its
   HTTP header, synchronized diff-pane tabs, matching trace tab geometry,
   typography, and colors in both themes,
@@ -168,6 +179,9 @@ The Playwright suite protects these browser journeys:
   environment shortcuts alongside remembered project destinations, the searchable project registry
   with direct configuration, hide, and safe forget workflows, the persistent
   collapsible icon rail, Settings return, and breadcrumbs;
+- MCP configuration generation and permission combinations, with conditional
+  project/source-root fields using consistent theme colors, typography, sizing,
+  and keyboard focus from desktop through 390 px layouts;
 - a persistent environment header across all eight views, health and public
   Open App links, shared lifecycle state with the command palette, and a single
   activity subscription that discards responses from a previous environment;
@@ -216,6 +230,10 @@ The Playwright suite protects these browser journeys:
   and traffic attribution;
 - recording history rows with one ellipsis menu for Export and Delete, including
   export contents, deletion, and row layouts in both themes;
+- a recording-history header menu with DELETE ALL and inline confirmation,
+  cancellation on dismissal and pagination, keyboard access, both themes and
+  narrow layouts, pending progress, and deletion across all pages while retaining
+  the active recording;
 - consistent on/off switches for mock scenarios, routes, and faults, including
   keyboard toggling without opening the scenario or changing the selected route;
   fault switches keep their saved state after a failed browser request and show
@@ -279,9 +297,11 @@ The Playwright suite protects these browser journeys:
   visible Search text across desktop, narrow, and focus-mode headers,
   Stop environment through Search, shared pending state with the command palette,
   and keyboard-accessible, disabled-while-pending lifecycle controls;
-- Services-table Start All and Stop All controls without a workload count,
-  mixed-state suppression, stable header geometry, and shared pending state
-  with the top header, Search, and per-service actions;
+- Services-table Start All and an ellipsis menu containing STOP ALL with an
+  inline confirmation before dispatch; keyboard access, cancellation on menu
+  dismissal, both themes and narrow layouts, mixed-state suppression, stable
+  header geometry, and shared pending
+  state with the top header, Search, and per-service actions;
 - project-page source add/delete and
   Bindings-page checkout configure/edit/remove workflows using the native
   directory picker;

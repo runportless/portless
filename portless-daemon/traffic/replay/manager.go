@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,14 +45,15 @@ type workspaceKey struct {
 }
 type originKey struct{ project, environment string }
 type workspace struct {
-	value         contract.TrafficReplayWorkspace
-	target        Target
-	runtime       *contract.TrafficReplayDraft
-	confirmations map[int64]bool
-	bytes         int
-	running       bool
-	disposed      bool
-	idleUntil     time.Time
+	value               contract.TrafficReplayWorkspace
+	target              Target
+	runtime             *contract.TrafficReplayDraft
+	confirmations       map[int64]bool
+	bytes               int
+	running             bool
+	disposed            bool
+	idleUntil           time.Time
+	receiptDestinations []string
 }
 
 // Manager retains bounded ephemeral workspaces and suppresses duplicate dispatch for every admitted run.
@@ -458,6 +460,9 @@ func (m *Manager) Run(ctx context.Context, project, origin string, number int64,
 	w.value.Run = &run
 	w.idleUntil = started.Add(workspaceIdleTimeout)
 	w.value.Receipts = append(w.value.Receipts, run)
+	if !slices.Contains(w.receiptDestinations, draft.Environment) {
+		w.receiptDestinations = append(w.receiptDestinations, draft.Environment)
+	}
 	w.confirmations[input.RunNumber] = input.ConfirmRemoteWrite
 	w.value.NextRunNumber++
 	w.runtime = nil
@@ -610,6 +615,29 @@ func (m *Manager) Get(project, origin string, number int64, expected contract.Tr
 	return snapshot(w, includeResult && !w.disposed && m.now().Before(w.idleUntil)), nil
 }
 
+// Status returns payload-free state and every environment addressed by retained receipts.
+func (m *Manager) Status(project, origin string, number int64, expected contract.TrafficReplayIdentity) (contract.TrafficReplayStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, err := m.findLocked(project, origin, number, expected, true, true)
+	if err != nil {
+		return contract.TrafficReplayStatus{}, err
+	}
+	value := snapshot(w, false)
+	destinations := append([]string{}, w.receiptDestinations...)
+	if value.Destination != nil && !slices.Contains(destinations, value.Destination.Environment) {
+		destinations = append(destinations, value.Destination.Environment)
+	}
+	if w.value.Draft != nil && !slices.Contains(destinations, w.value.Draft.Environment) {
+		destinations = append(destinations, w.value.Draft.Environment)
+	}
+	if w.value.Result != nil && !slices.Contains(destinations, w.value.Result.Destination.Environment) {
+		destinations = append(destinations, w.value.Result.Destination.Environment)
+	}
+	slices.Sort(destinations)
+	return contract.TrafficReplayStatus{TrafficReplayIdentity: value.TrafficReplayIdentity, Project: project, Environment: origin, Number: number, Revision: value.Revision, NextRunNumber: value.NextRunNumber, Closed: w.disposed, Destinations: destinations, Run: value.Run, Receipts: append([]contract.TrafficReplayRun{}, value.Receipts...)}, nil
+}
+
 // Touch renews the idle timeout for an existing session without extending prepared credential retention.
 func (m *Manager) Touch(project, origin string, number int64, expected contract.TrafficReplayIdentity) error {
 	m.mu.Lock()
@@ -651,11 +679,14 @@ func (m *Manager) Delete(project, origin string, number int64, expected contract
 }
 
 // Clear discards origin payloads while allowing admitted runs to finish without republishing their results.
-func (m *Manager) Clear(project, origin string) {
+func (m *Manager) Clear(project, origin string) { m.ClearThrough(project, origin, 1<<63-1) }
+
+// ClearThrough disposes origin workspaces whose baseline lies at or below the reviewed watermark.
+func (m *Manager) ClearThrough(project, origin string, through int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, w := range m.workspaces {
-		if key.project == project && key.environment == origin {
+		if key.project == project && key.environment == origin && w.value.Baseline != nil && w.value.Baseline.Sequence <= through {
 			release(w)
 			if len(w.value.Receipts) == 0 {
 				m.bytes -= w.bytes

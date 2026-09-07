@@ -37,12 +37,10 @@ func (r *runtime) selectEnvironment(ctx context.Context, selector string) (selec
 	switch {
 	case r.config.Environment != "":
 		allowed = strings.EqualFold(selector, r.config.Environment)
+	case r.config.Project != "":
+		allowed = project == r.config.Project
 	case r.config.AllEnvironments:
-		list, listErr := client.ListEnvironments(ctx, "", 1000)
-		if listErr != nil {
-			return selectedEnvironment{}, listErr
-		}
-		allowed = containsEnvironment(list.Environments, project, environment)
+		allowed = true
 	default:
 		list, listErr := client.EnvironmentsForPath(ctx, r.config.WorkspaceRoot)
 		if listErr != nil {
@@ -88,6 +86,8 @@ func (r *runtime) visibleEnvironments(ctx context.Context, limit int) (*apiclien
 		response = contract.EnvironmentList{Environments: []contract.Environment{item}, Total: 1}
 	case r.config.AllEnvironments:
 		response, err = client.ListEnvironments(ctx, "", limit)
+	case r.config.Project != "":
+		response, err = client.ListEnvironments(ctx, r.config.Project, limit)
 	default:
 		response, err = client.EnvironmentsForPath(ctx, r.config.WorkspaceRoot)
 	}

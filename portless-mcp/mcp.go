@@ -18,10 +18,14 @@ import (
 type Config struct {
 	WorkspaceRoot         string
 	Environment           string
+	Project               string
 	AllEnvironments       bool
+	AllowedSourceRoots    []string
 	AllowLifecycle        bool
 	AllowTrafficControl   bool
 	AllowSensitiveTraffic bool
+	AllowReplay           bool
+	AllowConfiguration    bool
 	Version               string
 }
 
@@ -54,15 +58,17 @@ func Serve(ctx context.Context, config Config, connector Connector, streams Stre
 	if streams.In == nil || streams.Out == nil || streams.Err == nil {
 		return errors.New("MCP input, output, and error streams are required")
 	}
-	if config.Environment != "" && config.AllEnvironments {
-		return errors.New("an MCP server cannot combine a pinned environment with all-environment scope")
+	var err error
+	config, err = validateConfig(config)
+	if err != nil {
+		return err
 	}
 	if config.Environment != "" {
 		if _, _, err := parseEnvironmentSelector(config.Environment); err != nil {
 			return fmt.Errorf("invalid pinned MCP environment: %w", err)
 		}
 	}
-	if config.Environment == "" && !config.AllEnvironments && config.WorkspaceRoot == "" {
+	if config.Environment == "" && config.Project == "" && !config.AllEnvironments && config.WorkspaceRoot == "" {
 		return errors.New("workspace-scoped MCP access requires a source root")
 	}
 	if config.Version == "" {
@@ -71,9 +77,10 @@ func Serve(ctx context.Context, config Config, connector Connector, streams Stre
 
 	logger := slog.New(slog.NewTextHandler(streams.Err, &slog.HandlerOptions{Level: slog.LevelError}))
 	runtime := newRuntime(config, connector, logger)
+	defer runtime.closeReplays()
 	server := runtime.server()
 	transport := &mcp.IOTransport{
-		Reader: io.NopCloser(streams.In),
+		Reader: io.NopCloser(newMessageReader(streams.In, config.AllowReplay && config.AllowSensitiveTraffic)),
 		Writer: nopWriteCloser{Writer: streams.Out},
 	}
 	if err := server.Run(ctx, transport); err != nil && !errors.Is(err, context.Canceled) {

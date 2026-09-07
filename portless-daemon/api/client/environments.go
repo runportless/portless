@@ -99,9 +99,9 @@ func (c *Client) ChangeBinding(ctx context.Context, project, environment, servic
 }
 
 // SetSourceCheckout changes one environment checkout path and rediscovers its services.
-func (c *Client) SetSourceCheckout(ctx context.Context, project, environment, source, path string) (contract.EnvironmentMutation, error) {
+func (c *Client) SetSourceCheckout(ctx context.Context, project, environment, source string, input contract.SetSourceCheckoutRequest) (contract.EnvironmentMutation, error) {
 	var result contract.EnvironmentMutation
-	err := c.do(ctx, http.MethodPut, environmentPath(project, environment)+"/sources/"+EscapePath(source), contract.SetSourceCheckoutRequest{Path: path}, &result)
+	err := c.do(ctx, http.MethodPut, environmentPath(project, environment)+"/sources/"+EscapePath(source), input, &result)
 	return result, err
 }
 

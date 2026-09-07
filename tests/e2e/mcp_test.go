@@ -26,7 +26,7 @@ func TestMCPStdioScopeAndDurableLifecycle(t *testing.T) {
 
 	readSession, readDiagnostics := connectMCPCommand(t, binary, home, checkout, "mcp", "serve")
 	readTools := mcpToolNames(t, readSession)
-	if len(readTools) != 15 || containsString(readTools, "portless_stop_environment") {
+	if len(readTools) != 24 || containsString(readTools, "portless_stop_environment") {
 		t.Fatalf("default tools = %v", readTools)
 	}
 	listed, err := readSession.CallTool(context.Background(), &mcp.CallToolParams{
@@ -57,7 +57,7 @@ func TestMCPStdioScopeAndDurableLifecycle(t *testing.T) {
 
 	operatorSession, operatorDiagnostics := connectMCPCommand(t, binary, home, checkout,
 		"--env", "mcp-e2e/local", "mcp", "serve", "--allow-lifecycle")
-	if tools := mcpToolNames(t, operatorSession); len(tools) != 18 || !containsString(tools, "portless_change_service_state") {
+	if tools := mcpToolNames(t, operatorSession); len(tools) != 27 || !containsString(tools, "portless_change_service_state") {
 		t.Fatalf("lifecycle tools = %v", tools)
 	}
 	arguments := map[string]any{

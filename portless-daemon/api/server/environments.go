@@ -35,7 +35,7 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 			if input.From == "" {
 				input.From = "local"
 			}
-			environment, err := s.app.CloneEnvironment(ctx, input.Project, input.From, input.Name)
+			environment, err := s.app.CloneEnvironment(ctx, input.Project, input.From, input.Name, principal.Actor)
 			if err != nil {
 				s.writeError(writer, err, map[string]any{"project": input.Project, "environment": input.Name})
 				return
@@ -131,7 +131,7 @@ func (s *Server) handleEnvironments(writer http.ResponseWriter, request *http.Re
 	}
 	switch segments[3] {
 	case "rescan":
-		s.handleRescan(writer, request, project, environment)
+		s.handleRescan(writer, request, project, environment, principal)
 	case "up":
 		s.handleUp(writer, request, project, environment, principal)
 	case "down":
@@ -175,7 +175,11 @@ func (s *Server) handleEnvironment(writer http.ResponseWriter, request *http.Req
 		}
 		writeJSON(writer, http.StatusOK, result)
 	case http.MethodDelete:
-		if err := s.app.ForgetEnvironment(request.Context(), project, environment); err != nil {
+		expected, ok := s.configurationCondition(writer, request, project, environment, "")
+		if !ok {
+			return
+		}
+		if err := s.app.ForgetEnvironment(request.Context(), project, environment, expected); err != nil {
 			s.writeError(writer, err, environmentSubject(project, environment))
 			return
 		}
@@ -185,12 +189,16 @@ func (s *Server) handleEnvironment(writer http.ResponseWriter, request *http.Req
 	}
 }
 
-func (s *Server) handleRescan(writer http.ResponseWriter, request *http.Request, project, environment string) {
+func (s *Server) handleRescan(writer http.ResponseWriter, request *http.Request, project, environment string, principal auth.Principal) {
 	if request.Method != http.MethodPost {
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	result, warnings, err := s.app.Rescan(request.Context(), project, environment)
+	expected, ok := requestResourceVersion(writer, request, request.Header.Get(contract.ClientKindHeader) == string(contract.ClientKindMCP))
+	if !ok {
+		return
+	}
+	result, warnings, err := s.app.Rescan(request.Context(), project, environment, principal.Actor, expected)
 	if err != nil {
 		s.writeError(writer, err, environmentSubject(project, environment))
 		return
@@ -272,14 +280,21 @@ func (s *Server) handleSources(writer http.ResponseWriter, request *http.Request
 			writeAPIError(writer, http.StatusBadRequest, contract.APIError{Code: "PATH_REQUIRED", Message: "checkout path is required"})
 			return
 		}
-		result, warnings, err := s.app.SetSourceCheckout(request.Context(), project, environment, segments[4], input.Path, principal.Actor)
+		if !requireSourceRoot(writer, request, input.AllowedRoot) {
+			return
+		}
+		result, warnings, err := s.app.SetSourceCheckout(request.Context(), project, environment, segments[4], input.Path, principal.Actor, input.AllowedRoot)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "source": segments[4]})
 			return
 		}
 		writeJSON(writer, http.StatusOK, contract.EnvironmentMutation{Environment: result, Warnings: nonNil(warnings)})
 	case http.MethodDelete:
-		result, err := s.app.RemoveSourceCheckout(request.Context(), project, environment, segments[4], principal.Actor)
+		expected, ok := s.configurationCondition(writer, request, project, environment, segments[4])
+		if !ok {
+			return
+		}
+		result, err := s.app.RemoveSourceCheckout(request.Context(), project, environment, segments[4], principal.Actor, expected)
 		if err != nil {
 			s.writeError(writer, err, map[string]any{"project": project, "environment": environment, "source": segments[4]})
 			return

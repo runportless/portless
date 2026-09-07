@@ -154,13 +154,6 @@ func (c *Client) StopRecording(ctx context.Context, project, environment, name s
 	return result, err
 }
 
-// ExportRecording returns the portable JSON representation of a recording.
-func (c *Client) ExportRecording(ctx context.Context, project, environment, name string) ([]byte, error) {
-	var result []byte
-	err := c.do(ctx, http.MethodGet, environmentPath(project, environment)+"/recordings/"+EscapePath(name)+"/export", nil, &result)
-	return result, err
-}
-
 // DeleteRecording permanently removes one retained recording.
 func (c *Client) DeleteRecording(ctx context.Context, project, environment, name string) error {
 	return c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/recordings/"+EscapePath(name), nil, nil)
@@ -207,5 +200,19 @@ func (c *Client) DeleteFault(ctx context.Context, project, environment, name str
 func (c *Client) DisableAllFaults(ctx context.Context, project, environment string) (contract.DisableFaultsResponse, error) {
 	var result contract.DisableFaultsResponse
 	err := c.do(ctx, http.MethodPost, environmentPath(project, environment)+"/faults/disable-all", nil, &result)
+	return result, err
+}
+
+// PreviewTrafficClear returns the live watermark without clearing exchanges.
+func (c *Client) PreviewTrafficClear(ctx context.Context, project, environment string) (contract.TrafficClearPreview, error) {
+	var result contract.TrafficClearPreview
+	err := c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/traffic?mode=preview", nil, &result)
+	return result, err
+}
+
+// ClearTrafficThrough clears only the reviewed watermark with a required resource version.
+func (c *Client) ClearTrafficThrough(ctx context.Context, project, environment string, through int64) (contract.TrafficClearResponse, error) {
+	var result contract.TrafficClearResponse
+	err := c.do(ctx, http.MethodDelete, environmentPath(project, environment)+"/traffic?throughSequence="+strconv.FormatInt(through, 10), nil, &result)
 	return result, err
 }

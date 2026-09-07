@@ -94,13 +94,13 @@ func TestMockScenarioRejectsOverlapAndCoverageChangesWhileActive(t *testing.T) {
 	if _, err := app.PutMockRoute(ctx, "store", "local", "first", "new-service", model.MockRoute{Name: "new-service", Service: "checkout", Method: "GET", Path: "/", Status: 200, Enabled: true}, "test"); err == nil || !strings.Contains(err.Error(), "which services") {
 		t.Fatalf("active target expansion was accepted: %v", err)
 	}
-	if _, err := app.DeleteMockRoute(ctx, "store", "local", "first", "inventory-health", "test"); err == nil || !strings.Contains(err.Error(), "final route") {
+	if _, err := app.DeleteMockRoute(ctx, "store", "local", "first", "inventory-health", "test", nil); err == nil || !strings.Contains(err.Error(), "final route") {
 		t.Fatalf("active target removal was accepted: %v", err)
 	}
 	if _, err := app.PutMockRoute(ctx, "store", "local", "first", "inventory-health", model.MockRoute{Name: "inventory-health", Service: "inventory", Method: "GET", Path: "/health", Status: 503, Enabled: false}, "test"); err != nil {
 		t.Fatalf("same-coverage route update was rejected: %v", err)
 	}
-	if err := app.DeleteMockScenario(ctx, "store", "local", "first", "test"); err == nil {
+	if err := app.DeleteMockScenario(ctx, "store", "local", "first", "test", nil); err == nil {
 		t.Fatal("active scenario deletion was accepted")
 	}
 	if _, err := app.ChangeBinding(ctx, "store", "local", "checkout", model.ComponentBinding{Provider: model.ProviderMock, Mock: &model.MockTarget{Scenario: "first"}}, "test", "individual-mock"); err == nil || !strings.Contains(err.Error(), "individually") {

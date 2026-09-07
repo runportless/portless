@@ -98,6 +98,8 @@ describe('RecordingsPanel', () => {
     expect(html).not.toContain('One recording can be active at a time.')
     expect(html).toContain('● START RECORDING')
     expect(html).toContain('No recording history yet. Completed recordings will appear here.')
+    expect(html).toMatch(/<button[^>]*aria-label="Recording history actions"[^>]*disabled=""/)
+    expect(html).not.toContain('>DELETE ALL</button>')
     expect(html).not.toContain('CREATE RECORDING')
     expect(html).not.toContain('class="form-modal"')
   })
@@ -127,12 +129,15 @@ describe('RecordingsPanel', () => {
     expect(scheduler.clearInterval).toHaveBeenCalledWith(42)
   })
 
-  it('keeps recording history actions in a named row menu', () => {
+  it('keeps recording history actions in named header and row menus', () => {
     const html = renderToStaticMarkup(<RecordingsPanel environment={environment} recordings={[completedRecording]} refresh={async () => undefined} />)
 
     expect(html).toContain('completed-checkout')
-    expect(html).toContain('aria-label="Delete all 1 completed recording"')
-    expect(html).toContain('>DELETE ALL</button>')
+    const historyMenu = html.match(/<button[^>]*aria-label="Recording history actions"[^>]*>/)?.[0]
+    expect(historyMenu).toContain('aria-expanded="false"')
+    expect(historyMenu).not.toContain('disabled=""')
+    expect(html).not.toContain('aria-label="Delete all 1 completed recording"')
+    expect(html).not.toContain('>DELETE ALL</button>')
     expect(html).not.toContain('Repeat recording')
     expect(html).not.toContain('REPEAT')
     expect(html).toContain('aria-label="Recording actions for completed-checkout"')

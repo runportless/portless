@@ -38,6 +38,8 @@ export function MCPSettings({ environments, initialEnvironment }: {
   const defaultWorkspace = workspaceChoices.length === 1 ? workspaceChoices[0].directory : ''
   const [scopeKind, setScopeKind] = useState<ScopeKind>('environment')
   const [environment, setEnvironment] = useState(defaultEnvironment)
+  const [project, setProject] = useState(defaultEnvironment.split('/')[0] || '')
+  const [sourceRoots, setSourceRoots] = useState('')
   const [workspace, setWorkspace] = useState(defaultWorkspace)
   const [serverName, setServerName] = useState(() => suggestedMCPServerName({ kind: 'environment', environment: defaultEnvironment }))
   const [serverNameEdited, setServerNameEdited] = useState(false)
@@ -55,17 +57,17 @@ export function MCPSettings({ environments, initialEnvironment }: {
     if (!serverNameEdited) setServerName(suggestedMCPServerName({ kind: 'environment', environment: requestedEnvironment }))
   }, [environment, requestedEnvironment, serverNameEdited])
 
-  const scope = scopeFor(scopeKind, environment, workspace)
-  const configuration: MCPConfiguration = { serverName, executable, scope, capabilities }
+  const scope = scopeFor(scopeKind, environment, workspace, project)
+  const configuration: MCPConfiguration = { serverName, executable, scope, capabilities, sourceRoots: sourceRoots.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) }
   const valid = validMCPConfiguration(configuration)
   const preview = valid ? (format === 'json' ? serializeMCPClientConfiguration(configuration) : buildMCPCommand(configuration)) : ''
   const access = mcpAccessLabel(capabilities)
   const tools = mcpToolCount(capabilities)
-  const elevated = capabilities.lifecycle || capabilities.trafficControl
+  const elevated = capabilities.lifecycle || capabilities.trafficControl || capabilities.configuration || capabilities.replay
 
   const changeScope = (next: ScopeKind) => {
     setScopeKind(next)
-    if (!serverNameEdited) setServerName(suggestedMCPServerName(scopeFor(next, environment, workspace)))
+    if (!serverNameEdited) setServerName(suggestedMCPServerName(scopeFor(next, environment, workspace, project)))
   }
 
   const changeEnvironment = (next: string) => {
@@ -110,23 +112,29 @@ export function MCPSettings({ environments, initialEnvironment }: {
             <legend>SCOPE</legend>
             <label className={scopeKind === 'environment' ? 'is-selected' : ''}><input type="radio" name="mcp-scope" checked={scopeKind === 'environment'} onChange={() => changeScope('environment')} /><span><strong>Environment</strong><small>Pin access to one named environment.</small></span></label>
             <label className={`${scopeKind === 'workspace' ? 'is-selected ' : ''}${workspaceChoices.length === 0 ? 'is-disabled' : ''}`}><input type="radio" name="mcp-scope" checked={scopeKind === 'workspace'} disabled={workspaceChoices.length === 0} onChange={() => changeScope('workspace')} /><span><strong>Workspace</strong><small>Use environments associated with one source checkout.</small></span></label>
+            <label className={scopeKind === 'project' ? 'is-selected' : ''}><input type="radio" name="mcp-scope" checked={scopeKind === 'project'} onChange={() => changeScope('project')} /><span><strong>Project</strong><small>Access every environment and shared topology in one project.</small></span></label>
             <label className={scopeKind === 'all' ? 'is-selected' : ''}><input type="radio" name="mcp-scope" checked={scopeKind === 'all'} onChange={() => changeScope('all')} /><span><strong>All environments</strong><small>Permit access across this Portless installation.</small></span></label>
           </fieldset>
 
           {scopeKind === 'environment' && <label className="mcp-scope-value"><span>ENVIRONMENT</span><select aria-label="MCP environment" value={environment} onChange={(event) => changeEnvironment(event.target.value)}><option value="">Select an environment</option>{environmentChoices.map((choice) => <option value={choice.selector} key={choice.selector}>{choice.selector} · {choice.status}</option>)}</select></label>}
+          {scopeKind === 'project' && <label className="mcp-scope-value"><span>PROJECT</span><input aria-label="MCP project" value={project} onChange={(event) => { setProject(event.target.value); if (!serverNameEdited) setServerName(suggestedMCPServerName({ kind: 'project', project: event.target.value })) }} placeholder="store" autoComplete="off" spellCheck={false} /></label>}
           {scopeKind === 'workspace' && <label className="mcp-scope-value"><span>WORKSPACE SOURCE</span><select aria-label="MCP workspace source" value={workspace} onChange={(event) => changeWorkspace(event.target.value)}><option value="">Select a source checkout</option>{workspaceChoices.map((choice) => <option value={choice.directory} key={choice.directory}>{choice.label} · {choice.directory}</option>)}</select><small>The generated generic configuration uses <code>cwd</code>; verify that your MCP client supports it.</small></label>}
 
           <div className="mcp-capabilities-group">
             <div className="mcp-capabilities__title">CAPABILITIES</div>
             <div className="mcp-capabilities" role="group" aria-label="Capabilities">
-            <label><input type="checkbox" checked disabled /><span><strong>Inspection</strong><small>Environments, services, logs, traffic summaries, recordings, faults, operations, and timeline.</small></span><b>ALWAYS</b></label>
-            <label><input type="checkbox" checked={capabilities.lifecycle} onChange={() => toggleCapability('lifecycle')} /><span><strong>Lifecycle</strong><small>Start or stop environments and change service state.</small></span><b>+3 TOOLS</b></label>
-            <label><input type="checkbox" checked={capabilities.trafficControl} onChange={() => toggleCapability('trafficControl')} /><span><strong>Traffic control</strong><small>Start or stop recordings and apply or disable bounded faults.</small></span><b>+5 TOOLS</b></label>
-            <label><input type="checkbox" checked={capabilities.sensitiveTraffic} onChange={() => toggleCapability('sensitiveTraffic')} /><span><strong>Sensitive traffic</strong><small>Read bounded headers and captured request, response, or decoded message payload prefixes.</small></span><b>+1 TOOL</b></label>
+            <label><input type="checkbox" checked disabled /><span><strong>Inspection</strong><small>Projects, environments, services, logs, traces, traffic summaries, mock metadata, recordings, faults, operations, and timeline.</small></span><b>ALWAYS</b></label>
+            <label><input type="checkbox" checked={capabilities.lifecycle} onChange={() => toggleCapability('lifecycle')} /><span><strong>Lifecycle</strong><small>Start or stop environments and change service state. Combines with traffic control for mock activation and with configuration for binding changes.</small></span></label>
+            <label><input type="checkbox" checked={capabilities.trafficControl} onChange={() => toggleCapability('trafficControl')} /><span><strong>Traffic control</strong><small>Manage bounded recordings, faults, mock routes and saved traffic. Mock activation also requires lifecycle permission.</small></span></label>
+            <label><input type="checkbox" checked={capabilities.sensitiveTraffic} onChange={() => toggleCapability('sensitiveTraffic')} /><span><strong>Sensitive traffic</strong><small>Read captured payloads and export recordings. Also permits payload capture and recording imports with traffic control.</small></span></label>
+            <label><input type="checkbox" checked={capabilities.replay} onChange={() => toggleCapability('replay')} /><span><strong>Replay</strong><small>Edit and send reviewed HTTP requests and compare responses. Requires sensitive traffic permission.</small></span></label>
+            <label><input type="checkbox" checked={capabilities.configuration} onChange={() => toggleCapability('configuration')} /><span><strong>Configuration</strong><small>Discover projects, configure sources, clone environments, and preview and apply metadata cleanup. Shared topology changes require project or installation scope.</small></span></label>
             </div>
           </div>
+          {capabilities.configuration && <label className="mcp-scope-value"><span>AUTHORIZED SOURCE ROOTS</span><textarea aria-label="MCP source roots" rows={3} value={sourceRoots} onChange={(event) => setSourceRoots(event.target.value)} placeholder="/Users/dev/workspace" /><small>One absolute directory per line. New source paths must stay inside these roots. Workspace scope also authorizes its startup checkout; source roots do not expand environment access.</small></label>}
 
           <div className="mcp-notices" aria-live="polite">
+            {capabilities.replay && !capabilities.sensitiveTraffic && <div className="mcp-notice" role="status"><strong>REPLAY REQUIRES SENSITIVE TRAFFIC</strong><span>Select sensitive traffic to generate this configuration.</span></div>}
             {scopeKind === 'all' && <div className="mcp-notice"><strong>INSTALLATION-WIDE SCOPE</strong><span>This configuration can access every environment in this Portless installation.</span></div>}
             {elevated && <div className="mcp-notice"><strong>OPERATIONAL ACCESS</strong><span>This configuration permits the MCP client to change local environment behavior.</span></div>}
             {capabilities.sensitiveTraffic && <div className="mcp-notice"><strong>SENSITIVE DATA</strong><span>Traffic detail may contain credentials, personal data, or application data even after standard header redaction.</span></div>}
@@ -151,8 +159,9 @@ export function MCPSettings({ environments, initialEnvironment }: {
     </section>
 }
 
-function scopeFor(kind: ScopeKind, environment: string, workspace: string): MCPScope {
+function scopeFor(kind: ScopeKind, environment: string, workspace: string, project: string): MCPScope {
   if (kind === 'environment') return { kind, environment }
   if (kind === 'workspace') return { kind, directory: workspace }
+  if (kind === 'project') return { kind, project }
   return { kind }
 }

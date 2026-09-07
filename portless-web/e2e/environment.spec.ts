@@ -309,32 +309,77 @@ test('starts and stops all services from the Overview table without moving its h
   await authenticate(page)
   const header = environmentHeader(page)
   const title = page.locator('.services-panel > .panel-title')
-  const stopAll = title.getByRole('button', { name: 'Stop All', exact: true })
+  const menuTrigger = title.getByRole('button', { name: 'Services actions', exact: true })
+  const menu = title.getByRole('menu', { name: 'Services actions', exact: true })
+  const stopAll = menu.getByRole('menuitem', { name: 'STOP ALL', exact: true })
+  const confirmStopAll = menu.getByRole('menuitem', { name: 'Confirm stop all services', exact: true })
   const startAll = title.getByRole('button', { name: 'Start All', exact: true })
+  let stopRequests = 0
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === `${base}/down`) stopRequests++
+  })
   await expect(title.locator('small')).toHaveCount(0)
   await expect(title).not.toContainText('workloads')
-  await expect(stopAll).toBeEnabled()
+  await expect(menuTrigger).toBeEnabled()
+  await expect(stopAll).toHaveCount(0)
   await expect(startAll).toHaveCount(0)
 
+  await menuTrigger.focus()
+  await page.keyboard.press('Enter')
+  await expect(menuTrigger).toHaveAttribute('aria-expanded', 'true')
+  await page.keyboard.press('Tab')
+  await expect(stopAll).toBeFocused()
+  await expect(stopAll).toHaveCSS('outline-style', 'solid')
+  await page.keyboard.press('Enter')
+  await expect(confirmStopAll).toBeFocused()
+  await expect(confirmStopAll).toHaveText('CONFIRM')
+  await expect(confirmStopAll).toHaveClass(/is-confirming/)
+  expect(stopRequests).toBe(0)
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(menuTrigger).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(stopAll).toBeVisible()
+  await expect(confirmStopAll).toHaveCount(0)
+  await stopAll.click()
+  await expect(confirmStopAll).toBeVisible()
+  await title.getByText('SERVICES', { exact: true }).click()
+  await expect(menu).toHaveCount(0)
+
   const inventoryRow = page.locator('.service-row--interactive').filter({ has: page.getByRole('button', { name: 'View inventory details', exact: true }) })
+  await menuTrigger.click()
+  await stopAll.click()
+  await expect(confirmStopAll).toBeVisible()
   await inventoryRow.getByRole('button', { name: 'Service actions for inventory' }).click()
+  await expect(menu).toHaveCount(0)
   await page.getByRole('menu', { name: 'inventory actions' }).getByRole('menuitem', { name: 'STOP', exact: true }).click()
   await expect(inventoryRow).toContainText('stopped', { timeout: 30_000 })
   await expect(title.getByRole('button')).toHaveCount(0)
   await expect(title).toHaveCSS('min-height', '48px')
   await inventoryRow.getByRole('button', { name: 'Service actions for inventory' }).click()
   await page.getByRole('menu', { name: 'inventory actions' }).getByRole('menuitem', { name: 'START', exact: true }).click()
-  await expect(stopAll).toBeEnabled({ timeout: 30_000 })
+  await expect(menuTrigger).toBeEnabled({ timeout: 30_000 })
 
   for (const theme of ['dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: theme })
     for (const width of [1280, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
-      await expect(stopAll).toBeVisible()
-      expect(await stopAll.boundingBox()).toMatchObject({ width: 100, height: 29 })
+      await expect(menuTrigger).toBeVisible()
+      expect(await menuTrigger.boundingBox()).toMatchObject({ width: 40, height: 29 })
       expect((await title.boundingBox())?.height).toBe(48)
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
-      if (width === 1280) await title.screenshot({ path: testInfo.outputPath(`services-stop-all-${theme}.png`) })
+      if (width === 1280) await title.screenshot({ path: testInfo.outputPath(`services-actions-${theme}.png`) })
+      await menuTrigger.click()
+      await expect(stopAll).toBeVisible()
+      const menuBounds = await menu.boundingBox()
+      expect(menuBounds!.x).toBeGreaterThanOrEqual(0)
+      expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(width)
+      await page.locator('.services-panel').screenshot({ path: testInfo.outputPath(`services-menu-${theme}-${width}.png`) })
+      await stopAll.click()
+      await expect(confirmStopAll).toBeVisible()
+      expect(await menu.boundingBox()).toEqual(menuBounds)
+      await page.locator('.services-panel').screenshot({ path: testInfo.outputPath(`services-stop-confirm-${theme}-${width}.png`) })
+      await page.keyboard.press('Escape')
     }
   }
   await page.emulateMedia({ colorScheme: 'dark' })
@@ -344,7 +389,9 @@ test('starts and stops all services from the Overview table without moving its h
   // The class changes before the sidebar transition finishes moving the stage.
   await expect(page.locator('.stage')).toHaveCSS('margin-left', '0px')
   const titleBounds = await title.boundingBox()
-  const buttonBounds = await stopAll.boundingBox()
+  const menuTriggerBounds = await menuTrigger.boundingBox()
+  const controlRight = menuTriggerBounds!.x + menuTriggerBounds!.width
+  expect(stopRequests).toBe(0)
 
   for (const action of ['down', 'up'] as const) {
     const pattern = `**${base}/${action}`
@@ -360,17 +407,29 @@ test('starts and stops all services from the Overview table without moving its h
       await route.fulfill({ response })
     })
     try {
+      if (action === 'down') await menuTrigger.click()
       const button = action === 'down' ? stopAll : startAll
       await button.focus()
       await page.keyboard.press('Tab')
       await page.keyboard.press('Shift+Tab')
       await expect(button).toBeFocused()
       await expect(button).toHaveCSS('outline-style', 'solid')
-      if (action === 'down') await button.press('Enter')
+      if (action === 'down') {
+        await button.press('Space')
+        await expect(confirmStopAll).toBeFocused()
+        expect(requests).toBe(0)
+        await confirmStopAll.press('Enter')
+      }
       else await button.evaluate((element: HTMLButtonElement) => { element.click(); element.click() })
-      const pending = title.getByRole('button', { name: action === 'down' ? 'Stopping…' : 'Starting…', exact: true })
+      const pending = action === 'down' ? menuTrigger : title.getByRole('button', { name: 'Starting…', exact: true })
       await expect(pending).toBeDisabled()
-      expect(await pending.boundingBox()).toEqual(buttonBounds)
+      const pendingBounds = await pending.boundingBox()
+      expect(pendingBounds).toMatchObject({ y: menuTriggerBounds!.y, width: action === 'down' ? 40 : 100, height: 29 })
+      expect(pendingBounds!.x + pendingBounds!.width).toBe(controlRight)
+      if (action === 'down') {
+        await expect(title.getByRole('status')).toHaveText('Stopping…')
+        await expect(menu).toHaveCount(0)
+      }
       expect(await title.boundingBox()).toEqual(titleBounds)
       await expect(page.locator('.services-panel .service-row__menu-trigger:not(:disabled)')).toHaveCount(0)
       const palette = await openCommandPalette(page, 'environment')
@@ -380,9 +439,11 @@ test('starts and stops all services from the Overview table without moving its h
       await expect.poll(async () => (await controlAPI<{ status: string }>(base)).status, { timeout: 30_000 }).toBe(action === 'down' ? 'stopped' : 'healthy')
       await expect(pending).toBeDisabled()
       release()
-      const next = action === 'down' ? startAll : stopAll
+      const next = action === 'down' ? startAll : menuTrigger
       await expect(next).toBeEnabled({ timeout: 30_000 })
-      expect(await next.boundingBox()).toEqual(buttonBounds)
+      const nextBounds = await next.boundingBox()
+      expect(nextBounds).toMatchObject({ y: menuTriggerBounds!.y, width: action === 'down' ? 100 : 40, height: 29 })
+      expect(nextBounds!.x + nextBounds!.width).toBe(controlRight)
       expect(await title.boundingBox()).toEqual(titleBounds)
       expect(requests).toBe(1)
       if (action === 'down') await title.screenshot({ path: testInfo.outputPath('services-start-all-focus.png') })
@@ -391,6 +452,7 @@ test('starts and stops all services from the Overview table without moving its h
       await page.unrouteAll({ behavior: 'wait' })
     }
   }
+  expect(stopRequests).toBe(1)
   await expect(header.getByRole('link', { name: /health: healthy/ })).toBeVisible()
   expect((await applicationRequest('/checkout?sku=coffee-mug&quantity=1')).status).toBe(200)
 })

@@ -174,7 +174,7 @@ func (s *Service) runBindingChangeLocked(ctx context.Context, scope string, oper
 		return
 	}
 	if plan.environment.Status == model.EnvironmentStopped {
-		updated, replaceErr := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, plan.environment.Revision, plan.definition, plan.environment.Sources, plan.bindings)
+		updated, replaceErr := s.database.ReplaceEnvironmentConfiguration(ctx, projectName, environmentName, plan.environment.Revision, plan.definition, plan.environment.Sources, plan.bindings, nil)
 		if replaceErr != nil {
 			s.failBindingChange(scope, operation, replaceErr)
 			return

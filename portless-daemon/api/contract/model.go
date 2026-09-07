@@ -21,6 +21,15 @@ type OperationEvent = model.OperationEvent
 // ComponentBinding is the stable provider-binding wire model.
 type ComponentBinding = model.ComponentBinding
 
+// ProviderKind identifies the provider selected for an environment service.
+type ProviderKind = model.ProviderKind
+
+// RemoteTarget identifies a classified remote endpoint and its local write policy.
+type RemoteTarget = model.RemoteTarget
+
+// MockTarget identifies an environment-scoped scenario used as a service provider.
+type MockTarget = model.MockTarget
+
 // Connection is the stable logical service-connection wire model.
 type Connection = model.Connection
 
@@ -66,3 +75,6 @@ type MockRequest = model.MockRequest
 
 // MockPreview is the stable mock preview result wire model.
 type MockPreview = model.MockPreview
+
+// TrafficReplayProvenance identifies the original exchange and admitted replay run.
+type TrafficReplayProvenance = model.TrafficReplay

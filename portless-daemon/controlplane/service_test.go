@@ -57,11 +57,15 @@ func TestApplicationUsesInjectedDiscoveryEngine(t *testing.T) {
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test", Discoverer: discoverer})
 	defer app.Close(ctx)
 
-	_, environment, _, err := app.CreateProject(ctx, "fixture", []SourceInput{{Name: "fixture", Path: source}})
+	_, environment, _, err := app.CreateProject(ctx, "fixture", []SourceInput{{Name: "fixture", Path: source}}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if discoverer.path != source || len(environment.Services) != 1 || environment.Services[0].Framework != "fixture" {
 		t.Fatalf("injected discovery result was not used: path=%q environment=%#v", discoverer.path, environment)
 	}
+}
+
+func (d *fixtureDiscoverer) DiscoverWithin(ctx context.Context, path, allowedRoot string) (discovery.Result, error) {
+	return d.Discover(ctx, path)
 }

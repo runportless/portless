@@ -159,7 +159,7 @@ WHERE name = ? COLLATE NOCASE AND (? = 0 OR revision = ?)`, modelJSON, sourcesJS
 }
 
 // RenameProject renames a stopped project and reallocates its stable DNS endpoints.
-func (s *Store) RenameProject(ctx context.Context, oldName, newName string, expectedRevision int64) (model.Project, error) {
+func (s *Store) RenameProject(ctx context.Context, oldName, newName string, expectedRevision int64, expected *model.ResourceVersion) (model.Project, error) {
 	if err := model.ValidateProjectName(newName); err != nil {
 		return model.Project{}, err
 	}
@@ -196,6 +196,9 @@ func (s *Store) RenameProject(ctx context.Context, oldName, newName string, expe
 		return model.Project{}, err
 	}
 	defer tx.Rollback()
+	if err := checkConfigurationTx(ctx, tx, oldName, "", expected, true); err != nil {
+		return model.Project{}, err
+	}
 	result, err := tx.ExecContext(ctx, `
 UPDATE projects SET name = ?, revision = revision + 1, updated_at = ?
 WHERE name = ? COLLATE NOCASE AND (? = 0 OR revision = ?)`, newName, nowText(), oldName, expectedRevision, expectedRevision)
@@ -228,23 +231,22 @@ WHERE p.name = ? COLLATE NOCASE AND e.name = ? COLLATE NOCASE`, newName, plan.en
 }
 
 // ForgetProject deletes a project only when all of its environments are stopped.
-func (s *Store) ForgetProject(ctx context.Context, name string) error {
-	project, err := s.Project(ctx, name)
+func (s *Store) ForgetProject(ctx context.Context, name string, expected *model.ResourceVersion) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	for _, environment := range project.Environments {
-		if environment.Status != model.EnvironmentStopped {
-			return errors.New("all environments must be stopped before the project is forgotten")
-		}
+	defer tx.Rollback()
+	if err := checkConfigurationTx(ctx, tx, name, "", expected, true); err != nil {
+		return err
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE name = ? COLLATE NOCASE`, name)
+	result, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE name = ? COLLATE NOCASE`, name)
 	if err != nil {
 		return err
 	}
-	changed, _ := result.RowsAffected()
-	if changed == 0 {
+	count, _ := result.RowsAffected()
+	if count == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }

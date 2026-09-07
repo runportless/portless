@@ -172,7 +172,7 @@ func TestRecoverySkipsOutgoingProxiesForMockAndRemoteProviders(t *testing.T) {
 				t.Fatalf("restored local caller did not acquire its outgoing proxy: %#v, %v", outgoing, err)
 			}
 			if provider == model.ProviderMock {
-				if err := app.DeleteMockScenario(ctx, "billing", "local", "sold-out", "test"); err != nil {
+				if err := app.DeleteMockScenario(ctx, "billing", "local", "sold-out", "test", nil); err != nil {
 					t.Fatalf("delete disabled scenario after recovery: %v", err)
 				}
 			}

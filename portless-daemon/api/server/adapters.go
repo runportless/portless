@@ -29,7 +29,7 @@ func environmentSubject(project, environment string) map[string]any {
 func applicationSourceInputs(inputs []contract.SourceInput) []controlplane.SourceInput {
 	result := make([]controlplane.SourceInput, 0, len(inputs))
 	for _, input := range inputs {
-		result = append(result, controlplane.SourceInput{Name: input.Name, Path: input.Path})
+		result = append(result, controlplane.SourceInput{Name: input.Name, Path: input.Path, AllowedRoot: input.AllowedRoot})
 	}
 	return result
 }

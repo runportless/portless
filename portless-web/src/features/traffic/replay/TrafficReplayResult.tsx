@@ -5,11 +5,13 @@ import { ActionErrorNotice } from '../../../components/ActionError'
 import { CopyIcon, formatTrafficBytes, TrafficTextContent } from '../detail/TrafficFormatting'
 import type { TrafficPayloadView } from '../detail/trafficDetailTypes'
 import { formattedTrafficHeaders, highlightedTrafficHeaders, rawTrafficMessage } from '../protocols/HttpTrafficDetail'
+import { ReplayDifferenceDetails } from './ReplayDifferenceDetails'
 import { ReplayTabs } from './ReplayTabs'
 
 export function TrafficReplayResult({ workspace, outdated }: { workspace: TrafficReplayWorkspace; outdated: boolean }) {
   const [view, setView] = useState<'original' | 'replayed' | 'diff'>('original')
   const [representation, setRepresentation] = useState<TrafficPayloadView>('body')
+  const [differencesExpanded, setDifferencesExpanded] = useState(true)
   const panelID = useId()
   const result = workspace.result
   const runNumber = result?.runNumber
@@ -24,7 +26,7 @@ export function TrafficReplayResult({ workspace, outdated }: { workspace: Traffi
       {workspace.run?.outcome === 'unknown' && <p className="replay-notice" role="note">The request may have reached the application. It will not be sent again automatically.</p>}
       {!!result?.limitations?.length && <ul className="replay-limitations">{result.limitations.map((limitation, index) => <li key={`${limitation.code}-${index}`}>{limitation.message}</li>)}</ul>}
       <div className="replay-result__representation">
-        {view === 'diff' ? result ? <ReplayDifference section={representation === 'raw' ? undefined : result.comparison[representation]} original={workspace.baseline} replayed={result.exchange} representation={representation} onRepresentation={setRepresentation} /> : <p className="replay-empty">Send a request to compare the captured response with a new response.</p>
+        {view === 'diff' ? result ? <ReplayDifference section={representation === 'raw' ? undefined : result.comparison[representation]} original={workspace.baseline} replayed={result.exchange} representation={representation} onRepresentation={setRepresentation} expanded={differencesExpanded} onExpandedChange={setDifferencesExpanded} /> : <p className="replay-empty">Send a request to compare the captured response with a new response.</p>
           : selected ? <ReplayResponse exchange={selected} representation={representation} onRepresentation={setRepresentation} label={view === 'original' ? 'Original' : 'Replayed'} /> : <p className="replay-empty">No replay response available.</p>}
       </div>
     </div>
@@ -56,10 +58,9 @@ function ReplayResponse({ exchange, representation, onRepresentation, label }: {
   </section>
 }
 
-function ReplayDifference({ section, original, replayed, representation, onRepresentation }: { section?: TrafficComparisonSection; original?: TrafficExchange; replayed?: TrafficExchange; representation: TrafficPayloadView; onRepresentation: (view: TrafficPayloadView) => void }) {
+function ReplayDifference({ section, original, replayed, representation, onRepresentation, expanded, onExpandedChange }: { section?: TrafficComparisonSection; original?: TrafficExchange; replayed?: TrafficExchange; representation: TrafficPayloadView; onRepresentation: (view: TrafficPayloadView) => void; expanded: boolean; onExpandedChange: (expanded: boolean) => void }) {
   return <div className="replay-diff">
-    {section && <div className={`replay-diff__state is-${section.state}`}><strong>{section.state === 'equal' ? 'No differences' : section.state === 'different' ? 'Differences found' : section.state === 'partial' ? 'Partial comparison' : 'Comparison unavailable'}</strong>{section.reason && <p>{section.reason}</p>}</div>}
-    {!!section?.changes?.length && <table className="replay-diff-table" aria-label={`${representation} changes`}><thead><tr><th scope="col">PATH / HEADER</th><th scope="col">ORIGINAL</th><th scope="col">REPLAYED</th></tr></thead><tbody>{section.changes.slice(0, 1000).map((change, index) => <tr key={`${change.path}-${index}`}><th scope="row"><code>{change.path || '/'}</code><small>{change.kind}</small></th><td><pre>{change.before ?? '—'}</pre></td><td><pre>{change.after ?? '—'}</pre></td></tr>)}</tbody></table>}
+    {section && <ReplayDifferenceDetails section={section} representation={representation} expanded={expanded} onExpandedChange={onExpandedChange} />}
     <div className="replay-diff__panes">{original && <ReplayResponse exchange={original} representation={representation} onRepresentation={onRepresentation} label="Original" />}{replayed && <ReplayResponse exchange={replayed} representation={representation} onRepresentation={onRepresentation} label="Replayed" />}</div>
   </div>
 }

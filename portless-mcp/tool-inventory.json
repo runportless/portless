@@ -1,0 +1,593 @@
+[
+  {
+    "name": "portless_add_project_source",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_apply_fault",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_change_service_binding",
+    "requires": [
+      "configuration",
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
+    "name": "portless_change_service_state",
+    "requires": [
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
+    "name": "portless_clear_traffic",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_clone_environment",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_close_replay",
+    "requires": [
+      "replay",
+      "sensitiveTraffic"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_create_mock_scenario",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_create_project",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_delete_fault",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_delete_mock_route",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_delete_mock_scenario",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_delete_project_source",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_delete_recording",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_disable_all_faults",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_disable_all_mock_scenarios",
+    "requires": [
+      "trafficControl",
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
+    "name": "portless_disable_fault",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_discover_project",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_enable_fault",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_export_project",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_export_recording",
+    "requires": [
+      "sensitiveTraffic"
+    ],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_forget_environment",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_forget_project",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_connection",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_environment",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_fault",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_mock_route",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_mock_scenario",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_operation",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_project",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_recording",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_replay",
+    "requires": [
+      "replay",
+      "sensitiveTraffic"
+    ],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_service",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_service_configuration",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_timeline",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_trace",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_get_traffic_detail",
+    "requires": [
+      "sensitiveTraffic"
+    ],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_import_mock_openapi",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_import_mock_recording",
+    "requires": [
+      "trafficControl",
+      "sensitiveTraffic"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_connections",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_environments",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_faults",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_mock_scenarios",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_operations",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_projects",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_recordings",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_list_traces",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_prepare_replay",
+    "requires": [
+      "replay",
+      "sensitiveTraffic"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_preview_mock",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_put_mock_route",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_query_traffic",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_read_logs",
+    "requires": [],
+    "readOnly": true,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_remove_source_checkout",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_rename_project",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_rescan_environment",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_run_replay",
+    "requires": [
+      "replay",
+      "sensitiveTraffic"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
+    "name": "portless_set_mock_scenario_enabled",
+    "requires": [
+      "trafficControl",
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
+    "name": "portless_set_source_checkout",
+    "requires": [
+      "configuration"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_start_environment",
+    "requires": [
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
+    "name": "portless_start_recording",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_stop_environment",
+    "requires": [
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": false
+  },
+  {
+    "name": "portless_stop_recording",
+    "requires": [
+      "trafficControl"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": true,
+    "openWorld": false
+  },
+  {
+    "name": "portless_update_replay",
+    "requires": [
+      "replay",
+      "sensitiveTraffic"
+    ],
+    "readOnly": false,
+    "destructive": false,
+    "idempotent": false,
+    "openWorld": false
+  }
+]

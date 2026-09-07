@@ -22,7 +22,7 @@ func TestSharedGitCheckoutIsPreparedAutomaticallyAndReused(t *testing.T) {
 			ctx := context.Background()
 			app, store, root := worktreeTestService(t, "checkout")
 			local := startWorktreeEnvironment(t, app, "local")
-			if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa"); err != nil {
+			if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa", "CLI"); err != nil {
 				t.Fatal(err)
 			}
 			original := local.Sources[0].Path
@@ -104,7 +104,7 @@ func TestConcurrentStartsShareOneWorktreePerEnvironmentRepository(t *testing.T) 
 	ctx := context.Background()
 	app, _, root := worktreeTestService(t, "checkout", "inventory")
 	for _, name := range []string{"qa", "preview"} {
-		if _, err := app.CloneEnvironment(ctx, "billing", "local", name); err != nil {
+		if _, err := app.CloneEnvironment(ctx, "billing", "local", name, "CLI"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,7 +145,7 @@ func TestSwitchToLocalPreparesAnIndependentCheckout(t *testing.T) {
 	ctx := context.Background()
 	app, _, _ := worktreeTestService(t, "checkout")
 	local := startWorktreeEnvironment(t, app, "local")
-	if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))

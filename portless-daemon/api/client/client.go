@@ -17,10 +17,13 @@ import (
 
 // Client is an authenticated typed client for one Portless daemon API.
 type Client struct {
-	baseURL    string
-	token      string
-	http       *http.Client
-	clientKind contract.ClientKind
+	baseURL         string
+	token           string
+	http            *http.Client
+	clientKind      contract.ClientKind
+	mcpReplay       bool
+	mockMetadata    bool
+	resourceVersion *contract.ResourceVersion
 }
 
 // New constructs a daemon API client. A nil httpClient uses
@@ -37,6 +40,13 @@ func New(baseURL, token string, httpClient *http.Client) *Client {
 func (c *Client) WithClientKind(kind contract.ClientKind) *Client {
 	clone := *c
 	clone.clientKind = kind
+	return &clone
+}
+
+// WithMCPReplayCapability declares explicit replay permission for the local MCP adapter.
+func (c *Client) WithMCPReplayCapability() *Client {
+	clone := *c
+	clone.mcpReplay = true
 	return &clone
 }
 
@@ -81,6 +91,15 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, 
 	if c.clientKind != "" {
 		request.Header.Set(contract.ClientKindHeader, string(c.clientKind))
 	}
+	if c.resourceVersion != nil && method != http.MethodGet {
+		request.Header.Set("If-Match", resourceVersionHeader(*c.resourceVersion))
+	}
+	if c.mockMetadata {
+		request.Header.Set(contract.MockMetadataHeader, "1")
+	}
+	if c.mcpReplay && c.clientKind == contract.ClientKindMCP {
+		request.Header.Set(contract.MCPReplayCapabilityHeader, contract.MCPReplayCapabilityVersion)
+	}
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -98,9 +117,12 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, input, 
 		// body. Allow their JSON encoding without raising other response limits.
 		limit += 12 * contract.TrafficReplayMaxBodyBytes
 	}
-	content, err := io.ReadAll(io.LimitReader(response.Body, limit))
+	content, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		return err
+	}
+	if int64(len(content)) > limit {
+		return fmt.Errorf("daemon response exceeds the %d byte limit", limit)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var envelope contract.ErrorEnvelope

@@ -81,10 +81,10 @@ func TestMockScenariosPersistServiceRoutesAndCloneWithEnvironment(t *testing.T) 
 	if err != nil || len(cloned.Routes) != 1 || cloned.Routes[0].Body != `{"available":false}` || !reflect.DeepEqual(cloned.Routes[0].Query, updated.Routes[0].Query) {
 		t.Fatalf("cloned scenario = %#v, err = %v", cloned, err)
 	}
-	if _, err := controlStore.DeleteMockRoute(ctx, "store", "qa", "sold-out", "lookup"); err != nil {
+	if _, err := controlStore.DeleteMockRoute(ctx, "store", "qa", "sold-out", "lookup", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := controlStore.DeleteMockScenario(ctx, "store", "qa", "sold-out"); err != nil {
+	if err := controlStore.DeleteMockScenario(ctx, "store", "qa", "sold-out", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controlStore.MockScenario(ctx, "store", "qa", "sold-out"); !errors.Is(err, ErrNotFound) {

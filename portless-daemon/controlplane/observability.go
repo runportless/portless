@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/database"
 	"github.com/runportless/portless/portless-daemon/events"
 	"github.com/runportless/portless/portless-daemon/model"
@@ -138,9 +139,9 @@ func (s *Service) Recording(ctx context.Context, project, environment, name stri
 }
 
 // DeleteRecording removes a recording and all of its captured traffic.
-func (s *Service) DeleteRecording(ctx context.Context, project, environment, name, actor string) error {
+func (s *Service) DeleteRecording(ctx context.Context, project, environment, name, actor string, expected *model.ResourceVersion) error {
 	scope := model.EnvironmentSelector(project, environment)
-	if err := s.database.DeleteRecording(ctx, scope, name); err != nil {
+	if err := s.database.DeleteRecording(ctx, scope, name, expected); err != nil {
 		return err
 	}
 	_, _ = s.timeline(ctx, scope, actor, "recording.deleted", name, "warning", "Recording "+name+" deleted", nil)
@@ -210,7 +211,7 @@ func (s *Service) Fault(ctx context.Context, project, environment, name string) 
 }
 
 // EnableFault reactivates a non-expired fault rule.
-func (s *Service) EnableFault(ctx context.Context, project, environment, name, actor string) (model.FaultRule, error) {
+func (s *Service) EnableFault(ctx context.Context, project, environment, name, actor string, expected *model.ResourceVersion) (model.FaultRule, error) {
 	scope := model.EnvironmentSelector(project, environment)
 	fault, err := s.database.Fault(ctx, scope, name)
 	if err != nil {
@@ -219,8 +220,8 @@ func (s *Service) EnableFault(ctx context.Context, project, environment, name, a
 	if fault.ExpiresAt != nil && !fault.ExpiresAt.After(time.Now()) {
 		return model.FaultRule{}, fmt.Errorf("fault %s has expired; delete it and create a new rule", name)
 	}
-	if fault.Enabled {
-		return fault, nil
+	if actor == "MCP" && (fault.Source == "" || fault.Target == "" || fault.ExpiresAt == nil || fault.ExpiresAt.After(time.Now().Add(time.Hour))) {
+		return model.FaultRule{}, errors.New("MCP can only enable an exact-edge fault with an existing expiry within one hour")
 	}
 	definition, err := s.database.EnvironmentModel(ctx, project, environment)
 	if err != nil {
@@ -229,7 +230,7 @@ func (s *Service) EnableFault(ctx context.Context, project, environment, name, a
 	if err := validateExperimentScope(definition, fault.Source, fault.Target, false); err != nil {
 		return model.FaultRule{}, err
 	}
-	if err := s.database.EnableFault(ctx, scope, name); err != nil {
+	if err := s.database.EnableFault(ctx, scope, name, expected); err != nil {
 		return model.FaultRule{}, err
 	}
 	fault, err = s.database.Fault(ctx, scope, name)
@@ -253,9 +254,9 @@ func (s *Service) DisableFault(ctx context.Context, project, environment, name, 
 }
 
 // DeleteFault permanently removes a fault rule.
-func (s *Service) DeleteFault(ctx context.Context, project, environment, name, actor string) error {
+func (s *Service) DeleteFault(ctx context.Context, project, environment, name, actor string, expected *model.ResourceVersion) error {
 	scope := model.EnvironmentSelector(project, environment)
-	if err := s.database.DeleteFault(ctx, scope, name); err != nil {
+	if err := s.database.DeleteFault(ctx, scope, name, expected); err != nil {
 		return err
 	}
 	_, _ = s.timeline(ctx, scope, actor, "fault.deleted", name, "warning", "Fault "+name+" deleted", nil)
@@ -300,13 +301,21 @@ func (s *Service) Logs(ctx context.Context, project, environment, service string
 
 // ExportProject serializes a project's reusable topology as formatted JSON.
 func (s *Service) ExportProject(ctx context.Context, project string) ([]byte, error) {
-	definition, err := s.database.ProjectModel(ctx, project)
+	declaration, err := s.ProjectDeclaration(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	definition.SuggestedName = project
-	return json.MarshalIndent(struct {
-		SchemaVersion int `json:"schemaVersion"`
-		model.ProjectModel
-	}{SchemaVersion: 1, ProjectModel: definition}, "", "  ")
+	return json.MarshalIndent(declaration, "", "  ")
+}
+
+// TrafficTracePage reads only the requested span metadata, preserving the complete trace identity.
+func (s *Service) TrafficTracePage(ctx context.Context, project, environment string, number int64, offset, limit int) (contract.TrafficTracePage, error) {
+	trace, next, found, err := s.traffic.TracePage(ctx, model.EnvironmentSelector(project, environment), number, offset, limit)
+	if err != nil {
+		return contract.TrafficTracePage{}, err
+	}
+	if !found {
+		return contract.TrafficTracePage{}, database.ErrNotFound
+	}
+	return contract.TrafficTracePage{Trace: trace, NextOffset: next}, nil
 }

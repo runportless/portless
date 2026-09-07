@@ -51,12 +51,15 @@ func TestToolInventoryIsFixedByStartupCapabilities(t *testing.T) {
 		"portless_list_connections", "portless_list_environments", "portless_list_faults",
 		"portless_list_operations", "portless_list_recordings", "portless_query_traffic",
 		"portless_read_logs",
+		"portless_list_projects", "portless_get_project", "portless_export_project",
+		"portless_list_traces", "portless_get_trace", "portless_list_mock_scenarios", "portless_get_mock_scenario", "portless_get_mock_route", "portless_preview_mock",
 	}
-	sensitiveTools := []string{"portless_get_traffic_detail"}
+	sensitiveTools := []string{"portless_get_traffic_detail", "portless_export_recording"}
 	lifecycleTools := []string{"portless_change_service_state", "portless_start_environment", "portless_stop_environment"}
 	trafficControlTools := []string{
-		"portless_apply_fault", "portless_disable_all_faults", "portless_disable_fault",
-		"portless_start_recording", "portless_stop_recording",
+		"portless_apply_fault", "portless_disable_all_faults", "portless_disable_fault", "portless_enable_fault", "portless_delete_fault", "portless_delete_recording",
+		"portless_start_recording", "portless_stop_recording", "portless_clear_traffic",
+		"portless_create_mock_scenario", "portless_put_mock_route", "portless_import_mock_openapi", "portless_delete_mock_route", "portless_delete_mock_scenario",
 	}
 	sort.Strings(defaultTools)
 
@@ -76,6 +79,12 @@ func TestToolInventoryIsFixedByStartupCapabilities(t *testing.T) {
 		}
 		if config.AllowTrafficControl {
 			want = append(want, trafficControlTools...)
+			if config.AllowSensitiveTraffic {
+				want = append(want, "portless_import_mock_recording")
+			}
+			if config.AllowLifecycle {
+				want = append(want, "portless_set_mock_scenario_enabled", "portless_disable_all_mock_scenarios")
+			}
 		}
 		sort.Strings(want)
 		t.Run(strings.Join(capabilityNames(config), "+"), func(t *testing.T) {
@@ -251,8 +260,8 @@ func TestReadReconnectsOnceButMutationDoesNotRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsError {
-		t.Fatalf("failed mutation unexpectedly succeeded: %#v", result)
+	if result.IsError || !strings.Contains(textContent(result), `"admissionUnknown":true`) || !strings.Contains(textContent(result), `"idempotencyKey"`) {
+		t.Fatalf("uncertain mutation lost recovery identity: %#v", result)
 	}
 	if calls := mutationConnector.calls.Load(); calls != 1 {
 		t.Fatalf("mutation connector calls = %d, want 1", calls)
@@ -288,8 +297,8 @@ func TestServeNegotiatesOverInjectedStdioAndStopsOnEOF(t *testing.T) {
 	if initialized.Capabilities.Tools == nil || initialized.Capabilities.Tools.ListChanged {
 		t.Fatalf("tool capability = %#v, want fixed tool list", initialized.Capabilities.Tools)
 	}
-	if names := listSessionToolNames(t, session); len(names) != 15 {
-		t.Fatalf("default stdio tool count = %d, want 15", len(names))
+	if names := listSessionToolNames(t, session); len(names) != 24 {
+		t.Fatalf("default stdio tool count = %d, want 24", len(names))
 	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)

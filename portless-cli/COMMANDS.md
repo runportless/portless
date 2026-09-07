@@ -550,7 +550,7 @@ identifier, trigger, target build, acceptance time, and shared ready deadline.
 
 | Command | Usage |
 | --- | --- |
-| `portless mcp serve` | Serve Portless tools over stdin/stdout. By default, scope access to the current workspace. `--env <project/environment>` pins one environment; `--all-environments` grants installation-wide inspection and cannot be combined with `--env`. `--allow-lifecycle` enables environment and service lifecycle tools. `--allow-traffic-control` enables bounded recording and fault tools. `--allow-sensitive-traffic` enables detailed traffic access that may include application data. `--json` is rejected because stdout is reserved for MCP JSON-RPC. |
+| `portless mcp serve` | Serve 24 default inspection tools over stdio, scoped to the current checkout. `--env <project/environment>`, `--project <project>`, and `--all-environments` are mutually exclusive scope selections. Repeat `--source-root <absolute-directory>` to authorize new source paths. `--allow-lifecycle`, `--allow-traffic-control`, `--allow-sensitive-traffic`, `--allow-replay`, and `--allow-configuration` opt into application workflows (63 tools with all flags). Replay requires sensitive traffic; mock activation requires traffic control plus lifecycle, recording import requires traffic control plus sensitive traffic, and binding changes require configuration plus lifecycle. `--json` is rejected because stdout carries MCP JSON-RPC. |
 
 See the [MCP README](../portless-mcp/README.md) for client configuration and
 the exact tool capability model.

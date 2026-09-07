@@ -29,11 +29,11 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 
 	first := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
 	worktree := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	_, local, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: first}})
+	_, local, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: first}}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cloned, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid")
+	cloned, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestEnvironmentCanSwitchProviderAndSourceCheckout(t *testing.T) {
 		t.Fatalf("provider changes leaked between environments: local=%#v hybrid=%#v", local.Bindings, hybrid.Bindings)
 	}
 	createdAt := hybrid.Sources[0].CreatedAt
-	hybrid, _, err = app.SetSourceCheckout(ctx, "billing", "hybrid", "checkout", worktree, "test")
+	hybrid, _, err = app.SetSourceCheckout(ctx, "billing", "hybrid", "checkout", worktree, "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,11 +97,11 @@ func TestEnvironmentCanRemoveUnusedCheckoutWithoutDeletingProjectSource(t *testi
 	defer app.Close(ctx)
 
 	checkout := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	project, local, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: checkout}})
+	project, local, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: checkout}}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.RemoveSourceCheckout(ctx, "billing", "local", "checkout", "test"); err == nil {
+	if _, err := app.RemoveSourceCheckout(ctx, "billing", "local", "checkout", "test", nil); err == nil {
 		t.Fatal("checkout removal succeeded while a Checkout provider still used it")
 	} else {
 		var inUse CheckoutInUseError
@@ -109,7 +109,7 @@ func TestEnvironmentCanRemoveUnusedCheckoutWithoutDeletingProjectSource(t *testi
 			t.Fatalf("checkout removal error = %#v, %v", inUse, err)
 		}
 	}
-	if _, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "billing", "local", "hybrid", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	remote := model.ComponentBinding{Provider: model.ProviderRemote, Remote: &model.RemoteTarget{
@@ -122,7 +122,7 @@ func TestEnvironmentCanRemoveUnusedCheckoutWithoutDeletingProjectSource(t *testi
 	if operation = waitForOperation(t, app, operation); operation.State != "succeeded" {
 		t.Fatalf("remote provider operation = %#v", operation)
 	}
-	hybrid, err := app.RemoveSourceCheckout(ctx, "billing", "hybrid", "checkout", "browser")
+	hybrid, err := app.RemoveSourceCheckout(ctx, "billing", "hybrid", "checkout", "browser", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,17 +157,17 @@ func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *test
 	defer app.Close(ctx)
 
 	checkout := nestNamedFixture(t, filepath.Join(t.TempDir(), "checkout"), "checkout")
-	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa", "CLI"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.CloneEnvironment(ctx, "store", "local", "remote"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "remote", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	inventoryLocal := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory-local"), "inventory")
-	project, local, warnings, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventoryLocal, "test")
+	project, local, warnings, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventoryLocal, "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestProjectSourceAdditionIsGlobalAndBindsOnlyTheSelectedEnvironment(t *test
 	}
 
 	inventoryQA := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory-qa"), "inventory")
-	qa, _, err = app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventoryQA, "test")
+	qa, _, err = app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventoryQA, "test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,17 +245,17 @@ func TestProjectSourceAdditionRequiresEveryEnvironmentToBeStoppedAndRollsBack(t 
 	defer app.Close(ctx)
 
 	checkout := nestNamedFixture(t, filepath.Join(t.TempDir(), "checkout"), "checkout")
-	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentHealthy, "test"); err != nil {
 		t.Fatal(err)
 	}
 	inventory := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory"), "inventory")
-	_, _, _, err = app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test")
+	_, _, _, err = app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test", "")
 	var active database.ActiveProjectEnvironmentsError
 	if !errors.As(err, &active) || strings.Join(active.Environments, ",") != "store/qa" {
 		t.Fatalf("active environment error = %#v, %v", active, err)
@@ -285,17 +285,17 @@ func TestProjectSourceRemovalRejectsReferencedMockScenarioRoutes(t *testing.T) {
 	defer app.Close(ctx)
 
 	checkout := nestNamedFixture(t, filepath.Join(t.TempDir(), "checkout"), "checkout")
-	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "store", []SourceInput{{Name: "checkout", Path: checkout}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "store", "local", "qa", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	inventory := nestNamedFixture(t, filepath.Join(t.TempDir(), "inventory"), "inventory")
-	if _, _, _, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test"); err != nil {
+	if _, _, _, err := app.AddProjectSource(ctx, "store", "local", "inventory", inventory, "test", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventory, "test"); err != nil {
+	if _, _, err := app.SetSourceCheckout(ctx, "store", "qa", "inventory", inventory, "test", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.CreateMockScenario(ctx, "store", "local", model.MockScenario{Name: "empty-inventory"}, "test"); err != nil {
@@ -310,20 +310,20 @@ func TestProjectSourceRemovalRejectsReferencedMockScenarioRoutes(t *testing.T) {
 	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentHealthy, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.RemoveProjectSource(ctx, "store", "inventory", "test"); err == nil {
+	if _, err := app.RemoveProjectSource(ctx, "store", "inventory", "test", nil); err == nil {
 		t.Fatal("active environment did not block source removal")
 	}
 	if err := controlStore.SetEnvironmentStatus(ctx, "store", "qa", model.EnvironmentStopped, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.RemoveProjectSource(ctx, "store", "inventory", "test"); err == nil || !strings.Contains(err.Error(), "mock scenario") {
+	if _, err := app.RemoveProjectSource(ctx, "store", "inventory", "test", nil); err == nil || !strings.Contains(err.Error(), "mock scenario") {
 		t.Fatalf("referenced mock scenario route did not block source removal: %v", err)
 	}
-	if err := app.DeleteMockScenario(ctx, "store", "local", "empty-inventory", "test"); err != nil {
+	if err := app.DeleteMockScenario(ctx, "store", "local", "empty-inventory", "test", nil); err != nil {
 		t.Fatal(err)
 	}
 
-	removed, err := app.RemoveProjectSource(ctx, "store", "inventory", "test")
+	removed, err := app.RemoveProjectSource(ctx, "store", "inventory", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,10 +354,10 @@ func TestProjectSourceRemovalRejectsReferencedMockScenarioRoutes(t *testing.T) {
 	if err != nil || fault.Enabled || fault.Revision != 2 {
 		t.Fatalf("obsolete fault after source removal = %#v, err = %v", fault, err)
 	}
-	if _, err := app.RemoveProjectSource(ctx, "store", "checkout", "test"); err == nil || !strings.Contains(err.Error(), "retain at least one") {
+	if _, err := app.RemoveProjectSource(ctx, "store", "checkout", "test", nil); err == nil || !strings.Contains(err.Error(), "retain at least one") {
 		t.Fatalf("last source removal error = %v", err)
 	}
-	if _, err := app.RemoveProjectSource(ctx, "store", "missing", "test"); !errors.Is(err, database.ErrNotFound) {
+	if _, err := app.RemoveProjectSource(ctx, "store", "missing", "test", nil); !errors.Is(err, database.ErrNotFound) {
 		t.Fatalf("missing source removal error = %v", err)
 	}
 }
@@ -397,7 +397,7 @@ func TestProjectSourceRemovalPersistsARequiredDependencyAsAnExplicitIssue(t *tes
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
 	defer app.Close(ctx)
 
-	removed, err := app.RemoveProjectSource(ctx, "store", "inventory", "test")
+	removed, err := app.RemoveProjectSource(ctx, "store", "inventory", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +662,7 @@ func TestCreateProjectRejectsDaemonRelativeSourcePath(t *testing.T) {
 	defer controlStore.Close()
 	app := New(controlStore, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
 	defer app.Close(ctx)
-	_, _, _, err = app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: "."}})
+	_, _, _, err = app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: "."}}, "", "CLI")
 	if err == nil {
 		t.Fatal("relative source path was accepted by the daemon")
 	}
@@ -680,7 +680,7 @@ func TestEnvironmentsForPathDecoratesResolvedEnvironmentURLs(t *testing.T) {
 	defer app.Close(ctx)
 
 	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	environments, err := app.EnvironmentsForPath(ctx, source)
@@ -715,7 +715,7 @@ func TestRescanRemovesConnectionNoLongerDiscoveredFromSource(t *testing.T) {
 	if err := os.WriteFile(environmentFile, []byte("REDIS_URL=redis://redis\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, environment, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}})
+	_, environment, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,7 +725,7 @@ func TestRescanRemovesConnectionNoLongerDiscoveredFromSource(t *testing.T) {
 	if err := os.WriteFile(environmentFile, []byte("LOG_LEVEL=debug\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rescanned, _, err := app.Rescan(ctx, "billing", "local")
+	rescanned, _, err := app.Rescan(ctx, "billing", "local", "CLI", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,14 +759,14 @@ func TestRescanAddsConsumerScopedResourceAndContainerBinding(t *testing.T) {
 	defer app.Close(ctx)
 
 	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	_, _, _, err = app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}})
+	_, _, _, err = app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, ".env.example"), []byte("DATABASE_URL=postgresql://postgres\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rescanned, _, err := app.Rescan(ctx, "billing", "local")
+	rescanned, _, err := app.Rescan(ctx, "billing", "local", "CLI", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,7 +804,7 @@ func TestCreateProjectScopesGenericResourcesAcrossSources(t *testing.T) {
 	_, environment, _, err := app.CreateProject(ctx, "store", []SourceInput{
 		{Name: "orders", Path: orders},
 		{Name: "inventory", Path: inventory},
-	})
+	}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,14 +838,14 @@ func TestIncompleteRescanPreservesLastCompleteDiscovery(t *testing.T) {
 	defer app.Close(ctx)
 
 	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	_, before, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}})
+	_, before, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}, "", "CLI")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, "package.json"), []byte(`{"name":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := app.Rescan(ctx, "billing", "local"); err == nil {
+	if _, _, err := app.Rescan(ctx, "billing", "local", "CLI", nil); err == nil {
 		t.Fatal("malformed discovery unexpectedly replaced the stored source")
 	}
 	after, err := app.Environment(ctx, "billing", "local")
@@ -917,14 +917,14 @@ func TestEnvironmentContextExplainsSelectionAndInference(t *testing.T) {
 	defer app.Close(ctx)
 
 	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	resolved, err := app.EnvironmentContext(ctx, source)
 	if err != nil || resolved.Resolution != "inferred" || resolved.Environment == nil || resolved.Environment.Name != "local" {
 		t.Fatalf("inferred context = %#v, err = %v", resolved, err)
 	}
-	if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa-assisted"); err != nil {
+	if _, err := app.CloneEnvironment(ctx, "billing", "local", "qa-assisted", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	resolved, err = app.EnvironmentContext(ctx, source)

@@ -3,6 +3,7 @@ package traffic
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/runportless/portless/portless-cli/command"
@@ -103,17 +104,15 @@ func (c *Commands) exportRecording(ctx context.Context, name string, options exp
 	if err != nil {
 		return err
 	}
-	content, err := client.ExportRecording(ctx, environment.Project, environment.Name, name)
-	if err != nil {
-		return err
-	}
 	if options.output == "-" {
-		_, err = c.Out.Write(content)
+		return client.WriteRecordingExport(ctx, environment.Project, environment.Name, name, c.Out)
+	}
+	if err := writePrivateFile(options.output, func(writer io.Writer) error {
+		return client.WriteRecordingExport(ctx, environment.Project, environment.Name, name, writer)
+	}, options.force); err != nil {
 		return err
 	}
-	if err := writePrivateFile(options.output, content, options.force); err != nil {
-		return err
-	}
+
 	if c.JSONOutput {
 		return command.WriteJSON(c.Out, command.ActionOutput{Action: "export", Project: environment.Project, Environment: environment.Name, Name: name, Path: options.output, Status: "written"})
 	}

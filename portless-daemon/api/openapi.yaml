@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 17.0.0
+  version: 18.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -36,7 +36,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '17.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '18.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -271,7 +271,14 @@ paths:
   /projects:
     get:
       operationId: listProjects
+      description: With view=metadata returns ProjectMetadataList with offset pagination, safe counts and summaries.
       parameters:
+        - in: query
+          name: view
+          schema: { type: string, enum: [metadata] }
+        - in: query
+          name: offset
+          schema: { type: integer }
         - { $ref: '#/components/parameters/Limit1000' }
       responses:
         '200':
@@ -279,12 +286,14 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [projects]
-                properties:
-                  projects:
-                    type: array
-                    items: { $ref: '#/components/schemas/Project' }
+                anyOf:
+                  - $ref: '#/components/schemas/ProjectMetadataList'
+                  - type: object
+                    required: [projects]
+                    properties:
+                      projects:
+                        type: array
+                        items: { $ref: '#/components/schemas/Project' }
     post:
       operationId: createProject
       description: Discover and combine one or more named source checkouts, then create the local environment.
@@ -296,6 +305,7 @@ paths:
               type: object
               required: [name, sources]
               properties:
+                requiredAssociationPath: { type: string, description: Creation must contain a discovered source associated with this absolute startup workspace; checked before persistence. }
                 name: { $ref: '#/components/schemas/ProjectName' }
                 sources:
                   type: array
@@ -307,7 +317,7 @@ paths:
   /projects/discover:
     post:
       operationId: discoverProject
-      description: CLI-only single-checkout discovery used by bare `portless up`.
+      description: Authenticated native single-checkout discovery used by bare `portless up` and MCP configuration. MCP must supply allowedRoot. Discovery is static and read-only; it persists a stopped environment and never starts services.
       requestBody:
         required: true
         content:
@@ -316,6 +326,9 @@ paths:
               type: object
               required: [path]
               properties:
+                allowedRoot: { type: string, description: Absolute canonical authorization root. MCP discovery uses confined directory handles and cannot inspect ancestors outside it. }
+                requiredAssociationPath: { type: string, description: Require workspace association before creating a project. }
+                requiredProject: { type: string, description: Require this public project name for both existing and newly discovered projects. }
                 path: { type: string, description: Absolute checkout path from the CLI process. }
                 name: { $ref: '#/components/schemas/ProjectName' }
       responses:
@@ -325,15 +338,25 @@ paths:
       - { $ref: '#/components/parameters/ProjectName' }
     get:
       operationId: getProject
+      parameters:
+        - in: query
+          name: view
+          schema: { type: string, enum: [metadata] }
+      description: With view=metadata returns ProjectMetadata without discovered commands, environment values or runtime credentials.
       responses:
         '200':
           description: Logical topology and environment summaries
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Project' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/Project'
+                  - $ref: '#/components/schemas/ProjectMetadata'
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       operationId: renameProject
+      parameters:
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       requestBody:
         required: true
         content:
@@ -349,15 +372,55 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: forgetProject
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       responses:
+        '200':
+          description: Preview of affected environments and retained artifacts when mode=preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurationPreview' }
         '204': { description: Stopped project and all environment metadata forgotten }
   /projects/{projectName}/declaration:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
     get:
       operationId: exportProjectDeclaration
+      parameters:
+        - in: query
+          name: view
+          schema: { type: string, enum: [chunk] }
+        - in: query
+          name: offset
+          schema: { type: integer }
+        - in: query
+          name: limit
+          schema: { type: integer }
+        - in: query
+          name: expectedRevision
+          schema: { type: integer }
+        - in: query
+          name: expectedCreatedAt
+          schema: { type: string }
+      description: Exports a safe schema-2 declaration with explicit redactions. view=chunk returns identity-bound UTF-8 TextRange pages; continuation requires expectedRevision and expectedCreatedAt.
       responses:
-        '200': { description: Generated portless.project.json }
+        '200':
+          description: Safe schema-2 declaration, or its next UTF-8 range when view=chunk
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - type: object
+                    required: [schemaVersion, project, revision, createdAt, redactions]
+                    properties:
+                      schemaVersion: { type: integer, enum: [2] }
+                      project: { $ref: '#/components/schemas/ProjectName' }
+                      revision: { type: integer, minimum: 1 }
+                      createdAt: { type: string, format: date-time }
+                      redactions: { type: array, items: { type: string } }
+                  - $ref: '#/components/schemas/ProjectDeclarationChunk'
+        '409': { description: Project identity or declaration revision changed since the previous range }
   /projects/{projectName}/sources:
     parameters:
       - { $ref: '#/components/parameters/ProjectName' }
@@ -376,6 +439,7 @@ paths:
               type: object
               required: [name, path, environment]
               properties:
+                allowedRoot: { type: string, description: Absolute canonical authorization root; required for MCP source introduction. }
                 name: { $ref: '#/components/schemas/SourceName' }
                 path: { type: string, description: Absolute source path on the daemon host. }
                 environment: { $ref: '#/components/schemas/EnvironmentName' }
@@ -388,6 +452,9 @@ paths:
       - { $ref: '#/components/parameters/SourceName' }
     delete:
       operationId: deleteProjectSource
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       description: >-
         Removes a logical source from the project and atomically recompiles every environment.
         Every project environment must be stopped. Services owned by the source and resources
@@ -399,7 +466,10 @@ paths:
           description: Updated project and environments with the removed services and connections
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ProjectSourceDeletion' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/ProjectSourceDeletion'
+                  - $ref: '#/components/schemas/ConfigurationPreview'
         '400':
           description: The source is the project's final remaining source or the request is otherwise invalid
           content:
@@ -522,12 +592,22 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
       operationId: forgetEnvironment
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       responses:
+        '200':
+          description: Preview of affected configuration and retained artifacts when mode=preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurationPreview' }
         '204': { description: Stopped environment metadata forgotten }
   /environments/{projectName}/{environmentName}/rescan:
     parameters: *environmentParameters
     post:
       operationId: rescanEnvironment
+      parameters:
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       responses:
         '200': { description: Refreshed all source discovery and recompiled topology }
   /environments/{projectName}/{environmentName}/up:
@@ -619,6 +699,7 @@ paths:
               type: object
               required: [path]
               properties:
+                allowedRoot: { type: string, description: Canonical confined discovery root required for MCP source changes. }
                 path: { type: string, description: Absolute checkout or worktree path. }
       responses:
         '200': { description: Recompiled environment and discovery warnings }
@@ -626,12 +707,22 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: removeEnvironmentSourceCheckout
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       description: >-
         Removes only this environment's checkout while retaining the project source and every
         other environment. The environment must be stopped and no Checkout provider may still
         reference the source.
       responses:
-        '200': { description: Recompiled environment without the checkout }
+        '200':
+          description: Recompiled environment without the checkout, or ConfigurationPreview when mode=preview
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/EnvironmentMutation'
+                  - $ref: '#/components/schemas/ConfigurationPreview'
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/services:
@@ -801,18 +892,29 @@ paths:
     parameters: *environmentParameters
     delete:
       operationId: clearTraffic
-      description: Clears the live exchange buffer and derived traces, and disposes originating replay workspace payloads. Admitted replay receipts remain until idle cleanup. Does not delete durable recordings or reset sequence numbers.
+      parameters:
+        - in: query
+          name: throughSequence
+          schema: { type: integer, minimum: 0 }
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
+      description: Clears the live exchange buffer and derived traces, and disposes originating replay workspace payloads. Preview returns TrafficClearPreview. MCP apply requires throughSequence and the unchanged environment/daemon ResourceVersion. Only completed exchanges through this watermark are evicted; newer traffic and recordings remain. Admitted replay receipts remain until idle cleanup. Does not reset sequence numbers.
       responses:
         '200':
           description: Live traffic was cleared through the reported environment-local sequence.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TrafficClearResponse' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/TrafficClearResponse'
+                  - $ref: '#/components/schemas/TrafficClearPreview'
   /environments/{projectName}/{environmentName}/traffic/replays:
     parameters: *environmentParameters
     post:
       operationId: prepareTrafficReplay
-      description: Freeze one ordinary HTTP exchange from the live traffic window. Exact sequence and startedAt must match; recordings are not a fallback. Preparation sends no application requests and does not probe or start services. Replay routes require the existing authenticated browser/CLI contract and are denied to MCP callers. All responses use Cache-Control no-store. JSON input is bounded to 1 MiB and rejects unknown fields and trailing data.
+      parameters:
+        - { $ref: '#/components/parameters/MCPReplayCapability' }
+      description: Freeze one ordinary HTTP exchange from the live traffic window. Exact sequence and startedAt must match; recordings are not a fallback. Preparation sends no application requests and does not probe or start services. Replay routes accept authenticated browser/CLI clients. An MCP bearer client must also send Portless-MCP-Replay-Capability with value 1; missing or invalid declarations are rejected. All responses use Cache-Control no-store. JSON input is bounded to 1 MiB and rejects unknown fields and trailing data.
       requestBody:
         required: true
         content:
@@ -842,6 +944,7 @@ paths:
       operationId: getTrafficReplay
       description: Inspect metadata without sending traffic. Clients following a receipt must supply both expected timestamps. With neither timestamp, inspect a number explicitly selected in the current daemon. Metadata omits baseline, draft, and result payloads. Disposed workspaces return retained receipts without payloads until idle cleanup. Inspection and background polling do not renew the idle timeout.
       parameters:
+        - { $ref: '#/components/parameters/MCPReplayCapability' }
         - in: query
           name: expectedCreatedAt
           schema: { type: string, format: date-time }
@@ -863,6 +966,8 @@ paths:
         '410': { description: Expired workspace or mismatched daemon/workspace identity }
     delete:
       operationId: deleteTrafficReplay
+      parameters:
+        - { $ref: '#/components/parameters/MCPReplayCapability' }
       description: Release workspace payloads and unused prepared credentials when the editor closes. Admitted requests continue independently; their compact receipts suppress duplicate sends for the remainder of the idle retention window. Completed results are not republished into a closed session.
       requestBody:
         required: true
@@ -876,6 +981,8 @@ paths:
     parameters: *replayParameters
     post:
       operationId: touchTrafficReplay
+      parameters:
+        - { $ref: '#/components/parameters/MCPReplayCapability' }
       description: Record replay editor activity and renew the one-hour idle timeout for the matching open session. Requires both identity timestamps; a closed or inactive session cannot be revived. Does not alter the draft, retain prepared credentials longer, send application traffic, or emit lifecycle events. Browser clients batch actual keyboard, pointer, input and scroll activity at most once every 30 seconds; they do not send unconditional keepalives.
       requestBody:
         required: true
@@ -892,6 +999,8 @@ paths:
     parameters: *replayParameters
     put:
       operationId: updateTrafficReplayDraft
+      parameters:
+        - { $ref: '#/components/parameters/MCPReplayCapability' }
       description: Validate a complete request and snapshot the ready service's registered provider generation and current topology. Same-project environments only; original source and target are fixed. No application I/O. Successful preparation increments revision and retains runtime credential values for less than 60 seconds. Responses contain only redacted values. Requires optimistic revision and both identity timestamps. The decoded UTF-8 body is limited to 25 MiB; the JSON envelope allows 151 MiB for worst-case string escaping. Oversized bodies return a structured 413 replay_input_limit error without changing the prepared draft or dispatching a request.
       requestBody:
         required: true
@@ -914,6 +1023,8 @@ paths:
     parameters: *replayParameters
     post:
       operationId: runTrafficReplay
+      parameters:
+        - { $ref: '#/components/parameters/MCPReplayCapability' }
       description: Admit one explicit request using the prepared revision, next run number and both identity timestamps. Revalidate the destination binding and proxy generation, enforce remote policy, and require reviewed confirmation for remote writes. Identical repeated admission arguments return that run's receipt without dispatching again; conflicting arguments fail. Runs continue independently of the initiating HTTP connection, with a 30-second deadline, 64 KiB retained response and 1 MiB consumption cap. No redirect following or automatic application retry. After a lost POST response, inspect the known workspace with GET instead of resending.
       requestBody:
         required: true
@@ -1024,12 +1135,30 @@ paths:
         schema: { type: integer, format: int64, minimum: 1 }
     get:
       operationId: getTrafficTrace
+      parameters:
+        - in: query
+          name: view
+          schema: { type: string, enum: [page] }
+        - in: query
+          name: offset
+          schema: { type: integer }
+        - in: query
+          name: limit
+          schema: { type: integer }
+        - in: query
+          name: expectedRevision
+          schema: { type: integer }
+      description: view=page returns revision-bound trace metadata and a bounded span page. Continuation requires expectedRevision.
       responses:
         '200':
           description: One trace with its tree and waterfall span projection
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TrafficTrace' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/TrafficTrace'
+                  - $ref: '#/components/schemas/TrafficTracePage'
+        '409': { description: Trace projection changed since the previous page }
         '404': { $ref: '#/components/responses/NotFound' }
   /environments/{projectName}/{environmentName}/stream:
     parameters: *environmentParameters
@@ -1047,14 +1176,30 @@ paths:
     parameters: *environmentParameters
     get:
       operationId: listMockScenarios
+      parameters:
+        - in: query
+          name: view
+          schema: { type: string, enum: [metadata] }
+        - in: query
+          name: offset
+          schema: { type: integer }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      description: view=metadata returns paged scenario identity, activation and counts without loading saved bodies.
       responses:
         '200':
           description: Environment-scoped HTTP mock scenarios, service-scoped routes, and derived activation state
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockScenarioList' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/MockScenarioList'
+                  - $ref: '#/components/schemas/MockScenarioMetadataList'
     post:
       operationId: createMockScenario
+      parameters:
+        - { $ref: '#/components/parameters/MockMetadata' }
       description: Creates an empty, disabled scenario. Services are selected on individual routes, not on the scenario.
       requestBody:
         required: true
@@ -1075,17 +1220,42 @@ paths:
       - { $ref: '#/components/parameters/MockScenarioName' }
     get:
       operationId: getMockScenario
+      parameters:
+        - in: query
+          name: view
+          schema: { type: string, enum: [metadata] }
+        - in: query
+          name: offset
+          schema: { type: integer }
+        - in: query
+          name: limit
+          schema: { type: integer }
+        - in: query
+          name: expectedModifiedAt
+          schema: { type: string }
+      description: view=metadata returns a page of route metadata. Continuation requires expectedModifiedAt to reject scenario edits.
       responses:
         '200':
           description: One mock scenario and its ordered routes
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockScenario' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/MockScenario'
+                  - $ref: '#/components/schemas/MockScenarioMetadataPage'
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
       operationId: deleteMockScenario
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       description: Deletes a disabled scenario and all of its routes. Enabled and degraded scenarios must be disabled first.
       responses:
+        '200':
+          description: Scenario identity, eligibility and removal effects when mode=preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockDeletionPreview' }
         '204': { description: Scenario deleted }
         '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/mocks/{scenarioName}/activation:
@@ -1121,6 +1291,8 @@ paths:
       - { $ref: '#/components/parameters/MockRouteName' }
     put:
       operationId: putMockRoute
+      parameters:
+        - { $ref: '#/components/parameters/MockMetadata' }
       description: >-
         Creates or replaces one fixed-response route. Service is required. Ambiguity is
         checked only within the same service. While enabled, response edits and route
@@ -1143,19 +1315,52 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
     delete:
       operationId: deleteMockRoute
+      parameters:
+        - { $ref: '#/components/parameters/MockMetadata' }
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       description: Deleting the final route for an active target service requires disabling the scenario first.
       responses:
         '200':
-          description: Updated scenario
+          description: Updated scenario, or MockDeletionPreview when mode=preview
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MockScenario' }
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/MockScenario'
+                  - $ref: '#/components/schemas/MockDeletionPreview'
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      operationId: getMockRoute
+      description: Read one route metadata projection. includePayloads=true additionally returns a UTF-8 TextRange of JSON containing query matchers, response headers and body. Continuation requires expectedModifiedAt. Saved route payload reads are permission-gated by MCP.
+      parameters:
+        - in: query
+          name: includePayloads
+          schema: { type: boolean, default: false }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 131072, default: 32768 }
+        - in: query
+          name: expectedModifiedAt
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Route metadata and optional payload range
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MockRouteDetail' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /environments/{projectName}/{environmentName}/mocks/{scenarioName}/preview:
     parameters: *mockScenarioParameters
     post:
       operationId: previewMockRequest
+      parameters:
+        - { $ref: '#/components/parameters/MockMetadata' }
       description: >-
         Evaluates a sample request against saved scenario routes and an optional
         in-memory route draft. The scenario may be disabled. An existing draft
@@ -1185,6 +1390,8 @@ paths:
     parameters: *mockScenarioParameters
     post:
       operationId: importMockScenarioRecording
+      parameters:
+        - { $ref: '#/components/parameters/MockMetadata' }
       description: Appends deterministic routes from a stopped recording to a disabled scenario. Preserves each exchange's target service. Omit services to import all eligible HTTP services.
       requestBody:
         required: true
@@ -1202,6 +1409,8 @@ paths:
     parameters: *mockScenarioParameters
     post:
       operationId: importMockScenarioOpenAPI
+      parameters:
+        - { $ref: '#/components/parameters/MockMetadata' }
       description: Appends deterministic routes from a local OpenAPI 3.0/3.1 document to a disabled scenario, assigning them to the explicitly selected service. External references are rejected.
       requestBody:
         required: true
@@ -1259,7 +1468,15 @@ paths:
               schema: { $ref: '#/components/schemas/Recording' }
     delete:
       operationId: deleteRecording
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       responses:
+        '200':
+          description: Recording identity, eligibility and removal effects when mode=preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecordingDeletionPreview' }
         '204': { description: Completed recording deleted }
   /environments/{projectName}/{environmentName}/recordings/{recordingName}/stop:
     parameters: *recordingParameters
@@ -1324,9 +1541,17 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/FaultRule' }
     delete:
-      operationId: disableFault
+      operationId: deleteFault
+      parameters:
+        - { $ref: '#/components/parameters/MutationMode' }
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
       responses:
-        '204': { description: Rule disabled; audit history retained }
+        '200':
+          description: Fault identity, eligibility and removal effects when mode=preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FaultDeletionPreview' }
+        '204': { description: Rule deleted; existing traffic and timeline history retained }
   /environments/{projectName}/{environmentName}/faults/disable-all:
     parameters: *environmentParameters
     post:
@@ -1392,6 +1617,85 @@ paths:
                 required: [timeline]
                 properties:
                   timeline: { type: array, items: { $ref: '#/components/schemas/TimelineEvent' } }
+  /environments/{projectName}/{environmentName}/traffic/replays/{replayNumber}/status:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - in: path
+        name: replayNumber
+        required: true
+        schema: { type: integer, minimum: 1 }
+      - { $ref: '#/components/parameters/MCPReplayCapability' }
+    get:
+      operationId: getTrafficReplayStatus
+      description: Metadata-only workspace identity, revisions, every submitted destination and compact admission receipts. Never clones bodies or prepared credentials. Closed workspaces remain readable while receipts are retained.
+      parameters:
+        - in: query
+          name: expectedCreatedAt
+          required: true
+          schema: { type: string, format: date-time }
+        - in: query
+          name: expectedDaemonStartedAt
+          required: true
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Bounded replay status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrafficReplayStatus' }
+        '403': { description: MCP capability missing or invalid }
+        '409': { description: Workspace identity changed }
+  /environments/{projectName}/{environmentName}/recordings/{recordingName}/export/chunks:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/RecordingName' }
+    get:
+      operationId: getRecordingExportChunk
+      description: Complete schema-4 export delivered in base64 chunks. First request freezes retained event count and sequence watermark; subsequent signed cursors bind recording/environment creation identities and a position within an event. Active recordings exclude later traffic. Name reuse, deletion or daemon restart invalidates the cursor. Reassemble bytes in order; complete is true only after the JSON suffix. The ordinary export endpoint streams this same complete iterator without the former 10000-event cutoff.
+      parameters:
+        - in: query
+          name: cursor
+          schema: { type: string, maxLength: 4096 }
+        - in: query
+          name: maxBytes
+          schema: { type: integer, minimum: 1, maximum: 131072, default: 131072 }
+      responses:
+        '200':
+          description: Lossless bounded export chunk
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecordingExportChunk' }
+        '400': { description: Invalid cursor or chunk size }
+        '409': { description: Snapshot identity changed }
+  /environments/{projectName}/{environmentName}/faults/{faultName}/enable:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/FaultName' }
+    post:
+      operationId: enableFault
+      description: Enable an existing unexpired rule without extending its original expiry. MCP additionally requires an exact source-target edge, a finite expiry within one hour, and an atomic reviewed identity.
+      parameters:
+        - { $ref: '#/components/parameters/ResourceIfMatch' }
+      responses:
+        '200':
+          description: Enabled rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FaultRule' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '428': { description: Missing MCP precondition }
+  /environments/{projectName}/{environmentName}/faults/{faultName}/disable:
+    parameters:
+      - { $ref: '#/components/parameters/ProjectName' }
+      - { $ref: '#/components/parameters/EnvironmentName' }
+      - { $ref: '#/components/parameters/FaultName' }
+    post:
+      operationId: disableFault
+      responses:
+        '204': { description: Rule disabled with history retained }
 components:
   securitySchemes:
     bearer:
@@ -1404,6 +1708,26 @@ components:
       name: portless_session
       description: SameSite=Strict browser session; mutations also require X-Portless-CSRF.
   parameters:
+    MutationMode:
+      in: query
+      name: mode
+      description: preview returns an exact identity and affected metadata without mutation; absent mode applies the mutation. MCP apply requires If-Match. Tool-layer apply additionally requires confirm=true.
+      schema: { type: string, enum: [preview, apply] }
+    ResourceIfMatch:
+      in: header
+      name: If-Match
+      description: Quoted base64url encoding of ResourceVersion JSON from preview. Required for MCP guarded cleanup, rename, rescan and fault enable. The database checks creation identities, revisions and configuration stateDigest inside the committing transaction; stale identity returns 409 and missing identity 428.
+      schema: { type: string, maxLength: 2048 }
+    MCPReplayCapability:
+      in: header
+      name: Portless-MCP-Replay-Capability
+      description: MCP native clients must declare the fixed replay contract version on every replay route. This opt-in declaration supplements bearer authentication and is not a credential. Browser/CLI authentication and remote write policy remain unchanged.
+      schema: { type: string, enum: ['1'] }
+    MockMetadata:
+      in: header
+      name: Portless-Mock-Metadata
+      description: Value 1 requests compact metadata-only mock mutations and preview responses; stored body, response header values and query matcher values are omitted.
+      schema: { type: string, enum: ['1'] }
     PortlessClientKind:
       in: header
       name: Portless-Client-Kind
@@ -1547,7 +1871,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '17.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '18.0.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -1727,7 +2051,8 @@ components:
       required: [name, path]
       properties:
         name: { $ref: '#/components/schemas/SourceName' }
-        path: { type: string, description: Absolute path resolved by the CLI. }
+        path: { type: string, description: Absolute source path. }
+        allowedRoot: { type: string, description: Canonical confined discovery root required for MCP source changes. }
     ProjectSource:
       type: object
       required: [name]
@@ -2534,3 +2859,530 @@ components:
             subject: { type: object, additionalProperties: true }
             details: { type: object, additionalProperties: true }
             remediation: { type: array, items: { type: object, additionalProperties: true } }
+
+    ConfigurationEnvironmentPreview:
+      properties:
+        faults:
+          items:
+            type: string
+          type: array
+        mockRoutes:
+          type: integer
+        mockScenarios:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+        operations:
+          type: integer
+        recordedEvents:
+          type: integer
+        recordings:
+          items:
+            type: string
+          type: array
+        revision:
+          type: integer
+        services:
+          items:
+            type: string
+          type: array
+        sources:
+          items:
+            type: string
+          type: array
+        status:
+          type: string
+        timelineEvents:
+          type: integer
+      required:
+        - name
+        - status
+        - revision
+        - sources
+        - services
+        - recordings
+        - faults
+        - mockScenarios
+        - mockRoutes
+        - recordedEvents
+        - operations
+        - timelineEvents
+      type: object
+    EnvironmentMutation:
+      type: object
+      required: [environment, warnings]
+      properties:
+        environment: { $ref: '#/components/schemas/Environment' }
+        warnings: { type: array, items: { type: string } }
+    ConfigurationPreview:
+      properties:
+        blocked:
+          items:
+            type: string
+          type: array
+        environment:
+          type: string
+        environments:
+          items:
+            $ref: '#/components/schemas/ConfigurationEnvironmentPreview'
+          type: array
+        expected:
+          $ref: '#/components/schemas/ResourceVersion'
+        project:
+          type: string
+        removedConnections:
+          items:
+            $ref: '#/components/schemas/Connection'
+          type: array
+        removedServices:
+          items:
+            type: string
+          type: array
+        retained:
+          items:
+            type: string
+          type: array
+        source:
+          type: string
+      required:
+        - project
+        - expected
+        - environments
+        - blocked
+        - retained
+      type: object
+    FaultDeletionPreview:
+      properties:
+        blocked:
+          items:
+            type: string
+          type: array
+        expected:
+          $ref: '#/components/schemas/ResourceVersion'
+        fault:
+          $ref: '#/components/schemas/FaultRule'
+        retained:
+          items:
+            type: string
+          type: array
+      required:
+        - fault
+        - expected
+        - blocked
+        - retained
+      type: object
+    LogicalServiceMetadata:
+      properties:
+        framework:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        required:
+          type: boolean
+        resource:
+          $ref: '#/components/schemas/ResourceDefinition'
+      required:
+        - name
+        - kind
+        - required
+      type: object
+    MockDeletionPreview:
+      properties:
+        blocked:
+          items:
+            type: string
+          type: array
+        expected:
+          $ref: '#/components/schemas/ResourceVersion'
+        retained:
+          items:
+            type: string
+          type: array
+        route:
+          type: string
+        routes:
+          items:
+            type: string
+          type: array
+        scenario:
+          $ref: '#/components/schemas/MockScenarioMetadata'
+      required:
+        - scenario
+        - routes
+        - expected
+        - blocked
+        - retained
+      type: object
+    MockRouteDetail:
+      properties:
+        payload:
+          $ref: '#/components/schemas/TextRange'
+        route:
+          $ref: '#/components/schemas/MockRouteMetadata'
+        scenario:
+          $ref: '#/components/schemas/MockScenarioMetadata'
+      required:
+        - scenario
+        - route
+      type: object
+    MockRouteMetadata:
+      properties:
+        bodyBytes:
+          type: integer
+        createdAt:
+          format: date-time
+          type: string
+        delayMs:
+          type: integer
+        enabled:
+          type: boolean
+        headerNames:
+          items:
+            type: string
+          type: array
+        method:
+          type: string
+        modifiedAt:
+          format: date-time
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        queryKinds:
+          additionalProperties:
+            type: string
+          type: object
+        service:
+          type: string
+        status:
+          type: integer
+      required:
+        - name
+        - service
+        - method
+        - path
+        - queryKinds
+        - headerNames
+        - status
+        - delayMs
+        - enabled
+        - bodyBytes
+        - createdAt
+        - modifiedAt
+      type: object
+    MockScenarioMetadata:
+      properties:
+        activation:
+          $ref: '#/components/schemas/MockScenarioActivation'
+        createdAt:
+          format: date-time
+          type: string
+        description:
+          type: string
+        environment:
+          type: string
+        modifiedAt:
+          format: date-time
+          type: string
+        name:
+          type: string
+        project:
+          type: string
+        routeCount:
+          type: integer
+      required:
+        - project
+        - environment
+        - name
+        - createdAt
+        - modifiedAt
+        - activation
+        - routeCount
+      type: object
+    MockScenarioMetadataList:
+      properties:
+        nextOffset:
+          type: integer
+        scenarios:
+          items:
+            $ref: '#/components/schemas/MockScenarioMetadata'
+          type: array
+        total:
+          type: integer
+      required:
+        - scenarios
+        - total
+      type: object
+    MockScenarioMetadataPage:
+      properties:
+        nextOffset:
+          type: integer
+        routes:
+          items:
+            $ref: '#/components/schemas/MockRouteMetadata'
+          type: array
+        scenario:
+          $ref: '#/components/schemas/MockScenarioMetadata'
+      required:
+        - scenario
+        - routes
+      type: object
+    ProjectDeclarationChunk:
+      properties:
+        content:
+          $ref: '#/components/schemas/TextRange'
+        createdAt:
+          format: date-time
+          type: string
+        redacted:
+          type: boolean
+        revision:
+          type: integer
+      required:
+        - revision
+        - createdAt
+        - redacted
+        - content
+      type: object
+    ProjectMetadata:
+      properties:
+        connections:
+          items:
+            $ref: '#/components/schemas/Connection'
+          type: array
+        createdAt:
+          format: date-time
+          type: string
+        environments:
+          items:
+            $ref: '#/components/schemas/EnvironmentSummary'
+          type: array
+        name:
+          type: string
+        primaryService:
+          type: string
+        revision:
+          type: integer
+        serviceCount:
+          type: integer
+        services:
+          items:
+            $ref: '#/components/schemas/LogicalServiceMetadata'
+          type: array
+        sourceCount:
+          type: integer
+        sources:
+          items:
+            $ref: '#/components/schemas/ProjectSource'
+          type: array
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - name
+        - revision
+        - createdAt
+        - updatedAt
+        - serviceCount
+        - sourceCount
+        - environments
+      type: object
+    ProjectMetadataList:
+      properties:
+        nextOffset:
+          type: integer
+        projects:
+          items:
+            $ref: '#/components/schemas/ProjectMetadata'
+          type: array
+        total:
+          type: integer
+      required:
+        - projects
+        - total
+      type: object
+    RecordingDeletionPreview:
+      properties:
+        blocked:
+          items:
+            type: string
+          type: array
+        expected:
+          $ref: '#/components/schemas/ResourceVersion'
+        recording:
+          $ref: '#/components/schemas/Recording'
+        retained:
+          items:
+            type: string
+          type: array
+      required:
+        - recording
+        - expected
+        - blocked
+        - retained
+      type: object
+    RecordingExportChunk:
+      properties:
+        complete:
+          type: boolean
+        data:
+          type: string
+        nextCursor:
+          type: string
+        schemaVersion:
+          type: integer
+        snapshot:
+          $ref: '#/components/schemas/RecordingExportSnapshot'
+      required:
+        - schemaVersion
+        - snapshot
+        - data
+        - complete
+      type: object
+    RecordingExportSnapshot:
+      properties:
+        environment:
+          type: string
+        environmentCreatedAt:
+          format: date-time
+          type: string
+        eventCount:
+          type: integer
+        project:
+          type: string
+        recording:
+          type: string
+        recordingStartedAt:
+          format: date-time
+          type: string
+        throughSequence:
+          type: integer
+      required:
+        - project
+        - environment
+        - recording
+        - recordingStartedAt
+        - environmentCreatedAt
+        - throughSequence
+        - eventCount
+      type: object
+    ResourceDefinition:
+      properties:
+        type:
+          type: string
+        version:
+          type: string
+      required:
+        - type
+        - version
+      type: object
+    ResourceVersion:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        modifiedAt:
+          format: date-time
+          type: string
+        parentCreatedAt:
+          format: date-time
+          type: string
+        revision:
+          type: integer
+        stateDigest:
+          type: string
+      required:
+        - createdAt
+      type: object
+    TextRange:
+      properties:
+        content:
+          type: string
+        mediaType:
+          type: string
+        nextOffset:
+          type: integer
+        offset:
+          type: integer
+        totalBytes:
+          type: integer
+      required:
+        - content
+        - mediaType
+        - offset
+        - totalBytes
+      type: object
+    TrafficClearPreview:
+      properties:
+        count:
+          type: integer
+        expected:
+          $ref: '#/components/schemas/ResourceVersion'
+        retained:
+          items:
+            type: string
+          type: array
+        throughSequence:
+          type: integer
+      required:
+        - count
+        - throughSequence
+        - expected
+        - retained
+      type: object
+    TrafficReplayStatus:
+      properties:
+        closed:
+          type: boolean
+        createdAt:
+          format: date-time
+          type: string
+        daemonStartedAt:
+          format: date-time
+          type: string
+        destinations:
+          items:
+            type: string
+          type: array
+        environment:
+          type: string
+        nextRunNumber:
+          type: integer
+        number:
+          type: integer
+        project:
+          type: string
+        receipts:
+          items:
+            $ref: '#/components/schemas/TrafficReplayRun'
+          type: array
+        revision:
+          type: integer
+        run:
+          $ref: '#/components/schemas/TrafficReplayRun'
+      required:
+        - createdAt
+        - daemonStartedAt
+        - project
+        - environment
+        - number
+        - revision
+        - nextRunNumber
+        - closed
+        - destinations
+        - receipts
+      type: object
+    TrafficTracePage:
+      properties:
+        nextOffset:
+          type: integer
+        trace:
+          $ref: '#/components/schemas/TrafficTrace'
+      required:
+        - trace
+      type: object

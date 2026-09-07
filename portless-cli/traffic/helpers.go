@@ -46,7 +46,7 @@ func printHeaderMap(writer io.Writer, title string, headers map[string][]string)
 	}
 }
 
-func writePrivateFile(path string, content []byte, force bool) error {
+func writePrivateFile(path string, write func(io.Writer) error, force bool) error {
 	if path == "" || path == "-" {
 		return errors.New("an output path is required")
 	}
@@ -66,7 +66,7 @@ func writePrivateFile(path string, content []byte, force bool) error {
 		temporary.Close()
 		return err
 	}
-	if _, err := temporary.Write(content); err != nil {
+	if err := write(temporary); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -76,6 +76,9 @@ func writePrivateFile(path string, content []byte, force bool) error {
 	}
 	if err := temporary.Close(); err != nil {
 		return err
+	}
+	if !force {
+		return os.Link(temporaryPath, path)
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err

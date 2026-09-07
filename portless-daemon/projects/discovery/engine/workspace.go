@@ -80,6 +80,10 @@ func openWorkspace(ctx context.Context, root string, limits Limits) (*workspace,
 	if err != nil {
 		return nil, fmt.Errorf("open discovery root: %w", err)
 	}
+	return openWorkspaceHandle(ctx, root, rootHandle, limits)
+}
+
+func openWorkspaceHandle(ctx context.Context, root string, rootHandle *os.Root, limits Limits) (*workspace, error) {
 	result := &workspace{
 		root: root, rootHandle: rootHandle, limits: normalizeLimits(limits),
 		index: make(map[string]fileStamp), directories: map[string]struct{}{".": {}}, cache: make(map[string][]byte),

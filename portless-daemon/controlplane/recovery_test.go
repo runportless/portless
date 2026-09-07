@@ -33,7 +33,7 @@ func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
 	defer app.Close(ctx)
 
 	source := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: source}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
@@ -75,7 +75,7 @@ func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
 	if disabled != 2 {
 		t.Fatalf("disabled fault count = %d, want 2", disabled)
 	}
-	persistent, err = app.EnableFault(ctx, "billing", "local", persistent.Name, "test")
+	persistent, err = app.EnableFault(ctx, "billing", "local", persistent.Name, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestFaultsRemainActiveUntilDisabledUnlessExpiryIsRequested(t *testing.T) {
 	if err := app.DisableFault(ctx, "billing", "local", persistent.Name, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.DeleteFault(ctx, "billing", "local", persistent.Name, "test"); err != nil {
+	if err := app.DeleteFault(ctx, "billing", "local", persistent.Name, "test", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.Fault(ctx, "billing", "local", persistent.Name); err == nil {

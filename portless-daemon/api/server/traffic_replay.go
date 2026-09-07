@@ -11,8 +11,8 @@ import (
 
 func (s *Server) handleTrafficReplay(w http.ResponseWriter, r *http.Request, project, environment string, segments []string) {
 	w.Header().Set("Cache-Control", "no-store")
-	if r.Header.Get(contract.ClientKindHeader) == string(contract.ClientKindMCP) {
-		writeAPIError(w, http.StatusForbidden, contract.APIError{Code: "REPLAY_CAPABILITY_REQUIRED", Message: "replay workspaces are not available through the current MCP capability contract"})
+	if r.Header.Get(contract.ClientKindHeader) == string(contract.ClientKindMCP) && r.Header.Get(contract.MCPReplayCapabilityHeader) != contract.MCPReplayCapabilityVersion {
+		writeAPIError(w, http.StatusForbidden, contract.APIError{Code: "REPLAY_CAPABILITY_REQUIRED", Message: "MCP replay requires the versioned replay capability declaration"})
 		return
 	}
 	if len(segments) < 5 || len(segments) > 7 {
@@ -76,6 +76,22 @@ func (s *Server) handleTrafficReplay(w http.ResponseWriter, r *http.Request, pro
 		return
 	}
 	switch segments[6] {
+	case "status":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		expected, err := replayQueryIdentity(r)
+		if err != nil || expected.CreatedAt.IsZero() || expected.DaemonStartedAt.IsZero() {
+			writeAPIError(w, http.StatusBadRequest, contract.APIError{Code: "INVALID_REPLAY_IDENTITY", Message: "provide both replay identity timestamps"})
+			return
+		}
+		result, err := s.app.TrafficReplayStatus(project, environment, number, expected)
+		if err != nil {
+			s.writeReplayError(w, err, project, environment)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	case "activity":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)

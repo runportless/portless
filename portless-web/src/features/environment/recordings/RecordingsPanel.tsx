@@ -44,7 +44,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const [busy, setBusy] = useState('')
   const [deleteName, setDeleteName] = useState('')
   const [menuRecording, setMenuRecording] = useState('')
-  const [deleteAllConfirm, setDeleteAllConfirm] = useState(false)
+  const [historyMenuState, setHistoryMenuState] = useState<'closed' | 'open' | 'confirm-delete'>('closed')
   const [error, setError] = useState<ActionErrorDetails | null>(null)
   const [historyPage, setHistoryPage] = useState(0)
   const [historySort, setHistorySort] = useState<TableSort<RecordingHistorySortField>>(defaultRecordingHistorySort)
@@ -56,17 +56,20 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   useEffect(() => {
     setDeleteName('')
     setMenuRecording('')
-    setDeleteAllConfirm(false)
+    setHistoryMenuState('closed')
     setError(null)
     setHistoryPage(0)
     setHistorySort(defaultRecordingHistorySort)
   }, [environment.project, environment.name])
+  useEffect(() => {
+    if (busy || historyRecordings.length === 0) setHistoryMenuState('closed')
+  }, [busy, historyRecordings.length])
 
   const start = async (input: CreateRecordingInput) => {
     setBusy('create')
     setDeleteName('')
     setMenuRecording('')
-    setDeleteAllConfirm(false)
+    setHistoryMenuState('closed')
     setError(null)
     try {
       await api(environmentPath(environment, '/recordings'), { method: 'POST', ...jsonBody(input) })
@@ -82,7 +85,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     setBusy(`stop:${recording.name}`)
     setDeleteName('')
     setMenuRecording('')
-    setDeleteAllConfirm(false)
+    setHistoryMenuState('closed')
     setError(null)
     try {
       await api(environmentPath(environment, `/recordings/${encodeURIComponent(recording.name)}/stop`), { method: 'POST' })
@@ -95,7 +98,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   }
 
   const remove = async (recording: Recording) => {
-    setDeleteAllConfirm(false)
+    setHistoryMenuState('closed')
     if (deleteName !== recording.name) {
       setDeleteName(recording.name)
       setError(null)
@@ -117,15 +120,15 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
 
   const removeAll = async () => {
     if (busy || historyRecordings.length === 0) return
-    if (!deleteAllConfirm) {
-      setDeleteAllConfirm(true)
+    if (historyMenuState !== 'confirm-delete') {
+      setHistoryMenuState('confirm-delete')
       setDeleteName('')
       setMenuRecording('')
       setError(null)
       return
     }
     setBusy('delete-all')
-    setDeleteAllConfirm(false)
+    setHistoryMenuState('closed')
     setDeleteName('')
     setMenuRecording('')
     setError(null)
@@ -147,7 +150,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
   const clearRowConfirmations = () => {
     setDeleteName('')
     setMenuRecording('')
-    setDeleteAllConfirm(false)
+    setHistoryMenuState('closed')
   }
 
   return <div className="recordings-page">
@@ -169,17 +172,31 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
     <section className="panel recording-history-panel">
       <div className="panel-title recording-history-title">
         <span>HISTORY</span>
-        <button
-          className={`recording-history-delete-all${deleteAllConfirm ? ' is-confirming' : ''}`}
-          type="button"
-          disabled={!!busy || historyRecordings.length === 0}
-          aria-label={deleteAllConfirm
-            ? `Confirm delete all ${historyRecordings.length} completed recording${historyRecordings.length === 1 ? '' : 's'}`
-            : historyRecordings.length === 0
-              ? 'Delete all completed recordings'
-              : `Delete all ${historyRecordings.length} completed recording${historyRecordings.length === 1 ? '' : 's'}`}
-          onClick={() => void removeAll()}
-        >{busy === 'delete-all' ? 'DELETING…' : deleteAllConfirm ? 'CONFIRM' : 'DELETE ALL'}</button>
+        <div className="recording-history-actions table-row-actions">
+          {busy === 'delete-all' && <span className="recording-history-progress" role="status">DELETING…</span>}
+          <RowActionsMenu
+            label="Recording history actions"
+            menuLabel="Recording history actions"
+            open={historyMenuState !== 'closed' && !busy && historyRecordings.length > 0}
+            disabled={!!busy || historyRecordings.length === 0}
+            onOpenChange={(open) => {
+              setHistoryMenuState(open ? 'open' : 'closed')
+              if (open) {
+                setDeleteName('')
+                setMenuRecording('')
+              }
+            }}
+          >
+            <button
+              className={`is-danger${historyMenuState === 'confirm-delete' ? ' is-confirming' : ''}`}
+              type="button"
+              role="menuitem"
+              disabled={!!busy}
+              aria-label={`${historyMenuState === 'confirm-delete' ? 'Confirm delete' : 'Delete'} all ${historyRecordings.length} completed recording${historyRecordings.length === 1 ? '' : 's'}`}
+              onClick={() => void removeAll()}
+            >{historyMenuState === 'confirm-delete' ? 'CONFIRM' : 'DELETE ALL'}</button>
+          </RowActionsMenu>
+        </div>
       </div>
       <div className="recording-history-scroll">
         <table className="recording-history-table">
@@ -211,6 +228,7 @@ export function RecordingsPanel({ environment, recordings, refresh }: { environm
                   disabled={!!busy}
                   onOpenChange={(open) => {
                     setMenuRecording(open ? recording.name : '')
+                    setHistoryMenuState('closed')
                     if (!open || menuRecording !== recording.name) setDeleteName('')
                   }}
                 >

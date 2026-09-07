@@ -26,7 +26,7 @@ func TestRemoteWritePolicyChangeClosesAnOpenWebSocket(t *testing.T) {
 	app := New(db, events.NewBroker(), Config{DataDirectory: data, InstallationKey: "test"})
 	defer app.Close(context.Background())
 	root := nestFixture(t, filepath.Join(t.TempDir(), "checkout"))
-	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: root}}); err != nil {
+	if _, _, _, err := app.CreateProject(ctx, "billing", []SourceInput{{Name: "checkout", Path: root}}, "", "CLI"); err != nil {
 		t.Fatal(err)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

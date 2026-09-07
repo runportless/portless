@@ -139,7 +139,7 @@ func (c *Commands) setCheckout(ctx context.Context, source, pathValue string) er
 	if err != nil {
 		return err
 	}
-	response, err := client.SetSourceCheckout(ctx, environment.Project, environment.Name, source, sourcePath)
+	response, err := client.SetSourceCheckout(ctx, environment.Project, environment.Name, source, contract.SetSourceCheckoutRequest{Path: sourcePath})
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (c *Commands) setCheckout(ctx context.Context, source, pathValue string) er
 		return command.WriteJSON(c.Out, response)
 	}
 	c.PrintWarnings(response.Warnings)
-	fmt.Fprintf(c.Out, "%s checkout %s now uses %s\n", model.EnvironmentSelector(environment.Project, environment.Name), source, sourcePath)
+	fmt.Fprintf(c.Out, "%s checkout %s now uses %s\n", model.EnvironmentSelector(environment.Project, environment.Name), source, contract.SetSourceCheckoutRequest{Path: sourcePath})
 	return nil
 }
 

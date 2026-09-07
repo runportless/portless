@@ -231,11 +231,8 @@ func (e *Engine) hasRootMarker(directory string) (bool, error) {
 
 // Discover indexes the project, resolves service candidates, and analyzes its topology.
 func (e *Engine) Discover(ctx context.Context, start string) (Result, error) {
-	if _, bounded := ctx.Deadline(); !bounded {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, e.config.ScanTimeout)
-		defer cancel()
-	}
+	ctx, cancel := context.WithTimeout(ctx, e.config.ScanTimeout)
+	defer cancel()
 	root, err := e.FindRoot(ctx, start)
 	if err != nil {
 		return Result{}, err
@@ -245,7 +242,11 @@ func (e *Engine) Discover(ctx context.Context, start string) (Result, error) {
 		return Result{}, err
 	}
 	defer workspace.Close()
+	return e.discoverWorkspace(ctx, workspace)
+}
 
+func (e *Engine) discoverWorkspace(ctx context.Context, workspace *workspace) (Result, error) {
+	root := workspace.root
 	var candidates []pluginCandidate
 	var diagnostics []spec.Diagnostic
 	for _, detector := range e.detectors {

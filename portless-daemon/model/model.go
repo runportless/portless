@@ -345,14 +345,16 @@ type MockScenarioActivation struct {
 
 // MockScenario groups deterministic HTTP routes across environment services.
 type MockScenario struct {
-	Project     string                 `json:"project"`
-	Environment string                 `json:"environment"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	Routes      []MockRoute            `json:"routes"`
-	Activation  MockScenarioActivation `json:"activation"`
-	CreatedAt   time.Time              `json:"createdAt"`
-	ModifiedAt  time.Time              `json:"modifiedAt"`
+	RouteCount      int                    `json:"routeCount,omitempty"`
+	PayloadsOmitted bool                   `json:"payloadsOmitted,omitempty"`
+	Project         string                 `json:"project"`
+	Environment     string                 `json:"environment"`
+	Name            string                 `json:"name"`
+	Description     string                 `json:"description,omitempty"`
+	Routes          []MockRoute            `json:"routes"`
+	Activation      MockScenarioActivation `json:"activation"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	ModifiedAt      time.Time              `json:"modifiedAt"`
 }
 
 // MockQueryMatcher requires a query parameter using equals, exists, or regex.

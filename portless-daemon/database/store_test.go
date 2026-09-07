@@ -416,7 +416,7 @@ func TestContextSelectionCanBeClearedIdempotently(t *testing.T) {
 	replacementPath := filepath.Join(t.TempDir(), "checkout-worktree")
 	if _, err := controlStore.ReplaceEnvironmentConfiguration(ctx, "billing", "local", environment.Revision, definition,
 		[]model.SourceBinding{{Name: "checkout", Path: replacementPath, Status: "ready", ScannedAt: time.Now(), Definition: definition}},
-		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}},
+		[]model.ComponentBinding{{Service: "checkout", Provider: model.ProviderLocal, Source: "checkout"}}, nil,
 	); err != nil {
 		t.Fatal(err)
 	}

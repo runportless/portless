@@ -141,7 +141,7 @@ func (s *Service) importMockRoutes(ctx context.Context, project, environment, sc
 }
 
 // DeleteMockScenario removes a disabled mock scenario and its routes.
-func (s *Service) DeleteMockScenario(ctx context.Context, project, environment, name, actor string) error {
+func (s *Service) DeleteMockScenario(ctx context.Context, project, environment, name, actor string, expected *model.ResourceVersion) error {
 	lock := s.projectLock(model.EnvironmentSelector(project, environment))
 	lock.Lock()
 	defer lock.Unlock()
@@ -152,7 +152,7 @@ func (s *Service) DeleteMockScenario(ctx context.Context, project, environment, 
 	if scenario.Activation.State != model.MockScenarioDisabled {
 		return fmt.Errorf("%w: mock scenario %s is %s; disable it before deleting it", errMockScenarioConflict, scenario.Name, scenario.Activation.State)
 	}
-	if err := s.database.DeleteMockScenario(ctx, project, environment, scenario.Name); err != nil {
+	if err := s.database.DeleteMockScenario(ctx, project, environment, scenario.Name, expected); err != nil {
 		return err
 	}
 	scope := model.EnvironmentSelector(project, environment)
@@ -236,7 +236,7 @@ func (s *Service) PutMockRoute(ctx context.Context, project, environment, scenar
 }
 
 // DeleteMockRoute removes one route and reloads every active service matcher.
-func (s *Service) DeleteMockRoute(ctx context.Context, project, environment, scenarioName, routeName, actor string) (model.MockScenario, error) {
+func (s *Service) DeleteMockRoute(ctx context.Context, project, environment, scenarioName, routeName, actor string, expected *model.ResourceVersion) (model.MockScenario, error) {
 	lock := s.projectLock(model.EnvironmentSelector(project, environment))
 	lock.Lock()
 	defer lock.Unlock()
@@ -260,7 +260,7 @@ func (s *Service) DeleteMockRoute(ctx context.Context, project, environment, sce
 	if scenario.Activation.State != model.MockScenarioDisabled && !sameMockServices(beforeServices, mockScenarioServices(remaining)) {
 		return model.MockScenario{}, fmt.Errorf("%w: disable the mock scenario before deleting the final route for a service", errMockScenarioConflict)
 	}
-	updated, err := s.database.DeleteMockRoute(ctx, project, environment, scenario.Name, routeName)
+	updated, err := s.database.DeleteMockRoute(ctx, project, environment, scenario.Name, routeName, expected)
 	if err != nil {
 		return model.MockScenario{}, err
 	}
