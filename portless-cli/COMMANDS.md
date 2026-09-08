@@ -1,13 +1,8 @@
 # Portless Command Reference
 
-This document describes the complete public command tree of the `portless`
-executable. For CLI ownership, architecture, and contribution guidance, see
-the [Portless CLI README](README.md). For installation and the broader product
-workflow, see the [repository README](../README.md).
-
-The executable also contains private process modes whose names begin with
-`__`. They are implementation protocols for the daemon, relay, and supervised
-runtimes, not public commands, and are intentionally excluded here.
+This document describes every public command and option of `portless`.
+Start with the [CLI guide](README.md) for everyday workflows or the
+[installation guide](../README.md#install) to get set up.
 
 ## Syntax and shared behavior
 

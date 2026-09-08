@@ -1,199 +1,195 @@
 # Portless CLI
 
-`portless-cli` owns the user-facing command surface of Portless. It assembles
-the Cobra command tree, resolves the current checkout, renders human and
-machine-readable output, confirms destructive actions, generates shell
-completion, and opens browser destinations.
+Use `portless` to start your application's services, give them stable local
+addresses, and inspect logs and traffic from your terminal. You can start
+from a checkout without an account or a `portless.yaml` file.
 
-The CLI is part of the repository's single Go module and the distributed
-`portless` executable. It is not a second daemon or a client for a hosted
-service. For the complete public command hierarchy, options, and examples, see
-the [command reference](COMMANDS.md).
+This guide covers everyday use. See the [command reference](COMMANDS.md) for
+all commands, flags, and advanced options.
 
-## Product boundary
+## Get started
 
-The CLI owns:
-
-- public command names, arguments, flags, aliases, help, and completion;
-- current-checkout and one-invocation environment selection;
-- concise human output, structured JSON, JSON Lines for streams, and exit
-  codes;
-- semantic color, confirmations, progress, and browser launching; and
-- composition of the local daemon, relay, runtime, doctor, and MCP entry
-  points exposed through the shared executable.
-
-Feature state and behavior remain behind narrower boundaries:
-
-- `portless-daemon/api/client` is the typed boundary for projects,
-  environments, lifecycle, observability, traffic, and mocks. CLI packages do
-  not construct daemon routes or import server and control-plane packages.
-- `portless-daemon/control` owns out-of-process daemon inspection, startup,
-  replacement, shutdown, reset, and uninstall coordination.
-- `portless-relay` owns the machine-wide privileged HTTP and DNS boundary.
-- `portless-mcp` owns the local stdio MCP runtime. Only `administration`
-  consumes it.
-
-`cmd/portless` is deliberately a thin executable entry point. Its private
-`__daemon`, `__relay`, `__runner`, and relay-installation modes are internal
-process protocols, not public commands. Contributors and users should invoke
-the normal command tree instead.
-
-## Package map
-
-| Path | Responsibility |
-| --- | --- |
-| `cmd/portless` | Start the shared executable and dispatch private process modes. |
-| `app.go`, `commands.go` | Compose dependencies, assemble the root tree, apply global policy, and map errors to exit codes. |
-| `command` | Shared CLI mechanics: context, selection, output, color, completion, operation waiting, browser launching, and host seams. |
-| `environment` | `up`, `down`, `status`, `open`, `url`, and `ui`. |
-| `projects` | Project, source, environment, provider-binding, and checkout commands. |
-| `observe` | Logs, timeline, service inspection and lifecycle, and effective connections. |
-| `traffic` | Traffic exchanges and traces, recordings, and fault rules. |
-| `mocks` | Multi-service mock scenarios, activation, routes, imports, and previews. |
-| `administration` | Preferences, daemon, relay, runtime, MCP, reset, uninstall, and setup commands. |
-| `doctor` | Installation diagnostics and report types used by `administration`. |
-
-The feature packages are siblings: they do not import one another. Shared
-invocation state and host dependencies flow through `command.Context`, while
-daemon-backed behavior flows through the typed API client. These dependency
-rules are guarded by `tests/architecture`.
-
-## Execution model
-
-```text
-argv
-  |
-  v
-CLI.Run -> root Cobra command -> owning feature package
-  |                                |
-  |                                +-> typed daemon API client
-  |                                +-> daemon lifecycle controller
-  |                                +-> narrow local host dependency
-  v
-human output / JSON / JSON Lines + process exit code
-```
-
-`CLI.Run` is reusable and returns an exit code instead of terminating the
-process. It loads saved presentation preferences, configures the root command,
-executes one invocation, and applies the common error policy. The executable
-entry point is the only layer that turns that return value into process exit.
-
-Normal daemon-backed actions use the lifecycle controller to connect to the
-per-user daemon, starting it when the command contract permits. Help and shell
-completion do not start a daemon. Dynamic completion consults only an existing
-daemon with a short timeout and quietly returns no candidates when local state
-is unavailable.
-
-## Selection contract
-
-Most environment-scoped commands resolve context in this order:
-
-1. the global `--env project/environment` override for this invocation;
-2. a selection saved for the current checkout by `portless env select`; or
-3. an environment inferred unambiguously from the current checkout.
-
-An ambiguous checkout fails with the candidate selectors and explicit next
-steps. `portless env current` explains the effective resolution,
-`portless env clear` removes only the saved checkout selection, and `--env`
-never changes saved state. Commands with an intentional inventory fallback,
-such as `portless status`, document that exception in the command reference.
-
-When the current checkout is not registered, `portless up` asks the daemon to
-discover and create the project automatically.
-
-## Output and error contract
-
-Human-readable output is the default. Data-bearing commands also honor the
-global `--json` flag; streaming commands emit one compact JSON document per
-line. Global flags work before or after subcommands. `portless mcp serve` is
-the intentional exception because stdout carries MCP JSON-RPC.
-
-Errors go to stderr. JSON invocations use a stable `error` envelope, including
-typed daemon error details and remediation when available. Exit codes are:
-
-| Code | Meaning |
-| --- | --- |
-| `0` | The action succeeded, or an incomplete parent/leaf invocation displayed useful help. |
-| `1` | The requested action failed at runtime. |
-| `2` | The invocation was invalid, such as an unknown command, invalid value, conflicting flags, or missing required flag. |
-
-Color is semantic and never part of machine output. Resolution order is JSON
-or completion output, `--no-color`, `NO_COLOR`, the saved
-`auto|always|never` preference, then terminal detection. Incomplete parent
-commands display help without making an API request; missing required
-positional arguments do the same, while malformed arguments are usage errors.
-
-## Lifecycle and destructive actions
-
-Commands that start asynchronous work wait and render progress by default.
-Their explicit `--no-wait` form returns after the operation is accepted.
-Callers should not add a second fire-and-forget path or permit duplicate work
-while an operation is already running.
-
-Destructive commands are preview-first where a useful inventory can be shown,
-or require an explicit `--yes` confirmation at the leaf. `--force` is a
-guarded recovery mechanism, not general permission to kill an unverified
-process or remove an unowned runtime resource. Keep confirmation, preview,
-ownership checks, and the final result consistent between human and JSON
-output.
-
-## Changing the command tree
-
-When adding or changing a command:
-
-1. Put it in the package that owns the user-facing behavior. Keep
-   `cmd/portless`, `app.go`, and `commands.go` limited to composition and
-   global execution policy.
-2. Use the typed daemon client for feature requests. Change the wire contract,
-   client, server, consumers, and API documentation together when the
-   operation does not already exist.
-3. Give incomplete parent commands useful help. Wrap positional validation
-   with `command.UsageArgs`, validate bounded options before I/O, and register
-   completion without starting the daemon.
-4. Implement both concise human output and the appropriate JSON contract.
-   Use JSON Lines only for actual streams.
-5. Add focused tests in the owning package. Update
-   `command_contract_test.go` whenever the public tree or bare-command
-   behavior changes.
-6. Update the [command reference](COMMANDS.md) in the same change.
-
-Every exported declaration under `portless-cli` needs meaningful GoDoc that
-begins with its exact identifier.
-
-## Development
-
-Run supported workflows from the repository root:
+Follow the [installation guide](../README.md#install), then configure local
+networking once:
 
 ```bash
-make                              # build web assets and bin/portless
-go test ./portless-cli/...        # focused CLI suite
-go test ./tests/architecture      # package and import boundaries
-make test-go                      # complete Go suite
-make test                         # complete non-destructive repository suite
-git diff --check
+portless setup
 ```
 
-Use the complete executable for manual command-tree checks:
+Setup may request administrator approval to configure local HTTP and DNS
+routing. Docker or Podman is needed only when your environment uses containers.
+
+Install your application's dependencies as usual, then start Portless from
+its checkout:
 
 ```bash
-make
-./bin/portless --help
-./bin/portless env bind --help
-./bin/portless --json daemon status
+cd /path/to/billing
+portless up
 ```
 
-Ordinary end-to-end suites compile a product binary and isolate the Portless
-home. Read [the E2E testing guide](../docs/e2e-testing.md) before changing or
-running them. Do not use reset, uninstall, relay installation/removal, forced
-daemon replacement, or machine-destructive relay suites as incidental CLI
-validation.
+On first use, Portless discovers supported services and creates a project with
+a `local` environment. It starts the environment and opens its dashboard when
+ready. Use `portless up --no-open` to start without opening a browser.
 
-## Further reading
+For a ready-made application, try the [Chat](../examples/chat/README.md) or
+[Store](../examples/store/README.md) example.
 
-- [Complete CLI command reference](COMMANDS.md)
-- [Repository overview and product workflow](../README.md)
-- [Daemon ownership and runtime model](../portless-daemon/README.md)
-- [Daemon OpenAPI contract](../portless-daemon/api/openapi.yaml)
-- [Daemon event contract](../portless-daemon/api/events.md)
-- [Package ownership and dependency direction](../docs/plans/package-structure-refactor.md)
-- [MCP boundary and client configuration](../portless-mcp/README.md)
+## Everyday commands
+
+Run these from a checkout belonging to your project. Replace `checkout` with
+a service name from `portless service list`.
+
+| Command | What it does |
+| --- | --- |
+| `portless up` | Start the environment and open its dashboard. |
+| `portless status` | Show environment and service status. |
+| `portless service list` | List the environment's services. |
+| `portless open checkout` | Open a service in the browser. |
+| `portless url checkout` | Print a service's public endpoint. |
+| `portless ui` | Open the Portless dashboard. |
+| `portless logs --tail` | Follow logs from all services. |
+| `portless service restart checkout` | Restart one service. |
+| `portless down` | Stop the environment and keep its managed data volumes. |
+
+You can omit the service name from `open` or `url` to use the environment's
+primary service. Public endpoints stay the same across service restarts.
+
+Start, stop, and restart commands wait and show progress by default. Where
+supported, `--no-wait` returns as soon as the operation is accepted.
+
+## Choose an environment
+
+A project is your application, which may span several repositories. An
+environment is an instance of that application. For example, `billing/local`
+means the `local` environment in the `billing` project.
+
+List environments, select one for your current checkout, and check the
+selection:
+
+```bash
+portless env list
+portless env select billing/local
+portless env current
+```
+
+Most commands use `--env` first, then your saved checkout selection, then an
+unambiguous match for the current checkout. If several environments match,
+choose one explicitly. `portless env clear` removes the saved selection.
+
+To target an environment for just one command, use `--env`. This also works
+outside a project checkout and does not change your saved selection:
+
+```bash
+portless --env billing/local status
+```
+
+To try a separate configuration, clone an environment and start the clone:
+
+```bash
+portless --env billing/local env clone qa
+portless --env billing/qa up
+```
+
+If the original environment is already using the checkout, Portless prepares
+an independent Git worktree for the clone automatically. This requires Git
+and an existing commit. See [environment configuration](COMMANDS.md#environment-selection-and-configuration)
+for checkout paths and local, container, or remote providers.
+
+## Inspect a service or request
+
+For a service named `checkout`, inspect its status and configuration or follow
+its recent logs:
+
+```bash
+portless service show checkout
+portless service config checkout
+portless logs checkout --since 10m --tail
+```
+
+For requests from `checkout` to `orders`, inspect the connection and follow
+its traffic:
+
+```bash
+portless connection show checkout:orders
+portless traffic list --edge checkout:orders --tail
+```
+
+The `source:target` notation identifies the caller and the service it calls.
+Use `portless traffic traces --service checkout` to list correlated traces,
+or open **Traffic** in the dashboard to inspect requests and responses.
+
+For a local service with a supported debugger, `portless service debug checkout`
+restarts it with debugging enabled. Run `portless service manage checkout`
+to restart it in normal mode. See [service commands](COMMANDS.md#services)
+for the full set of controls.
+
+## Use Portless in scripts
+
+Add `--json` for structured output:
+
+```bash
+portless status --json
+portless --env billing/local service list --json
+portless logs checkout --tail --json
+```
+
+Streaming commands emit JSON Lines: one JSON object per line. Errors go to
+stderr; JSON invocations include a structured `error` object. `mcp serve`
+uses its own protocol and does not accept `--json`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success, including displaying help. |
+| `1` | The requested action failed. |
+| `2` | The command or its arguments were invalid. |
+
+JSON output has no color codes. For plain terminal output, use `--no-color`
+or set `NO_COLOR`. Save a preference with `portless config color auto`,
+`portless config color always`, or `portless config color never`.
+
+## Help and shell completion
+
+Append `--help` to any command to see its arguments, options, and examples:
+
+```bash
+portless --help
+portless up --help
+portless env bind --help
+```
+
+Completion is available for Bash, Zsh, Fish, and PowerShell. For example,
+load it into a Zsh session with completion already enabled:
+
+```zsh
+source <(portless completion zsh)
+```
+
+Run `portless completion zsh --help` for persistent installation instructions,
+or replace `zsh` with your shell's name: `bash`, `fish`, or `powershell`.
+
+## Troubleshooting
+
+Start with `portless doctor` to check the local installation. Use a narrower
+check when you know where the problem is:
+
+| Problem | Command |
+| --- | --- |
+| Unsure which environment a command will use | `portless env current` |
+| A service fails to start | `portless logs checkout --since 10m` |
+| Local service addresses do not resolve or open | `portless doctor relay` |
+| Container dependencies cannot start | `portless doctor runtime` |
+| Commands cannot connect to Portless | `portless doctor daemon` |
+
+Use `portless down` for a normal stop. To remove environment data or uninstall
+Portless, review the [cleanup commands and their previews](COMMANDS.md#reset-and-uninstall).
+
+## More workflows
+
+- [Combine several repositories into one project](COMMANDS.md#projects-and-sources)
+- [Record traffic for later inspection](COMMANDS.md#recordings)
+- [Replay an HTTP request and compare responses](COMMANDS.md#captured-traffic-and-traces)
+- [Simulate delays and failures](COMMANDS.md#fault-rules)
+- [Mock a dependency's HTTP responses](COMMANDS.md#deterministic-mocks)
+- [Connect an MCP client](../portless-mcp/README.md)
+
+For development of Portless itself, see [Contributing](../CONTRIBUTING.md).
