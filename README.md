@@ -32,15 +32,14 @@ See [current support and limitations](docs/implementation-status.md).
 
 ### Homebrew (macOS)
 
-The Homebrew formula is not published yet. Once available, install from the
-project tap:
+Install the latest alpha release from the project tap:
 
 ```bash
 brew install runportless/tap/portless
 ```
 
 Use the full `runportless/tap/portless` name to select this project's formula.
-Until it is published, [build from source](#build-from-source).
+You can also [build from source](#build-from-source).
 
 ### Build from source
 

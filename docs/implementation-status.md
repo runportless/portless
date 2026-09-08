@@ -33,6 +33,6 @@ This repository is a runnable vertical implementation of the product direction, 
 - Stateful, scripted, templated, passthrough, WebSocket, gRPC, TCP, and binary mock behavior. The initial mock provider deliberately returns fixed HTTP responses from a deterministic matcher and returns `501` when no route matches.
 - TCP-specific reset/drop-after-byte effects. TCP edges support delay/rejection through the shared fault model; advanced stream effects remain.
 - Operation cancellation, bounded-parallel graph execution, long-lived port lease recovery, and resource-cap enforcement under load.
-- Windows support, nerdctl adapters, packaging, notarization, upgrade rollback tooling, SBOM generation, and release soak tests.
+- Windows support, nerdctl adapters, notarization, upgrade rollback tooling, and release soak tests.
 
 These items should be treated as release gates, not hidden behavior. The architecture keeps them behind store, runtime, proxy, and API boundaries so they can be added without changing the public naming model or user workflow.
