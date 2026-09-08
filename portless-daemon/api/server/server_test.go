@@ -117,7 +117,7 @@ func TestProjectAndEnvironmentAPIsAndHostsAreSeparated(t *testing.T) {
 		t.Fatalf("mock route response code=%d body=%s", updatedMock.Code, updatedMock.Body.String())
 	}
 	previewMock := request(server, authManager, http.MethodPost, mockBase+"/preview", `{"request":{"service":"checkout","method":"GET","path":"/health","headers":{"Accept":["application/json"],"X-Trace":["one","two"]},"body":"preview payload"}}`, true)
-	if previewMock.Code != http.StatusOK || !strings.Contains(previewMock.Body.String(), `"matched":true`) || !strings.Contains(previewMock.Body.String(), `"route":"health"`) {
+	if previewMock.Code != http.StatusOK || !strings.Contains(previewMock.Body.String(), `"outcome":"mocked"`) || !strings.Contains(previewMock.Body.String(), `"route":"health"`) {
 		t.Fatalf("mock preview response code=%d body=%s", previewMock.Code, previewMock.Body.String())
 	}
 	listedMocks := request(server, authManager, http.MethodGet, "/api/v1/environments/billing/local/mocks", "", true)

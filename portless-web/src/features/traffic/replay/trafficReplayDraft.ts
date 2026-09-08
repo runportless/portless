@@ -122,7 +122,8 @@ export function replayDestinationReason(environment: Environment, baseline: Traf
   if (['stopped', 'stopping', 'starting', 'recovering', 'unknown'].includes(environment.status)) return `Environment ${environment.status}`
   const target = environment.services.find((service) => service.name === baseline.target)
   if (!target) return 'Target service is missing'
-  if (target.status !== 'ready') return `Target service ${target.status}`
+  const partialAdmission = target.mock?.unmatchedRequests === 'forward' && target.mock.state === 'enabled' && ['failed', 'exited', 'unhealthy'].includes(target.status)
+  if (target.status !== 'ready' && !partialAdmission) return `Target service ${target.status}`
   if (baseline.source === 'external') return target.endpoints?.some((endpoint) => endpoint.kind === 'public' && endpoint.protocol === 'http') ? '' : 'No public HTTP endpoint'
   return environment.connections.some((edge) => edge.source === baseline.source && edge.target === baseline.target && edge.protocol === 'http') ? '' : 'HTTP dependency edge is missing'
 }

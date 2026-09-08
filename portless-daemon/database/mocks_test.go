@@ -50,6 +50,15 @@ func TestMockScenariosPersistServiceRoutesAndCloneWithEnvironment(t *testing.T) 
 	if _, err := controlStore.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 11`); err != nil {
 		t.Fatal(err)
 	}
+	for _, query := range []string{
+		`ALTER TABLE mock_scenarios DROP COLUMN unmatched_requests`,
+		`ALTER TABLE mock_scenario_activations DROP COLUMN unmatched_requests`,
+		`DELETE FROM schema_migrations WHERE version = 12`,
+	} {
+		if _, err := controlStore.db.ExecContext(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := controlStore.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +67,9 @@ func TestMockScenariosPersistServiceRoutesAndCloneWithEnvironment(t *testing.T) 
 		t.Fatal(err)
 	}
 	updated, err = controlStore.MockScenario(ctx, "store", "local", "sold-out")
+	if err != nil || updated.UnmatchedRequests != model.MockUnmatchedReject {
+		t.Fatalf("existing scenario changed policy during migration: %#v %v", updated, err)
+	}
 	if err != nil || !reflect.DeepEqual(updated.Routes[0].Query, map[string]model.MockQueryMatcher{"warehouse": {Match: "equals", Value: "central"}, "include": {Match: "exists"}}) {
 		t.Fatalf("migrated query = %#v, %v", updated, err)
 	}

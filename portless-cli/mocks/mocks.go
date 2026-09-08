@@ -33,13 +33,13 @@ func (c *Commands) list(ctx context.Context) error {
 		return nil
 	}
 	fmt.Fprintf(c.Out, "%s · %s/%s\n\n", c.Heading(c.Out, "Mocks"), environment.Project, environment.Name)
-	fmt.Fprintln(c.Out, c.Muted(c.Out, fmt.Sprintf("%-24s %-10s %-28s %-8s %s", "SCENARIO", "STATE", "SERVICES", "ROUTES", "MODIFIED")))
+	fmt.Fprintln(c.Out, c.Muted(c.Out, fmt.Sprintf("%-24s %-10s %-10s %-28s %-8s %s", "SCENARIO", "STATE", "UNMATCHED", "SERVICES", "ROUTES", "MODIFIED")))
 	for _, scenario := range result.Scenarios {
 		services := strings.Join(scenario.Activation.TargetServices, ",")
 		if services == "" {
 			services = "—"
 		}
-		fmt.Fprintf(c.Out, "%-24s %-10s %-28s %-8d %s\n", scenario.Name, c.State(c.Out, string(scenario.Activation.State)), services, len(scenario.Routes), scenario.ModifiedAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(c.Out, "%-24s %-10s %-10s %-28s %-8d %s\n", scenario.Name, c.State(c.Out, string(scenario.Activation.State)), scenario.UnmatchedRequests, services, len(scenario.Routes), scenario.ModifiedAt.Local().Format(time.RFC3339))
 	}
 	return nil
 }
@@ -58,6 +58,7 @@ func (c *Commands) show(ctx context.Context, name string) error {
 	}
 	fmt.Fprintln(c.Out, c.Heading(c.Out, scenario.Name))
 	fmt.Fprintf(c.Out, "  %-13s %s\n", "State:", c.State(c.Out, string(scenario.Activation.State)))
+	fmt.Fprintf(c.Out, "  %-13s %s\n", "Unmatched:", scenario.UnmatchedRequests)
 	if scenario.Description != "" {
 		fmt.Fprintf(c.Out, "  %-13s %s\n", "Description:", scenario.Description)
 	}
@@ -82,12 +83,15 @@ func (c *Commands) show(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *Commands) create(ctx context.Context, name, description string) error {
+func (c *Commands) create(ctx context.Context, name, description, policy string) error {
+	if err := model.MockUnmatchedRequests(policy).Validate(); err != nil {
+		return err
+	}
 	client, environment, err := c.Current(ctx)
 	if err != nil {
 		return err
 	}
-	scenario, err := client.CreateMockScenario(ctx, environment.Project, environment.Name, contract.CreateMockRequest{Name: name, Description: description})
+	scenario, err := client.CreateMockScenario(ctx, environment.Project, environment.Name, contract.CreateMockRequest{Name: name, Description: description, UnmatchedRequests: model.MockUnmatchedRequests(policy)})
 	if err != nil {
 		return err
 	}
@@ -95,6 +99,38 @@ func (c *Commands) create(ctx context.Context, name, description string) error {
 		return command.WriteJSON(c.Out, scenario)
 	}
 	fmt.Fprintf(c.Out, "mock scenario %s created\n", scenario.Name)
+	return nil
+}
+
+func (c *Commands) setPolicy(ctx context.Context, name, policy string) error {
+	if err := model.MockUnmatchedRequests(policy).Validate(); err != nil {
+		return err
+	}
+	client, environment, err := c.Current(ctx)
+	if err != nil {
+		return err
+	}
+	key, err := command.InvocationKey("cli-set-mock-policy")
+	if err != nil {
+		return err
+	}
+	operation, err := client.SetMockScenarioPolicy(ctx, environment.Project, environment.Name, name, contract.SetMockScenarioPolicyRequest{UnmatchedRequests: model.MockUnmatchedRequests(policy)}, key)
+	if err != nil {
+		return err
+	}
+	waitContext, cancel := context.WithTimeout(ctx, 13*time.Minute)
+	defer cancel()
+	operation, err = c.WaitOperation(waitContext, client, operation, c.JSONOutput)
+	if err != nil {
+		return err
+	}
+	if operation.State != "succeeded" {
+		return errors.New(operation.Error)
+	}
+	if c.JSONOutput {
+		return command.WriteJSON(c.Out, operation)
+	}
+	fmt.Fprintf(c.Out, "mock scenario %s now uses %s for unmatched requests\n", name, policy)
 	return nil
 }
 
@@ -223,18 +259,23 @@ func (c *Commands) preview(ctx context.Context, scenarioName string, options pre
 	if c.JSONOutput {
 		return command.WriteJSON(c.Out, preview)
 	}
-	if !preview.Matched {
-		fmt.Fprintf(c.Out, "no %s route matched; the mock would return %d\n", preview.Service, preview.Status)
-		return nil
-	}
-	fmt.Fprintf(c.Out, "matched %s for %s · %d", c.Accent(c.Out, preview.Route), preview.Service, preview.Status)
-	if preview.DelayMS > 0 {
-		fmt.Fprintf(c.Out, " · %dms delay", preview.DelayMS)
-	}
-	fmt.Fprintln(c.Out)
-	if preview.Body != "" {
+	switch preview.Outcome {
+	case "forward":
+		fmt.Fprintf(c.Out, "no %s route matched; would forward to %s (%s)\n", preview.Service, preview.Destination.URL, preview.Destination.Provider)
+	case "blocked":
+		fmt.Fprintf(c.Out, "blocked: %s\n", preview.Reason.Message)
+	case "rejected":
+		fmt.Fprintf(c.Out, "no %s route matched; the mock would return %d\n", preview.Service, preview.Response.Status)
+	case "mocked":
+		fmt.Fprintf(c.Out, "matched %s for %s · %d", c.Accent(c.Out, preview.Route), preview.Service, preview.Response.Status)
+		if preview.Response.DelayMS > 0 {
+			fmt.Fprintf(c.Out, " · %dms delay", preview.Response.DelayMS)
+		}
 		fmt.Fprintln(c.Out)
-		fmt.Fprintln(c.Out, preview.Body)
+		if preview.Response.Body != "" {
+			fmt.Fprintln(c.Out)
+			fmt.Fprintln(c.Out, preview.Response.Body)
+		}
 	}
 	return nil
 }

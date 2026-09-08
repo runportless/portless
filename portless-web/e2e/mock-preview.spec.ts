@@ -41,7 +41,7 @@ test('reloads and leaves unsaved mock routes without a native confirmation', asy
   }
 })
 
-test('shows the save footer only for route edits in Routes and Preview', async ({ page }, testInfo) => {
+test('shows the save footer only for route edits in Edit and Preview', async ({ page }, testInfo) => {
   const fixture = await createScenario('footer', [route('lookup', '/saved', '{"saved":true}')])
   try {
     await authenticate(page, fixture.path + '&route=lookup')
@@ -86,23 +86,23 @@ test('shows the save footer only for route edits in Routes and Preview', async (
     await body.fill('{"saved":false}')
     await expect(footer).toHaveCount(0)
     await page.screenshot({ path: testInfo.outputPath('mock-preview-saved-no-footer.png'), animations: 'disabled' })
-    await openRoutes(page)
+    await openEdit(page)
     await expect(footer).toHaveCount(0)
   } finally {
     await fixture.cleanup()
   }
 })
 
-test('switches Routes and Preview while retaining the selected route, configuration, draft, and result', async ({ page }) => {
+test('switches Edit and Preview while retaining the selected route, configuration, draft, and result', async ({ page }) => {
   const fixture = await createScenario('workspace', [route('lookup', '/inventory', '{"available":true}'), route('other', '/other', 'other')])
   try {
     await authenticate(page, fixture.path + '&route=lookup')
     const saved = await controlAPI<MockScenario>(fixture.scenarioBase)
     const editor = page.getByRole('region', { name: 'Edit Route', exact: true })
     const views = page.getByRole('tablist', { name: 'Mock workspace view' })
-    const routeTitle = page.locator('.mock-route-heading h2')
+    const routeTitle = page.locator('.mock-route-heading h3')
     const endpoint = page.locator('.mock-route-heading__endpoint')
-    const routesTab = views.getByRole('tab', { name: 'Routes', exact: true })
+    const editTab = views.getByRole('tab', { name: 'Edit', exact: true })
     const previewTab = views.getByRole('tab', { name: 'Preview', exact: true })
     const browser = page.locator('.mock-route-browser')
     const configuration = editor.locator('.mock-route-configuration')
@@ -113,7 +113,7 @@ test('switches Routes and Preview while retaining the selected route, configurat
     const samplePath = preview.getByLabel('PREVIEW PATH', { exact: true })
     const response = preview.getByRole('region', { name: 'Preview response', exact: true })
     const responseTab = editor.getByRole('tab', { name: 'Response', exact: true })
-    await expect(routesTab).toHaveAttribute('aria-selected', 'true')
+    await expect(editTab).toHaveAttribute('aria-selected', 'true')
     await expect(browser).toBeVisible()
     await expect(preview).toBeHidden()
     await expect(routeTitle).toHaveText('lookup')
@@ -132,14 +132,14 @@ test('switches Routes and Preview while retaining the selected route, configurat
     await responseTab.click()
     await editor.getByLabel('RESPONSE BODY', { exact: true }).fill('{"available":false}')
 
-    await routesTab.focus()
-    await routesTab.press('ArrowRight')
+    await editTab.focus()
+    await editTab.press('ArrowRight')
     await expect(previewTab).toBeFocused()
     await expect(previewTab).toHaveAttribute('aria-selected', 'true')
     await expect(browser).toBeHidden()
     await expect(preview).toBeVisible()
     await expect(responseTab).toHaveAttribute('aria-selected', 'true')
-    await expect(page.locator('.mock-route-heading h2')).toHaveText('lookup')
+    await expect(page.locator('.mock-route-heading h3')).toHaveText('lookup')
     const configurationBox = (await configuration.boundingBox())!
     const previewBox = (await preview.boundingBox())!
     expect(configurationBox.x).toBeCloseTo(listingLeft, 0)
@@ -156,7 +156,7 @@ test('switches Routes and Preview while retaining the selected route, configurat
 
     await previewTab.focus()
     await previewTab.press('Home')
-    await expect(routesTab).toBeFocused()
+    await expect(editTab).toBeFocused()
     await expect(browser).toBeVisible()
     await expect(preview).toBeHidden()
     await expect(page.getByRole('button', { name: 'Edit lookup route', exact: true })).toHaveAttribute('aria-current', 'true')
@@ -168,8 +168,8 @@ test('switches Routes and Preview while retaining the selected route, configurat
     await expect(query.getByLabel('Query parameter value 1', { exact: true })).toHaveValue('central')
     await path.fill('/changed')
     await expect(endpoint.locator('code')).toHaveText('/changed')
-    await routesTab.focus()
-    await routesTab.press('End')
+    await editTab.focus()
+    await editTab.press('End')
     await expect(previewTab).toBeFocused()
     await expect(editor.getByRole('tab', { name: 'Request', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(samplePath).toHaveValue('/inventory')
@@ -198,10 +198,10 @@ test('switches Routes and Preview while retaining the selected route, configurat
     expect((await controlAPI<MockScenario>(fixture.scenarioBase)).routes[0]).toMatchObject({ path: '/changed', body: '{"available":false}', query: { warehouse: { match: 'equals', value: 'central' } } })
     await previewTab.focus()
     await previewTab.press('ArrowLeft')
-    await expect(routesTab).toBeFocused()
+    await expect(editTab).toBeFocused()
     await expect(page.getByRole('button', { name: 'Edit lookup route', exact: true })).toHaveAttribute('aria-current', 'true')
     await page.reload()
-    await expect(routesTab).toHaveAttribute('aria-selected', 'true')
+    await expect(editTab).toHaveAttribute('aria-selected', 'true')
     await expect(path).toHaveValue('/changed')
   } finally {
     await fixture.cleanup()
@@ -234,12 +234,12 @@ test('opens a route from its Preview menu action with retained drafts and keyboa
     await expect(page.locator('.mock-route-browser')).toBeHidden()
     await expect(page.getByRole('menu', { name: 'other route actions', includeHidden: true })).toHaveCount(0)
     await expect(editor.getByLabel('ROUTE NAME', { exact: true })).toHaveValue('other')
-    await expect(page.locator('.mock-route-heading h2')).toHaveText('other')
+    await expect(page.locator('.mock-route-heading h3')).toHaveText('other')
     await expect(page.locator('.mock-route-heading__endpoint code')).toHaveText('/other')
     await expect(preview.getByLabel('PREVIEW PATH', { exact: true })).toHaveValue('/other')
     expect(previewRequests).toBe(0)
 
-    await openRoutes(page)
+    await openEdit(page)
     const lookupActions = page.getByRole('button', { name: 'Route actions for lookup', exact: true })
     await lookupActions.focus()
     await lookupActions.press('Enter')
@@ -252,7 +252,7 @@ test('opens a route from its Preview menu action with retained drafts and keyboa
     await expect(page).toHaveURL(/route=lookup$/)
     await expect(previewTab).toBeFocused()
     await expect(editor.getByLabel('PATH', { exact: true })).toHaveValue('/draft-lookup')
-    await expect(page.locator('.mock-route-heading h2')).toHaveText('lookup')
+    await expect(page.locator('.mock-route-heading h3')).toHaveText('lookup')
     await expect(page.locator('.mock-route-heading__endpoint code')).toHaveText('/draft-lookup')
     await expect(preview.getByLabel('PREVIEW PATH', { exact: true })).toHaveValue('/draft-lookup')
     await expect(editor.getByRole('button', { name: 'SAVE ROUTE', exact: true })).toBeEnabled()
@@ -262,7 +262,7 @@ test('opens a route from its Preview menu action with retained drafts and keyboa
     await expect(response).toContainText('Matched lookup')
     await response.getByRole('tab', { name: 'Headers', exact: true }).click()
     await editor.getByRole('tab', { name: 'Response', exact: true }).click()
-    await openRoutes(page)
+    await openEdit(page)
     await lookupActions.click()
     await previewAction.click()
     await expect(previewTab).toBeFocused()
@@ -272,7 +272,7 @@ test('opens a route from its Preview menu action with retained drafts and keyboa
     await expect(preview.getByLabel('PREVIEW PATH', { exact: true })).toHaveValue('/draft-lookup')
     expect(previewRequests).toBe(1)
     expect(await controlAPI<MockScenario>(fixture.scenarioBase)).toEqual(saved)
-    await openRoutes(page)
+    await openEdit(page)
     await page.getByRole('button', { name: 'Route actions for other', exact: true }).click()
     await otherMenu.getByRole('menuitem', { name: 'EDIT', exact: true }).click()
     await expect(editor.getByLabel('ROUTE NAME', { exact: true })).toHaveValue('other')
@@ -283,7 +283,7 @@ test('opens a route from its Preview menu action with retained drafts and keyboa
   }
 })
 
-test('keeps Routes and Preview usable in both themes and narrow workspaces', async ({ page }, testInfo) => {
+test('aligns the shared route toolbar and keeps Edit and Preview usable in both themes and narrow workspaces', async ({ page }, testInfo) => {
   const name = 'lookup-inventory-availability-for-checkout-and-fulfillment'
   const path = '/inventory/{sku}/warehouses/{warehouse}/availability'
   const fixture = await createScenario('workspace-with-a-long-scenario-name', [route(name, path, '{"available":false,"quantity":0}')])
@@ -291,31 +291,51 @@ test('keeps Routes and Preview usable in both themes and narrow workspaces', asy
     await authenticate(page, fixture.path + '&route=' + name)
     const editor = page.getByRole('region', { name: 'Edit Route', exact: true })
     const header = page.locator('.mock-scenario-header')
-    const routeTitle = header.getByRole('heading', { name, exact: true })
+    const toolbar = page.locator('.mock-route-toolbar')
+    const routeTitle = toolbar.getByRole('heading', { name, exact: true })
     const assertHeaderFits = async () => {
       await expect(routeTitle).toBeInViewport()
       await expect(routeTitle).toHaveAttribute('title', name)
-      await expect(header.locator('.mock-route-heading__endpoint code')).toHaveText(path)
+      await expect(toolbar.locator('.mock-route-heading__endpoint code')).toHaveText(path)
+      await expect(header.getByRole('heading', { level: 2 })).toHaveText(fixture.name)
+      await expect(header.getByRole('button', { name: 'Full mock', exact: true })).toBeInViewport({ ratio: 1 })
+      await expect(header.getByRole('button', { name: 'Partial mock', exact: true })).toBeInViewport({ ratio: 1 })
       await expect(header.locator('.mock-scenario-toggle')).toBeInViewport({ ratio: 1 })
-      await expect(header.getByRole('switch')).toBeEnabled()
-      const context = (await header.locator('.mock-scenario-header__context').boundingBox())!
-      const main = (await header.locator('.mock-scenario-header__route').boundingBox())!
-      const identity = (await header.locator('.mock-route-heading').boundingBox())!
-      const endpoint = (await header.locator('.mock-route-heading__endpoint').boundingBox())!
-      const tabs = (await header.getByRole('tablist').boundingBox())!
+      await expect(header.getByRole('switch', { name: `${fixture.name} enabled`, exact: true })).toBeEnabled()
+      const context = (await header.boundingBox())!
+      const main = (await toolbar.boundingBox())!
+      const identity = (await toolbar.locator('.mock-route-heading').boundingBox())!
+      const endpoint = (await toolbar.locator('.mock-route-heading__endpoint').boundingBox())!
+      const tabs = (await toolbar.getByRole('tablist').boundingBox())!
       expect(context.y + context.height).toBeLessThanOrEqual(main.y)
+      expect(main.x).toBeCloseTo(context.x, 0)
+      expect(main.width).toBeCloseTo(context.width, 0)
       expect(identity.x + identity.width).toBeLessThanOrEqual(tabs.x)
       expect(endpoint.x + endpoint.width).toBeLessThanOrEqual(identity.x + identity.width + 1)
       expect(tabs.x + tabs.width).toBeLessThanOrEqual(main.x + main.width + 1)
+      const browser = page.locator('.mock-route-browser')
+      if (await browser.isVisible()) {
+        const controls = browser.getByRole('group', { name: 'Route list controls', exact: true })
+        await expect(controls.getByRole('combobox', { name: 'Sort routes by', exact: true })).toBeInViewport({ ratio: 1 })
+        await expect(controls.getByRole('button', { name: 'ADD ROUTE', exact: true })).toBeInViewport({ ratio: 1 })
+        const listBar = (await controls.boundingBox())!
+        const configurationBar = (await editor.locator('.mock-route-configuration-bar').boundingBox())!
+        expect(listBar.x).toBeCloseTo(main.x, 0)
+        expect(listBar.y).toBeCloseTo(main.y + main.height, 0)
+        expect(listBar.height).toBeCloseTo(configurationBar.height, 0)
+        if (configurationBar.x >= listBar.x + listBar.width - 1) {
+          expect(configurationBar.y).toBeCloseTo(listBar.y, 0)
+        }
+      }
     }
     for (const theme of ['dark', 'light'] as const) {
       await page.emulateMedia({ colorScheme: theme })
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
-      await openRoutes(page)
+      await openEdit(page)
       await expect(page.locator('.mock-route-browser')).toBeVisible()
       await expect(editor.locator('.mock-workspace-footer')).toHaveCount(0)
       await assertHeaderFits()
-      await page.screenshot({ path: testInfo.outputPath('mock-workspace-routes-' + theme + '.png'), animations: 'disabled' })
+      await page.screenshot({ path: testInfo.outputPath('mock-workspace-edit-' + theme + '.png'), animations: 'disabled' })
       const preview = await openPreview(page)
       await preview.getByRole('button', { name: 'PREVIEW', exact: true }).click()
       await assertPreviewFits(page)
@@ -332,13 +352,13 @@ test('keeps Routes and Preview usable in both themes and narrow workspaces', asy
       await assertHeaderFits()
       await expect(page.locator('.mock-route-browser')).toBeHidden()
       await page.screenshot({ path: testInfo.outputPath('mock-workspace-preview-' + width + '.png'), animations: 'disabled' })
-      await openRoutes(page)
+      await openEdit(page)
       await expect(page.locator('.mock-route-browser')).toBeVisible()
       await expect(editor.getByRole('tablist', { name: 'Mock route configuration' })).toBeInViewport()
       await expect(editor.locator('.mock-workspace-footer')).toHaveCount(0)
       await assertHeaderFits()
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
-      await page.screenshot({ path: testInfo.outputPath('mock-workspace-routes-' + width + '.png'), animations: 'disabled' })
+      await page.screenshot({ path: testInfo.outputPath('mock-workspace-edit-' + width + '.png'), animations: 'disabled' })
       await openPreview(page)
     }
   } finally {
@@ -356,7 +376,7 @@ test('renames a route with its draft, previews the new name, and follows the sav
     await authenticate(page, `${fixture.path}&route=lookup`)
     const editor = page.getByRole('region', { name: 'Edit Route', exact: true })
     const name = editor.getByLabel('ROUTE NAME', { exact: true })
-    const routeTitle = page.locator('.mock-route-heading h2')
+    const routeTitle = page.locator('.mock-route-heading h3')
     await expect(name).toBeEnabled()
     const before = await controlAPI<MockScenario>(fixture.scenarioBase)
     await name.fill('renamed')
@@ -388,7 +408,7 @@ test('renames a route with its draft, previews the new name, and follows the sav
     await expect(page).toHaveURL(/route=renamed$/)
     await expect(page.getByRole('button', { name: 'Edit lookup route', exact: true })).toHaveCount(0)
     await expect(page.getByRole('tab', { name: 'Preview', exact: true })).toHaveAttribute('aria-selected', 'true')
-    await openRoutes(page)
+    await openEdit(page)
     await expect(page.getByRole('button', { name: 'Edit renamed route', exact: true })).toBeVisible()
     await expect(name).toHaveValue('renamed')
     await expect(editor.locator('.mock-workspace-footer')).toHaveCount(0)
@@ -574,6 +594,49 @@ test('edits, previews, validates, and saves regex query matchers', async ({ page
   }
 })
 
+test('saves and cancels new route defaults without requiring a field edit', async ({ page }, testInfo) => {
+  const fixture = await createScenario('new-defaults')
+  try {
+    await authenticate(page, fixture.path)
+    const editor = page.getByRole('region', { name: 'Create Route', exact: true })
+    for (const view of ['edit', 'preview'] as const) {
+      await page.getByRole('button', { name: 'ADD ROUTE', exact: true }).click()
+      if (view === 'preview') await openPreview(page)
+      const cancel = editor.getByRole('button', { name: 'Cancel new route', exact: true })
+      await expect(cancel).toBeInViewport({ ratio: 1 })
+      await cancel.click()
+      await expect(editor).toHaveCount(0)
+      expect((await controlAPI<MockScenario>(fixture.scenarioBase)).routes).toHaveLength(view === 'edit' ? 0 : 1)
+
+      await page.getByRole('button', { name: 'ADD ROUTE', exact: true }).click()
+      if (view === 'preview') await openPreview(page)
+      const name = await editor.getByLabel('ROUTE NAME', { exact: true }).inputValue()
+      const service = await editor.getByLabel('SERVICE', { exact: true }).inputValue()
+      const path = await editor.getByLabel('PATH', { exact: true }).inputValue()
+      const save = editor.getByRole('button', { name: 'SAVE ROUTE', exact: true })
+      await expect(save).toBeEnabled()
+      await expect(save).toBeInViewport({ ratio: 1 })
+      await editor.getByRole('tab', { name: 'Response', exact: true }).click()
+      await expect(save).toBeInViewport({ ratio: 1 })
+      await editor.getByRole('tab', { name: 'Request', exact: true }).click()
+      await page.screenshot({ path: testInfo.outputPath('mock-new-defaults-' + view + '.png'), animations: 'disabled' })
+      await save.focus()
+      await save.press('Enter')
+      await expect(editor).toHaveCount(0)
+      const savedEditor = page.getByRole('region', { name: 'Edit Route', exact: true })
+      await expect(savedEditor.locator('.mock-workspace-footer')).toHaveCount(0)
+      await expect.poll(() => new URL(page.url()).searchParams.get('route')).toBe(name)
+      expect((await controlAPI<MockScenario>(fixture.scenarioBase)).routes.find((route) => route.name === name)).toMatchObject({ name, service, method: 'GET', path, status: 200, enabled: true })
+      await page.reload()
+      await expect(savedEditor.getByLabel('ROUTE NAME', { exact: true })).toHaveValue(name)
+      await expect(savedEditor.getByLabel('PATH', { exact: true })).toHaveValue(path)
+      await expect(savedEditor.locator('.mock-workspace-footer')).toHaveCount(0)
+    }
+  } finally {
+    await fixture.cleanup()
+  }
+})
+
 test('previews a new unsaved route in a disabled scenario without changing saved or runtime state', async ({ page }) => {
   const fixture = await createScenario('new')
   try {
@@ -582,10 +645,12 @@ test('previews a new unsaved route in a disabled scenario without changing saved
     await page.getByRole('button', { name: 'ADD ROUTE', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'Preview', exact: true })).toBeEnabled()
     const editor = page.getByRole('region', { name: 'Create Route', exact: true })
-    await expect(editor.locator('.mock-workspace-footer')).toHaveCount(0)
+    await expect(editor.getByRole('button', { name: 'SAVE ROUTE', exact: true })).toBeEnabled()
+    await expect(editor.locator('.mock-workspace-footer')).toBeInViewport({ ratio: 1 })
     await openPreview(page)
-    await expect(editor.locator('.mock-workspace-footer')).toHaveCount(0)
-    await openRoutes(page)
+    await expect(editor.getByRole('button', { name: 'SAVE ROUTE', exact: true })).toBeEnabled()
+    await expect(editor.locator('.mock-workspace-footer')).toBeInViewport({ ratio: 1 })
+    await openEdit(page)
     await editor.getByLabel('SERVICE', { exact: true }).selectOption('inventory')
     await editor.getByLabel('PATH', { exact: true }).fill('/inventory/{sku}')
     await expect(editor.locator('.mock-workspace-footer')).toBeVisible()
@@ -1062,7 +1127,7 @@ test('previews saved route overlays, precedence, no matches, disabled routes, an
     await expect(outdated).toHaveCount(0)
     expect(await controlAPI<MockScenario>(fixture.scenarioBase)).toEqual(saved)
 
-    await openRoutes(page)
+    await openEdit(page)
     const routeEnabled = page.getByRole('switch', { name: 'lookup route enabled', exact: true })
     await routeEnabled.focus()
     await page.keyboard.press('Space')
@@ -1099,7 +1164,7 @@ test('previews saved route overlays, precedence, no matches, disabled routes, an
     for (const width of [760, 540]) {
       await page.setViewportSize({ width, height: 820 })
       await expect(disabledBadge).toBeInViewport()
-      await expect(page.locator('.mock-route-heading h2')).toBeInViewport()
+      await expect(page.locator('.mock-route-heading h3')).toBeInViewport()
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
       await page.screenshot({ path: testInfo.outputPath('mock-disabled-preview-' + width + '.png'), animations: 'disabled' })
     }
@@ -1182,7 +1247,7 @@ test('discards late preview results after switching routes and keeps the respons
     await expect(page.getByRole('button', { name: 'RUNNING…', exact: true })).toBeDisabled()
     await page.getByLabel('PATH', { exact: true }).fill('/first-edited')
     await expect(page.getByRole('button', { name: 'PREVIEW', exact: true })).toBeEnabled()
-    await openRoutes(page)
+    await openEdit(page)
     await page.getByRole('button', { name: 'Edit second route', exact: true }).click()
     await openPreview(page)
     await page.getByRole('button', { name: 'PREVIEW', exact: true }).click()
@@ -1235,8 +1300,8 @@ async function openPreview(page: Page) {
   return preview
 }
 
-async function openRoutes(page: Page) {
-  await page.getByRole('tablist', { name: 'Mock workspace view' }).getByRole('tab', { name: 'Routes', exact: true }).click()
+async function openEdit(page: Page) {
+  await page.getByRole('tablist', { name: 'Mock workspace view' }).getByRole('tab', { name: 'Edit', exact: true }).click()
   await expect(page.locator('.mock-route-browser')).toBeVisible()
 }
 
@@ -1275,7 +1340,7 @@ async function createScenario(kind: string, routes: MockRoute[] = []) {
     for (const value of routes) {
       await controlAPI(`${scenarioBase}/routes/${value.name}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) })
     }
-    return { base, scenarioBase, path: `${environmentPath('mocks')}&scenario=${name}`, cleanup }
+    return { name, base, scenarioBase, path: `${environmentPath('mocks')}&scenario=${name}`, cleanup }
   } catch (error) {
     await cleanup()
     throw error

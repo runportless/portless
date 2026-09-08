@@ -53,7 +53,7 @@ func (s *Store) MockScenarioMetadata(ctx context.Context, project, environment, 
 		return result, err
 	}
 	var created, modified string
-	err = s.db.QueryRowContext(ctx, `SELECT name,description,created_at,modified_at,(SELECT COUNT(*) FROM mock_scenario_routes r WHERE r.environment_key=s.environment_key AND r.scenario_name=s.name) FROM mock_scenarios s WHERE environment_key=? AND name=? COLLATE NOCASE`, key, name).Scan(&result.Name, &result.Description, &created, &modified, &result.RouteCount)
+	err = s.db.QueryRowContext(ctx, `SELECT name,description,created_at,modified_at,unmatched_requests,(SELECT COUNT(*) FROM mock_scenario_routes r WHERE r.environment_key=s.environment_key AND r.scenario_name=s.name) FROM mock_scenarios s WHERE environment_key=? AND name=? COLLATE NOCASE`, key, name).Scan(&result.Name, &result.Description, &created, &modified, &result.UnmatchedRequests, &result.RouteCount)
 	if err != nil {
 		return result, mapSQLError(err)
 	}
@@ -63,7 +63,7 @@ func (s *Store) MockScenarioMetadata(ctx context.Context, project, environment, 
 	if err != nil {
 		return result, err
 	}
-	scenario := model.MockScenario{Name: result.Name}
+	scenario := model.MockScenario{Name: result.Name, UnmatchedRequests: result.UnmatchedRequests}
 	for rows.Next() {
 		var service string
 		if err := rows.Scan(&service); err != nil {
@@ -81,6 +81,11 @@ func (s *Store) MockScenarioMetadata(ctx context.Context, project, environment, 
 		return result, err
 	}
 	result.Activation = scenario.Activation
+	var parent string
+	if err := s.db.QueryRowContext(ctx, `SELECT created_at FROM environments WHERE private_key=?`, key).Scan(&parent); err != nil {
+		return result, err
+	}
+	result.Version = model.ResourceVersion{CreatedAt: result.CreatedAt, ModifiedAt: result.ModifiedAt, ParentCreatedAt: parseTime(parent)}
 	return result, nil
 }
 

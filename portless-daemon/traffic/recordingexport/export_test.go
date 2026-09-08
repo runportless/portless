@@ -91,7 +91,7 @@ func TestChunksAndStreamExportMoreThanTenThousandEventsAndSixteenMiB(t *testing.
 	if err := json.Unmarshal(assembled.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != 4 || len(result.Exchanges) != 10007 || result.Exchanges[0].Sequence != 20014 || result.Exchanges[10006].Sequence != 2 || result.Exchanges[0].ResponseBody != strings.Repeat("\x00☕", 40000) {
+	if result.SchemaVersion != 5 || len(result.Exchanges) != 10007 || result.Exchanges[0].Sequence != 20014 || result.Exchanges[10006].Sequence != 2 || result.Exchanges[0].ResponseBody != strings.Repeat("\x00☕", 40000) {
 		t.Fatal("export lost events, ordering, or a split escaped payload")
 	}
 	var streamed bytes.Buffer

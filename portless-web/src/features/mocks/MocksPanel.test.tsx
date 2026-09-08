@@ -16,6 +16,7 @@ const environment: Environment = {
 
 const route: MockRoute = { name: 'lookup', service: 'inventory', method: 'GET', path: '/inventory/{sku}', status: 200, body: '{"available":false}', delayMs: 0, enabled: true }
 const scenario: MockScenario = {
+  unmatchedRequests: 'reject', version: { createdAt: '2026-09-07T00:00:00Z', modifiedAt: '2026-09-07T00:00:00Z', parentCreatedAt: '2026-09-07T00:00:00Z' },
   project: 'store', environment: 'local', name: 'checkout-failure', description: 'Inventory empty and payments down', createdAt: '2026-08-18T12:00:00Z', modifiedAt: '2026-08-18T13:15:00Z',
   activation: { state: 'disabled', targetServices: ['inventory', 'payments'], activeServices: [] },
   routes: [route, { ...route, name: 'decline', service: 'payments', path: '/payments', status: 503 }],
@@ -45,9 +46,10 @@ const workspaceProps = {
   onBack: () => undefined,
   onToggle: () => undefined,
   onAddRoute: () => undefined,
+  onPolicyChange: () => undefined,
   onSelectRoute: () => undefined,
   onSaveRoute: async () => true,
-  onPreviewRoute: async () => ({ service: 'inventory', matched: false, status: 501 }),
+  onPreviewRoute: async () => ({ service: 'inventory', outcome: 'rejected' as const, response: { status: 501 } }),
   onToggleRoute: async () => true,
   onDeleteRoute: async () => true,
   onDismissDelete: () => undefined,
@@ -59,8 +61,8 @@ describe('MocksPanel', () => {
     expect(html).toContain('<span>SCENARIOS</span>')
     expect(html).toContain('CREATE SCENARIO')
     expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>Scenario</span>')
-    for (const label of ['State', 'Services', 'Routes', 'Modified']) expect(html).toContain(`aria-sort="none"><span>${label}</span>`)
-    expect(html.match(/class="sortable-grid-header/g)).toHaveLength(5)
+    for (const label of ['State', 'Mock type', 'Services', 'Routes', 'Modified']) expect(html).toContain(`aria-sort="none"><span>${label}</span>`)
+    expect(html.match(/class="sortable-grid-header/g)).toHaveLength(6)
     expect(html).toContain('Loading mock scenarios')
     expect(html).not.toContain('mock-scenario-workspace')
     expect(html).not.toContain('DISABLE ALL')
@@ -83,29 +85,42 @@ describe('MocksPanel', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={empty} />)
     expect(html).toContain('aria-label="checkout-failure mock scenario"')
     expect(html).toContain('aria-label="Back to mock scenarios from checkout-failure"')
-    expect(html).toContain('<h2 title="Routes">Routes</h2>')
+    expect(html).toContain('<h3 title="Routes">Routes</h3>')
     expect(html).not.toContain('NO SERVICES YET')
     expect(html).not.toContain('mock-scenario-service-eyebrow')
     expect(html).toContain('<div class="empty-row">No routes. Add one to define a request and response for a service.</div>')
+    expect(html).toContain('Add a route to configure a mocked response.')
     expect(html).not.toContain('mock-scenario-empty')
     expect(html).not.toContain('ADD FIRST ROUTE')
-    expect(html.match(/>ADD ROUTE<\/button>/g)).toHaveLength(1)
+    expect(html.match(/aria-label="ADD ROUTE"/g)).toHaveLength(1)
     expect(html).toMatch(/<button(?=[^>]*role="tab")(?=[^>]*disabled="")[^>]*>Preview<\/button>/)
     expect(html).toMatch(/<input(?=[^>]*role="switch")(?=[^>]*disabled="")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
   })
 
-  it('renders a compact route list beside the first route configuration', () => {
+  it('renders the route list and configuration beneath one workspace toolbar', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, routes: [route, { ...scenario.routes[1], method: 'POST', enabled: false, delayMs: 150 }] }} />)
-    expect(html).toContain('class="mock-scenario-header__context"')
-    expect(html).toContain('<span title="checkout-failure">checkout-failure</span>')
-    expect(html).toContain('<h2 title="lookup">lookup</h2>')
+    expect(html).toContain('class="mock-scenario-header__identity"')
+    expect(html).toContain('<h2 title="checkout-failure">checkout-failure</h2>')
+    expect(html).toContain('<h3 title="lookup">lookup</h3>')
+    const header = html.match(/<header class="mock-scenario-header">.*?<\/header>/)?.[0]
+    expect(header).toContain('<span>Mocks</span>')
+    expect(header).toContain('<h2 title="checkout-failure">checkout-failure</h2>')
+    expect(header).not.toContain('mock-route-heading')
+    expect(html.indexOf('class="mock-route-toolbar"')).toBeLessThan(html.indexOf('class="mock-scenario-split"'))
+    expect(html).toContain('<span class="mock-route-heading__section">Routes</span>')
+    expect(html.match(/class="mock-route-toolbar"/g)).toHaveLength(1)
+    const routeControls = html.slice(html.indexOf('class="mock-route-browser__controls"'), html.indexOf('class="mock-route-browser__scroll"'))
+    expect(routeControls).toContain('role="group" aria-label="Route list controls"')
+    expect(routeControls).toContain('aria-label="Sort routes by"')
+    expect(routeControls).toContain('aria-label="ADD ROUTE" title="Add route"')
+    expect(html.indexOf('class="mock-workspace-views"')).toBeLessThan(html.indexOf('class="mock-route-content"'))
     expect(html).toContain('class="mock-route-heading__endpoint" title="GET /inventory/{sku}"')
     expect(html).not.toContain('SERVICES /')
     expect(html).not.toContain(scenario.description)
     expect(html).not.toContain('class="empty-row"')
     expect(html).toContain('class="mock-scenario-split"')
     expect(html).toContain('role="tablist" aria-label="Mock workspace view"')
-    expect(html).toMatch(/<button(?=[^>]*role="tab")(?=[^>]*aria-selected="true")(?=[^>]*tabindex="0")[^>]*>Routes<\/button>/)
+    expect(html).toMatch(/<button(?=[^>]*role="tab")(?=[^>]*aria-selected="true")(?=[^>]*tabindex="0")[^>]*>Edit<\/button>/)
     expect(html).toMatch(/<button(?=[^>]*role="tab")(?=[^>]*aria-selected="false")(?=[^>]*tabindex="-1")[^>]*>Preview<\/button>/)
     expect(html).toContain('aria-label="Mock request preview" hidden=""')
     expect(html).toContain('class="mock-route-browser"')
@@ -154,24 +169,27 @@ describe('MocksPanel', () => {
     expect(html).toContain('aria-label="Edit decline route" aria-current="true"')
     expect(html).toContain('value="/payments"')
     expect(html).toContain('class="mock-route-browser"')
-    expect(html).toContain('<h2 title="decline">decline</h2><span class="mock-route-disabled-state">DISABLED</span>')
+    expect(html).toContain('<h3 title="decline">decline</h3><span class="mock-route-disabled-state">DISABLED</span>')
   })
 
   it('creates routes in the right pane without replacing the saved route list', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} creatingRoute />)
     expect(html).toContain('aria-label="Create Route"')
-    expect(html).toContain('<h2 title="get-route-3">get-route-3</h2>')
+    expect(html).toContain('<h3 title="get-route-3">get-route-3</h3>')
+    expect(html).toContain('>SAVE ROUTE</button>')
+    expect(html).toContain('aria-label="Cancel new route"')
     expect(html).toContain('class="mock-route-new is-selected"')
     expect(html).toContain('aria-label="Edit lookup route"')
     expect(html).toContain('aria-label="Edit decline route"')
     expect(html).not.toContain('class="mock-route-item is-selected"')
+    expect(html).toMatch(/<button(?=[^>]*aria-label="ADD ROUTE")(?=[^>]*disabled="")[^>]*>/)
     expect(html).toMatch(/<button(?=[^>]*role="tab")(?![^>]*disabled="")[^>]*>Preview<\/button>/)
   })
 
   it('keeps the route list available for a missing route selection', () => {
     const html = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} selectedRoute="missing" />)
     expect(html).toContain('ROUTE NOT FOUND')
-    expect(html).toContain('<h2 title="missing">missing</h2>')
+    expect(html).toContain('<h3 title="missing">missing</h3>')
     expect(html).not.toContain('mock-route-heading__endpoint')
     expect(html).toContain('aria-label="Edit lookup route"')
   })
@@ -217,7 +235,7 @@ describe('MocksPanel', () => {
     expect(html).toContain('<span class="sr-only">Updating</span>')
 
     const workspaceHTML = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={enabled} busy="enable:checkout-failure" />)
-    expect(workspaceHTML).toContain('>ENABLING…</span>')
+    expect(workspaceHTML).toContain('>Enabling…</span>')
     expect(workspaceHTML).toMatch(/<input(?=[^>]*aria-busy="true")(?=[^>]*aria-label="checkout-failure enabled")[^>]*>/)
   })
 
@@ -251,7 +269,7 @@ describe('MocksPanel', () => {
     const scenarios: MockScenario[] = [
       { ...scenario, name: 'bravo', activation: { state: 'disabled', targetServices: ['zeta'], activeServices: [] }, routes: [route, route, route], modifiedAt: '2026-08-18T11:00:00Z' },
       { ...scenario, name: 'alpha', activation: { state: 'enabled', targetServices: ['orders'], activeServices: ['orders'] }, routes: [route], modifiedAt: '2026-08-18T14:00:00Z' },
-      { ...scenario, name: 'charlie', activation: { state: 'degraded', targetServices: ['billing'], activeServices: [] }, routes: [route, route], modifiedAt: '2026-08-18T13:00:00Z' },
+      { ...scenario, name: 'charlie', unmatchedRequests: 'forward', activation: { state: 'degraded', targetServices: ['billing'], activeServices: [] }, routes: [route, route], modifiedAt: '2026-08-18T13:00:00Z' },
     ]
     const html = renderToStaticMarkup(<MockScenariosList {...listProps} scenarios={scenarios} />)
     const renderedNames = [...html.matchAll(/<strong>([^<]+)<\/strong>/g)].map((match) => match[1])
@@ -260,6 +278,8 @@ describe('MocksPanel', () => {
     expect(names('state', 'asc')).toEqual(['alpha', 'charlie', 'bravo'])
     expect(names('name', 'desc')).toEqual(['charlie', 'bravo', 'alpha'])
     expect(names('services', 'asc')).toEqual(['charlie', 'alpha', 'bravo'])
+    expect(names('type', 'asc')).toEqual(['alpha', 'bravo', 'charlie'])
+    expect(names('type', 'desc')).toEqual(['charlie', 'alpha', 'bravo'])
     expect(names('routes', 'asc')).toEqual(['alpha', 'charlie', 'bravo'])
     expect(names('modifiedAt', 'desc')).toEqual(['alpha', 'charlie', 'bravo'])
   })
@@ -352,4 +372,40 @@ describe('MocksPanel', () => {
     expect(() => mockRoutesFromDrafts([{ ...draft, path: '/inventory/{sku}' }])).toThrow(/Choose Template/)
     expect(() => mockRoutesFromDrafts([{ ...draft, pathMatch: 'template' }])).toThrow(/choose Exact/)
   })
+})
+
+it.each(['reject', 'forward'] as const)('lists only saved routes for %s scenarios', (unmatchedRequests) => {
+  const value = { ...scenario, unmatchedRequests }
+  const markup = renderToStaticMarkup(<MockScenarioWorkspace scenario={value} {...workspaceProps} />)
+  expect(markup).toContain('mock-scenario-policy')
+  expect(markup.match(/class="mock-route-select"/g)).toHaveLength(scenario.routes.length)
+  expect(markup).toContain('aria-label="Edit lookup route" aria-current="true"')
+  expect(markup).toContain('<h3 title="lookup">lookup</h3>')
+  expect(markup).toContain(unmatchedRequests === 'forward' ? 'Unmatched requests forward to the service.' : 'Unmatched requests return 501.')
+})
+
+it.each(['reject', 'forward'] as const)('allows switching a %s scenario in its editor', (unmatchedRequests) => {
+  const markup = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={{ ...scenario, unmatchedRequests, activation: { ...scenario.activation, state: 'enabled' } }} />)
+  expect(markup).toContain('role="group" aria-label="Mock type"')
+  const choices = markup.match(/<button[^>]*>(Full mock|Partial mock)<\/button>/g)
+  expect(choices).toHaveLength(2)
+  expect(choices?.[0]).toContain(`aria-pressed="${unmatchedRequests === 'reject'}"`)
+  expect(choices?.[1]).toContain(`aria-pressed="${unmatchedRequests === 'forward'}"`)
+  expect(choices?.join('')).not.toContain('disabled')
+  expect(markup).toContain(unmatchedRequests === 'forward' ? 'Unmatched requests forward to the service.' : 'Unmatched requests return 501.')
+  expect(markup.indexOf('mock-scenario-header__controls')).toBeLessThan(markup.indexOf('mock-scenario-toggle'))
+  expect(markup.indexOf('mock-scenario-toggle')).toBeLessThan(markup.indexOf('mock-scenario-policy'))
+  expect(markup.indexOf('mock-scenario-policy')).toBeLessThan(markup.indexOf('</header>'))
+  expect(markup).not.toContain('fixed at creation')
+})
+
+it.each([{ busy: 'policy:checkout-failure' }, { busy: 'route' }, { transitionBlocked: true }, { scenario: { ...scenario, activation: { ...scenario.activation, state: 'degraded' as const } } }])('blocks conflicting mock type edits: %j', (props) => {
+  const markup = renderToStaticMarkup(<MockScenarioWorkspace {...workspaceProps} scenario={scenario} {...props} />)
+  expect(markup).toMatch(/<button(?=[^>]*disabled="")[^>]*>Full mock<\/button>/)
+  expect(markup).toMatch(/<button(?=[^>]*disabled="")[^>]*>Partial mock<\/button>/)
+  if (props.busy === 'policy:checkout-failure') {
+    expect(markup).toContain('Changing mock type…')
+    expect(markup).toContain('aria-label="Mock type" aria-busy="true"')
+    expect(markup).toMatch(/<input(?=[^>]*aria-label="checkout-failure enabled")(?=[^>]*disabled="")[^>]*>/)
+  }
 })

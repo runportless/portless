@@ -44,11 +44,11 @@ func runReplay(t *testing.T, manager *Manager, ctx context.Context, method, path
 	if upstream.baseURL != nil {
 		expected.Remote = &model.RemoteTarget{URL: upstream.baseURL.String(), Classification: upstream.classification, WritePolicy: upstream.writePolicy, HealthPath: upstream.healthPath}
 	}
-	generation, err := manager.ReplayTarget("billing/local", "orders", expected)
+	selected, err := manager.ReplayTarget("billing/local", "orders", expected, method, path)
 	if err != nil {
-		t.Fatal(err)
+		return model.TrafficExchange{}, "not-sent", err
 	}
-	return manager.ReplayHTTP(ctx, "billing/local", "checkout", "orders", method, path, headers, body, generation, model.TrafficReplay{Project: "billing", Environment: "local", Sequence: 42, StartedAt: time.Unix(1, 0), Workspace: 1, Run: 1})
+	return manager.ReplayHTTP(ctx, "billing/local", "checkout", "orders", method, path, headers, body, selected.Generation, selected.RoutingRevision, model.TrafficReplay{Project: "billing", Environment: "local", Sequence: 42, StartedAt: time.Unix(1, 0), Workspace: 1, Run: 1})
 }
 
 func TestReplayRequestCaptureCompletesWithLastBytes(t *testing.T) {
@@ -337,13 +337,13 @@ func TestReplayTargetRequiresMatchingEffectiveProviderAndRemotePolicy(t *testing
 	if err := manager.SetRemoteTarget("billing/local", "orders", remote); err != nil {
 		t.Fatal(err)
 	}
-	if generation, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &remote}); err != nil || generation == 0 {
-		t.Fatalf("matching snapshot generation=%d err=%v", generation, err)
+	if selected, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &remote}, "GET", "/"); err != nil || selected.Generation == 0 {
+		t.Fatalf("matching snapshot=%#v err=%v", selected, err)
 	}
-	if _, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderLocal}); err == nil {
+	if _, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderLocal}, "GET", "/"); err == nil {
 		t.Fatal("saved local binding matched effective remote target")
 	}
-	if _, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderRemote}); err == nil {
+	if _, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderRemote}, "GET", "/"); err == nil {
 		t.Fatal("remote binding without policy accepted")
 	}
 	for _, test := range []struct {
@@ -358,7 +358,7 @@ func TestReplayTargetRequiresMatchingEffectiveProviderAndRemotePolicy(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			expected := remote
 			test.change(&expected)
-			if _, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &expected}); err == nil {
+			if _, err := manager.ReplayTarget("billing/local", "orders", model.ComponentBinding{Provider: model.ProviderRemote, Remote: &expected}, "GET", "/"); err == nil {
 				t.Fatal("mismatched remote snapshot accepted")
 			}
 		})

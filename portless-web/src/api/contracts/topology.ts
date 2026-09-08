@@ -48,6 +48,7 @@ export interface Endpoint {
 }
 
 export interface Service extends ServiceDefinition {
+  mock?: { scenario: string; unmatchedRequests: 'reject' | 'forward'; state: 'disabled' | 'enabled' | 'degraded' }
   launchMode: LaunchMode
   debugger?: { adapter: DebugAdapter; host: string; port: number; state: 'starting' | 'listening' | 'stopped' | string }
   status: ServiceStatus

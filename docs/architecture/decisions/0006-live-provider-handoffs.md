@@ -13,3 +13,8 @@ Only the selected locally managed process is stopped or started. Other process a
 If persistence, launch, readiness, or final endpoint setup fails after the old local process was stopped, the daemon restores the previous binding and target and restarts the previous local definition when necessary. A successful rollback leaves the environment derived from its actual service states while the operation remains failed and records the reason. A failed rollback marks the selected service failed instead of pretending the previous provider is available. Daemon restart interrupts the in-flight operation; normal runtime reconciliation uses the last committed binding and treats a generation-zero remote binding as recoverable configuration.
 
 Changing or removing an environment checkout remains stopped-only. Source rediscovery can alter multiple service definitions and dependency edges, so it is not equivalent to selecting a different provider for one already-declared service.
+
+Partial HTTP mocks retain the configured provider and therefore do not use a
+provider handoff. Their scenario owns the service across route edits; a direct
+provider change still requires disabling that scenario. See ADR 0007 for the
+separate request policy, remote write enforcement, and replay routing revision.

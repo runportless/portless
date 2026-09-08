@@ -31,7 +31,7 @@ func (s *Server) handleMocks(writer http.ResponseWriter, request *http.Request, 
 				writeDecodeError(writer, err)
 				return
 			}
-			scenario, err := s.app.CreateMockScenario(request.Context(), project, environment, model.MockScenario{Name: input.Name, Description: input.Description}, principal.Actor)
+			scenario, err := s.app.CreateMockScenario(request.Context(), project, environment, model.MockScenario{Name: input.Name, Description: input.Description, UnmatchedRequests: input.UnmatchedRequests}, principal.Actor)
 			if err != nil {
 				s.writeError(writer, err, subject(input.Name))
 				return
@@ -91,10 +91,30 @@ func (s *Server) handleMocks(writer http.ResponseWriter, request *http.Request, 
 			return
 		}
 		if request.Header.Get(contract.MockMetadataHeader) == "1" {
-			preview.Headers = nil
-			preview.Body = ""
+			if preview.Response != nil {
+				preview.Response.Headers = nil
+				preview.Response.Body = ""
+			}
 		}
 		writeJSON(writer, http.StatusOK, preview)
+		return
+	}
+	if len(segments) == 6 && segments[5] == "policy" {
+		if request.Method != http.MethodPut {
+			methodNotAllowed(writer, http.MethodPut)
+			return
+		}
+		var input contract.SetMockScenarioPolicyRequest
+		if err := decodeMockJSON(writer, request, &input); err != nil {
+			writeDecodeError(writer, err)
+			return
+		}
+		operation, err := s.app.SetMockScenarioPolicy(request.Context(), project, environment, scenarioName, input.UnmatchedRequests, principal.Actor, request.Header.Get("Idempotency-Key"))
+		if err != nil {
+			s.writeError(writer, err, subject(scenarioName))
+			return
+		}
+		writeJSON(writer, http.StatusAccepted, operation)
 		return
 	}
 	if len(segments) == 6 && segments[5] == "activation" {

@@ -1,6 +1,6 @@
 # MCP feature parity for the first release
 
-Status: implemented and validated (2026-09-06). All 63 tools are registered;
+Status: implemented and validated (2026-09-06). All 64 tools are registered;
 24 are available by default. Scope/capability enforcement, safe inspection,
 mock authoring/activation, replay/comparison, complete recording exports,
 finite faults, guarded cleanup, configuration, bounded stdio/results, the shared

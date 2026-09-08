@@ -49,14 +49,15 @@ export function MockPreviewResponse({ result, outdated }: { result: MockPreview 
   const response = useRef<HTMLElement>(null)
   const [tab, setTab] = useState<'body' | 'headers'>('body')
   const [raw, setRaw] = useState(false)
-  const body = result?.body || ''
-  const headers = Object.entries(result?.headers || {}).sort(([left], [right]) => left.localeCompare(right))
+  const fixed = result && 'response' in result ? result.response : null
+  const body = fixed?.body || ''
+  const headers = Object.entries(fixed?.headers || {}).sort(([left], [right]) => left.localeCompare(right))
   useEffect(() => {
     if (result) response.current?.scrollIntoView({ block: 'nearest' })
   }, [result])
   return <section ref={response} className={`mock-preview__response${outdated ? ' is-outdated' : ''}`} aria-label="Preview response">
-    <div className="mock-preview__response-heading"><h3>EXPECTED RESPONSE</h3>{result && <div aria-live="polite"><strong>{result.status}</strong><span>{result.matched ? `Matched ${result.route}` : 'No route matched'}</span>{!!result.delayMs && <span>{result.delayMs.toLocaleString()} ms configured delay</span>}</div>}</div>
-    {result ? <>
+    <div className="mock-preview__response-heading"><h3>EXPECTED RESPONSE</h3>{fixed && result && <div aria-live="polite"><strong>{fixed.status}</strong><span>{result.outcome === 'mocked' ? `Matched ${result.route}` : 'No route matched'}</span>{!!fixed.delayMs && <span>{fixed.delayMs.toLocaleString()} ms configured delay</span>}</div>}</div>
+    {result?.outcome === 'forward' ? <div className="mock-preview__content mock-preview__decision" role="status"><strong>Would forward to service</strong><p>{result.destination.provider} · {result.destination.url}</p>{result.destination.writePolicy && <p>{result.destination.classification} · {result.destination.writePolicy}</p>}<p>No request was sent. The service determines the response.</p></div> : result?.outcome === 'blocked' ? <div className="mock-preview__content"><ActionErrorNotice error={{ title: 'Request would be blocked', message: result.reason.message }} /></div> : result ? <>
       <div className="mock-preview__toolbar"><div role="tablist" aria-label="Preview response views">{(['body', 'headers'] as const).map((item) => <button key={item} id={`mock-preview-tab-${item}`} role="tab" type="button" aria-selected={tab === item} aria-controls="mock-preview-response-content" tabIndex={tab === item ? 0 : -1} onClick={() => setTab(item)} onKeyDown={(event) => {
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
           event.preventDefault()

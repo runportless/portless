@@ -51,31 +51,31 @@ func TestPreviewMockEvaluatesDraftWithoutChangingSavedOrLiveState(t *testing.T) 
 	defer subscription.Close()
 	request := model.MockRequest{Service: "inventory", Method: "GET", Path: "/inventory/coffee"}
 	saved, err := app.PreviewMock(ctx, "store", "local", "preview", request, nil, "")
-	if err != nil || saved.Body != route.Body || saved.Status != 200 {
+	if err != nil || saved.Response.Body != route.Body || saved.Response.Status != 200 {
 		t.Fatalf("saved preview = %#v, %v", saved, err)
 	}
 	draft := route
 	draft.Status, draft.Body, draft.DelayMS = 503, `{"draft":true}`, 300_000
 	draft.Name = "renamed-lookup"
 	preview, err := app.PreviewMock(ctx, "store", "local", "preview", request, &draft, "lookup")
-	if err != nil || preview.Route != draft.Name || preview.Status != 503 || preview.Body != draft.Body || preview.DelayMS != draft.DelayMS {
+	if err != nil || preview.Route != draft.Name || preview.Response.Status != 503 || preview.Response.Body != draft.Body || preview.Response.DelayMS != draft.DelayMS {
 		t.Fatalf("draft preview = %#v, %v", preview, err)
 	}
 	request.Path = "/inventory/featured"
 	preview, err = app.PreviewMock(ctx, "store", "local", "preview", request, &draft, "lookup")
-	if err != nil || preview.Route != "featured" || preview.Status != 202 {
+	if err != nil || preview.Route != "featured" || preview.Response.Status != 202 {
 		t.Fatalf("saved peer precedence = %#v, %v", preview, err)
 	}
 	request.Path = "/inventory/coffee"
 	draft.Enabled = false
 	preview, err = app.PreviewMock(ctx, "store", "local", "preview", request, &draft, "lookup")
-	if err != nil || preview.Matched || preview.Status != 501 {
+	if err != nil || (preview.Outcome == "mocked") || preview.Response.Status != 501 {
 		t.Fatalf("disabled draft preview = %#v, %v", preview, err)
 	}
 	draft.Name, draft.Path, draft.Enabled = "new-route", "/new", true
 	request.Path = "/new"
 	preview, err = app.PreviewMock(ctx, "store", "local", "preview", request, &draft, "")
-	if err != nil || preview.Route != "new-route" || preview.Body != draft.Body {
+	if err != nil || preview.Route != "new-route" || preview.Response.Body != draft.Body {
 		t.Fatalf("new draft preview = %#v, %v", preview, err)
 	}
 	after, err := app.MockScenario(ctx, "store", "local", "preview")
@@ -162,7 +162,7 @@ func TestPreviewMockWorksForEnabledScenariosWithoutChangingCoverage(t *testing.T
 	}
 	draft := model.MockRoute{Name: "inventory-health", Service: "payments", Method: "GET", Path: "/health", Status: 202, Enabled: true}
 	preview, err := app.PreviewMock(ctx, "store", "local", "preview", model.MockRequest{Service: "payments", Method: "GET", Path: "/health"}, &draft, draft.Name)
-	if err != nil || !preview.Matched || preview.Service != "payments" || preview.Status != 202 {
+	if err != nil || preview.Outcome != "mocked" || preview.Service != "payments" || preview.Response.Status != 202 {
 		t.Fatalf("active scenario draft = %#v, %v", preview, err)
 	}
 	scenario, err := app.MockScenario(ctx, "store", "local", "preview")

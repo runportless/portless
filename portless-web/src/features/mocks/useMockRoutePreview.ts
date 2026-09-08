@@ -6,14 +6,14 @@ import { mockPreviewRequest, newMockPreviewRequest, type MockPreviewRequestDraft
 
 export type RunMockPreview = (draft: MockRouteDraft, originalRoute: string | undefined, request: MockRequest, signal: AbortSignal) => Promise<MockPreview>
 
-export function useMockRoutePreview(draft: MockRouteDraft, scenario: MockScenario, originalRoute: string | undefined, onPreview: RunMockPreview) {
+export function useMockRoutePreview(draft: MockRouteDraft, scenario: MockScenario, originalRoute: string | undefined, onPreview: RunMockPreview, routingContext?: unknown) {
   const [customRequest, setRequest] = useState<MockPreviewRequestDraft | null>(null)
   const request = customRequest ?? newMockPreviewRequest(draft)
   const [result, setResult] = useState<{ fingerprint: string; value: MockPreview } | null>(null)
   const [error, setError] = useState<{ fingerprint: string; value: ActionErrorDetails } | null>(null)
   const [running, setRunning] = useState(false)
   const pending = useRef<{ controller: AbortController; fingerprint: string } | null>(null)
-  const fingerprint = JSON.stringify({ draft, originalRoute, routes: scenario.routes, request })
+  const fingerprint = JSON.stringify({ draft, originalRoute, routes: scenario.routes, unmatchedRequests: scenario.unmatchedRequests, routingContext, request })
   const currentFingerprint = useRef(fingerprint)
   currentFingerprint.current = fingerprint
 

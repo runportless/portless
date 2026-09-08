@@ -13,6 +13,42 @@ import (
 	"time"
 )
 
+func TestMockPolicyToolReturnsReceiptAndPreservesRetryKey(t *testing.T) {
+	var firstKey string
+	var calls int
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPut || req.URL.Path != "/api/v1/environments/shop/local/mocks/sample/policy" {
+			t.Errorf("request: %s %s", req.Method, req.URL.Path)
+		}
+		var input contract.SetMockScenarioPolicyRequest
+		if err := json.NewDecoder(req.Body).Decode(&input); err != nil || input.UnmatchedRequests != "forward" {
+			t.Errorf("input: %#v %v", input, err)
+		}
+		if calls == 0 {
+			firstKey = req.Header.Get("Idempotency-Key")
+		}
+		if firstKey == "" || req.Header.Get("Idempotency-Key") != firstKey {
+			t.Error("retry key changed")
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(contract.Operation{Project: "shop", Environment: "local", Number: 9, State: "running"})
+	}))
+	defer daemon.Close()
+	session, closeSession := connectTestServer(t, Config{Environment: "shop/local", AllowTrafficControl: true, AllowLifecycle: true}, testConnector{client: apiclient.New(daemon.URL, "test", daemon.Client())})
+	defer closeSession()
+	for range 2 {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "portless_set_mock_scenario_policy", Arguments: map[string]any{"environment": "shop/local", "scenario": "sample", "unmatchedRequests": "forward", "idempotencyKey": "same-change", "waitSeconds": 0}})
+		if err != nil || result.IsError {
+			t.Fatalf("result: %#v %v", result, err)
+		}
+		encoded, _ := json.Marshal(result)
+		if !strings.Contains(string(encoded), `"number":9`) || !strings.Contains(string(encoded), `"state":"running"`) {
+			t.Fatalf("receipt: %s", encoded)
+		}
+	}
+}
+
 func TestMockMutationReturnsMetadataAndNeverRetriesImport(t *testing.T) {
 	var imports atomic.Int32
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -87,7 +123,7 @@ func TestMockCleanupDefaultsToPreviewAndRequiresConfirmation(t *testing.T) {
 		}
 		if req.URL.Query().Get("mode") == "preview" {
 			previews.Add(1)
-			_ = json.NewEncoder(w).Encode(contract.MockDeletionPreview{Expected: expected, Routes: []string{"one"}})
+			_ = json.NewEncoder(w).Encode(contract.MockDeletionPreview{Scenario: contract.MockScenarioMetadata{UnmatchedRequests: "reject"}, Expected: expected, Routes: []string{"one"}})
 			return
 		}
 		applies.Add(1)
@@ -132,7 +168,7 @@ func TestMockDraftUsesEditableFieldsWithoutServerTimestamps(t *testing.T) {
 		if draft.Name != "health" || draft.Status != 200 || !draft.CreatedAt.IsZero() {
 			t.Errorf("draft=%#v", draft)
 		}
-		_ = json.NewEncoder(w).Encode(contract.MockScenario{Name: "test", RouteCount: 1, PayloadsOmitted: true})
+		_ = json.NewEncoder(w).Encode(contract.MockScenario{UnmatchedRequests: "reject", Name: "test", RouteCount: 1, PayloadsOmitted: true})
 	}))
 	defer daemon.Close()
 	session, closeSession := connectTestServer(t, Config{Environment: "shop/local", AllowTrafficControl: true}, testConnector{client: apiclient.New(daemon.URL, "test", daemon.Client())})

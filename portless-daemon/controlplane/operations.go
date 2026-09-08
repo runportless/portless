@@ -306,6 +306,10 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 			s.completeOperation(scope, operation, "Service "+serviceName+" is already ready")
 			return
 		}
+		if currentErr = s.restorePartialMocks(context.Background(), current); currentErr != nil {
+			s.failOperation(scope, operation, currentErr)
+			return
+		}
 		if currentErr = s.prepareServiceDependencies(context.Background(), scope, current, serviceName, operation); currentErr != nil {
 			s.failOperation(scope, operation, currentErr)
 			return
@@ -330,7 +334,7 @@ func (s *Service) beginServiceStart(ctx context.Context, projectName, environmen
 				s.failOperation(scope, operation, currentErr)
 				return
 			}
-			s.proxy.RemoveTarget(scope, serviceName)
+			s.proxy.StopTarget(scope, serviceName)
 		}
 		_ = s.database.SetServiceStatus(context.Background(), scope, serviceName, model.ServiceStarting, "")
 		s.reconcileEnvironmentStatus(context.Background(), scope)
@@ -440,7 +444,7 @@ func (s *Service) StopService(ctx context.Context, projectName, environmentName,
 			s.failOperation(scope, operation, stopErr)
 			return
 		}
-		s.proxy.RemoveTarget(scope, serviceName)
+		s.proxy.StopTarget(scope, serviceName)
 		launchMode := currentRuntime.LaunchMode
 		if launchMode == "" {
 			launchMode = model.LaunchManaged

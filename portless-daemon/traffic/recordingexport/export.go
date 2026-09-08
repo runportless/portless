@@ -105,7 +105,7 @@ func prefix(snapshot model.RecordingExportSnapshot) []byte {
 		Project       string `json:"project"`
 		Environment   string `json:"environment"`
 		Recording     string `json:"recording"`
-	}{4, snapshot.Project, snapshot.Environment, snapshot.Recording})
+	}{5, snapshot.Project, snapshot.Environment, snapshot.Recording})
 	return append(encoded[:len(encoded)-1], []byte(`,"exchanges":[`)...)
 }
 

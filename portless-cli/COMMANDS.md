@@ -440,7 +440,8 @@ routes. Route toggles do not release their service or enable passthrough.
 | --- | --- |
 | `portless mock list` | List scenarios, target services, route counts, and activation state. Alias: `mock ls`. |
 | `portless mock show <scenario>` | Show a scenario and all service-scoped routes. |
-| `portless mock create <scenario>` | Create an empty, disabled scenario. `--description <text>` adds context. |
+| `portless mock configure <scenario>` | Switch the existing scenario with required `--unmatched-requests <policy>` (`reject` or `forward`). Preserves routes and enabled state; waits for the tracked provider handoff and attempts to restore the old mode if the change fails. |
+| `portless mock create <scenario>` | Create an empty, disabled scenario. `--description <text>` adds context; `--unmatched-requests <policy>` accepts `reject` (default) or `forward`. Switch it later with `mock configure`. |
 | `portless mock enable <scenario>` | Activate every target service and wait for completion. Empty scenarios cannot be enabled. |
 | `portless mock disable <scenario>` | Restore the saved provider bindings and wait for completion. Also retries restoration of a degraded scenario. |
 | `portless mock delete <scenario>` | Delete a disabled scenario. Requires `--yes`. |
@@ -550,7 +551,7 @@ identifier, trigger, target build, acceptance time, and shared ready deadline.
 
 | Command | Usage |
 | --- | --- |
-| `portless mcp serve` | Serve 24 default inspection tools over stdio, scoped to the current checkout. `--env <project/environment>`, `--project <project>`, and `--all-environments` are mutually exclusive scope selections. Repeat `--source-root <absolute-directory>` to authorize new source paths. `--allow-lifecycle`, `--allow-traffic-control`, `--allow-sensitive-traffic`, `--allow-replay`, and `--allow-configuration` opt into application workflows (63 tools with all flags). Replay requires sensitive traffic; mock activation requires traffic control plus lifecycle, recording import requires traffic control plus sensitive traffic, and binding changes require configuration plus lifecycle. `--json` is rejected because stdout carries MCP JSON-RPC. |
+| `portless mcp serve` | Serve 24 default inspection tools over stdio, scoped to the current checkout. `--env <project/environment>`, `--project <project>`, and `--all-environments` are mutually exclusive scope selections. Repeat `--source-root <absolute-directory>` to authorize new source paths. `--allow-lifecycle`, `--allow-traffic-control`, `--allow-sensitive-traffic`, `--allow-replay`, and `--allow-configuration` opt into application workflows (64 tools with all flags). Replay requires sensitive traffic; mock activation requires traffic control plus lifecycle, recording import requires traffic control plus sensitive traffic, and binding changes require configuration plus lifecycle. `--json` is rejected because stdout carries MCP JSON-RPC. |
 
 See the [MCP README](../portless-mcp/README.md) for client configuration and
 the exact tool capability model.

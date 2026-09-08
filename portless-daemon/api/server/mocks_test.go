@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/runportless/portless/portless-daemon/api/contract"
 	"github.com/runportless/portless/portless-daemon/auth"
@@ -60,7 +61,7 @@ func TestMockPreviewEnvelopeUsesDraftWithoutSaving(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
 				t.Fatal(err)
 			}
-			if !preview.Matched || preview.Service != "checkout" || preview.Route != test.route || preview.Status != test.status || preview.Body != test.result {
+			if preview.Outcome != "mocked" || preview.Service != "checkout" || preview.Route != test.route || preview.Response.Status != test.status || preview.Response.Body != test.result {
 				t.Fatalf("preview = %#v", preview)
 			}
 			after := request(server, authManager, http.MethodGet, base, "", true)
@@ -187,4 +188,70 @@ func newMockPreviewServer(t *testing.T) (*Server, *auth.Manager) {
 		t.Fatalf("create preview route code=%d body=%s", saved.Code, saved.Body.String())
 	}
 	return server, authManager
+}
+
+func TestMockScenarioPolicyAndPreviewWireContract(t *testing.T) {
+	server, authManager := newMockPreviewServer(t)
+	base := "/api/v1/environments/billing/local/mocks"
+	for _, value := range []string{`null`, `""`, `"invalid"`, `false`} {
+		response := request(server, authManager, http.MethodPost, base, `{"name":"invalid","unmatchedRequests":`+value+`}`, true)
+		if response.Code != 400 {
+			t.Fatalf("policy %s: %d %s", value, response.Code, response.Body.String())
+		}
+	}
+
+	for _, policy := range []string{"reject", "forward"} {
+		name := "switchable-" + policy
+		created := request(server, authManager, http.MethodPost, base, `{"name":"`+name+`","unmatchedRequests":"`+policy+`"}`, true)
+		if created.Code != http.StatusCreated {
+			t.Fatalf("create=%d %s", created.Code, created.Body.String())
+		}
+		path := base + "/" + name
+		response := request(server, authManager, http.MethodPut, path+"/routes/fixed", `{"name":"fixed","service":"checkout","method":"GET","path":"/fixed","status":200,"enabled":true}`, true)
+		var scenario contract.MockScenario
+		if err := json.Unmarshal(response.Body.Bytes(), &scenario); err != nil || string(scenario.UnmatchedRequests) != policy || scenario.Version.ModifiedAt.IsZero() {
+			t.Fatalf("scenario=%#v %v", scenario, err)
+		}
+		preview := request(server, authManager, http.MethodPost, path+"/preview", `{"request":{"service":"checkout","method":"GET","path":"/other"}}`, true)
+		var result map[string]any
+		if err := json.Unmarshal(preview.Body.Bytes(), &result); err != nil || preview.Code != http.StatusOK {
+			t.Fatalf("preview=%d %s", preview.Code, preview.Body.String())
+		}
+		if policy == "forward" && (result["outcome"] != "forward" || result["destination"] == nil || result["response"] != nil) || policy == "reject" && (result["outcome"] != "rejected" || result["response"] == nil) {
+			t.Fatalf("default route changed: %s", preview.Body.String())
+		}
+		for _, input := range []string{`{}`, `{"unmatchedRequests":null}`, `{"unmatchedRequests":""}`, `{"unmatchedRequests":"invalid"}`, `{"unmatchedRequests":"forward","extra":true}`} {
+			response := request(server, authManager, http.MethodPut, path+"/policy", input, true)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid update: %d %s", response.Code, response.Body.String())
+			}
+		}
+		next := "forward"
+		if policy == "forward" {
+			next = "reject"
+		}
+		response = request(server, authManager, http.MethodPut, path+"/policy", `{"unmatchedRequests":"`+next+`"}`, true)
+		var operation contract.Operation
+		if err := json.Unmarshal(response.Body.Bytes(), &operation); err != nil || response.Code != http.StatusAccepted {
+			t.Fatalf("update: %d %s", response.Code, response.Body.String())
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for operation.State == "running" && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			var err error
+			operation, err = server.app.Operation(t.Context(), "billing", "local", operation.Number)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if operation.State != "succeeded" {
+			t.Fatalf("operation: %#v", operation)
+		}
+		response = request(server, authManager, http.MethodGet, path, "", true)
+		var updated contract.MockScenario
+		if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil || string(updated.UnmatchedRequests) != next || len(updated.Routes) != len(scenario.Routes) || updated.Version.ModifiedAt == scenario.Version.ModifiedAt {
+			t.Fatalf("updated: %#v %v", updated, err)
+		}
+
+	}
 }

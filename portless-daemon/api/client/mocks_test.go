@@ -11,6 +11,26 @@ import (
 	"github.com/runportless/portless/portless-daemon/api/contract"
 )
 
+func TestSetMockScenarioPolicyUsesDurableOperationAndIdempotency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPut || request.URL.Path != "/api/v1/environments/store/local/mocks/scenario/policy" || request.Header.Get("Idempotency-Key") != "policy-key" {
+			t.Errorf("request: %s %s %v", request.Method, request.URL.Path, request.Header)
+		}
+		var input contract.SetMockScenarioPolicyRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.UnmatchedRequests != "forward" {
+			t.Errorf("input: %#v %v", input, err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(writer).Encode(contract.Operation{Number: 7, State: "running"})
+	}))
+	defer server.Close()
+	op, err := New(server.URL, "test", server.Client()).SetMockScenarioPolicy(t.Context(), "store", "local", "scenario", contract.SetMockScenarioPolicyRequest{UnmatchedRequests: "forward"}, "policy-key")
+	if err != nil || op.Number != 7 || op.State != "running" {
+		t.Fatalf("operation: %#v %v", op, err)
+	}
+}
+
 func TestPutMockRouteSendsOriginalIdentityAndNewName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPut || request.URL.Path != "/api/v1/environments/store/local/mocks/scenario/routes/original" {
@@ -21,7 +41,7 @@ func TestPutMockRouteSendsOriginalIdentityAndNewName(t *testing.T) {
 			t.Errorf("route = %#v, %v", route, err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(contract.MockScenario{Name: "scenario", Routes: []contract.MockRoute{route}})
+		_ = json.NewEncoder(writer).Encode(contract.MockScenario{UnmatchedRequests: "reject", Name: "scenario", Routes: []contract.MockRoute{route}})
 	}))
 	defer server.Close()
 	client := New(server.URL, "test", server.Client())
@@ -73,7 +93,7 @@ func TestPreviewMockEncodesRequestEnvelopeAndDecodesResponse(t *testing.T) {
 					t.Errorf("decoded preview = %#v, error = %v; want %#v", decoded, err, test.input)
 				}
 				writer.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(writer, `{"service":"checkout","matched":true,"route":"create-order","status":503,"headers":{"Content-Type":"application/json","X-Portless-Mock":"checkout-empty"},"body":"{\"available\":false}","delayMs":25}`)
+				_, _ = io.WriteString(writer, `{"service":"checkout","route":"create-order","outcome":"mocked","response":{"status":503,"headers":{"Content-Type":"application/json","X-Portless-Mock":"checkout-empty"},"body":"{\"available\":false}","delayMs":25}}`)
 			}))
 			defer server.Close()
 
@@ -82,7 +102,7 @@ func TestPreviewMockEncodesRequestEnvelopeAndDecodesResponse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !preview.Matched || preview.Service != "checkout" || preview.Route != draft.Name || preview.Status != draft.Status || preview.Body != draft.Body || preview.DelayMS != draft.DelayMS || preview.Headers["X-Portless-Mock"] != "checkout-empty" {
+			if preview.Outcome != "mocked" || preview.Service != "checkout" || preview.Route != draft.Name || preview.Response.Status != draft.Status || preview.Response.Body != draft.Body || preview.Response.DelayMS != draft.DelayMS || preview.Response.Headers["X-Portless-Mock"] != "checkout-empty" {
 				t.Fatalf("preview = %#v", preview)
 			}
 		})

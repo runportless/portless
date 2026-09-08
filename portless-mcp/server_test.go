@@ -83,7 +83,7 @@ func TestToolInventoryIsFixedByStartupCapabilities(t *testing.T) {
 				want = append(want, "portless_import_mock_recording")
 			}
 			if config.AllowLifecycle {
-				want = append(want, "portless_set_mock_scenario_enabled", "portless_disable_all_mock_scenarios")
+				want = append(want, "portless_set_mock_scenario_enabled", "portless_set_mock_scenario_policy", "portless_disable_all_mock_scenarios")
 			}
 		}
 		sort.Strings(want)

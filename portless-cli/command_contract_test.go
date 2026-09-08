@@ -112,6 +112,7 @@ func TestEveryPublicCommandHasAuditedBareBehavior(t *testing.T) {
 		"portless mock list":             runAction,
 		"portless mock show":             showHelp,
 		"portless mock create":           showHelp,
+		"portless mock configure":        showHelp,
 		"portless mock enable":           showHelp,
 		"portless mock disable":          showHelp,
 		"portless mock delete":           showHelp,

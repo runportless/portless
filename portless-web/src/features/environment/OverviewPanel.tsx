@@ -149,7 +149,7 @@ export function OverviewPanel({ environment, actions, timeline, ready, faults, a
         const hasMenu = !!openURL || rowActions.length > 0
         return <div className="table-row service-row service-row--interactive" key={service.name} onClick={() => onService(service)}>
           <StatusMark status={service.status} label={false} />
-          <button className="service-row__details" type="button" aria-label={`View ${service.name} details`} onClick={(event) => { event.stopPropagation(); onService(service) }}><strong>{service.name}</strong></button>
+          <button className="service-row__details" type="button" aria-label={`View ${service.name} details`} onClick={(event) => { event.stopPropagation(); onService(service) }}><strong>{service.name}</strong>{service.mock?.unmatchedRequests === 'forward' && <span className="mock-scenario-mode">PARTIAL MOCK</span>}</button>
           <span>{displayLaunchMode(environment, service)}</span>
           <StatusMark status={service.status} />
           <span className={service.restartCount ? 'warning-text' : ''}>{service.restartCount}</span>

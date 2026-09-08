@@ -55,7 +55,7 @@ func TestRegexQueryMatchesPreviewAndLiveRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			preview, err := compiled.Preview(model.MockRequest{Service: "inventory", Method: "GET", Path: "/items", Query: values})
-			if err != nil || preview.Matched != test.matched {
+			if err != nil || (preview.Outcome == "mocked") != test.matched {
 				t.Fatalf("preview = %#v, %v", preview, err)
 			}
 			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/items?"+values.Encode(), nil)
@@ -67,7 +67,7 @@ func TestRegexQueryMatchesPreviewAndLiveRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			response.Body.Close()
-			if response.StatusCode != preview.Status || response.Header.Get(RouteHeader) != preview.Route {
+			if response.StatusCode != preview.Response.Status || response.Header.Get(RouteHeader) != preview.Route {
 				t.Fatalf("live status/route = %d/%s, preview = %#v", response.StatusCode, response.Header.Get(RouteHeader), preview)
 			}
 			delete(values, "warehouse")

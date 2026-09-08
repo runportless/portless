@@ -6,7 +6,7 @@ the same authenticated, typed daemon API as the CLI and embedded UI; it opens
 no network listener and never returns the daemon bearer token.
 
 The default is **24 inspection tools**. Enabling all five capabilities exposes
-**63 tools**. Tool names, scope, source grants and permissions are fixed for the
+**64 tools**. Tool names, scope, source grants and permissions are fixed for the
 lifetime of the stdio process. Tool arguments cannot grant additional access.
 
 ## Configure a client
@@ -167,7 +167,7 @@ fallback. Closing does not cancel an admitted run or erase its receipt.
 Recording export: call `portless_export_recording` with `recording` and optional
 `maxBytes` (up to 131072), then repeat with each returned `nextCursor`. Base64
 decode and concatenate `data` in order until `complete:true`. The result is one
-complete schema-4 JSON recording, including events beyond 10,000 and exports
+complete schema-5 JSON recording, including events beyond 10,000 and exports
 larger than 16 MiB. An active recording exports the reported event-count and
 sequence snapshot, excluding later traffic. Deletion, name reuse or daemon
 restart invalidates continuation. Export is lossless relative to retained,
@@ -283,6 +283,7 @@ The count is `24 + 3L + 2S + 14T + 2(T∧L) + (T∧S) + 5(R∧S) + 11C + (C∧L)
 | `portless_rescan_environment` | C |
 | `portless_run_replay` | R + S |
 | `portless_set_mock_scenario_enabled` | T + L |
+| `portless_set_mock_scenario_policy` | T + L |
 | `portless_set_source_checkout` | C |
 | `portless_start_environment` | L |
 | `portless_start_recording` | T |
@@ -310,3 +311,16 @@ Run `go test ./portless-mcp`, `go test -race ./portless-mcp`, `make lint`, and
 by the default `make test-e2e-ui` suite. Both suites isolate Portless state and
 leave the developer's installation alone; see
 [`docs/e2e-testing.md`](../docs/e2e-testing.md).
+
+Mock scenarios expose `unmatchedRequests`: `reject` (default) replaces the service
+and returns 501 for misses; `forward` keeps its real provider and forwards only
+unmatched requests. Choose the policy at creation or change it with
+`portless_set_mock_scenario_policy` (traffic control plus lifecycle). Policy changes
+preserve routes and enabled state, return durable operation receipts, and attempt
+to restore the old mode if the provider handoff fails.
+Creation uses T; activation still requires T + L.
+Preview returns `outcome` with a fixed nested `response`, a forwarding
+`destination`, or a blocking `reason`, without application traffic. Sensitive
+preview response headers and bodies remain gated by S. `service.mock` reports
+partial intervention separately from provider and runtime health. Traffic
+`mockOutcome` distinguishes mocked, forwarded, rejected, and blocked requests.

@@ -19,11 +19,26 @@ func (c *Commands) mockCommand() *cobra.Command {
 	root.AddCommand(show)
 
 	description := ""
+	unmatchedRequests := "reject"
 	create := &cobra.Command{Use: "create <scenario>", Short: "Create an empty mock scenario", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
-		return c.create(cmd.Context(), args[0], description)
+		return c.create(cmd.Context(), args[0], description, unmatchedRequests)
 	}}
 	create.Flags().StringVar(&description, "description", "", "optional scenario description")
+	create.Flags().StringVar(&unmatchedRequests, "unmatched-requests", "reject", "unmatched requests: reject or forward")
+	policyCompletion := func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return []string{"reject", "forward"}, cobra.ShellCompDirectiveNoFileComp
+	}
+	_ = create.RegisterFlagCompletionFunc("unmatched-requests", policyCompletion)
 	root.AddCommand(create)
+	configuredPolicy := ""
+	configure := &cobra.Command{Use: "configure <scenario>", Short: "Switch full or partial mocking while preserving routes and enabled state", Args: shared.UsageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+		return c.setPolicy(cmd.Context(), args[0], configuredPolicy)
+	}}
+	configure.Flags().StringVar(&configuredPolicy, "unmatched-requests", "", "unmatched requests: reject or forward")
+	_ = configure.MarkFlagRequired("unmatched-requests")
+	_ = configure.RegisterFlagCompletionFunc("unmatched-requests", policyCompletion)
+	configure.ValidArgsFunction = c.Complete(shared.CompletionMockScenarios)
+	root.AddCommand(configure)
 
 	root.AddCommand(c.activationCommand("enable", true), c.activationCommand("disable", false))
 

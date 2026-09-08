@@ -7,9 +7,9 @@ export function bindingFor(environment: Pick<Environment, 'bindings'>, service: 
   return environment.bindings?.find((binding) => binding.service === service)
 }
 
-export function mockScenarioFor(environment: Pick<Environment, 'bindings'>, service: string) {
+export function mockScenarioFor(environment: Pick<Environment, 'bindings'> & Partial<Pick<Environment, 'services'>>, service: string) {
   const binding = bindingFor(environment, service)
-  return binding?.provider === 'mock' ? binding.mock?.scenario : undefined
+  return environment.services?.find((item) => item.name === service)?.mock?.scenario || (binding?.provider === 'mock' ? binding.mock?.scenario : undefined)
 }
 
 export function publicEndpoint(service: Service, protocol?: Protocol) {

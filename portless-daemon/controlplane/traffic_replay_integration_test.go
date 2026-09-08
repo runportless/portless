@@ -201,10 +201,75 @@ func TestTrafficReplayRejectsMixedBindingAndEffectiveProviderSnapshot(t *testing
 	if bindingForEnvironment(current, "orders").Provider != model.ProviderLocal {
 		t.Fatal("fixture needs a saved local binding")
 	}
-	if _, err := app.resolveReplayTarget(t.Context(), "billing", "local", "external", "orders"); err == nil {
+	if _, err := app.resolveReplayTarget(t.Context(), "billing", "local", "external", "orders", "GET", "/"); err == nil {
 		t.Fatal("mixed local binding and effective remote target was accepted without remote policy")
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("resolution sent %d application calls", calls.Load())
+	}
+}
+
+func TestPartialReplayUsesActualRemoteDecisionAndInvalidatesRouteEdits(t *testing.T) {
+	for _, policy := range []model.WritePolicy{model.WriteReadOnly, model.WriteReadWrite} {
+		t.Run(string(policy), func(t *testing.T) {
+			app, db, calls, upstream := replayIntegrationService(t)
+			remote := model.RemoteTarget{URL: upstream.URL, Classification: model.RemoteQA, WritePolicy: policy}
+			definition, err := db.EnvironmentModel(t.Context(), "billing", "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ApplyActiveBindingConfiguration(t.Context(), "billing", "local", 0, definition, model.ComponentBinding{Service: "orders", Provider: model.ProviderRemote, Remote: &remote}); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.proxy.SetRemoteTarget("billing/local", "orders", remote); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := app.CreateMockScenario(t.Context(), "billing", "local", model.MockScenario{Name: "partial", UnmatchedRequests: model.MockUnmatchedForward}, "test"); err != nil {
+				t.Fatal(err)
+			}
+			route := model.MockRoute{Name: "create", Service: "orders", Method: "POST", Path: "/orders", Status: 202, Enabled: true}
+			if _, err := app.PutMockRoute(t.Context(), "billing", "local", "partial", route.Name, route, "test"); err != nil {
+				t.Fatal(err)
+			}
+			op, err := app.SetMockScenarioEnabled(t.Context(), "billing", "local", "partial", true, "test", "enable")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if op = waitForOperation(t, app, op); op.State != "succeeded" {
+				t.Fatalf("enable=%#v", op)
+			}
+			baseline := replayIntegrationBaseline(app, "checkout")
+			workspace, err := app.PrepareTrafficReplay(t.Context(), "billing", "local", contract.PrepareTrafficReplayRequest{Sequence: baseline.Sequence, StartedAt: baseline.StartedAt})
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft := *workspace.Draft
+			draft.Method = "POST"
+			workspace, err = app.UpdateTrafficReplay(t.Context(), "billing", "local", workspace.Number, contract.UpdateTrafficReplayDraftRequest{TrafficReplayIdentity: workspace.TrafficReplayIdentity, Revision: workspace.Revision, Draft: draft})
+			if err != nil || workspace.Destination.Provider != "mock" || workspace.Destination.MockScenario != "partial" || workspace.Destination.MockRoute != "create" || workspace.Destination.RequiresConfirmation || calls.Load() != 0 {
+				t.Fatalf("mock preparation=%#v %v", workspace.Destination, err)
+			}
+			route.Enabled = false
+			if _, err := app.PutMockRoute(t.Context(), "billing", "local", "partial", route.Name, route, "test"); err != nil {
+				t.Fatal(err)
+			}
+			_, err = app.RunTrafficReplay(t.Context(), "billing", "local", workspace.Number, contract.RunTrafficReplayRequest{TrafficReplayIdentity: workspace.TrafficReplayIdentity, Revision: workspace.Revision, RunNumber: 1})
+			replayErrorStatus(t, err, 409)
+			prepared, err := app.UpdateTrafficReplay(t.Context(), "billing", "local", workspace.Number, contract.UpdateTrafficReplayDraftRequest{TrafficReplayIdentity: workspace.TrafficReplayIdentity, Revision: workspace.Revision, Draft: draft})
+			if policy == model.WriteReadOnly {
+				replayErrorStatus(t, err, 403)
+			} else {
+				if err != nil || prepared.Destination.Provider != "remote" || !prepared.Destination.RequiresConfirmation {
+					t.Fatalf("forward preparation=%#v %v", prepared.Destination, err)
+				}
+				_, err = app.RunTrafficReplay(t.Context(), "billing", "local", prepared.Number, contract.RunTrafficReplayRequest{TrafficReplayIdentity: prepared.TrafficReplayIdentity, Revision: prepared.Revision, RunNumber: 1})
+				if err == nil {
+					t.Fatal("unconfirmed remote write was admitted")
+				}
+			}
+			if calls.Load() != 0 {
+				t.Fatal("preparation or stale/blocked replay dispatched upstream")
+			}
+		})
 	}
 }

@@ -28,7 +28,8 @@ export interface MockRouteDraft {
   enabled: boolean
 }
 
-export function MockRouteEditor({ scenario, services, routeName, draft, dirty, busy, previewing, error, onDismissError, onChange, onCancel, onSave, onPreview }: {
+export function MockRouteEditor({ routingContext, scenario, services, routeName, draft, dirty, busy, previewing, error, onDismissError, onChange, onCancel, onSave, onPreview }: {
+  routingContext?: unknown
   scenario: MockScenario
   services: string[]
   routeName?: string
@@ -49,10 +50,11 @@ export function MockRouteEditor({ scenario, services, routeName, draft, dirty, b
   const configurationID = useId()
   const configurationTabs = useRef<HTMLDivElement>(null)
   const focusNewPath = useRef(!routeName)
-  const preview = useMockRoutePreview(draft, scenario, routeName, onPreview)
+  const preview = useMockRoutePreview(draft, scenario, routeName, onPreview, routingContext)
   const existing = routeName ? scenario.routes.find((route) => route.name === routeName) : undefined
   const missing = !!routeName && !existing
   const title = existing ? 'Edit Route' : 'Create Route'
+  const unsaved = !routeName || dirty
   const ready = !!draft.name.trim() && !!draft.service && draft.path.startsWith('/')
   const queryOpen = queryExpanded ?? draft.query.length > 0
   const headersOpen = headersExpanded ?? draft.headers.length > 0
@@ -94,7 +96,7 @@ export function MockRouteEditor({ scenario, services, routeName, draft, dirty, b
 
     {missing ? <div className="mock-workspace-missing"><strong>ROUTE NOT FOUND</strong><p>{routeName} is no longer part of this mock scenario.</p><button className="button" type="button" onClick={onCancel}>BACK TO ROUTES</button></div> : <>
       <div className={`mock-route-layout${previewing ? ' is-preview' : ''}`}>
-      <form id={`${configurationID}-form`} className="mock-route-form mock-route-configuration" autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); if (ready && !busy && dirty) void onSave(draft, existing?.name) }}>
+      <form id={`${configurationID}-form`} className="mock-route-form mock-route-configuration" autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => { event.preventDefault(); if (ready && !busy && unsaved) void onSave(draft, existing?.name) }}>
       <div className="mock-route-configuration-bar">
         <div ref={configurationTabs} className="mock-route-configuration-tabs" role="tablist" aria-label="Mock route configuration">
           {(['request', 'response'] as const).map((tab) => <button key={tab} id={`${configurationID}-tab-${tab}`} data-configuration-tab={tab} type="button" role="tab" aria-selected={configurationTab === tab} aria-controls={`${configurationID}-panel-${tab}`} tabIndex={configurationTab === tab ? 0 : -1} onClick={() => selectConfigurationTab(tab)} onKeyDown={(event) => {
@@ -150,7 +152,7 @@ export function MockRouteEditor({ scenario, services, routeName, draft, dirty, b
       </form>
       <MockRoutePreview preview={preview} services={services} enabled={draft.enabled} busy={busy} hidden={!previewing} />
       </div>
-      {dirty && <footer className="mock-workspace-footer"><span role="status">Unsaved changes</span><div><button className="button button--quiet" type="button" disabled={busy} aria-label={existing ? 'Discard route changes' : 'Cancel new route'} onClick={onCancel}>{existing ? 'DISCARD' : 'CANCEL'}</button><button className="button button--primary" type="submit" form={`${configurationID}-form`} disabled={busy || !ready}>{busy ? 'SAVING…' : 'SAVE ROUTE'}</button></div></footer>}
+      {unsaved && <footer className="mock-workspace-footer"><span role="status">Unsaved changes</span><div><button className="button button--quiet" type="button" disabled={busy} aria-label={existing ? 'Discard route changes' : 'Cancel new route'} onClick={onCancel}>{existing ? 'DISCARD' : 'CANCEL'}</button><button className="button button--primary" type="submit" form={`${configurationID}-form`} disabled={busy || !ready}>{busy ? 'SAVING…' : 'SAVE ROUTE'}</button></div></footer>}
     </>}
   </section>
 }

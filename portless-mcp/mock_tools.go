@@ -141,25 +141,27 @@ func (r *runtime) previewMock(ctx context.Context, _ *mcp.CallToolRequest, input
 		if err != nil {
 			return result, err
 		}
-		if !input.IncludePayloads {
-			preview.Headers = nil
-			preview.Body = ""
-		} else {
-			preview.Body, result.DisplayTruncated = truncateUTF8(preview.Body, 16<<10)
-			headers := map[string][]string{}
-			for key, value := range preview.Headers {
-				headers[key] = []string{value}
-			}
-			bounded, cut := capHeaders(headers, 4<<10)
-			preview.Headers = map[string]string{}
-			for key, values := range bounded {
-				if len(values) > 0 {
-					preview.Headers[key] = values[0]
+		if preview.Response != nil {
+			if !input.IncludePayloads {
+				preview.Response.Headers = nil
+				preview.Response.Body = ""
+			} else {
+				preview.Response.Body, result.DisplayTruncated = truncateUTF8(preview.Response.Body, 16<<10)
+				headers := map[string][]string{}
+				for key, value := range preview.Response.Headers {
+					headers[key] = []string{value}
 				}
-			}
-			result.DisplayTruncated = result.DisplayTruncated || cut
-			if result.DisplayTruncated {
-				result.Continuation = "Use portless_get_mock_route for complete saved payload JSON; a supplied draft remains available in your input."
+				bounded, cut := capHeaders(headers, 4<<10)
+				preview.Response.Headers = map[string]string{}
+				for key, values := range bounded {
+					if len(values) > 0 {
+						preview.Response.Headers[key] = values[0]
+					}
+				}
+				result.DisplayTruncated = result.DisplayTruncated || cut
+				if result.DisplayTruncated {
+					result.Continuation = "Use portless_get_mock_route for complete saved payload JSON; a supplied draft remains available in your input."
+				}
 			}
 		}
 		result.Preview = preview

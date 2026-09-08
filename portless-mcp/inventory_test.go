@@ -46,7 +46,7 @@ func TestCanonicalInventoryMatchesEveryCapabilityCombination(t *testing.T) {
 		}
 		closeSession()
 	}
-	if len(toolInventory) != 63 {
+	if len(toolInventory) != 64 {
 		t.Fatalf("release inventory=%d", len(toolInventory))
 	}
 }

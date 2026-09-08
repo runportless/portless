@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, connectEvents, environmentPath, jsonBody } from '../../api'
 import type { Environment, Operation } from '../../api/contracts/environments'
-import type { MockPreview, MockRoute, MockScenario, MockScenarioList, PreviewMockRequest } from '../../api/contracts/mocks'
+import type { MockPreview, MockRoute, MockScenario, MockScenarioList, MockUnmatchedRequests, PreviewMockRequest } from '../../api/contracts/mocks'
 import { actionError, ActionErrorNotice, type ActionErrorDetails } from '../../components/ActionError'
 import { FormDialog } from '../../components/overlays/FormDialog'
 import { paginateItems, PanelPagination } from '../../components/PanelPagination'
@@ -16,7 +16,7 @@ import { mockResponseHeaders } from './mockResponseHeaders'
 import { mockRequiredQueryParameters } from './mockQueryParameters'
 import type { RunMockPreview } from './useMockRoutePreview'
 
-type MockScenarioSortField = 'state' | 'name' | 'services' | 'routes' | 'modifiedAt'
+type MockScenarioSortField = 'state' | 'name' | 'type' | 'services' | 'routes' | 'modifiedAt'
 type MockRouteSortField = 'service' | 'route' | 'match' | 'response' | 'state'
 
 const defaultMockScenarioSort: TableSort<MockScenarioSortField> = { key: 'name', direction: 'asc' }
@@ -63,7 +63,7 @@ export function MocksPanel({ environment, selectedScenario, creatingRoute, selec
     if (selectedScenario) setCreateOpen(false)
   }, [selectedScenario])
 
-  const createScenario = async (input: { name: string; description?: string }) => {
+  const createScenario = async (input: { name: string; description?: string; unmatchedRequests: MockUnmatchedRequests }) => {
     setBusy('create-scenario'); setError(null)
     try {
       const created = await api<MockScenario>(environmentPath(environment, '/mocks'), { method: 'POST', ...jsonBody(input) })
@@ -125,6 +125,24 @@ export function MocksPanel({ environment, selectedScenario, creatingRoute, selec
     } catch (reason) {
       const details = actionError("Couldn't finish disabling all scenarios", reason)
       setError({ ...details, message: `${completed} of ${activeScenarios.length} scenarios disabled.${currentScenario ? ` Stopped at ${currentScenario}.` : ''} ${details.message}` })
+      await Promise.allSettled([refresh(), Promise.resolve().then(onChanged)])
+    } finally { setBusy('') }
+  }
+
+  const setScenarioPolicy = async (unmatchedRequests: MockUnmatchedRequests) => {
+    if (!selected || busy || transitionBlocked || selected.unmatchedRequests === unmatchedRequests) return
+    setBusy(`policy:${selected.name}`); setDeleteName(''); setError(null)
+    try {
+      const operation = await api<Operation>(environmentPath(environment, `/mocks/${encodeURIComponent(selected.name)}/policy`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ unmatchedRequests }),
+      })
+      const completed = await waitForEnvironmentOperation(environment, operation)
+      if (completed.state !== 'succeeded') throw new Error(completed.error || `Mock type change ${completed.state}`)
+      await Promise.all([refresh(), Promise.resolve(onChanged())])
+    } catch (reason) {
+      setError(actionError("Mock type wasn't changed", reason))
       await Promise.allSettled([refresh(), Promise.resolve().then(onChanged)])
     } finally { setBusy('') }
   }
@@ -203,6 +221,7 @@ export function MocksPanel({ environment, selectedScenario, creatingRoute, selec
       onDismissError={() => setError(null)}
       onBack={() => { setDeleteName(''); setError(null); onSelectScenario() }}
       onToggle={(enabled) => { void setScenarioEnabled(selected, enabled) }}
+      onPolicyChange={(policy) => { void setScenarioPolicy(policy) }}
       onAddRoute={() => onCreateRoute(selected.name)}
       onSelectRoute={(route) => onSelectRoute(selected.name, route)}
       onSaveRoute={saveRoute}
@@ -255,10 +274,11 @@ export function MockScenarioCreateDialog({ busy, error, onDismissError, onClose,
   error: ActionErrorDetails | null
   onDismissError: () => void
   onClose: () => void
-  onCreate: (input: { name: string; description?: string }) => Promise<void>
+  onCreate: (input: { name: string; description?: string; unmatchedRequests: MockUnmatchedRequests }) => Promise<void>
 }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [unmatchedRequests, setUnmatchedRequests] = useState<MockUnmatchedRequests>('reject')
   const nameInput = useRef<HTMLInputElement>(null)
   const ready = !!name.trim()
 
@@ -275,12 +295,13 @@ export function MockScenarioCreateDialog({ busy, error, onDismissError, onClose,
     <form autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onSubmit={(event) => {
       event.preventDefault()
       if (!ready) return
-      void onCreate({ name: name.trim(), ...(description.trim() ? { description: description.trim() } : {}) })
+      void onCreate({ name: name.trim(), unmatchedRequests, ...(description.trim() ? { description: description.trim() } : {}) })
     }}>
       <p id="mock-scenario-create-description">Create the scenario, then add one or more service routes.</p>
       <div className="form-modal__fields">
         <label><span>NAME</span><input ref={nameInput} aria-label="NAME" name="portless-mock-scenario-name" required pattern="[a-z0-9][a-z0-9._-]{0,63}" maxLength={64} autoComplete="off" spellCheck="false" value={name} disabled={busy} title="Use a lowercase URL-safe name." data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-protonpass-ignore="true" data-keeper-ignore="true" data-form-type="other" onChange={(event) => { setName(event.target.value); onDismissError() }} /></label>
         <label className="provider-field--wide"><span>DESCRIPTION <small>OPTIONAL</small></span><input aria-label="DESCRIPTION" value={description} disabled={busy} onChange={(event) => { setDescription(event.target.value); onDismissError() }} /></label>
+        <MockPolicySetting value={unmatchedRequests} disabled={busy} onChange={setUnmatchedRequests} />
       </div>
       {error && <ActionErrorNotice error={error} onDismiss={onDismissError} />}
       <footer><button className="button button--quiet" type="button" disabled={busy} onClick={onClose}>CANCEL</button><button className="button button--primary" type="submit" disabled={busy || !ready}>{busy ? 'CREATING…' : 'CREATE SCENARIO'}</button></footer>
@@ -320,6 +341,7 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
     <div className={`mock-scenario-row mock-scenario-row--header sortable-header-row${scenarioSort.key === defaultMockScenarioSort.key && scenarioSort.direction === defaultMockScenarioSort.direction ? ' is-default-sort' : ''}`} role="row">
       <SortableGridHeader label="State" sortKey="state" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
       <SortableGridHeader label="Scenario" sortKey="name" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+      <SortableGridHeader label="Mock type" sortKey="type" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
       <SortableGridHeader label="Services" sortKey="services" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
       <SortableGridHeader label="Routes" sortKey="routes" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
       <SortableGridHeader label="Modified" sortKey="modifiedAt" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
@@ -331,9 +353,14 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
       const menuOpen = scenarioMenu === scenario.name
       const enableBlocked = !active && scenario.routes.length === 0
       const services = scenario.activation.targetServices
+      const typeLabel = mockScenarioTypeLabel(scenario.unmatchedRequests)
+      const typeTitle = typeLabel === 'PARTIAL'
+        ? 'Keeps the service running and forwards unmatched requests.'
+        : 'Replaces the service and returns 501 for unmatched requests.'
       return <div className="mock-scenario-row" key={scenario.name} onClick={() => { if (!busy) onOpen(scenario) }}>
         <MockEnabledState state={scenario.activation.state} />
         <div className="mock-scenario-row__name"><button type="button" disabled={!!busy} aria-label={`Open ${scenario.name} mock scenario`} title={scenario.description} onClick={(event) => { event.stopPropagation(); onOpen(scenario) }}><strong>{scenario.name}</strong></button></div>
+        <span className="mock-scenario-type" title={typeTitle}>{typeLabel}</span>
         <span className="mock-scenario-services" title={services.join(', ')}>{services.length ? services.join(', ') : '—'}</span>
         <span>{scenario.routes.length}</span>
         <MockTimestamp className="mock-scenario-row__modified" value={scenario.modifiedAt} />
@@ -354,12 +381,12 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
         </div>
       </div>
     })}
-    {!loading && scenarios.length === 0 && <div className="empty-row">No mock scenarios. Create one, then add routes for the services it should replace.</div>}
+    {!loading && scenarios.length === 0 && <div className="empty-row">No mock scenarios. Create one, then add routes for the services it should mock.</div>}
     {loading && <div className="empty-row">Loading mock scenarios…</div>}
   </section>
 }
 
-export function MockScenarioWorkspace({ scenario, services, selectedRoute, creatingRoute = false, busy, deleteName, transitionBlocked, error, onDismissError, onBack, onToggle, onAddRoute, onSelectRoute, onSaveRoute, onPreviewRoute, onToggleRoute, onDeleteRoute, onDismissDelete }: {
+export function MockScenarioWorkspace({ environment, scenario, services, selectedRoute, creatingRoute = false, busy, deleteName, transitionBlocked, error, onDismissError, onBack, onToggle, onPolicyChange, onAddRoute, onSelectRoute, onSaveRoute, onPreviewRoute, onToggleRoute, onDeleteRoute, onDismissDelete }: {
   environment: Environment
   scenario: MockScenario
   services: string[]
@@ -372,6 +399,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   onDismissError: () => void
   onBack: () => void
   onToggle: (enabled: boolean) => void
+  onPolicyChange: (policy: MockUnmatchedRequests) => void
   onAddRoute: () => void
   onSelectRoute: (route?: string) => void
   onSaveRoute: (route: MockRouteDraft, originalName?: string) => Promise<boolean>
@@ -385,17 +413,18 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   const [routeSort, setRouteSort] = useState<TableSort<MockRouteSortField>>(defaultMockRouteSort)
   const [drafts, setDrafts] = useState<Record<string, MockRouteDraft>>({})
   const [leaveOpen, setLeaveOpen] = useState(false)
-  const [workspaceView, setWorkspaceView] = useState<'routes' | 'preview'>('routes')
+  const [workspaceView, setWorkspaceView] = useState<'edit' | 'preview'>('edit')
   const workspaceID = useId()
   const workspaceTabs = useRef<HTMLDivElement>(null)
   const active = mockScenarioIsActive(scenario)
   const enableBlocked = !active && scenario.routes.length === 0
   const toggleBusy = busy === `enable:${scenario.name}` || busy === `disable:${scenario.name}`
   const toggleDisabled = !!busy || transitionBlocked || enableBlocked
+  const policyBusy = busy === `policy:${scenario.name}`
   const orderedRoutes = useMemo(() => sortMockRoutes(scenario.routes, routeSort), [scenario.routes, routeSort])
   const routePagination = useMemo(() => paginateItems(orderedRoutes, routePage, mockRoutePageSize), [orderedRoutes, routePage])
-  const defaultRoute = useMemo(() => sortMockRoutes(scenario.routes, defaultMockRouteSort)[0]?.name, [scenario.routes])
-  const routeName = creatingRoute ? undefined : selectedRoute || defaultRoute
+  const firstRoute = useMemo(() => sortMockRoutes(scenario.routes, defaultMockRouteSort)[0]?.name, [scenario.routes])
+  const routeName = creatingRoute ? undefined : selectedRoute || firstRoute
   const existing = scenario.routes.find((route) => route.name === routeName)
   const draftKey = creatingRoute ? 'new' : routeName ? `route:${routeName}` : undefined
   const draft = draftKey && drafts[draftKey] || (existing ? mockRouteDraft(existing) : newMockRouteDraft(scenario.routes.length + 1, services[0] || ''))
@@ -403,7 +432,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
   const canPreview = creatingRoute || !!existing
   const workspaceTitle = canPreview ? draft.name.trim() || routeName || 'New route' : routeName || 'Routes'
   const previewing = workspaceView === 'preview' && canPreview
-  const activeView = previewing ? 'preview' : 'routes'
+  const activeView = previewing ? 'preview' : 'edit'
   const hasDrafts = Object.keys(drafts).length > 0
   const selectedPage = Math.max(0, Math.floor(orderedRoutes.findIndex((route) => route.name === routeName) / mockRoutePageSize))
 
@@ -427,7 +456,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     if (existing && !mockRouteDraftHasChanges(next, existing)) clearDraft(draftKey)
     else setDrafts((current) => ({ ...current, [draftKey]: next }))
   }
-  const selectRoute = (name?: string, view: 'routes' | 'preview' = 'routes') => {
+  const selectRoute = (name?: string, view: 'edit' | 'preview' = 'edit') => {
     if (busy) return
     setWorkspaceView(view)
     setRouteMenu('')
@@ -446,7 +475,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     clearDraft(draftKey)
     onDismissError()
     if (creatingRoute || !existing) {
-      setWorkspaceView('routes')
+      setWorkspaceView('edit')
       onSelectRoute()
     }
   }
@@ -474,7 +503,7 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
     setRouteMenu('')
     onDismissDelete()
   }
-  const selectWorkspaceView = (view: 'routes' | 'preview') => {
+  const selectWorkspaceView = (view: 'edit' | 'preview') => {
     setWorkspaceView(view)
     setRouteMenu('')
     onDismissDelete()
@@ -482,50 +511,59 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
 
   return <section className="panel mock-scenario-workspace" role="region" aria-label={`${scenario.name} mock scenario`}>
     <header className="mock-scenario-header">
-      <div className="mock-scenario-header__context">
+      <div className="mock-scenario-header__identity">
         <button className="mock-workspace-back" type="button" disabled={!!busy} aria-label={`Back to mock scenarios from ${scenario.name}`} title="Back to mock scenarios" onClick={() => { if (hasDrafts) setLeaveOpen(true); else onBack() }}>
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M7 3 2 8l5 5" /><path d="M2 8h12" /></svg>
-          <span title={scenario.name}>{scenario.name}</span>
+          <span>Mocks</span>
         </button>
+        <h2 title={scenario.name}>{scenario.name}</h2>
+      </div>
+      <div className="mock-scenario-header__controls">
         <div className={`mock-scenario-toggle${active ? ' is-active' : ''}`}>
-          <span className="mock-scenario-toggle__label">{toggleBusy ? busy.startsWith('disable:') ? 'DISABLING…' : 'ENABLING…' : scenario.activation.state.toUpperCase()}</span>
+          <span className="mock-scenario-toggle__label">{toggleBusy ? busy.startsWith('disable:') ? 'Disabling…' : 'Enabling…' : scenario.activation.state[0].toUpperCase() + scenario.activation.state.slice(1)}</span>
           <ToggleSwitch label={`${scenario.name} enabled`} checked={active} disabled={toggleDisabled} pending={toggleBusy} title={enableBlocked ? 'Add a route before enabling this scenario.' : undefined} onChange={onToggle} />
         </div>
-      </div>
-      <div className="mock-scenario-header__route">
-        <div className={`mock-route-heading${canPreview && !draft.enabled ? ' is-off' : ''}`}>
-          <div className="mock-route-heading__identity">
-            <h2 title={workspaceTitle}>{workspaceTitle}</h2>
-            {canPreview && !draft.enabled && <span className="mock-route-disabled-state">DISABLED</span>}
-          </div>
-          {canPreview && <div className="mock-route-heading__endpoint" title={`${draft.method} ${draft.path}`}><span className="mock-route-method">{draft.method}</span><code>{draft.path || '…'}</code></div>}
-        </div>
-        <div ref={workspaceTabs} className="mock-workspace-views" role="tablist" aria-label="Mock workspace view">
-          {(['routes', 'preview'] as const).map((view) => <button key={view} id={`${workspaceID}-tab-${view}`} data-workspace-view={view} type="button" role="tab" aria-selected={activeView === view} aria-controls={`${workspaceID}-panel`} tabIndex={activeView === view ? 0 : -1} disabled={view === 'preview' && !canPreview} onClick={() => selectWorkspaceView(view)} onKeyDown={(event) => {
-            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
-              event.preventDefault()
-              const next = !canPreview || event.key === 'Home' ? 'routes' : event.key === 'End' ? 'preview' : view === 'routes' ? 'preview' : 'routes'
-              selectWorkspaceView(next)
-              workspaceTabs.current?.querySelector<HTMLButtonElement>(`[data-workspace-view="${next}"]`)?.focus()
-            }
-          }}>{view === 'routes' ? 'Routes' : 'Preview'}</button>)}
+        <div className="mock-scenario-policy" role="group" aria-label="Mock type" aria-busy={policyBusy}>
+          {(['reject', 'forward'] as const).map((policy) => <button key={policy} type="button" aria-pressed={scenario.unmatchedRequests === policy} disabled={!!busy || transitionBlocked || scenario.activation.state === 'degraded'} title={scenario.activation.state === 'degraded' ? 'Disable the partially active scenario before changing its mock type.' : policy === 'forward' ? 'Unmatched requests forward to the service.' : 'Unmatched requests return 501.'} onClick={() => { if (scenario.unmatchedRequests !== policy) onPolicyChange(policy) }}>{policy === 'forward' ? 'Partial mock' : 'Full mock'}</button>)}
+          {policyBusy && <span className="sr-only" role="status">Changing mock type…</span>}
         </div>
       </div>
     </header>
-    {scenario.activation.state === 'degraded' && <ActionErrorNotice error={{ title: 'Scenario is partially active', message: `${scenario.activation.activeServices.length} of ${scenario.activation.targetServices.length} services currently use this scenario. Disable it to restore the saved providers.` }} />}
+    {scenario.activation.state === 'degraded' && <ActionErrorNotice error={{ title: 'Scenario is partially active', message: `${scenario.activation.activeServices.length} of ${scenario.activation.targetServices.length} services currently use this scenario. Disable the scenario to release its service ownership.` }} />}
     {error && !draftKey && <div className="mock-workspace-error"><ActionErrorNotice error={error} onDismiss={onDismissError} /></div>}
-    <div className={`mock-scenario-split${previewing ? ' is-preview' : ''}`} id={`${workspaceID}-panel`} role="tabpanel" aria-labelledby={`${workspaceID}-tab-${activeView}`}>
-      <section className="mock-route-browser" aria-label={`${scenario.name} routes`} hidden={previewing}>
-        <div className="mock-route-browser__title">
-          <span>ROUTES</span>
-          <button className="button button--primary button--small" type="button" disabled={!!busy || creatingRoute} onClick={() => { setWorkspaceView('routes'); onDismissError(); onDismissDelete(); onAddRoute() }}>ADD ROUTE</button>
+    <div className="mock-route-toolbar">
+      <div className={`mock-route-heading${canPreview && !draft.enabled ? ' is-off' : ''}`}>
+        <div className="mock-route-heading__identity">
+          {(canPreview || routeName) && <><span className="mock-route-heading__section">Routes</span><span className="mock-route-heading__separator" aria-hidden="true">/</span></>}
+          <h3 title={workspaceTitle}>{workspaceTitle}</h3>
+          {canPreview && !draft.enabled && <span className="mock-route-disabled-state">DISABLED</span>}
         </div>
-        {scenario.routes.length > 0 && <div className="mock-route-sort">
-          <label><span>SORT BY</span><select aria-label="Sort routes by" value={routeSort.key} onChange={(event) => changeRouteSort({ key: event.target.value as MockRouteSortField, direction: 'asc' })}>
-            <option value="service">Service</option><option value="route">Route</option><option value="match">Match</option><option value="response">Response</option><option value="state">State</option>
-          </select></label>
-          <button type="button" aria-label={`Sort routes ${routeSort.direction === 'asc' ? 'descending' : 'ascending'}`} onClick={() => changeRouteSort({ ...routeSort, direction: routeSort.direction === 'asc' ? 'desc' : 'asc' })}>{routeSort.direction === 'asc' ? '↑' : '↓'}</button>
-        </div>}
+        {canPreview && <div className="mock-route-heading__endpoint" title={`${draft.method} ${draft.path}`}><span className="mock-route-method">{draft.method}</span><code>{draft.path || '…'}</code></div>}
+      </div>
+      <div ref={workspaceTabs} className="mock-workspace-views" role="tablist" aria-label="Mock workspace view">
+        {(['edit', 'preview'] as const).map((view) => <button key={view} id={`${workspaceID}-tab-${view}`} data-workspace-view={view} type="button" role="tab" aria-selected={activeView === view} aria-controls={`${workspaceID}-panel`} tabIndex={activeView === view ? 0 : -1} disabled={view === 'preview' && !canPreview} onClick={() => selectWorkspaceView(view)} onKeyDown={(event) => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault()
+            const next = !canPreview || event.key === 'Home' ? 'edit' : event.key === 'End' ? 'preview' : view === 'edit' ? 'preview' : 'edit'
+            selectWorkspaceView(next)
+            workspaceTabs.current?.querySelector<HTMLButtonElement>(`[data-workspace-view="${next}"]`)?.focus()
+          }
+        }}>{view === 'edit' ? 'Edit' : 'Preview'}</button>)}
+      </div>
+    </div>
+    <div className={`mock-scenario-split${previewing ? ' is-preview' : ''}`}>
+      <section className="mock-route-browser" aria-label={`${scenario.name} routes`} hidden={previewing}>
+        <div className="mock-route-browser__controls" role="group" aria-label="Route list controls">
+          {scenario.routes.length > 0 && <div className="mock-route-sort">
+            <label><span className="sr-only">Sort routes by</span><select aria-label="Sort routes by" value={routeSort.key} onChange={(event) => changeRouteSort({ key: event.target.value as MockRouteSortField, direction: 'asc' })}>
+              <option value="service">Service</option><option value="route">Route</option><option value="match">Match</option><option value="response">Response</option><option value="state">State</option>
+            </select></label>
+            <button type="button" aria-label={`Sort routes ${routeSort.direction === 'asc' ? 'descending' : 'ascending'}`} onClick={() => changeRouteSort({ ...routeSort, direction: routeSort.direction === 'asc' ? 'desc' : 'asc' })}>{routeSort.direction === 'asc' ? '↑' : '↓'}</button>
+          </div>}
+          <button className="mock-route-add" type="button" aria-label="ADD ROUTE" title="Add route" disabled={!!busy || creatingRoute} onClick={() => { setWorkspaceView('edit'); onDismissError(); onDismissDelete(); onAddRoute() }}>
+            <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
+          </button>
+        </div>
         {(creatingRoute || drafts.new) && <button className={`mock-route-new${creatingRoute ? ' is-selected' : ''}`} type="button" disabled={!!busy} aria-current={creatingRoute ? 'true' : undefined} onClick={() => { if (!creatingRoute) onAddRoute() }}>NEW ROUTE <span>{drafts.new ? 'UNSAVED' : 'DRAFT'}</span></button>}
         <div className="mock-route-browser__scroll">
           <div className="mock-route-list" role="list" aria-label="Routes">
@@ -557,7 +595,11 @@ export function MockScenarioWorkspace({ scenario, services, selectedRoute, creat
         </div>
         <PanelPagination label="routes" pagination={routePagination} onPage={(page) => { setRoutePage(page); setRouteMenu(''); onDismissDelete() }} />
       </section>
-      {draftKey ? <MockRouteEditor key={draftKey} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} previewing={previewing} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} onPreview={onPreviewRoute} /> : <div className="mock-route-editor-empty"><span>Add a route to configure its request and response.</span></div>}
+      <div className="mock-route-detail">
+        <div className="mock-route-content" id={`${workspaceID}-panel`} role="tabpanel" aria-labelledby={`${workspaceID}-tab-${activeView}`}>
+          {draftKey ? <MockRouteEditor key={draftKey} routingContext={environment.bindings} scenario={scenario} services={services} routeName={routeName} draft={draft} dirty={dirty} busy={!!busy} previewing={previewing} error={error} onDismissError={onDismissError} onChange={changeDraft} onCancel={discardDraft} onSave={saveDraft} onPreview={onPreviewRoute} /> : <div className="mock-route-placeholder">Add a route to configure a mocked response.</div>}
+        </div>
+      </div>
     </div>
     {leaveOpen && <FormDialog className="mock-scenario-leave-dialog" titleID="mock-scenario-leave-title" descriptionID="mock-scenario-leave-description" closeLabel="Keep editing routes" onClose={() => setLeaveOpen(false)} header={<h2 id="mock-scenario-leave-title">Discard unsaved changes?</h2>}>
       <p id="mock-scenario-leave-description">Your route drafts will be discarded when you leave this scenario.</p>
@@ -647,6 +689,9 @@ export function sortMockScenarios(scenarios: MockScenario[], sort: TableSort<Moc
       case 'services':
         order = compareMockText(left.activation.targetServices.join(','), right.activation.targetServices.join(','))
         break
+      case 'type':
+        order = compareMockText(mockScenarioTypeLabel(left.unmatchedRequests), mockScenarioTypeLabel(right.unmatchedRequests))
+        break
       case 'routes':
         order = left.routes.length - right.routes.length
         break
@@ -690,6 +735,10 @@ function mockScenarioStateRank(scenario: MockScenario) {
     case 'degraded': return 1
     case 'disabled': return 2
   }
+}
+
+function mockScenarioTypeLabel(unmatchedRequests: MockUnmatchedRequests) {
+  return unmatchedRequests === 'forward' ? 'PARTIAL' : 'FULL'
 }
 
 function mockRouteBodyBytes(route: MockRoute) {
@@ -744,4 +793,8 @@ function formatQuerySummary(query: MockRoute['query']) {
 
 function formatTimestamp(value: string) {
   return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function MockPolicySetting({ value, disabled, onChange }: { value: MockUnmatchedRequests; disabled: boolean; onChange: (value: MockUnmatchedRequests) => void }) {
+  return <label className="mock-policy-setting"><span>MOCK TYPE</span><select aria-label="MOCK TYPE" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value as MockUnmatchedRequests)}><option value="reject">Full mock</option><option value="forward">Partial mock</option></select><small>{value === 'forward' ? 'Unmatched requests forward to the service.' : 'Unmatched requests return 501.'} You can switch types in the scenario editor.</small></label>
 }

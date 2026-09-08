@@ -322,7 +322,7 @@ func TestCLIFaultAndRecordingRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(exportOutput), &exported); err != nil {
 		t.Fatalf("decode recording export: %v\n%s", err, exportOutput)
 	}
-	if exported.SchemaVersion != 4 || exported.Project != "experiments-e2e" || exported.Environment != "local" || exported.Recording != "orders-failure" || len(exported.Exchanges) != 2 {
+	if exported.SchemaVersion != 5 || exported.Project != "experiments-e2e" || exported.Environment != "local" || exported.Recording != "orders-failure" || len(exported.Exchanges) != 2 {
 		t.Fatalf("unexpected recording export: %#v", exported)
 	}
 	if exported.Exchanges[0].Source != "checkout" || exported.Exchanges[0].Target != "orders" || exported.Exchanges[0].Recording != "orders-failure" {

@@ -50,11 +50,13 @@ after any fault event.
 
 `mock.state` carries the current scenario after a scenario, route, or activation
 change, or a small `{name, deleted}` tombstone after deletion. Scenario payloads
-include service-scoped routes and derived activation (`disabled`, `enabled`, or
+include explicit `unmatchedRequests`, an inspected resource `version`, service-scoped routes and derived activation (`disabled`, `enabled`, or
 `degraded`) with target and active service names. Clients should reload the mock
-collection after receiving it. Each active service matcher is recompiled and
-swapped atomically; whole-scenario activation is a tracked operation, not an
-instantaneous cross-service traffic switch. Follow `operation.state` to its
+collection after receiving it. Forward mode compiles once and atomically publishes
+all target policies while retaining real providers. Strict mode retains its tracked
+provider replacement/restoration operation. `service.mock` describes intervention
+independently of provider binding and health; missing forward runtime policy is degraded.
+Policy edits emit `mock.updated` timeline entries and `mock.state`. Follow `operation.state` to its
 terminal state and reload the environment after a transition. Restoration
 bindings remain private and are never included in events.
 
@@ -72,13 +74,25 @@ routes in memory; other browser drafts are not included. Preview neither saves
 the route nor changes active bindings, and emits no mock.state, traffic,
 recording, operation, or timeline events. Preview results describe the evaluated
 snapshot only. Clients mark them outdated after changing the draft or sample
-request, or after receiving changed saved scenario routes.
+request or real provider binding, or after receiving changed saved routes.
+API 19.0.0 previews return `outcome`: `mocked` or `rejected` with a nested
+`response`, `forward` with a public `destination`, or `blocked` with a `reason`.
+Forward previews do not invent an upstream status. API 20.1.0 exposes
+`PUT /mocks/{scenarioName}/policy` as a durable full/partial mode change. It
+preserves routes and enabled state, emits `mock.updated` and `mock.state` on
+success, and uses the existing activation/provider events for active handoffs.
+A failed change attempts to restore the old mode; inspect the final scenario
+after failure or daemon interruption. Policy changes also invalidate previews.
 
 `traffic.exchange` carries a completed HTTP request, decoded TCP operation, or
 opaque TCP session summary. HTTP headers and bodies and decoded TCP message
 fields/content are omitted from this notification; clients load the full
-exchange on demand. Mock-served HTTP exchanges identify `mockScenario` and
-`mockRoute`; the existing source and target still identify the service edge.
+exchange on demand. Scenario evaluations identify `mockScenario` and optional
+`mockOutcome` (`mocked`, `forwarded`, `rejected`, `blocked`); only matches have
+`mockRoute`. `targetProvider` records the actual selected provider. Source and
+target retain the service edge. Terminal faults before evaluation have no mock
+outcome. Recording export schema 5 retains these fields; old exchanges without
+a decision are left absent.
 The TCP summary retains its declared application protocol,
 operation, inspection state, outcome, and message counts. `traffic.trace`
 carries changed trace summaries after a shared metadata projection batch, with
@@ -101,7 +115,11 @@ exchange includes `replay` provenance: the original project, environment,
 sequence and start time, plus public workspace/run numbers. It is a fresh
 foreground trace root; ordinary downstream calls correlate with that root.
 Replay execution uses the same traffic, fault, mock, and recording paths and
-emits their normal events. JSON recording export schema 4 retains these fields.
+emits their normal events. JSON recording export schema 5 retains these fields.
+Prepared replay destinations include safe `mockScenario`/`mockRoute` context
+when applicable. A matching partial response selects provider `mock`; a miss
+retains the real provider and its write policy. Mock routing changes invalidate
+preparation independently of the provider generation.
 
 Preparing and editing `/traffic/replays` workspaces and recording editor activity
 through `POST /{number}/activity` emits no application traffic or lifecycle events.

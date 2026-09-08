@@ -530,6 +530,17 @@
     "openWorld": true
   },
   {
+    "name": "portless_set_mock_scenario_policy",
+    "requires": [
+      "trafficControl",
+      "lifecycle"
+    ],
+    "readOnly": false,
+    "destructive": true,
+    "idempotent": false,
+    "openWorld": true
+  },
+  {
     "name": "portless_set_source_checkout",
     "requires": [
       "configuration"

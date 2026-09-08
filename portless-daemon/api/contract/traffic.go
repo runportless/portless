@@ -75,7 +75,7 @@ type RecordingExportChunkQuery struct {
 	MaxBytes int
 }
 
-// RecordingExportChunk contains lossless schema-4 JSON bytes encoded as base64.
+// RecordingExportChunk contains lossless schema-5 JSON bytes encoded as base64.
 // Complete is true only after the document suffix has been returned.
 type RecordingExportChunk struct {
 	SchemaVersion int                     `json:"schemaVersion"`

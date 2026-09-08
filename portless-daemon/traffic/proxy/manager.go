@@ -50,6 +50,7 @@ type target struct {
 	healthPath     string
 	mockScenario   string
 	mockRoute      string
+	mockOutcome    string
 }
 
 // Manager owns source-scoped HTTP and TCP proxies, targets, capture, and fault behavior.
@@ -59,6 +60,9 @@ type Manager struct {
 	traffic                 *traffic.Store
 	mu                      sync.RWMutex
 	targets                 map[string]target
+	partialMocks            map[string]partialMock
+	routingRevisions        map[string]uint64
+	routingRevision         uint64
 	edges                   map[string]*edge
 	localProcessTransport   *http.Transport
 	boundedTransport        *http.Transport
@@ -372,6 +376,19 @@ func (m *Manager) CloseEnvironment(ctx context.Context, scope string) {
 	for key := range m.targets {
 		if strings.HasPrefix(key, scope+"\x00") {
 			delete(m.targets, key)
+			delete(m.partialMocks, key)
+			delete(m.routingRevisions, key)
+		}
+	}
+	for key := range m.partialMocks {
+		if strings.HasPrefix(key, strings.ToLower(scope)+"\x00") {
+			delete(m.partialMocks, key)
+			delete(m.routingRevisions, key)
+		}
+	}
+	for key := range m.routingRevisions {
+		if strings.HasPrefix(key, strings.ToLower(scope)+"\x00") {
+			delete(m.routingRevisions, key)
 		}
 	}
 	sessions := m.invalidateWebSocketsLocked(scope, "")
@@ -408,6 +425,14 @@ func (m *Manager) Close(ctx context.Context) {
 		projects[current.scope] = struct{}{}
 	}
 	for key := range m.targets {
+		scope, _, _ := strings.Cut(key, "\x00")
+		projects[scope] = struct{}{}
+	}
+	for key := range m.partialMocks {
+		scope, _, _ := strings.Cut(key, "\x00")
+		projects[scope] = struct{}{}
+	}
+	for key := range m.routingRevisions {
 		scope, _, _ := strings.Cut(key, "\x00")
 		projects[scope] = struct{}{}
 	}
@@ -466,6 +491,7 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	}
 	fault := m.matchFault(request.Context(), scope, source, targetName, request.Method, request.URL.Path)
 	if fault != nil {
+		upstream.mockScenario, upstream.mockRoute, upstream.mockOutcome = "", "", ""
 		m.applyDelay(request.Context(), *fault)
 		if request.Context().Err() != nil {
 			if session != nil {
@@ -496,16 +522,35 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 			return
 		}
 	}
-	ok := session != nil || replay != nil
-	if !ok {
-		upstream, ok = m.target(scope, targetName)
+	decision := routingDecision{upstream: upstream, available: session != nil || replay != nil}
+	if replay == nil {
+		decision = m.requestDecision(scope, targetName, request)
+	} else {
+		decision = replay.decision
+	}
+	if session != nil {
+		upstream.mockScenario, upstream.mockOutcome = decision.upstream.mockScenario, decision.upstream.mockOutcome
+		decision.upstream = upstream
+		decision.available = true
+	}
+	upstream, ok := decision.upstream, decision.available
+	fixed := decision.response
+	if decision.guarded {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(writer, "{\"error\":{\"code\":\"MOCK_POLICY_UNAVAILABLE\",\"message\":\"Partial mock policy is unavailable\"}}\n")
+		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusServiceUnavailable, 0, faultName(fault), "partial mock policy is unavailable", upstream, writer.Header(), requestCapture, nil, traceContext)
+		return
 	}
 	if !ok {
 		http.Error(writer, "Portless: "+targetName+" is not available", http.StatusBadGateway)
-		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", target{}, writer.Header(), requestCapture, nil, traceContext)
+		m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, http.StatusBadGateway, 0, faultName(fault), "target is not available", upstream, writer.Header(), requestCapture, nil, traceContext)
 		return
 	}
 	if upstream.provider == model.ProviderRemote && upstream.writePolicy == model.WriteReadOnly && !safeMethod(request.Method) {
+		if upstream.mockScenario != "" {
+			upstream.mockOutcome = "blocked"
+		}
 		if replay != nil {
 			replay.failure = errors.New("remote target is read-only")
 		}
@@ -521,31 +566,61 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 			return
 		}
 	}
-	outgoing := request.Clone(request.Context())
-	outgoing.RequestURI = ""
-	traceContext.inject(outgoing.Header)
-	m.contexts.remember(scope, traceContext)
-	if upstream.provider == model.ProviderRemote {
-		outgoing.URL.Scheme = upstream.baseURL.Scheme
-		outgoing.URL.Host = upstream.baseURL.Host
-		outgoing.URL.RawPath = joinURLPath(upstream.baseURL.EscapedPath(), request.URL.EscapedPath())
-		outgoing.URL.Path, _ = url.PathUnescape(outgoing.URL.RawPath)
-		outgoing.Host = upstream.baseURL.Host
+	var response *http.Response
+	var err error
+	if fixed != nil {
+		if fixed.DelayMS > 0 {
+			timer := time.NewTimer(time.Duration(fixed.DelayMS) * time.Millisecond)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-request.Context().Done():
+				if replay != nil {
+					replay.failure = request.Context().Err()
+				}
+				m.finishHTTP(request.Context(), activeRequest, scope, source, targetName, request, started, 0, 0, faultName(fault), "mock response canceled", upstream, nil, requestCapture, nil, traceContext)
+				return
+			}
+		}
+		header := make(http.Header)
+		for name, value := range fixed.Headers {
+			header.Set(name, value)
+		}
+		body := fixed.Body
+		if request.Method == http.MethodHead || fixed.Status == http.StatusNoContent || fixed.Status == http.StatusNotModified {
+			body = ""
+		}
+		if fixed.Status == http.StatusNotModified {
+			header.Del("Content-Type")
+		}
+		response = &http.Response{StatusCode: fixed.Status, Header: header, Body: io.NopCloser(strings.NewReader(body))}
 	} else {
-		outgoing.URL.Scheme = "http"
-		outgoing.URL.Host = upstream.address
+		outgoing := request.Clone(request.Context())
+		outgoing.RequestURI = ""
+		traceContext.inject(outgoing.Header)
+		m.contexts.remember(scope, traceContext)
+		if upstream.provider == model.ProviderRemote {
+			outgoing.URL.Scheme = upstream.baseURL.Scheme
+			outgoing.URL.Host = upstream.baseURL.Host
+			outgoing.URL.RawPath = joinURLPath(upstream.baseURL.EscapedPath(), request.URL.EscapedPath())
+			outgoing.URL.Path, _ = url.PathUnescape(outgoing.URL.RawPath)
+			outgoing.Host = upstream.baseURL.Host
+		} else {
+			outgoing.URL.Scheme = "http"
+			outgoing.URL.Host = upstream.address
+		}
+		removeHopHeaders(outgoing.Header)
+		transport := m.upstreamTransport(upstream)
+		if replay != nil {
+			transport = replay.transport
+		}
+		if session != nil {
+			outgoing.Header.Set("Connection", "Upgrade")
+			outgoing.Header.Set("Upgrade", "websocket")
+			transport = m.websocketTransport
+		}
+		response, err = transport.RoundTrip(outgoing)
 	}
-	removeHopHeaders(outgoing.Header)
-	transport := m.upstreamTransport(upstream)
-	if replay != nil {
-		transport = replay.transport
-	}
-	if session != nil {
-		outgoing.Header.Set("Connection", "Upgrade")
-		outgoing.Header.Set("Upgrade", "websocket")
-		transport = m.websocketTransport
-	}
-	response, err := transport.RoundTrip(outgoing)
 	if err != nil {
 		message := err.Error()
 		if session != nil {
@@ -588,6 +663,10 @@ func (m *Manager) forwardHTTP(writer http.ResponseWriter, request *http.Request,
 	if upstream.provider == model.ProviderMock {
 		upstream.mockScenario = response.Header.Get(mocks.ScenarioHeader)
 		upstream.mockRoute = response.Header.Get(mocks.RouteHeader)
+		upstream.mockOutcome = "rejected"
+		if upstream.mockRoute != "" {
+			upstream.mockOutcome = "mocked"
+		}
 		response.Header.Del(mocks.ScenarioHeader)
 		response.Header.Del(mocks.RouteHeader)
 	}
@@ -631,7 +710,7 @@ func (m *Manager) finishHTTP(ctx context.Context, activeRequest uint64, scope, s
 	exchange := model.TrafficExchange{
 		Project: project, Environment: environment, Protocol: model.ProtocolHTTP, Source: source, Target: targetName,
 		TargetProvider: upstream.provider, RemoteClassification: upstream.classification,
-		MockScenario: upstream.mockScenario, MockRoute: upstream.mockRoute,
+		MockScenario: upstream.mockScenario, MockRoute: upstream.mockRoute, MockOutcome: upstream.mockOutcome,
 		StartedAt: started, CompletedAt: completed, Method: request.Method, Host: request.Host,
 		Path: request.URL.Path, RequestTarget: exactRequestTarget(request.URL), RequestKind: classifyRequest(source, request),
 		Status: status, DurationMS: completed.Sub(started).Milliseconds(),

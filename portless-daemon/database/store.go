@@ -162,6 +162,14 @@ WHERE modified_at = ''`, nowText()); err != nil {
 	if err := s.migrateMockQueryMatchers(ctx); err != nil {
 		return err
 	}
+	for _, table := range []string{"mock_scenarios", "mock_scenario_activations"} {
+		if err := s.ensureColumn(ctx, table, "unmatched_requests", "TEXT NOT NULL DEFAULT 'reject' CHECK(unmatched_requests IN ('reject','forward'))"); err != nil {
+			return fmt.Errorf("migrate mock policy: %w", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(12, ?)`, nowText()); err != nil {
+		return err
+	}
 	return nil
 }
 

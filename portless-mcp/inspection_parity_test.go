@@ -46,7 +46,7 @@ func TestMockPayloadPermissionAndMetadataPreview(t *testing.T) {
 			t.Error("preview failed to request metadata response")
 		}
 		// Defend against a server returning payloads even for a metadata request.
-		_, _ = w.Write([]byte(`{"matched":true,"route":"health","status":200,"body":"saved-secret","headers":{"X-Secret":"header-secret"}}`))
+		_, _ = w.Write([]byte(`{"route":"health","outcome":"mocked","response":{"status":200,"headers":{"X-Secret":"header-secret"},"body":"saved-secret"}}`))
 	}))
 	defer daemon.Close()
 	session, closeSession := connectTestServer(t, Config{Environment: "shop/local"}, testConnector{client: apiclient.New(daemon.URL, "test", daemon.Client())})

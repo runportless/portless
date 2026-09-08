@@ -406,8 +406,8 @@ WHERE private_key = ?`, modelJSON, definition.PrimaryService, nowText(), key); e
 				return model.Environment{}, err
 			}
 			if _, err := tx.ExecContext(ctx, `
-INSERT INTO mock_scenario_activations(environment_key, scenario_name, service_name, previous_binding_json, activated_at)
-VALUES(?, ?, ?, ?, ?)`, key, scenario, binding.Service, bindingJSON, activatedAt); err != nil {
+INSERT INTO mock_scenario_activations(environment_key, scenario_name, service_name, previous_binding_json, activated_at, unmatched_requests)
+VALUES(?, ?, ?, ?, ?, (SELECT unmatched_requests FROM mock_scenarios WHERE environment_key=? AND name=? COLLATE NOCASE))`, key, scenario, binding.Service, bindingJSON, activatedAt, key, scenario); err != nil {
 				return model.Environment{}, err
 			}
 		}

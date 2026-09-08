@@ -53,7 +53,7 @@ describe('MCP client configuration', () => {
     expect(buildMCPArguments(current)).toEqual([
       'mcp', 'serve', '--all-environments', '--allow-lifecycle', '--allow-traffic-control', '--allow-sensitive-traffic',
     ])
-    expect(mcpToolCount(current.capabilities)).toBe(46)
+    expect(mcpToolCount(current.capabilities)).toBe(47)
     expect(mcpAccessLabel(current.capabilities)).toBe('SENSITIVE')
   })
 
@@ -89,6 +89,6 @@ it('counts every valid capability conjunction from the canonical inventory', () 
   for (let mask = 0; mask < 32; mask++) {
     const lifecycle = Boolean(mask & 1), trafficControl = Boolean(mask & 2), sensitiveTraffic = Boolean(mask & 4), replay = Boolean(mask & 8), configuration = Boolean(mask & 16)
     if (replay && !sensitiveTraffic) continue
-    expect(mcpToolCount({ lifecycle, trafficControl, sensitiveTraffic, replay, configuration })).toBe(24 + 3 * +lifecycle + 14 * +trafficControl + 2 * +sensitiveTraffic + 2 * +(trafficControl && lifecycle) + +(trafficControl && sensitiveTraffic) + 5 * +(replay && sensitiveTraffic) + 11 * +configuration + +(configuration && lifecycle))
+    expect(mcpToolCount({ lifecycle, trafficControl, sensitiveTraffic, replay, configuration })).toBe(24 + 3 * +lifecycle + 14 * +trafficControl + 2 * +sensitiveTraffic + 3 * +(trafficControl && lifecycle) + +(trafficControl && sensitiveTraffic) + 5 * +(replay && sensitiveTraffic) + 11 * +configuration + +(configuration && lifecycle))
   }
 })

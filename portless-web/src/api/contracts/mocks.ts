@@ -1,3 +1,6 @@
+export type MockUnmatchedRequests = 'reject' | 'forward'
+export interface MockVersion { createdAt: string; modifiedAt: string; parentCreatedAt: string }
+
 export type MockScenarioActivationState = 'disabled' | 'enabled' | 'degraded'
 
 export interface MockScenarioActivation {
@@ -27,6 +30,8 @@ export interface MockRoute {
 }
 
 export interface MockScenario {
+  unmatchedRequests: MockUnmatchedRequests
+  version: MockVersion
   project: string
   environment: string
   name: string
@@ -46,15 +51,19 @@ export interface MockScenarioMutation {
   warnings: string[]
 }
 
-export interface MockPreview {
-  service: string
-  matched: boolean
-  route?: string
+export interface MockResponse {
   status: number
   headers?: Record<string, string>
   body?: string
   delayMs?: number
 }
+
+export type MockPreview = { service: string } & (
+  | { outcome: 'mocked'; route: string; response: MockResponse }
+  | { outcome: 'rejected'; response: MockResponse }
+  | { outcome: 'forward'; destination: { provider: 'local' | 'remote'; url: string; classification?: string; writePolicy?: string } }
+  | { outcome: 'blocked'; reason: { code: string; message: string } }
+)
 
 export interface MockRequest {
   service: string

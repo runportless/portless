@@ -27,7 +27,7 @@ func original() model.TrafficExchange {
 	return model.TrafficExchange{Project: "store", Environment: "local", Protocol: model.ProtocolHTTP, Sequence: 142, Source: "checkout", Target: "orders", StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(), Method: "POST", Path: "/orders", RequestTarget: "/orders/a%2Fb?tag=a&tag=&space=+&space=%20", Status: 200, DurationMS: 10, RequestBody: `{"sku":"coffee"}`, ResponseBody: `{"available":true}`, RequestHeaders: map[string][]string{"Content-Type": {"application/json"}, "X-Repeat": {"first", "second"}}, ResponseHeaders: map[string][]string{"Content-Type": {"application/json"}}, RequestCapture: captured(`{"sku":"coffee"}`), ResponseCapture: captured(`{"available":true}`)}
 }
 
-func resolver(_ context.Context, _, environment, _, _ string) (Target, error) {
+func resolver(_ context.Context, _, environment, _, _, _, _ string) (Target, error) {
 	return Target{Generation: 1, Version: "first", Destination: contract.TrafficReplayDestination{Environment: environment, Provider: "local", URL: "http://orders." + environment + ".store.localhost"}}, nil
 }
 
@@ -37,7 +37,7 @@ func manager(t *testing.T, resolve Resolver, execute Executor) *Manager {
 		resolve = resolver
 	}
 	if execute == nil {
-		execute = func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
+		execute = func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
 			result := original()
 			result.Sequence = 143
 			return result, "response-received", nil
@@ -98,7 +98,7 @@ func expectStatus(t *testing.T, err error, status int) {
 
 func TestPrepareNeverExecutesAndPreservesBaselineFidelity(t *testing.T) {
 	var calls atomic.Int32
-	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
 		calls.Add(1)
 		return original(), "response-received", nil
 	})
@@ -219,7 +219,7 @@ func TestCredentialsAreExplicitAndNeverReturnedOrEchoed(t *testing.T) {
 	baseline := original()
 	baseline.RequestHeaders["Authorization"] = []string{redacted}
 	var sent atomic.Bool
-	m := manager(t, nil, func(_ context.Context, _, _, _ string, draft contract.TrafficReplayDraft, _ uint64, _ model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(_ context.Context, _, _, _ string, draft contract.TrafficReplayDraft, _, _ uint64, _ model.TrafficReplay) (model.TrafficExchange, string, error) {
 		sent.Store(draft.Headers["Authorization"][0] == "Bearer "+secret)
 		exchange := original()
 		exchange.ResponseBody = secret
@@ -275,7 +275,7 @@ func TestConcurrentDuplicateRunsHaveOneDispatchAndTombstones(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
 	finish := make(chan struct{})
-	m := manager(t, nil, func(ctx context.Context, scope, source, target string, _ contract.TrafficReplayDraft, _ uint64, provenance model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(ctx context.Context, scope, source, target string, _ contract.TrafficReplayDraft, _, _ uint64, provenance model.TrafficReplay) (model.TrafficExchange, string, error) {
 		if calls.Add(1) == 1 {
 			close(started)
 		}
@@ -342,7 +342,7 @@ func TestConcurrentDuplicateRunsHaveOneDispatchAndTombstones(t *testing.T) {
 
 func TestOldRunCannotDispatchAfterNewResult(t *testing.T) {
 	var calls atomic.Int32
-	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
 		calls.Add(1)
 		return original(), "response-received", nil
 	})
@@ -380,8 +380,8 @@ func TestRemotePolicyAndDestinationRevision(t *testing.T) {
 	var generation atomic.Uint64
 	generation.Store(1)
 	policy := "read-only"
-	resolve := func(ctx context.Context, project, environment, source, target string) (Target, error) {
-		value, _ := resolver(ctx, project, environment, source, target)
+	resolve := func(ctx context.Context, project, environment, source, target, method, requestTarget string) (Target, error) {
+		value, _ := resolver(ctx, project, environment, source, target, method, requestTarget)
 		value.Generation = generation.Load()
 		value.Destination.Provider = "remote"
 		value.Destination.WritePolicy = policy
@@ -457,7 +457,7 @@ func TestExpiryIdentityAndCapacity(t *testing.T) {
 
 func TestClearDoesNotRepublishRunningResult(t *testing.T) {
 	finish := make(chan struct{})
-	m := manager(t, nil, func(ctx context.Context, _, _, _ string, _ contract.TrafficReplayDraft, _ uint64, _ model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(ctx context.Context, _, _, _ string, _ contract.TrafficReplayDraft, _, _ uint64, _ model.TrafficReplay) (model.TrafficExchange, string, error) {
 		select {
 		case <-finish:
 			return original(), "response-received", nil
@@ -494,14 +494,14 @@ func TestRunAdmissionLosesRaceToDraftChangeOrClear(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			resolving, releaseResolver := make(chan struct{}), make(chan struct{})
 			var resolves, calls atomic.Int32
-			resolve := func(ctx context.Context, project, environment, source, target string) (Target, error) {
+			resolve := func(ctx context.Context, project, environment, source, target, method, requestTarget string) (Target, error) {
 				if resolves.Add(1) == 2 {
 					close(resolving)
 					<-releaseResolver
 				}
-				return resolver(ctx, project, environment, source, target)
+				return resolver(ctx, project, environment, source, target, method, requestTarget)
 			}
-			m := manager(t, resolve, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
+			m := manager(t, resolve, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
 				calls.Add(1)
 				return original(), "response-received", nil
 			})
@@ -534,7 +534,7 @@ func TestRunAdmissionLosesRaceToDraftChangeOrClear(t *testing.T) {
 
 func TestConcurrentCapacityAndShutdownCancelWorkers(t *testing.T) {
 	var calls atomic.Int32
-	m := manager(t, nil, func(ctx context.Context, _, _, _ string, _ contract.TrafficReplayDraft, _ uint64, _ model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(ctx context.Context, _, _, _ string, _ contract.TrafficReplayDraft, _, _ uint64, _ model.TrafficReplay) (model.TrafficExchange, string, error) {
 		calls.Add(1)
 		<-ctx.Done()
 		return model.TrafficExchange{}, "unknown", ctx.Err()
@@ -641,7 +641,7 @@ func TestKnownStreamingAndNonTextRequestsAreExcluded(t *testing.T) {
 }
 
 func TestResultRetentionBoundsInjectedExecutor(t *testing.T) {
-	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
 		exchange := original()
 		exchange.ResponseBody = strings.Repeat("x", maxBodyBytes+10)
 		exchange.ResponseCapture = captured(exchange.ResponseBody)
@@ -665,7 +665,7 @@ func TestNewCredentialScrubsBaselineAndPreviousResultMonotonically(t *testing.T)
 	baseline.ResponseBody = `{"echo":"` + secret + `"}`
 	baseline.ResponseCapture = captured(baseline.ResponseBody)
 	baseline.ResponseHeaders["X-Echo"] = []string{secret}
-	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
+	m := manager(t, nil, func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error) {
 		return baseline, "response-received", nil
 	})
 	w := prepare(t, m, baseline)

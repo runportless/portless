@@ -15,9 +15,10 @@ import (
 
 // MockScenarioActivationRecord retains the provider restored when a scenario is disabled.
 type MockScenarioActivationRecord struct {
-	Service         string
-	PreviousBinding model.ComponentBinding
-	ActivatedAt     time.Time
+	Service           string
+	UnmatchedRequests model.MockUnmatchedRequests
+	PreviousBinding   model.ComponentBinding
+	ActivatedAt       time.Time
 }
 
 // MockScenarios lists the mock scenarios configured for an environment.
@@ -27,7 +28,7 @@ func (s *Store) MockScenarios(ctx context.Context, project, environment string) 
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT name, description, created_at, modified_at
+SELECT name, description, created_at, modified_at, unmatched_requests
 FROM mock_scenarios WHERE environment_key = ? ORDER BY name COLLATE NOCASE`, key)
 	if err != nil {
 		return nil, err
@@ -37,7 +38,7 @@ FROM mock_scenarios WHERE environment_key = ? ORDER BY name COLLATE NOCASE`, key
 	for rows.Next() {
 		var scenario model.MockScenario
 		var created, modified string
-		if err := rows.Scan(&scenario.Name, &scenario.Description, &created, &modified); err != nil {
+		if err := rows.Scan(&scenario.Name, &scenario.Description, &created, &modified, &scenario.UnmatchedRequests); err != nil {
 			return nil, err
 		}
 		scenario.Project, scenario.Environment = project, environment
@@ -59,9 +60,9 @@ func (s *Store) MockScenario(ctx context.Context, project, environment, name str
 	var scenario model.MockScenario
 	var created, modified string
 	err = s.db.QueryRowContext(ctx, `
-SELECT name, description, created_at, modified_at
+SELECT name, description, created_at, modified_at, unmatched_requests
 FROM mock_scenarios WHERE environment_key = ? AND name = ? COLLATE NOCASE`, key, name).Scan(
-		&scenario.Name, &scenario.Description, &created, &modified)
+		&scenario.Name, &scenario.Description, &created, &modified, &scenario.UnmatchedRequests)
 	if err != nil {
 		return model.MockScenario{}, mapSQLError(err)
 	}
@@ -82,10 +83,16 @@ func (s *Store) CreateMockScenario(ctx context.Context, project, environment str
 	if err != nil {
 		return model.MockScenario{}, err
 	}
+	if scenario.UnmatchedRequests == "" {
+		scenario.UnmatchedRequests = model.MockUnmatchedReject
+	}
+	if err := scenario.UnmatchedRequests.Validate(); err != nil {
+		return model.MockScenario{}, err
+	}
 	now := nowText()
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO mock_scenarios(environment_key, name, description, created_at, modified_at)
-VALUES(?, ?, ?, ?, ?)`, key, scenario.Name, scenario.Description, now, now)
+INSERT INTO mock_scenarios(environment_key, name, description, created_at, modified_at, unmatched_requests)
+VALUES(?, ?, ?, ?, ?, ?)`, key, scenario.Name, scenario.Description, now, now, scenario.UnmatchedRequests)
 	if err != nil {
 		if isUniqueError(err) {
 			return model.MockScenario{}, ErrAlreadyExists
@@ -93,6 +100,34 @@ VALUES(?, ?, ?, ?, ?)`, key, scenario.Name, scenario.Description, now, now)
 		return model.MockScenario{}, err
 	}
 	return s.MockScenario(ctx, project, environment, scenario.Name)
+}
+
+// SetMockScenarioPolicy changes a disabled scenario's unmatched-request policy
+// without changing its identity or routes. Active ownership must be released first.
+func (s *Store) SetMockScenarioPolicy(ctx context.Context, project, environment, name string, policy model.MockUnmatchedRequests) (model.MockScenario, error) {
+	if err := policy.Validate(); err != nil {
+		return model.MockScenario{}, err
+	}
+	key, err := s.PrivateEnvironmentKey(ctx, project, environment)
+	if err != nil {
+		return model.MockScenario{}, err
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE mock_scenarios SET unmatched_requests=?, modified_at=?
+WHERE environment_key=? AND name=? COLLATE NOCASE
+AND NOT EXISTS (SELECT 1 FROM mock_scenario_activations WHERE environment_key=? AND scenario_name=? COLLATE NOCASE)`, policy, nowText(), key, name, key, name)
+	if err != nil {
+		return model.MockScenario{}, fmt.Errorf("save mock policy: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return model.MockScenario{}, err
+	}
+	scenario, err := s.MockScenario(ctx, project, environment, name)
+	if err == nil && changed == 0 {
+		err = fmt.Errorf("disable the mock scenario before changing its policy: %w", ErrConflict)
+	}
+	return scenario, err
 }
 
 // DeleteMockScenario removes a disabled scenario and all of its routes.
@@ -302,7 +337,7 @@ func (s *Store) MockScenarioActivations(ctx context.Context, project, environmen
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT service_name, previous_binding_json, activated_at
+SELECT service_name, previous_binding_json, activated_at, unmatched_requests
 FROM mock_scenario_activations
 WHERE environment_key = ? AND scenario_name = ? COLLATE NOCASE
 ORDER BY service_name COLLATE NOCASE`, key, scenario)
@@ -315,7 +350,7 @@ ORDER BY service_name COLLATE NOCASE`, key, scenario)
 		var item MockScenarioActivationRecord
 		var bindingJSON []byte
 		var activated string
-		if err := rows.Scan(&item.Service, &bindingJSON, &activated); err != nil {
+		if err := rows.Scan(&item.Service, &bindingJSON, &activated, &item.UnmatchedRequests); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(bindingJSON, &item.PreviousBinding); err != nil {
@@ -352,6 +387,11 @@ func (s *Store) hydrateMockScenario(ctx context.Context, environmentKey string, 
 		return err
 	}
 	scenario.Routes = routes
+	var parent string
+	if err := s.db.QueryRowContext(ctx, `SELECT created_at FROM environments WHERE private_key=?`, environmentKey).Scan(&parent); err != nil {
+		return err
+	}
+	scenario.Version = model.ResourceVersion{CreatedAt: scenario.CreatedAt, ModifiedAt: scenario.ModifiedAt, ParentCreatedAt: parseTime(parent)}
 	return s.hydrateMockActivation(ctx, environmentKey, scenario)
 }
 
@@ -368,7 +408,7 @@ func (s *Store) hydrateMockActivation(ctx context.Context, environmentKey string
 		return strings.ToLower(scenario.Activation.TargetServices[i]) < strings.ToLower(scenario.Activation.TargetServices[j])
 	})
 	rows, err := s.db.QueryContext(ctx, `
-SELECT a.service_name, a.activated_at, b.provider, b.config_json
+SELECT a.service_name, a.activated_at, b.provider, b.config_json, b.source_name, a.previous_binding_json, a.unmatched_requests
 FROM mock_scenario_activations a
 LEFT JOIN environment_bindings b ON b.environment_key = a.environment_key AND b.service_name = a.service_name COLLATE NOCASE
 WHERE a.environment_key = ? AND a.scenario_name = ? COLLATE NOCASE
@@ -381,13 +421,33 @@ ORDER BY a.service_name COLLATE NOCASE`, environmentKey, scenario.Name)
 	for rows.Next() {
 		var service, activated string
 		var provider sql.NullString
-		var configJSON []byte
-		if err := rows.Scan(&service, &activated, &provider, &configJSON); err != nil {
+		var configJSON, previousJSON []byte
+		var source sql.NullString
+		var policy model.MockUnmatchedRequests
+		if err := rows.Scan(&service, &activated, &provider, &configJSON, &source, &previousJSON, &policy); err != nil {
 			return err
 		}
 		activationCount++
 		if scenario.Activation.EnabledAt.IsZero() || parseTime(activated).Before(scenario.Activation.EnabledAt) {
 			scenario.Activation.EnabledAt = parseTime(activated)
+		}
+		if policy != scenario.UnmatchedRequests {
+			continue
+		}
+		if policy == model.MockUnmatchedForward {
+			var previous model.ComponentBinding
+			if err := json.Unmarshal(previousJSON, &previous); err != nil {
+				return err
+			}
+			valid := provider.String == string(previous.Provider) && source.String == previous.Source
+			if previous.Provider == model.ProviderRemote {
+				var remote model.RemoteTarget
+				valid = valid && json.Unmarshal(configJSON, &remote) == nil && previous.Remote != nil && remote == *previous.Remote
+			}
+			if valid {
+				scenario.Activation.ActiveServices = append(scenario.Activation.ActiveServices, service)
+			}
+			continue
 		}
 		if provider.String != string(model.ProviderMock) {
 			continue
@@ -462,8 +522,8 @@ func (s *Store) cloneMockScenarios(ctx context.Context, project, sourceEnvironme
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO mock_scenarios(environment_key, name, description, created_at, modified_at)
-SELECT ?, name, description, created_at, modified_at FROM mock_scenarios WHERE environment_key = ?`, targetKey, sourceKey); err != nil {
+INSERT INTO mock_scenarios(environment_key, name, description, created_at, modified_at, unmatched_requests)
+SELECT ?, name, description, created_at, modified_at, unmatched_requests FROM mock_scenarios WHERE environment_key = ?`, targetKey, sourceKey); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -473,8 +533,8 @@ FROM mock_scenario_routes WHERE environment_key = ?`, targetKey, sourceKey); err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO mock_scenario_activations(environment_key, scenario_name, service_name, previous_binding_json, activated_at)
-SELECT ?, scenario_name, service_name, previous_binding_json, ?
+INSERT INTO mock_scenario_activations(environment_key, scenario_name, service_name, previous_binding_json, activated_at, unmatched_requests)
+SELECT ?, scenario_name, service_name, previous_binding_json, ?, unmatched_requests
 FROM mock_scenario_activations WHERE environment_key = ?`, targetKey, nowText(), sourceKey); err != nil {
 		return err
 	}
@@ -493,4 +553,35 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// SetPartialMockActivation records or releases ownership without rewriting provider bindings.
+func (s *Store) SetPartialMockActivation(ctx context.Context, project, environment, name string, previous []model.ComponentBinding, enabled bool) error {
+	key, err := s.PrivateEnvironmentKey(ctx, project, environment)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mock_scenario_activations WHERE environment_key=? AND scenario_name=? COLLATE NOCASE`, key, name); err != nil {
+		return err
+	}
+	if enabled {
+		for _, binding := range previous {
+			data, err := json.Marshal(binding)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO mock_scenario_activations(environment_key,scenario_name,service_name,previous_binding_json,activated_at,unmatched_requests) VALUES(?,?,?,?,?,'forward')`, key, name, binding.Service, data, nowText()); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE mock_scenarios SET modified_at=? WHERE environment_key=? AND name=? COLLATE NOCASE`, nowText(), key, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

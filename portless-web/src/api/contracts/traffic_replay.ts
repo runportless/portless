@@ -34,6 +34,8 @@ export interface RunTrafficReplayRequest extends TrafficReplayIdentity {
 export interface TrafficReplayDestination {
   environment: string
   provider: string
+  mockScenario?: string
+  mockRoute?: string
   classification?: string
   writePolicy?: string
   url: string

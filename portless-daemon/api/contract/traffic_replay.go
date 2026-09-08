@@ -47,6 +47,8 @@ type RunTrafficReplayRequest struct {
 type TrafficReplayDestination struct {
 	Environment          string `json:"environment"`
 	Provider             string `json:"provider"`
+	MockScenario         string `json:"mockScenario,omitempty"`
+	MockRoute            string `json:"mockRoute,omitempty"`
 	Classification       string `json:"classification,omitempty"`
 	WritePolicy          string `json:"writePolicy,omitempty"`
 	URL                  string `json:"url"`

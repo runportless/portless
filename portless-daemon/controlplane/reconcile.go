@@ -147,6 +147,9 @@ func (s *Service) reconcileActiveEnvironment(ctx context.Context, environment mo
 }
 
 func (s *Service) reconcileActiveEnvironmentLocked(ctx context.Context, environment model.Environment) error {
+	if err := s.restorePartialMocks(ctx, environment); err != nil {
+		return err
+	}
 	scope := model.EnvironmentSelector(environment.Project, environment.Name)
 	if environment.Status != model.EnvironmentRecovering {
 		if err := s.database.SetEnvironmentStatus(ctx, environment.Project, environment.Name, model.EnvironmentRecovering, "runtime ownership is being verified"); err != nil {

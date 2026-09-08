@@ -92,8 +92,9 @@ type MockScenarioList struct {
 
 // CreateMockRequest creates an empty mock scenario.
 type CreateMockRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	UnmatchedRequests MockUnmatchedRequests `json:"unmatchedRequests,omitempty"`
+	Name              string                `json:"name"`
+	Description       string                `json:"description,omitempty"`
 }
 
 // MockScenarioMutation returns an updated scenario and non-fatal import warnings.

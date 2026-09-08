@@ -27,6 +27,8 @@ type replayAttempt struct {
 	manager                   *Manager
 	scope, source, targetName string
 	upstream                  target
+	decision                  routingDecision
+	routingRevision           uint64
 	provenance                model.TrafficReplay
 	ctx                       context.Context
 	cancel                    context.CancelFunc
@@ -42,31 +44,51 @@ type replayAttempt struct {
 	secrets                   []string
 }
 
-// ReplayTarget verifies the reviewed binding against the registered target and returns its private generation without contacting it.
-func (m *Manager) ReplayTarget(scope, service string, expected model.ComponentBinding) (uint64, error) {
+// ReplayTargetSnapshot identifies a routing revision and its safe request-specific destination.
+type ReplayTargetSnapshot struct {
+	Generation      uint64
+	RoutingRevision uint64
+	Provider        model.ProviderKind
+	MockScenario    string
+	MockRoute       string
+}
+
+// ReplayTarget verifies the real binding and predicts the request-specific destination without I/O.
+func (m *Manager) ReplayTarget(scope, service string, expected model.ComponentBinding, method, requestTarget string) (ReplayTargetSnapshot, error) {
+	parsed, err := url.ParseRequestURI(requestTarget)
+	if err != nil {
+		return ReplayTargetSnapshot{}, err
+	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	upstream, ok := m.targets[targetKey(scope, service)]
-	if !ok || m.closed.Load() {
-		return 0, errors.New("replay target is unavailable")
+	policy := m.partialMocks[targetKey(scope, service)]
+	revision := m.routingRevisions[targetKey(scope, service)]
+	closed := m.closed.Load()
+	m.mu.RUnlock()
+	if closed {
+		return ReplayTargetSnapshot{}, errors.New("replay manager is closed")
 	}
-	if upstream.provider != expected.Provider {
-		return 0, errors.New("replay target provider changed")
+	if ok && upstream.provider != expected.Provider {
+		return ReplayTargetSnapshot{}, errors.New("replay target provider changed")
 	}
-	if expected.Provider == model.ProviderRemote {
+	if ok && expected.Provider == model.ProviderRemote {
 		if expected.Remote == nil {
-			return 0, errors.New("replay remote policy is unavailable")
+			return ReplayTargetSnapshot{}, errors.New("replay remote policy is unavailable")
 		}
 		reviewed, err := buildRemoteTarget(*expected.Remote)
 		if err != nil || upstream.baseURL == nil || upstream.baseURL.String() != reviewed.baseURL.String() || upstream.classification != reviewed.classification || upstream.writePolicy != reviewed.writePolicy || upstream.healthPath != reviewed.healthPath {
-			return 0, errors.New("replay remote destination changed")
+			return ReplayTargetSnapshot{}, errors.New("replay remote destination changed")
 		}
 	}
-	return upstream.generation, nil
+	decision := decidePartial(upstream, ok, policy, service, method, parsed.Path, parsed.Query(), false)
+	if !decision.available || decision.guarded {
+		return ReplayTargetSnapshot{}, errors.New("replay target is unavailable")
+	}
+	return ReplayTargetSnapshot{Generation: upstream.generation, RoutingRevision: revision, Provider: decision.upstream.provider, MockScenario: decision.upstream.mockScenario, MockRoute: decision.upstream.mockRoute}, nil
 }
 
 // ReplayHTTP sends one bounded HTTP request through the selected logical edge and returns its retained exchange and dispatch outcome.
-func (m *Manager) ReplayHTTP(ctx context.Context, scope, source, targetName, method, requestTarget string, headers map[string][]string, body string, generation uint64, provenance model.TrafficReplay) (model.TrafficExchange, string, error) {
+func (m *Manager) ReplayHTTP(ctx context.Context, scope, source, targetName, method, requestTarget string, headers map[string][]string, body string, generation, routingRevision uint64, provenance model.TrafficReplay) (model.TrafficExchange, string, error) {
 	request, err := replayRequest(ctx, scope, targetName, method, requestTarget, headers, body)
 	if err != nil {
 		return model.TrafficExchange{}, "not-sent", err
@@ -76,7 +98,9 @@ func (m *Manager) ReplayHTTP(ctx context.Context, scope, source, targetName, met
 	attempt := &replayAttempt{manager: m, scope: scope, source: source, targetName: targetName, provenance: provenance, ctx: ctx, cancel: cancel, done: make(chan struct{}), secrets: replaySecrets(request.Header)}
 	m.mu.Lock()
 	upstream, ok := m.targets[targetKey(scope, targetName)]
-	if m.closed.Load() || !ok || generation == 0 || generation != upstream.generation || ctx.Err() != nil {
+	policy := m.partialMocks[targetKey(scope, targetName)]
+	decision := decidePartial(upstream, ok, policy, targetName, method, request.URL.Path, request.URL.Query(), false)
+	if m.closed.Load() || !decision.available || decision.guarded || generation != upstream.generation || routingRevision != m.routingRevisions[targetKey(scope, targetName)] || ctx.Err() != nil {
 		m.mu.Unlock()
 		return model.TrafficExchange{}, "not-sent", errors.New("replay destination changed or is unavailable")
 	}
@@ -87,7 +111,9 @@ func (m *Manager) ReplayHTTP(ctx context.Context, scope, source, targetName, met
 	if m.replayAttempts == nil {
 		m.replayAttempts = make(map[*replayAttempt]struct{})
 	}
-	attempt.upstream = upstream
+	attempt.upstream = decision.upstream
+	attempt.decision = decision
+	attempt.routingRevision = routingRevision
 	m.replayAttempts[attempt] = struct{}{}
 	m.mu.Unlock()
 	stop := context.AfterFunc(ctx, attempt.closeConnections)
@@ -230,7 +256,7 @@ func replayFrom(ctx context.Context) *replayAttempt {
 func (r *replayAttempt) check() error {
 	r.manager.mu.RLock()
 	current, ok := r.manager.targets[targetKey(r.scope, r.targetName)]
-	valid := ok && current.generation == r.upstream.generation && !r.manager.closed.Load()
+	valid := (ok || r.decision.response != nil) && current.generation == r.upstream.generation && r.routingRevision == r.manager.routingRevisions[targetKey(r.scope, r.targetName)] && !r.manager.closed.Load()
 	r.manager.mu.RUnlock()
 	if !valid || r.ctx.Err() != nil {
 		return errors.New("replay destination changed or request was canceled")

@@ -139,6 +139,8 @@ The CLI E2E suite protects these product contracts:
   including traffic attribution, local enforcement of its read-only write
   policy, and active local/remote provider handoffs that preserve unrelated
   service PIDs and generations;
+- partial HTTP scenarios preserving real process IDs, dependency paths, normal
+  daemon adoption, WebSocket sessions, and strict/forward preview decisions;
 - deterministic multi-service scenario and route creation, service-specific
   matcher preview, whole-scenario activation, mock traffic attribution,
   dependency short circuiting, peer-process preservation, and restoration of
@@ -191,7 +193,8 @@ The Playwright suite protects these browser journeys:
 - an Overview heading with environment identity and clone provenance kept out
   of the persistent header, no duplicate recording/fault/mock controls, and
   readable wrapping in focus mode and on narrow screens, plus sidebar badges
-  that count each active mock scenario once and show `1` only while recording,
+  that count each active full or partial mock scenario once across multiple services,
+  retain the count after reload or a mock-type change, and show `1` only while recording,
   disappearing when those activities end;
 - one shared red error notice for a failed environment start and its saved
   failure reason across all eight views, dismissal without a duplicate
@@ -250,7 +253,7 @@ The Playwright suite protects these browser journeys:
 - separate Request and Response route-configuration tabs with keyboard arrows,
   Home/End navigation, contextual fields in the active panel, retained edits across
   tabs, the editor remaining available alongside Preview, and complete-draft saves
-  from the shared footer; the footer appears only for edited drafts, disappears
+  from the shared footer; the footer appears for new routes and edited saved routes, disappears
   after save, discard, or manual reversion, and stays hidden for preview-only changes;
   fixed tabs and visible footer remain usable in both themes and narrow layouts;
 - mock request previews against unsaved new and existing routes in disabled
@@ -263,14 +266,15 @@ The Playwright suite protects these browser journeys:
   an unedited draft, preserved tested samples, explicit stale-result reruns,
   recoverable validation errors, cancellation when switching routes, and usable
   response panes in light/dark themes, focus mode, and narrow layouts;
-- Routes/Preview workspace tabs with keyboard arrows and Home/End; Preview hides
+- Edit/Preview workspace tabs with keyboard arrows and Home/End; Preview hides
   the route list and places the editor on the left and test request/response on
   the right, with retained selection, configuration tab, unsaved draft, request,
-  and result when returning to Routes and reopening Preview; disabled Preview
+  and result when returning to Edit and reopening Preview; disabled Preview
   for empty scenarios and usable layouts in both themes and narrow viewports;
-  a separate scenario back link and activation row above the prominent selected
-  route title and method/path, following selection and unsaved edits across views,
-  with long names and paths fitting the header without covering its controls;
+  a scenario title with its Mocks back link and an activation switch above joined
+  Full mock and Partial mock buttons; the selected route title and method/path share a toolbar with Edit
+  and Preview above the route list and editor, following selection and unsaved edits,
+  with long names and paths fitting without covering either toolbar's controls;
 - opening Preview from each route's ellipsis menu, selecting the correct route
   and retained draft, moving keyboard focus into Preview, and preserving the
   existing result when reopening the same route without automatically running it;
@@ -323,6 +327,21 @@ of an already admitted request after close, no workspace/expiry label, activity
 renewal across two hours, and cleanup after one idle hour using the browser clock.
 Daemon tests advance an injected clock to verify server idle retention and that
 receipt polling and activity never extend prepared credential retention.
+
+Mock workspace journeys verify that the shared route toolbar spans the route
+list and editor, that the sort/add controls align with the configuration tabs,
+and that the controls remain visible in both themes and narrow workspaces.
+New-route journeys also save and cancel untouched defaults from Edit and
+Preview, checking keyboard submission, persistence, and footer visibility.
+
+The partial-mock browser journey also switches enabled and disabled scenarios
+between full and partial mode using joined buttons below Enabled in the scenario header,
+verifies keyboard interaction, pressed state, and vertical placement at desktop and narrow widths
+in both themes, and checks real 501 versus
+forwarded responses, keeps the route list limited to saved routes, preserves
+unsaved route drafts, and checks persistence
+after reload. Control-plane tests cover both directions and failed handoffs
+restoring the old mode and original provider settings.
 
 ## WebSocket coverage
 

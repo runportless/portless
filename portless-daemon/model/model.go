@@ -323,7 +323,7 @@ type ComponentBinding struct {
 }
 
 // MockScenarioActivationState describes whether every service targeted by a
-// scenario is currently bound to it.
+// scenario is currently controlled by its selected policy.
 type MockScenarioActivationState string
 
 const (
@@ -345,16 +345,18 @@ type MockScenarioActivation struct {
 
 // MockScenario groups deterministic HTTP routes across environment services.
 type MockScenario struct {
-	RouteCount      int                    `json:"routeCount,omitempty"`
-	PayloadsOmitted bool                   `json:"payloadsOmitted,omitempty"`
-	Project         string                 `json:"project"`
-	Environment     string                 `json:"environment"`
-	Name            string                 `json:"name"`
-	Description     string                 `json:"description,omitempty"`
-	Routes          []MockRoute            `json:"routes"`
-	Activation      MockScenarioActivation `json:"activation"`
-	CreatedAt       time.Time              `json:"createdAt"`
-	ModifiedAt      time.Time              `json:"modifiedAt"`
+	UnmatchedRequests MockUnmatchedRequests  `json:"unmatchedRequests"`
+	Version           ResourceVersion        `json:"version"`
+	RouteCount        int                    `json:"routeCount,omitempty"`
+	PayloadsOmitted   bool                   `json:"payloadsOmitted,omitempty"`
+	Project           string                 `json:"project"`
+	Environment       string                 `json:"environment"`
+	Name              string                 `json:"name"`
+	Description       string                 `json:"description,omitempty"`
+	Routes            []MockRoute            `json:"routes"`
+	Activation        MockScenarioActivation `json:"activation"`
+	CreatedAt         time.Time              `json:"createdAt"`
+	ModifiedAt        time.Time              `json:"modifiedAt"`
 }
 
 // MockQueryMatcher requires a query parameter using equals, exists, or regex.
@@ -391,15 +393,45 @@ type MockRequest struct {
 	Body    string              `json:"body,omitempty"`
 }
 
-// MockPreview describes the route and fixed response selected for a request.
-type MockPreview struct {
-	Service string            `json:"service"`
-	Matched bool              `json:"matched"`
-	Route   string            `json:"route,omitempty"`
+// MockResponse is a fixed HTTP response produced by a mock route or rejection.
+type MockResponse struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
 	DelayMS int64             `json:"delayMs,omitempty"`
+}
+
+// MockDestination describes the public real provider selected by a preview.
+type MockDestination struct {
+	Provider       ProviderKind         `json:"provider"`
+	URL            string               `json:"url"`
+	Classification RemoteClassification `json:"classification,omitempty"`
+	WritePolicy    WritePolicy          `json:"writePolicy,omitempty"`
+}
+
+// MockBlockReason describes a local routing denial without contacting a provider.
+type MockBlockReason struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// MockPreview predicts a mocked, rejected, forward, or blocked outcome without I/O.
+// Response is present only for mocked/rejected; Destination only for forward;
+// Reason only for blocked. Route is present only for mocked.
+type MockPreview struct {
+	Service     string           `json:"service"`
+	Outcome     string           `json:"outcome"`
+	Route       string           `json:"route,omitempty"`
+	Response    *MockResponse    `json:"response,omitempty"`
+	Destination *MockDestination `json:"destination,omitempty"`
+	Reason      *MockBlockReason `json:"reason,omitempty"`
+}
+
+// ServiceMock describes scenario control independently from the real provider.
+type ServiceMock struct {
+	Scenario          string                      `json:"scenario"`
+	UnmatchedRequests MockUnmatchedRequests       `json:"unmatchedRequests"`
+	State             MockScenarioActivationState `json:"state"`
 }
 
 // ConfigurationIssue describes an invalid or incomplete environment setting.
@@ -460,6 +492,7 @@ type Environment struct {
 
 // Service combines a service definition with its current environment runtime state.
 type Service struct {
+	Mock *ServiceMock `json:"mock,omitempty"`
 	ServiceDefinition
 	LaunchMode    LaunchMode       `json:"launchMode"`
 	Debugger      *DebuggerRuntime `json:"debugger,omitempty"`
@@ -661,6 +694,7 @@ type TrafficExchange struct {
 	Target                string                    `json:"target"`
 	Background            bool                      `json:"background"`
 	TargetProvider        ProviderKind              `json:"targetProvider,omitempty"`
+	MockOutcome           string                    `json:"mockOutcome,omitempty"`
 	MockScenario          string                    `json:"mockScenario,omitempty"`
 	MockRoute             string                    `json:"mockRoute,omitempty"`
 	RemoteClassification  RemoteClassification      `json:"remoteClassification,omitempty"`

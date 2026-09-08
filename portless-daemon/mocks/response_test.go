@@ -36,7 +36,7 @@ func TestPreviewMatchesRuntimeResponseSemantics(t *testing.T) {
 			}
 			query := url.Values{"warehouse": {"central", "east"}}
 			preview, err := compiled.Preview(model.MockRequest{Service: "inventory", Method: test.requestMethod, Path: test.path, Query: query})
-			if err != nil || preview.Matched != test.matched {
+			if err != nil || (preview.Outcome == "mocked") != test.matched {
 				t.Fatalf("preview = %#v, %v", preview, err)
 			}
 			manager := NewManager()
@@ -56,22 +56,22 @@ func TestPreviewMatchesRuntimeResponseSemantics(t *testing.T) {
 			}
 			defer response.Body.Close()
 			body, err := io.ReadAll(response.Body)
-			if err != nil || response.StatusCode != preview.Status || string(body) != preview.Body {
-				t.Fatalf("runtime = %d %q, preview = %d %q, err = %v", response.StatusCode, body, preview.Status, preview.Body, err)
+			if err != nil || response.StatusCode != preview.Response.Status || string(body) != preview.Response.Body {
+				t.Fatalf("runtime = %d %q, preview = %d %q, err = %v", response.StatusCode, body, preview.Response.Status, preview.Response.Body, err)
 			}
-			for name, value := range preview.Headers {
+			for name, value := range preview.Response.Headers {
 				if got := response.Header.Get(name); got != value {
 					t.Errorf("%s = %q, preview = %q", name, got, value)
 				}
 			}
-			if preview.Headers[ScenarioHeader] != scenario.Name || (test.matched && preview.Headers[RouteHeader] != "lookup") {
-				t.Fatalf("mock-owned headers = %#v", preview.Headers)
+			if preview.Response.Headers[ScenarioHeader] != scenario.Name || (test.matched && preview.Response.Headers[RouteHeader] != "lookup") {
+				t.Fatalf("mock-owned headers = %#v", preview.Response.Headers)
 			}
-			if test.status == http.StatusNotModified && preview.Headers["Content-Type"] != "" {
-				t.Fatalf("304 preview retained Content-Type: %#v", preview.Headers)
+			if test.status == http.StatusNotModified && preview.Response.Headers["Content-Type"] != "" {
+				t.Fatalf("304 preview retained Content-Type: %#v", preview.Response.Headers)
 			}
-			if !test.matched && test.requestMethod != http.MethodHead && !strings.Contains(preview.Body, "MOCK_ROUTE_NOT_MATCHED") {
-				t.Fatalf("unmatched preview omitted structured error: %q", preview.Body)
+			if !test.matched && test.requestMethod != http.MethodHead && !strings.Contains(preview.Response.Body, "MOCK_ROUTE_NOT_MATCHED") {
+				t.Fatalf("unmatched preview omitted structured error: %q", preview.Response.Body)
 			}
 		})
 	}
@@ -89,7 +89,7 @@ func TestPreviewReportsDelayWithoutWaiting(t *testing.T) {
 	}()
 	select {
 	case preview := <-result:
-		if preview.DelayMS != 300_000 || !preview.Matched {
+		if preview.Response.DelayMS != 300_000 || preview.Outcome != "mocked" {
 			t.Fatalf("delay preview = %#v", preview)
 		}
 	case <-time.After(time.Second):

@@ -19,12 +19,32 @@ var errMockScenarioConflict = errors.New("mock scenario state conflict")
 
 // MockScenarios lists the mock scenarios owned by one environment.
 func (s *Service) MockScenarios(ctx context.Context, project, environment string) ([]model.MockScenario, error) {
-	return s.database.MockScenarios(ctx, project, environment)
+	items, err := s.database.MockScenarios(ctx, project, environment)
+	if err != nil {
+		return nil, err
+	}
+	current, err := s.database.Environment(ctx, project, environment)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].Activation = s.projectMockActivation(model.EnvironmentSelector(project, environment), items[i].Name, items[i].UnmatchedRequests, current.Status, items[i].Activation)
+	}
+	return items, nil
 }
 
 // MockScenario returns one environment-scoped mock scenario.
 func (s *Service) MockScenario(ctx context.Context, project, environment, name string) (model.MockScenario, error) {
-	return s.database.MockScenario(ctx, project, environment, name)
+	item, err := s.database.MockScenario(ctx, project, environment, name)
+	if err != nil {
+		return item, err
+	}
+	current, err := s.database.Environment(ctx, project, environment)
+	if err != nil {
+		return item, err
+	}
+	item.Activation = s.projectMockActivation(model.EnvironmentSelector(project, environment), item.Name, item.UnmatchedRequests, current.Status, item.Activation)
+	return item, nil
 }
 
 // CreateMockScenario creates an empty environment-scoped HTTP mock scenario.
@@ -318,7 +338,14 @@ func (s *Service) PreviewMock(ctx context.Context, project, environment, scenari
 	if err != nil {
 		return model.MockPreview{}, err
 	}
-	return compiled.Preview(request)
+	if !containsMockService(scenario.Routes, request.Service) {
+		return model.MockPreview{}, errors.New("preview service must be targeted by the scenario or draft")
+	}
+	preview, err := compiled.Preview(request)
+	if err != nil {
+		return preview, err
+	}
+	return s.mockPreviewDestination(ctx, project, environment, scenario.Name, request, preview)
 }
 
 func (s *Service) activateMock(ctx context.Context, scope string, binding model.ComponentBinding, runtime model.Service) error {
@@ -338,6 +365,7 @@ func (s *Service) activateMock(ctx context.Context, scope string, binding model.
 		return err
 	}
 	s.proxy.SetTargetProvider(scope, binding.Service, port, model.ProviderMock)
+	s.proxy.InvalidateMockRouting(scope, binding.Service)
 	now := time.Now().UTC()
 	return s.database.SetServiceRuntime(ctx, scope, binding.Service, database.ServiceRuntimeUpdate{
 		Status: model.ServiceReady, Reason: "mock scenario " + scenario.Name,
@@ -347,6 +375,16 @@ func (s *Service) activateMock(ctx context.Context, scope string, binding model.
 }
 
 func (s *Service) refreshActiveMockScenario(ctx context.Context, scenario model.MockScenario) error {
+	if scenario.UnmatchedRequests == model.MockUnmatchedForward {
+		if scenario.Activation.State == model.MockScenarioDisabled {
+			return nil
+		}
+		compiled, err := mocks.Compile(scenario)
+		if err != nil {
+			return err
+		}
+		return s.proxy.SetPartialMock(model.EnvironmentSelector(scenario.Project, scenario.Environment), scenario.Name, scenario.Activation.TargetServices, compiled)
+	}
 	environment, err := s.database.Environment(ctx, scenario.Project, scenario.Environment)
 	if err != nil {
 		return err

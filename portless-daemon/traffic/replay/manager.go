@@ -28,16 +28,17 @@ const (
 
 // Target binds public destination policy to an immutable private proxy generation and topology version.
 type Target struct {
-	Destination contract.TrafficReplayDestination
-	Generation  uint64
-	Version     string
+	Destination     contract.TrafficReplayDestination
+	Generation      uint64
+	RoutingRevision uint64
+	Version         string
 }
 
 // Resolver validates one logical edge and returns its current destination without application I/O.
-type Resolver func(context.Context, string, string, string, string) (Target, error)
+type Resolver func(context.Context, string, string, string, string, string, string) (Target, error)
 
 // Executor executes one admitted request through its source-aware proxy and returns the exact safe exchange and dispatch outcome.
-type Executor func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, model.TrafficReplay) (model.TrafficExchange, string, error)
+type Executor func(context.Context, string, string, string, contract.TrafficReplayDraft, uint64, uint64, model.TrafficReplay) (model.TrafficExchange, string, error)
 
 type workspaceKey struct {
 	project, environment string
@@ -343,7 +344,7 @@ func (m *Manager) Update(ctx context.Context, project, origin string, number int
 	if m.resolver == nil {
 		return contract.TrafficReplayWorkspace{}, failure("replay_unavailable", "Replay destination resolution is unavailable.", 503)
 	}
-	target, err := m.resolver(ctx, project, draft.Environment, baseline.Source, baseline.Target)
+	target, err := m.resolver(ctx, project, draft.Environment, baseline.Source, baseline.Target, draft.Method, draft.RequestTarget)
 	if err != nil {
 		return contract.TrafficReplayWorkspace{}, safeFailure(err, "The destination is unavailable for replay.")
 	}
@@ -424,12 +425,12 @@ func (m *Manager) Run(ctx context.Context, project, origin string, number int64,
 	draft := cloneDraft(*w.runtime)
 	baseline := cloneExchange(*w.value.Baseline)
 	m.mu.Unlock()
-	current, err := m.resolver(ctx, project, draft.Environment, baseline.Source, baseline.Target)
+	current, err := m.resolver(ctx, project, draft.Environment, baseline.Source, baseline.Target, draft.Method, draft.RequestTarget)
 	if err != nil {
 		return contract.TrafficReplayWorkspace{}, safeFailure(err, "The destination is no longer available for replay.")
 	}
 	current.Destination.RequiresConfirmation = target.Destination.RequiresConfirmation
-	if current.Generation != target.Generation || current.Version != target.Version || current.Destination != target.Destination {
+	if current.Generation != target.Generation || current.RoutingRevision != target.RoutingRevision || current.Version != target.Version || current.Destination != target.Destination {
 		return contract.TrafficReplayWorkspace{}, failure("replay_destination_changed", "The destination changed; prepare and review this request again.", 409)
 	}
 	m.mu.Lock()
@@ -507,7 +508,7 @@ func (m *Manager) execute(ctx context.Context, cancel context.CancelFunc, key wo
 	defer m.workers.Done()
 	defer cancel()
 	provenance := model.TrafficReplay{Project: key.project, Environment: key.environment, Sequence: baseline.Sequence, StartedAt: baseline.StartedAt, Workspace: key.number, Run: run.Number}
-	exchange, outcome, err := m.executor(ctx, key.project+"/"+draft.Environment, baseline.Source, baseline.Target, draft, target.Generation, provenance)
+	exchange, outcome, err := m.executor(ctx, key.project+"/"+draft.Environment, baseline.Source, baseline.Target, draft, target.Generation, target.RoutingRevision, provenance)
 	if outcome != "not-sent" && outcome != "response-received" && outcome != "unknown" {
 		outcome = "unknown"
 	}

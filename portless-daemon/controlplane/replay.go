@@ -60,7 +60,7 @@ func (s *Service) TouchTrafficReplay(project, environment string, number int64, 
 	return s.replays.Touch(project, environment, number, expected)
 }
 
-func (s *Service) resolveReplayTarget(ctx context.Context, project, environment, source, target string) (replay.Target, error) {
+func (s *Service) resolveReplayTarget(ctx context.Context, project, environment, source, target, method, requestTarget string) (replay.Target, error) {
 	if model.ValidateProjectName(project) != nil || model.ValidateEnvironmentName(environment) != nil {
 		return replay.Target{}, &replay.Error{Status: http.StatusBadRequest, Code: "INVALID_REPLAY_DESTINATION", Message: "select an environment in the original project"}
 	}
@@ -69,7 +69,7 @@ func (s *Service) resolveReplayTarget(ctx context.Context, project, environment,
 		return replay.Target{}, &replay.Error{Status: http.StatusNotFound, Code: "REPLAY_DESTINATION_UNAVAILABLE", Message: "the selected environment is unavailable"}
 	}
 	service := runtimeFor(current, target)
-	if service.Kind != model.ServiceProcess || service.Status != model.ServiceReady {
+	if service.Kind != model.ServiceProcess || service.Status == model.ServiceStopped || service.Status == model.ServicePlanned {
 		return replay.Target{}, &replay.Error{Status: http.StatusConflict, Code: "REPLAY_DESTINATION_UNAVAILABLE", Message: "the target HTTP service must be ready before replay"}
 	}
 	if current.Status == model.EnvironmentStopping || current.Status == model.EnvironmentRecovering {
@@ -93,9 +93,20 @@ func (s *Service) resolveReplayTarget(ctx context.Context, project, environment,
 		destination.Classification = string(binding.Remote.Classification)
 		destination.WritePolicy = string(binding.Remote.WritePolicy)
 	}
-	generation, err := s.proxy.ReplayTarget(model.EnvironmentSelector(project, environment), target, binding)
+	selected, err := s.proxy.ReplayTarget(model.EnvironmentSelector(project, environment), target, binding, method, requestTarget)
 	if err != nil {
 		return replay.Target{}, &replay.Error{Status: http.StatusConflict, Code: "REPLAY_DESTINATION_UNAVAILABLE", Message: "the selected service endpoint is not available"}
+	}
+	if service.Status != model.ServiceReady && selected.Provider != model.ProviderMock {
+		return replay.Target{}, &replay.Error{Status: http.StatusConflict, Code: "REPLAY_DESTINATION_UNAVAILABLE", Message: "the target HTTP service must be ready before forwarding a replay"}
+	}
+	destination.Provider = string(selected.Provider)
+	destination.MockScenario, destination.MockRoute = selected.MockScenario, selected.MockRoute
+	if selected.Provider == model.ProviderMock {
+		destination.Classification, destination.WritePolicy = "", ""
+		if binding.Mock != nil {
+			destination.MockScenario = binding.Mock.Scenario
+		}
 	}
 	versionData, err := json.Marshal(struct {
 		Revision    int64
@@ -106,9 +117,9 @@ func (s *Service) resolveReplayTarget(ctx context.Context, project, environment,
 		return replay.Target{}, &replay.Error{Status: http.StatusServiceUnavailable, Code: "REPLAY_DESTINATION_UNAVAILABLE", Message: "the selected service configuration could not be verified"}
 	}
 	version := sha256.Sum256(versionData)
-	return replay.Target{Destination: destination, Generation: generation, Version: hex.EncodeToString(version[:])}, nil
+	return replay.Target{Destination: destination, Generation: selected.Generation, RoutingRevision: selected.RoutingRevision, Version: hex.EncodeToString(version[:])}, nil
 }
 
-func (s *Service) executeReplay(ctx context.Context, scope, source, target string, draft contract.TrafficReplayDraft, generation uint64, provenance model.TrafficReplay) (model.TrafficExchange, string, error) {
-	return s.proxy.ReplayHTTP(ctx, scope, source, target, draft.Method, draft.RequestTarget, draft.Headers, draft.Body, generation, provenance)
+func (s *Service) executeReplay(ctx context.Context, scope, source, target string, draft contract.TrafficReplayDraft, generation, routingRevision uint64, provenance model.TrafficReplay) (model.TrafficExchange, string, error) {
+	return s.proxy.ReplayHTTP(ctx, scope, source, target, draft.Method, draft.RequestTarget, draft.Headers, draft.Body, generation, routingRevision, provenance)
 }

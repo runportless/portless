@@ -13,7 +13,7 @@ func (s *Service) RecordingExportChunk(ctx context.Context, project, environment
 	if err != nil {
 		return contract.RecordingExportChunk{}, err
 	}
-	return contract.RecordingExportChunk{SchemaVersion: 4, Snapshot: chunk.Snapshot, Data: base64.StdEncoding.EncodeToString(chunk.Bytes), NextCursor: chunk.NextCursor, Complete: chunk.Complete}, nil
+	return contract.RecordingExportChunk{SchemaVersion: 5, Snapshot: chunk.Snapshot, Data: base64.StdEncoding.EncodeToString(chunk.Bytes), NextCursor: chunk.NextCursor, Complete: chunk.Complete}, nil
 }
 
 // WriteRecordingExport streams a complete retained snapshot without accumulating its payloads.

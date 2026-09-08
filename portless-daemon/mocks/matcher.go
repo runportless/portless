@@ -53,6 +53,12 @@ type CompiledScenario struct {
 
 // Compile validates a scenario and orders its routes by deterministic specificity.
 func Compile(scenario model.MockScenario) (*CompiledScenario, error) {
+	if scenario.UnmatchedRequests == "" {
+		scenario.UnmatchedRequests = model.MockUnmatchedReject
+	}
+	if err := scenario.UnmatchedRequests.Validate(); err != nil {
+		return nil, err
+	}
 	if err := model.ValidateArtifactName(scenario.Name); err != nil {
 		return nil, fmt.Errorf("invalid mock scenario name: %w", err)
 	}
@@ -185,7 +191,14 @@ func (c *CompiledScenario) Preview(request model.MockRequest) (model.MockPreview
 		// net/http removes Content-Type when writing a 304 response.
 		delete(result.Headers, "Content-Type")
 	}
-	return result, nil
+	preview := model.MockPreview{Service: request.Service, Outcome: "rejected", Response: &result.MockResponse}
+	if result.Matched {
+		preview.Outcome, preview.Route = "mocked", result.Route
+	}
+	if !result.Matched && c.scenario.UnmatchedRequests == model.MockUnmatchedForward {
+		preview.Outcome, preview.Response = "forward", nil
+	}
+	return preview, nil
 }
 
 func validatePreviewRequest(request model.MockRequest) error {

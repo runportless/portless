@@ -23,9 +23,9 @@ func TestPreviewCommandUsesSavedScenarioEnvelopeAndPreservesOutput(t *testing.T)
 		response   string
 		output     string
 	}{
-		{name: "matched", response: `{"service":"checkout","matched":true,"route":"create-order","status":201,"body":"created","delayMs":25}`, output: "matched create-order for checkout · 201 · 25ms delay\n\ncreated\n"},
-		{name: "unmatched", response: `{"service":"checkout","matched":false,"status":501}`, output: "no checkout route matched; the mock would return 501\n"},
-		{name: "json", jsonOutput: true, response: `{"service":"checkout","matched":true,"route":"create-order","status":201,"headers":{"X-Portless-Mock":"checkout-empty"},"body":"created","delayMs":25}`},
+		{name: "matched", response: `{"service":"checkout","route":"create-order","outcome":"mocked","response":{"status":201,"body":"created","delayMs":25}}`, output: "matched create-order for checkout · 201 · 25ms delay\n\ncreated\n"},
+		{name: "unmatched", response: `{"service":"checkout","outcome":"rejected","response":{"status":501}}`, output: "no checkout route matched; the mock would return 501\n"},
+		{name: "json", jsonOutput: true, response: `{"service":"checkout","route":"create-order","outcome":"mocked","response":{"status":201,"headers":{"X-Portless-Mock":"checkout-empty"},"body":"created","delayMs":25}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var previewCalls int

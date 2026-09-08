@@ -400,6 +400,9 @@ func (s *Service) Environments(ctx context.Context, projectName string) ([]model
 			definitions[environments[index].Project] = definition
 		}
 		environments[index].Issues = compiler.Compile(definition, environments[index].Sources, environments[index].Bindings).Issues
+		if err := s.populateEnvironmentMocks(ctx, &environments[index]); err != nil {
+			return nil, err
+		}
 		environments[index] = s.decorateEnvironment(environments[index])
 	}
 	return environments, nil
@@ -414,6 +417,9 @@ func (s *Service) Environment(ctx context.Context, projectName, environmentName 
 	projectDefinition, definitionErr := s.database.ProjectModel(ctx, projectName)
 	if definitionErr == nil {
 		environment.Issues = compiler.Compile(projectDefinition, environment.Sources, environment.Bindings).Issues
+	}
+	if err := s.populateEnvironmentMocks(ctx, &environment); err != nil {
+		return model.Environment{}, err
 	}
 	return s.decorateEnvironment(environment), nil
 }

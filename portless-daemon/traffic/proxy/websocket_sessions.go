@@ -71,7 +71,17 @@ func (m *Manager) admitWebSocket(ctx context.Context, scope, source, service str
 	if current, scoped := ctx.Value(websocketEdgeContextKey{}).(*edge); scoped && m.edges[edgeKey(scope, source, service)] != current {
 		return configured, nil, &websocketFailure{http.StatusServiceUnavailable, "WebSocket edge is stopping"}
 	}
+	if policy, ok := m.partialMocks[targetKey(scope, service)]; ok && policy.admitted {
+		configured.mockScenario, configured.mockOutcome = policy.scenario, "forwarded"
+		if policy.compiled == nil {
+			configured.mockOutcome = "blocked"
+			return configured, nil, &websocketFailure{http.StatusServiceUnavailable, "partial mock policy is unavailable"}
+		}
+	}
 	if configured.provider == model.ProviderRemote && configured.writePolicy != model.WriteReadWrite {
+		if configured.mockScenario != "" {
+			configured.mockOutcome = "blocked"
+		}
 		return configured, nil, &websocketFailure{http.StatusForbidden, "remote target is read-only"}
 	}
 	if configured.provider == model.ProviderMock {
@@ -155,6 +165,10 @@ func (m *Manager) setTarget(scope, service string, configured target) bool {
 		replays = m.invalidateReplaysLocked(scope, service)
 	}
 	m.targets[key] = configured
+	if policy, ok := m.partialMocks[key]; ok {
+		policy.admitted = true
+		m.partialMocks[key] = policy
+	}
 	m.mu.Unlock()
 	closeWebSockets(closing)
 	closeReplays(replays)

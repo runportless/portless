@@ -4,14 +4,16 @@ import "time"
 
 // MockScenarioMetadata describes a scenario without loading its saved responses.
 type MockScenarioMetadata struct {
-	Project     string                 `json:"project"`
-	Environment string                 `json:"environment"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	CreatedAt   time.Time              `json:"createdAt"`
-	ModifiedAt  time.Time              `json:"modifiedAt"`
-	Activation  MockScenarioActivation `json:"activation"`
-	RouteCount  int                    `json:"routeCount"`
+	UnmatchedRequests MockUnmatchedRequests  `json:"unmatchedRequests"`
+	Version           ResourceVersion        `json:"version"`
+	Project           string                 `json:"project"`
+	Environment       string                 `json:"environment"`
+	Name              string                 `json:"name"`
+	Description       string                 `json:"description,omitempty"`
+	CreatedAt         time.Time              `json:"createdAt"`
+	ModifiedAt        time.Time              `json:"modifiedAt"`
+	Activation        MockScenarioActivation `json:"activation"`
+	RouteCount        int                    `json:"routeCount"`
 }
 
 // MockRouteMetadata describes matching structure without saved application data.

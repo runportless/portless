@@ -341,6 +341,18 @@ describe('TrafficDetail', () => {
     expect(inactive).not.toContain('>none<')
   })
 
+  it.each(['mocked', 'forwarded', 'blocked', 'rejected'] as const)('labels the actual %s mock outcome', (mockOutcome) => {
+    const markup = renderToStaticMarkup(createElement(TrafficDetail, {
+      exchange: { ...exchange, mockOutcome, mockRoute: mockOutcome === 'mocked' ? 'reject-order' : undefined, targetProvider: mockOutcome === 'forwarded' || mockOutcome === 'blocked' ? 'local' : 'mock' },
+      onClose: () => undefined,
+    }))
+    expect(markup).toContain(`<b>${mockOutcome.toUpperCase()}</b>`)
+    if (mockOutcome === 'forwarded') {
+      expect(markup).not.toContain('>MOCKED<')
+      expect(markup).toContain('orders · local')
+    }
+  })
+
   it('colors valid JSON media types and leaves malformed JSON unstyled', () => {
     const json = {
       ...exchange,

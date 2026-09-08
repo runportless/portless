@@ -18,7 +18,10 @@ func (s *Service) SetMockScenarioEnabled(ctx context.Context, project, environme
 	if s.resetting {
 		return model.Operation{}, errors.New("Portless reset preparation is in progress")
 	}
-	scenario, err := s.database.MockScenario(ctx, project, environment, name)
+	lock := s.projectLock(model.EnvironmentSelector(project, environment))
+	lock.Lock()
+	defer lock.Unlock()
+	scenario, err := s.MockScenario(ctx, project, environment, name)
 	if err != nil {
 		return model.Operation{}, err
 	}
@@ -51,8 +54,12 @@ func (s *Service) runMockScenarioActivation(scope string, operation model.Operat
 	defer lock.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	s.runMockScenarioActivationLocked(ctx, scope, operation, scenarioName, enabled)
+}
+
+func (s *Service) runMockScenarioActivationLocked(ctx context.Context, scope string, operation model.Operation, scenarioName string, enabled bool) {
 	project, environmentName := scopeNames(scope)
-	scenario, err := s.database.MockScenario(ctx, project, environmentName, scenarioName)
+	scenario, err := s.MockScenario(ctx, project, environmentName, scenarioName)
 	if err != nil {
 		s.failMockScenarioActivation(scope, operation, scenarioName, err)
 		return
@@ -69,9 +76,11 @@ func (s *Service) runMockScenarioActivation(scope string, operation model.Operat
 		s.failMockScenarioActivation(scope, operation, scenarioName, errors.New("add at least one route before enabling the mock scenario"))
 		return
 	}
-	if _, err := mocks.Compile(scenario); err != nil {
-		s.failMockScenarioActivation(scope, operation, scenarioName, err)
-		return
+	if enabled {
+		if _, err := mocks.Compile(scenario); err != nil {
+			s.failMockScenarioActivation(scope, operation, scenarioName, err)
+			return
+		}
 	}
 	environment, err := s.database.Environment(ctx, project, environmentName)
 	if err != nil {
@@ -80,6 +89,10 @@ func (s *Service) runMockScenarioActivation(scope string, operation model.Operat
 	}
 	if environment.Status == model.EnvironmentStarting || environment.Status == model.EnvironmentStopping || environment.Status == model.EnvironmentRecovering || environment.Status == model.EnvironmentUnknown {
 		s.failMockScenarioActivation(scope, operation, scenarioName, fmt.Errorf("environment is %s; wait for the current lifecycle transition", environment.Status))
+		return
+	}
+	if scenario.UnmatchedRequests == model.MockUnmatchedForward {
+		s.runPartialMockActivation(ctx, scope, operation, scenario, environment, enabled)
 		return
 	}
 	previous := []model.ComponentBinding{}

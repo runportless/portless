@@ -1,6 +1,19 @@
 # Partial HTTP mocks
 
-Status: proposed implementation plan, 2026-09-07. Implementation has not started.
+Status: implemented with an editable full/partial dropdown and tracked provider handoffs, 2026-09-07.
+Full/partial type can be switched in the scenario editor. The Mock type setting
+describes unmatched-request behavior, and the route list contains only saved
+routes.
+
+Validation passed: focused Go and architecture checks, `make lint`, `make test`
+(477 web tests plus all Go tests and the site checks), and both partial-mock
+browser journeys. Those journeys cover enabled and disabled mode changes,
+real forwarding versus 501 responses, route/draft preservation, and reloads.
+Both themes were visually checked. The complete executable and tracked web
+assets were rebuilt; the normal daemon restart completed in 1,676 ms and
+preserved all eight running service identities across `chat/local` and
+`store/local`. The running daemon reports API 20.1.0 and serves the matching
+built bundle. Machine-destructive relay suites were not run.
 
 ## Outcome
 
@@ -20,13 +33,13 @@ daemon, persistence, API, CLI, MCP, browser, preview, traffic, and recovery chan
 | Decision | Contract |
 | --- | --- |
 | Configuration | One `unmatchedRequests` policy per scenario: `reject` or `forward`. |
-| Default | `reject`, displayed as **Return 501**. |
-| Partial mode | `forward`, displayed as **Forward to service**. |
+| Default | `reject`, displayed as **Full mock**; unmatched requests return 501. |
+| Partial mode | `forward`, displayed as **Partial mock**; unmatched requests forward to the service. |
 | Scope | All services targeted by that scenario use its policy. |
 | Provider support | Existing HTTP application services backed by local processes or classified remote HTTP(S) providers. Managed database/broker resources remain ineligible. |
 | Coverage | The target set continues to include services from disabled routes. |
 | Ownership | At most one enabled scenario per service, across both policies. No scenario stacking or priority rules. |
-| Editing policy | Change policy only while the scenario is disabled and no activation is pending. |
+| Editing policy | Switch full/partial mode through a durable operation; preserve routes and enabled state and attempt rollback on failure. |
 | Editing routes | Preserve existing live response edits, route renames, and route toggles. Changes to the target service set still require disabling first. |
 | Unavailable upstream | An unmatched forwarded request returns the normal unavailable/upstream error. It does not start a process or change providers. |
 | Matched failure | A matched 4xx/5xx, delay, cancellation, or response-writing failure never triggers forwarding. |
@@ -72,7 +85,7 @@ The current behavior is deliberate and spans more than the unmatched response:
 | `portless-daemon/api/contract`, `client`, `server` | Own the wire changes, typed calls, and injected adapters. |
 | `portless-cli/mocks` | Creation/configuration commands, concise inspection, preview output, completion, and JSON. |
 | `portless-mcp` | Configuration and inspection parity through the typed client and existing capability gates. |
-| `portless-web/src/features/mocks` | Scenario settings, mode presentation, and preview outcomes. |
+| `portless-web/src/features/mocks` | Scenario creation, route editing, mode presentation, and preview outcomes. |
 | Web environment/traffic features | Accurate service badges, provider details, and exchange attribution. |
 
 Keep these existing package boundaries. The proxy already imports the mock
@@ -204,11 +217,10 @@ flowchart TD
    constraint across both modes. Keep the exact baseline binding private.
    In strict mode it is restored; in forward mode it is checked for unexpected
    drift and is never reapplied merely to disable the scenario.
-5. Validate policy edits and resource versions in the same transaction as the
-   update. Update `modifiedAt`; invalidate metadata continuation and stale
-   previews. Reject invalid policy values instead of silently defaulting them.
-6. A change from strict to forward or the reverse requires a fully disabled
-   scenario. The user disables, changes the setting, then enables normally.
+5. Validate the policy at creation and reject invalid explicit values. Return
+   resource versions for inspection and existing conditional resource mutations.
+6. The full/partial type never changes after creation. Route edits, imports,
+   activation, and cloning preserve the selected default behavior.
 
 ### Policy-aware activation projection
 
@@ -299,9 +311,8 @@ Audit [execution](../../portless-daemon/controlplane/execution.go),
 ## HTTP and event contracts
 
 Implement contract types first, then typed client, server adapters, and consumers.
-The current HTTP version is `18.0.0`; target `19.0.0` because preview becomes a
-discriminated result and activation inspection semantics broaden. Confirm the
-next version against the checkout before implementation.
+API `20.1.0` adds the durable scenario policy operation to the preview union,
+partial activation semantics, creation policy, and inspection fields.
 
 ### Scenario configuration
 
@@ -310,28 +321,13 @@ Add `unmatchedRequests` to `MockScenario`, `MockScenarioMetadata`, and
 empty, or null values are validation failures. Use a presence-aware input type
 so omission and an invalid explicit value are distinguishable.
 
-Add a typed `UpdateMockScenario` client operation for:
-
-```text
-PATCH /api/v1/environments/{project}/{environment}/mocks/{scenario}
-```
-
-```json
-{ "unmatchedRequests": "forward" }
-```
-
-The update changes only this setting and returns the saved scenario. Require
-the scenario to be disabled, validate unknown fields, and use the existing
-`ResourceVersion`/`If-Match` mechanism for stale updates. Return a safe current
-resource version with scenario detail/metadata so every consumer can construct
-the typed conditional update without invoking a deletion-preview endpoint.
-Repeated intent after a lost response is resolved by reading the current
-scenario; a stale precondition does not overwrite a newer change.
-
-Update injected server capabilities, structured error mapping, API permission
-classification, and metadata redaction. Saving a disabled scenario's policy
-uses existing mock-authoring capability; activation retains the existing
-additional lifecycle capability requirement.
+Change the scenario type with `PUT /mocks/{scenarioName}/policy`, requiring
+`unmatchedRequests` and returning a tracked operation. The typed client, CLI
+configure command, browser switch, and MCP policy tool share this operation.
+An enabled scenario is disabled, updated, and re-enabled under one environment
+lock. Failure attempts to restore the original mode and enabled state. Routes
+and scenario identity remain intact. Degraded scenarios require disabling first.
+MCP policy changes require traffic control plus lifecycle capabilities.
 
 ### Preview outcomes
 
@@ -371,14 +367,15 @@ For example:
   opening a session; strict mode reports its existing unsupported behavior.
 - Keep no side effects: no application request, health check, process start,
   persistence, fault match-count increment, traffic, recording, or timeline.
-- Mark results outdated when the scenario policy, relevant provider
-  configuration, route/draft, or sample request changes. Preserve existing
+- Mark results outdated when relevant provider configuration, saved routes,
+  route drafts, or sample requests change. Preserve existing
   cancellation and late-result protection.
 
 ### Events and versions
 
 - Extend `mock.state` with the policy and the same activation projection used
-  by inspection. Use a `mock.updated` timeline entry for policy edits.
+  by inspection. Policy changes emit `mock.updated` and `mock.state`; clients
+  follow the tracked operation to completion and refresh the scenario.
 - Update environment/service events with safe mock context, and retain
   `operation.state` for activation progress.
 - Update OpenAPI schemas/examples, event documentation, wire fixtures, and all
@@ -439,7 +436,7 @@ only in the final HTTP handler:
    that will actually be forwarded. A local matched mock response needs no
    remote-write confirmation, even when its base provider is remote.
 4. Revalidate the reviewed decision before dispatch. Scenario enable/disable,
-   route changes/renames, policy changes, or provider changes invalidate stale
+   route changes/renames, or provider changes invalidate stale
    preparation; return the existing stale-destination workflow and prepare
    again. Never turn a reviewed mock response into an unreviewed remote write.
 5. Once admitted, use the captured decision for that run and preserve existing
@@ -453,17 +450,19 @@ only in the final HTTP handler:
 
 ### Browser
 
-- Add **Unmatched requests** to Create Mock Scenario, defaulting to **Return
-  501**. Explain **Forward to service** as keeping the configured service
-  running and forwarding requests without a matching enabled route.
-- Add the same saved setting beside the scenario's existing activation row.
-  It applies independently of route drafts and persists immediately while
-  disabled. Lock it during a request/operation or while enabled/degraded;
-  show concise disable-first guidance. Failures use `ActionErrorNotice` and
-  preserve the last saved setting.
-- Show **Partial** or **Strict** beside the scenario name with an accessible
-  explanation. Keep Scenario A–Z as the table default and preserve row order
-  through all lifecycle changes.
+- Add **Mock type** to creation: **Full mock** (default, reject) or **Partial
+  mock** (forward). Allow changing it later in the scenario editor.
+- Make the scenario name the main editor title, with a Mocks back link above it.
+  Place the activation switch on the right, with joined **Full mock** and
+  **Partial mock** buttons below it. Keep both choices visible, highlight the
+  current type, and show unmatched-request help on hover. Apply
+  immediately, show pending state, block conflicting edits, preserve route drafts,
+  and refresh the mode description and previews after completion. List only
+  saved routes in the route browser; show unmatched-request behavior with the
+  Mock type setting. Keep selected-route identity and Edit/Preview tabs in a
+  shared toolbar directly above the route list and editor.
+- Show **Partial** or **Full** beside the scenario name. Keep Scenario A–Z as
+  the table default and preserve row order through lifecycle changes.
 - Use the safe service mock context for topology, Overview, and the service
   drawer. A partially mocked service still displays its real provider, real
   process/debug controls, actual health, and visible/copyable public endpoint.
@@ -471,7 +470,7 @@ only in the final HTTP handler:
 - Update preview response rendering for all four outcomes. Forward/blocked
   results have no fabricated response body, status, or empty response tabs.
 - Preserve both themes, keyboard focus, focus mode, narrow layouts, and
-  existing route-draft retention. Invalidate preview results on policy changes.
+  existing route-draft retention. Keep the fixed default behavior through route edits.
 
 ### CLI
 
@@ -479,14 +478,12 @@ Use the current `portless-cli/mocks` ownership and typed daemon client:
 
 ```bash
 portless mock create inventory-test --unmatched-requests forward
-portless mock configure inventory-test --unmatched-requests reject
 portless mock show inventory-test
 portless mock preview inventory-test --service inventory --path /health
 ```
 
-- Add the validated flag to create and a `mock configure` command for the
-  disabled-scenario setting. Complete `reject`/`forward` and scenario names.
-  Do not introduce duplicate mode flags or command aliases.
+- Add the validated flag to create; complete `reject`/`forward` and scenario
+  names. The type cannot be reconfigured after creation.
 - Show unmatched-request behavior in human list/show output and JSON. Preview
   prints a fixed response, rejection, forwarding destination, or policy block
   according to the result; `--json` exposes the complete discriminated result.
@@ -498,16 +495,15 @@ portless mock preview inventory-test --service inventory --path /health
 ### MCP
 
 - Add the policy to scenario creation, metadata results, and inspection.
-- Add `portless_configure_mock_scenario` for the disabled setting using the
-  existing authoring capability, typed client, scope checks, and resource
-  preconditions. Require the usual lifecycle capability for activation.
+- Expose `portless_set_mock_scenario_policy` with traffic control plus lifecycle
+  capabilities, durable receipts, retry keys, and bounded waits.
 - Update activation/Disable All descriptions to cover both provider
   restoration and partial-policy withdrawal. Preserve actor attribution,
   idempotency, bounded waits, and metadata-only mutation results.
 - Map every preview outcome; respect `includePayloads` and sensitive-traffic
   settings. Forward metadata never reveals private/secret-bearing endpoints.
 - Update the tool inventory, permission matrix, configuration docs, and
-  capability-count fixtures affected by the added tool. Do not expand default
+  capability-count fixtures affected by the policy tool. Do not expand default
   capabilities or route around the API client's transport boundary.
 
 ## Implementation sequence and completion gates
@@ -517,12 +513,12 @@ some API consumers updated.
 
 | Slice | Implementation | Completion gate |
 | --- | --- | --- |
-| 1. Contract | Policy enum, configuration API/client types, preview union, safe service context, traffic outcome, version changes, and OpenAPI/event draft. | Contract/client fixtures define one coherent API 19 format. |
-| 2. Storage | Schema migration, creation/update/metadata/clone paths, version preconditions, mode-aware ownership facts. | Strict data keeps its behavior; invalid/stale/active policy edits fail atomically. |
+| 1. Contract | Policy enum, creation policy and client types, preview union, safe service context, traffic outcome, version changes, and OpenAPI/event draft. | Contract/client fixtures define one coherent API 20.1 format. |
+| 2. Storage | Schema migration, creation/update/metadata/clone paths, version preconditions, mode-aware ownership facts. | Strict data keeps its behavior; invalid policies fail and mode changes preserve scenario identity and routes. |
 | 3. Runtime | Shared response decision, partial registry, immutable snapshots, forwarding and read-only enforcement, capture, WS interaction. | Matched requests never reach upstream; misses forward once with complete body and original edge identity. |
 | 4. Lifecycle | Forward enable/disable, state projection, live edits, rollback, recovery, start/stop/clone and provider guards. | Same PIDs/debuggers/listeners before and after partial toggles; no recovery interval silently bypasses mocks. |
 | 5. Replay/observability | Request-specific preparation, revision invalidation, actual destination policy, traffic/recording/MCP projections. | A previously reviewed mock cannot become an unreviewed forwarded request; attribution is correct and counted once. |
-| 6. User surfaces | CLI, MCP, creation/settings UI, preview, scenario/service/traffic labels, accessibility. | The feature is configurable and inspectable end to end through every supported consumer. |
+| 6. User surfaces | CLI, MCP, creation and route editing UI, preview, scenario/service/traffic labels, accessibility. | The feature is configurable and inspectable end to end through every supported consumer. |
 | 7. Validation/docs | Focused tests, complete non-destructive validation, E2E, regenerated assets, documentation, normal daemon restart. | All acceptance criteria below pass and the running UI serves the built checkout. |
 
 ## Validation plan
@@ -542,7 +538,7 @@ some API consumers updated.
 | Replay | Match/miss preparation, remote policy and confirmation, invalidation after every route/policy/provider mutation, immutable admitted decision, outcome receipt, no duplicate request. |
 | WebSockets | Existing session survives partial toggle/edit; new upgrades forward with preserved caller identity and remote policy; strict rejection remains; no mock frames. |
 | API/CLI/MCP | Typed serialization, errors and preconditions, actor/capability checks, metadata/payload redaction, human/JSON/preview output, completion/help, updated tool inventory. |
-| Vitest | Strict default, creation/settings saves and rollback, locks, name order, all preview results, stale previews, actual provider plus partial badge, distinct traffic outcomes. |
+| Vitest | Strict default, creation, editable type, pending controls, permanent default row, name order, all preview results, stale previews, actual provider plus partial badge, distinct traffic outcomes. |
 
 ### Real product journeys
 
@@ -559,8 +555,7 @@ Portless homes, following [the E2E guide](../e2e-testing.md):
 3. Disable the only enabled mock route and show that its request now forwards
    while scenario ownership and the other service's behavior remain stable.
 4. Compare strict and forward policies against the same routes. Strict keeps
-   unmatched 501 and existing provider restoration; policy changes require a
-   disabled scenario and survive reload/clone/restart.
+   unmatched 501 and existing provider restoration; separate scenarios preserve each type across reload/clone/restart.
 5. Exercise a fixture remote provider in read-only and read-write modes,
    including matched and unmatched POSTs. Assert actual request counts at the
    upstream; test replay's existing write-confirmation journey on the miss.
@@ -569,7 +564,7 @@ Portless homes, following [the E2E guide](../e2e-testing.md):
    stale after relevant setting changes.
 7. Run a WebSocket through a forward-mode service, toggle/edit HTTP mocks,
    and prove that the open socket and clean endpoint remain usable.
-8. Verify creation/settings, table order, service/traffic badges, structured
+8. Verify creation and route editing, table order, service/traffic badges, structured
    failures, keyboard controls, dark/light themes, narrow widths, and focus mode.
 
 ### Required commands and handoff

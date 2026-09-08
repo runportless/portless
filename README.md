@@ -179,7 +179,7 @@ clearing that traffic clears the labels. Activity still reflects captured
 handshakes, not ongoing message traffic or an open-connection count.
 WebSocket messages and session byte totals are not captured or
 replayed. Subprotocol header values are redacted because they may contain
-credentials. HTTP mocks cannot serve WebSockets; importing a recording skips
+credentials. Strict HTTP mocks cannot serve WebSockets; partial mocks forward valid upgrades; importing a recording skips
 upgrade handshakes with a warning. Faults apply to the opening handshake only.
 
 Connections close when an involved service is replaced, its environment stops,
@@ -275,15 +275,41 @@ portless mock enable checkout-failure
 portless mock disable checkout-failure
 ```
 
-Enabling saves each target's exact provider configuration and switches all
+In strict mode, enabling saves each target's exact provider configuration and switches all
 target services to the scenario. Disabling restores those saved providers.
 Scenarios may be active together only when they target different services.
 While active, route responses and enabled flags are editable, but changing the
-set of target services requires disabling the scenario first. An unmatched
-request returns `501`; it never falls through to the real service.
+set of target services requires disabling the scenario first. The default **Full mock** (`reject`) policy preserves strict replacement: an
+unmatched request returns `501`.
 
-Daemon restarts recover active mock and remote providers without requiring
-outgoing dependency proxies for those services. Incoming connections from
+Choose **Partial mock** (`forward`) to override selected requests while
+keeping the real local or remote HTTP service running:
+
+```bash
+portless mock create partial-inventory --unmatched-requests forward
+portless mock route set partial-inventory out-of-stock --service inventory \
+  --path /inventory/coffee --status 200 --body '{"stock":0}'
+portless mock enable partial-inventory
+```
+
+Other URLs and methods reach the real provider. Matched errors never forward.
+The process, debugger, endpoints, and existing WebSockets remain in place; a
+read-only remote binding still blocks unmatched writes locally. A provider crash
+leaves matched responses available, while explicit stop closes service admission.
+Choose Full mock or Partial mock when creating the scenario, then use the
+segmented control below Enabled in the editor's top-right corner to change it.
+Both choices remain visible, with the current type highlighted. The change preserves routes
+and enabled state. Enabled scenarios use the normal
+provider handoff, including restarting the real service when switching to
+partial mode; failed changes attempt to restore the previous mode. The route
+list contains only saved routes. The Mock type setting describes unmatched
+requests: full mocks return 501; partial mocks forward them to the service.
+Preview shows a fixed response, forwarding destination, or local policy block
+without sending application traffic.
+
+Daemon restarts recover strict mock and remote providers without requiring
+outgoing dependency proxies for those services. Partial mocks restore the real
+provider and its outgoing dependency proxies with the saved routing policy. Incoming connections from
 local callers retain their verified proxy endpoints. Scenarios remain editable
 and can be disabled after recovery to restore their original providers.
 
@@ -292,16 +318,23 @@ ten-per-page route list on the left and the selected route's configuration on
 the right. Request and Response tabs separate the configuration: Request holds
 the route name, service, method, path, and required query parameters; Response
 holds status, delay, body, and response headers. The response body grows to use
-the available space. A compact header row shows the scenario name as a back link
-and its enable/disable switch. Below it, the selected route's name, method, and
-path remain visible in both workspace views and follow unsaved edits. The scenario
-list shows its services; hovering a scenario name reveals its description. Routes
-and Preview tabs sit to the right of the route title:
-Routes shows the route list and editor; Preview hides the list and places the
-Request/Response editor on the left and the preview on the right. A shared Save
-and Discard footer appears only while the route has unsaved edits and disappears
-after saving, discarding, or reverting to its saved values. Editing the preview
-request alone does not show it. Routes returns to the list without losing the selected
+the available space. The header shows the scenario name as its main title, a
+Mocks back link above it, and the enable/disable switch on the right, above
+joined Full mock and Partial mock buttons. A shared toolbar spans the route list and editor, showing
+Routes / the selected route's name, method, and path. It remains visible in both
+views and follows unsaved edits. Below it, the list's sort controls and plus
+button for adding a route align with the editor's Request/Response tabs.
+The scenario list shows its services; hovering a scenario name reveals its description.
+The sidebar counts each enabled full or partial mock scenario once, even when
+it covers several services, and clears the badge when no scenarios are active.
+Edit and Preview tabs sit to the right of the route title:
+Edit shows the route list and editor; Preview hides the list and places the
+Request/Response editor on the left and the preview on the right. New routes
+show Save Route and Cancel immediately, so you can save the defaults without
+editing a field. Existing routes show Save and Discard only while they have
+unsaved edits; the footer disappears after saving, discarding, or reverting to
+the saved values. Editing the preview
+request alone does not show it. Edit returns to the list without losing the selected
 route, configuration tab, draft, or preview request and result.
 Use each route's switch in the route list to enable or disable it. Disabled
 routes show a DISABLED badge and muted request details in the list. The badge
@@ -343,7 +376,7 @@ value to test. At otherwise equal specificity, Equals takes precedence over Rege
 then Exists; equally specific regex routes are conservatively checked for ambiguity.
 The CLI accepts `--query-regex 'sku=coffee-.*'` alongside `--query warehouse=central`.
 
-Select Preview in the scenario header to test the selected route, or choose
+Select Preview in the route toolbar to test the selected route, or choose
 Preview from any route's ellipsis menu to select that route and open Preview.
 The editor stays available alongside a test request and its expected response, and the route
 name stays visible above the editor. The workspace tabs support arrow keys and
@@ -619,7 +652,7 @@ stdio; the daemon does not expose an MCP network endpoint.
 The default exposes 24 inspection tools in workspace scope. Pin an environment,
 select a whole project with `--project`, or opt into installation scope. Separate
 startup flags enable lifecycle, sensitive traffic, traffic control, replay, and
-configuration; all enabled exposes 63 tools. MCP supports project discovery and
+configuration; all enabled exposes 64 tools. MCP supports project discovery and
 sources, mock authoring and restoration, complete recording export, reviewed
 HTTP replay/comparison, and preview/apply cleanup through the same daemon state.
 Replay requires sensitive traffic; provider changes require lifecycle access.

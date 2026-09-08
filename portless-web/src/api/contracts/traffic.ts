@@ -84,6 +84,7 @@ export interface TrafficExchange {
   responseCapturedBytes?: number
   fault?: string
   recording?: string
+	mockOutcome?: 'mocked' | 'forwarded' | 'rejected' | 'blocked'
 	mockScenario?: string
   mockRoute?: string
   error?: string

@@ -297,23 +297,24 @@ type bindingView struct {
 }
 
 type serviceView struct {
-	Name            string         `json:"name"`
-	Kind            string         `json:"kind"`
-	Framework       string         `json:"framework,omitempty"`
-	ResourceType    string         `json:"resourceType,omitempty"`
-	ResourceVersion string         `json:"resourceVersion,omitempty"`
-	Required        bool           `json:"required"`
-	LaunchMode      string         `json:"launchMode,omitempty"`
-	Debugger        *debuggerView  `json:"debugger,omitempty"`
-	Status          string         `json:"status"`
-	Reason          string         `json:"reason,omitempty"`
-	Generation      int64          `json:"generation"`
-	Endpoints       []endpointView `json:"endpoints"`
-	StartedAt       *time.Time     `json:"startedAt,omitempty"`
-	RestartCount    int64          `json:"restartCount"`
-	RecentRequests  int64          `json:"recentRequests"`
-	P95Millis       int64          `json:"p95Millis,omitempty"`
-	Health          healthView     `json:"health"`
+	Mock            *contract.ServiceMock `json:"mock,omitempty"`
+	Name            string                `json:"name"`
+	Kind            string                `json:"kind"`
+	Framework       string                `json:"framework,omitempty"`
+	ResourceType    string                `json:"resourceType,omitempty"`
+	ResourceVersion string                `json:"resourceVersion,omitempty"`
+	Required        bool                  `json:"required"`
+	LaunchMode      string                `json:"launchMode,omitempty"`
+	Debugger        *debuggerView         `json:"debugger,omitempty"`
+	Status          string                `json:"status"`
+	Reason          string                `json:"reason,omitempty"`
+	Generation      int64                 `json:"generation"`
+	Endpoints       []endpointView        `json:"endpoints"`
+	StartedAt       *time.Time            `json:"startedAt,omitempty"`
+	RestartCount    int64                 `json:"restartCount"`
+	RecentRequests  int64                 `json:"recentRequests"`
+	P95Millis       int64                 `json:"p95Millis,omitempty"`
+	Health          healthView            `json:"health"`
 }
 
 type debuggerView struct {
@@ -406,6 +407,7 @@ type tcpSummaryView struct {
 type trafficSummaryView struct {
 	Background           bool                              `json:"background"`
 	RequestKind          string                            `json:"requestKind,omitempty"`
+	MockOutcome          string                            `json:"mockOutcome,omitempty"`
 	MockScenario         string                            `json:"mockScenario,omitempty"`
 	MockRoute            string                            `json:"mockRoute,omitempty"`
 	TraceID              string                            `json:"traceId,omitempty"`
@@ -474,6 +476,7 @@ func environmentResult(value contract.Environment) environmentView {
 
 func serviceResult(value contract.Service) serviceView {
 	result := serviceView{
+		Mock: value.Mock,
 		Name: value.Name, Kind: string(value.Kind), Framework: value.Framework,
 		Required: value.Required, LaunchMode: string(value.LaunchMode), Status: string(value.Status),
 		Reason: value.Reason, Generation: value.Generation, Endpoints: []endpointView{},
@@ -528,7 +531,7 @@ func endpointResult(kind, protocol, host string, port int, url string) endpointV
 
 func trafficSummaryResult(value contract.TrafficExchange) trafficSummaryView {
 	result := trafficSummaryView{
-		Background: value.Background, RequestKind: string(value.RequestKind), MockScenario: value.MockScenario, MockRoute: value.MockRoute,
+		Background: value.Background, RequestKind: string(value.RequestKind), MockOutcome: value.MockOutcome, MockScenario: value.MockScenario, MockRoute: value.MockRoute,
 		TraceID: value.TraceID, SpanID: value.SpanID, ParentSpanID: value.ParentSpanID, TraceContextSource: string(value.TraceContextSource), Replay: value.Replay,
 		Sequence: value.Sequence, Protocol: string(value.Protocol), Source: value.Source, Target: value.Target,
 		TargetProvider: string(value.TargetProvider), RemoteClassification: string(value.RemoteClassification),

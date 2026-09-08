@@ -40,7 +40,7 @@ func TestCompiledScenarioUsesDeterministicSpecificity(t *testing.T) {
 		}
 	}
 	preview, err := compiled.Preview(model.MockRequest{Service: "inventory", Method: "GET", Path: "/missing"})
-	if err != nil || preview.Matched || preview.Status != http.StatusNotImplemented {
+	if err != nil || (preview.Outcome == "mocked") || preview.Response.Status != http.StatusNotImplemented {
 		t.Fatalf("unmatched preview = %#v", preview)
 	}
 	if _, err := compiled.Match("inventory", "GET", "/inventory/", nil); err == nil {
@@ -58,7 +58,7 @@ func TestPreviewAcceptsRequestHeadersAndBodyAndRejectsUnsafeInput(t *testing.T) 
 	preview, err := compiled.Preview(model.MockRequest{
 		Service: "inventory", Method: "POST", Path: "/inventory", Headers: map[string][]string{"Content-Type": {"application/json"}, "X-Trace": {"one", "two"}}, Body: `{"sku":"coffee-mug"}`,
 	})
-	if err != nil || !preview.Matched || preview.Route != "reserve" {
+	if err != nil || preview.Outcome != "mocked" || preview.Route != "reserve" {
 		t.Fatalf("preview = %#v, %v", preview, err)
 	}
 	invalid := []model.MockRequest{
@@ -94,7 +94,7 @@ func TestCompileAllowsEquivalentRoutesForDifferentServices(t *testing.T) {
 	}
 	for service, status := range map[string]int{"inventory": 200, "payments": 503, "checkout": 501} {
 		preview, err := compiled.Preview(model.MockRequest{Service: service, Method: "GET", Path: "/health"})
-		if err != nil || preview.Service != service || preview.Status != status {
+		if err != nil || preview.Service != service || preview.Response.Status != status {
 			t.Fatalf("%s preview = %#v, %v; want status %d", service, preview, err, status)
 		}
 	}

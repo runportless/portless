@@ -78,3 +78,12 @@ type MockPreview = model.MockPreview
 
 // TrafficReplayProvenance identifies the original exchange and admitted replay run.
 type TrafficReplayProvenance = model.TrafficReplay
+
+// MockUnmatchedRequests selects strict rejection or forwarding to the real provider.
+type MockUnmatchedRequests = model.MockUnmatchedRequests
+
+// MockResponse is the fixed HTTP response selected by a mock.
+type MockResponse = model.MockResponse
+
+// ServiceMock describes scenario control independently of a provider binding.
+type ServiceMock = model.ServiceMock

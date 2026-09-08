@@ -275,7 +275,7 @@ export function TopologyCanvas({ environment, faults, paused, centerRequest, onS
         onBlur={() => setFocusedPreview((current) => current?.name === service.name ? undefined : current)}
         onClick={() => selectService(service)}
       >
-        <span className="topology-node__heading"><span className="topology-node__kind"><StatusMark status={service.status} label={false} /><span className="topology-node__framework">{service.kind === 'resource' ? service.resource?.type : service.framework}</span></span><span className="topology-node__badges">{observedProtocols && <span className="topology-node__websocket" title={`${observedProtocols} traffic observed`} aria-label="WebSocket traffic observed">WS</span>}{mockScenario && <span className="topology-node__mock">MOCK</span>}</span></span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
+        <span className="topology-node__heading"><span className="topology-node__kind"><StatusMark status={service.status} label={false} /><span className="topology-node__framework">{service.kind === 'resource' ? service.resource?.type : service.framework}</span></span><span className="topology-node__badges">{observedProtocols && <span className="topology-node__websocket" title={`${observedProtocols} traffic observed`} aria-label="WebSocket traffic observed">WS</span>}{mockScenario && <span className="topology-node__mock">{service.mock?.unmatchedRequests === 'forward' ? 'PARTIAL MOCK' : 'MOCK'}</span>}</span></span><strong>{service.name}</strong><small>{publicEndpoint(service)?.url.replace(/^[a-z]+:\/\//, '') || service.status}</small>
       </button>
     })}
     {previewService && previewDetails && previewTarget && <aside

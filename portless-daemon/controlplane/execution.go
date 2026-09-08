@@ -29,6 +29,10 @@ func (s *Service) runUp(scope string, operation model.Operation, options UpOptio
 		s.failOperation(scope, operation, err)
 		return
 	}
+	if err := s.restorePartialMocks(ctx, environment); err != nil {
+		s.failOperation(scope, operation, err)
+		return
+	}
 	changingModes := options.Managed || len(options.DebugServices) > 0
 	if !changingModes && environment.Status == model.EnvironmentHealthy && s.environmentRuntimeVerified(ctx, environment) {
 		s.completeOperation(scope, operation, "Environment is already ready")
@@ -211,7 +215,7 @@ func (s *Service) runDown(scope string, operation model.Operation, removeVolumes
 			return
 		}
 		_ = s.database.SetServiceRuntime(ctx, scope, serviceName, database.ServiceRuntimeUpdate{Status: model.ServiceStopped, Generation: current.Generation, RestartCount: current.RestartCount, LaunchMode: model.LaunchManaged})
-		s.proxy.RemoveTarget(scope, serviceName)
+		s.proxy.StopTarget(scope, serviceName)
 	}
 	privateKey, err := s.database.PrivateEnvironmentKeyForSelector(ctx, scope)
 	containerDefined, containerMayBeRunning := false, false

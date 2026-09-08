@@ -22,10 +22,11 @@ type ActivitySnapshot = Omit<EnvironmentActivity, 'refresh' | 'dismissError'>
 type ActivitySession = { identity: string; controller: AbortController; revision: number; recordingRevision: number }
 const emptyActivity: ActivitySnapshot = { timeline: [], recordings: [], faults: [], error: null, loading: true }
 
-export function boundMockScenarios(environment: Pick<Environment, 'bindings'>) {
-  return [...new Set((environment.bindings || []).flatMap((binding) =>
-    binding.provider === 'mock' && binding.mock?.scenario ? [binding.mock.scenario] : [],
-  ))].sort((left, right) => left.localeCompare(right))
+export function boundMockScenarios(environment: Pick<Environment, 'bindings' | 'services'>) {
+  return [...new Set([
+    ...(environment.bindings || []).flatMap((binding) => binding.provider === 'mock' && binding.mock?.scenario ? [binding.mock.scenario] : []),
+    ...environment.services.flatMap((service) => service.mock ? [service.mock.scenario] : []),
+  ])].sort((left, right) => left.localeCompare(right))
 }
 
 export function advanceRecordingCount(recordings: Recording[], exchange: Pick<TrafficExchange, 'recording'>) {

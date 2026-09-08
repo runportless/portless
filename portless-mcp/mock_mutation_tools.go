@@ -11,7 +11,8 @@ import (
 
 type createMockInput struct {
 	mockInput
-	Description string `json:"description,omitempty"`
+	Description       string                         `json:"description,omitempty"`
+	UnmatchedRequests contract.MockUnmatchedRequests `json:"unmatchedRequests,omitempty" jsonschema:"reject (default) or forward to the real service"`
 }
 type putMockRouteInput struct {
 	mockInput
@@ -53,6 +54,12 @@ type mockActivationView struct {
 	AdmissionUnknown bool                           `json:"admissionUnknown"`
 	Warning          string                         `json:"warning,omitempty"`
 }
+type mockPolicyInput struct {
+	mockInput
+	UnmatchedRequests contract.MockUnmatchedRequests `json:"unmatchedRequests" jsonschema:"reject for full mocking or forward for partial mocking"`
+	IdempotencyKey    string                         `json:"idempotencyKey,omitempty"`
+	WaitSeconds       *int                           `json:"waitSeconds,omitempty"`
+}
 type disableAllMocksView struct {
 	IdempotencyKey string               `json:"idempotencyKey"`
 	Operations     []mockActivationView `json:"operations"`
@@ -71,8 +78,9 @@ func (r *runtime) registerMockMutationTools(server *mcp.Server) {
 		registerTool(r, server, mutationTool("portless_import_mock_recording", "Append routes from a stopped recording in this same environment to a disabled scenario. This import is not safely retryable. Returns metadata and bounded import warnings.", false), r.importMockRecording)
 	}
 	if r.config.AllowLifecycle {
-		registerTool(r, server, mutationTool("portless_set_mock_scenario_enabled", "Enable or disable a scenario through a durable provider operation. Enabling may stop services; disabling restores saved providers, including configured remote services. Reuse the returned idempotency key for retries.", true), r.setMockScenarioEnabled)
-		registerTool(r, server, mutationTool("portless_disable_all_mock_scenarios", "Snapshot active and degraded scenarios and restore providers sequentially. Returns admitted operation receipts and completed, pending, or failed names; zero wait admits at most one pending operation.", true), r.disableAllMockScenarios)
+		registerTool(r, server, mutationTool("portless_set_mock_scenario_policy", "Switch full or partial mocking through a durable operation while preserving routes and enabled state. Enabled scenarios restore and replace providers as needed; a failed handoff attempts to restore the old mode. Reuse the returned idempotency key for retries.", true), r.setMockScenarioPolicy)
+		registerTool(r, server, mutationTool("portless_set_mock_scenario_enabled", "Enable or disable a scenario through a durable operation. Strict mocks replace and restore providers; partial mocks add or remove overrides while services keep running. Reuse the returned idempotency key for retries.", true), r.setMockScenarioEnabled)
+		registerTool(r, server, mutationTool("portless_disable_all_mock_scenarios", "Snapshot active and degraded scenarios and disable them sequentially, restoring strict providers or removing partial overrides. Returns admitted operation receipts and completed, pending, or failed names; zero wait admits at most one pending operation.", true), r.disableAllMockScenarios)
 	}
 }
 
@@ -81,7 +89,7 @@ func mockMetadata(value contract.MockScenario) contract.MockScenarioMetadata {
 	if value.PayloadsOmitted {
 		count = value.RouteCount
 	}
-	return contract.MockScenarioMetadata{Project: value.Project, Environment: value.Environment, Name: value.Name, Description: value.Description, CreatedAt: value.CreatedAt, ModifiedAt: value.ModifiedAt, Activation: value.Activation, RouteCount: count}
+	return contract.MockScenarioMetadata{Project: value.Project, Environment: value.Environment, Name: value.Name, Description: value.Description, CreatedAt: value.CreatedAt, ModifiedAt: value.ModifiedAt, Activation: value.Activation, RouteCount: count, UnmatchedRequests: value.UnmatchedRequests, Version: value.Version}
 }
 
 func mockMutationResult(value contract.MockScenario, warnings []string) mockMutationView {
@@ -108,7 +116,7 @@ func (r *runtime) createMockScenario(ctx context.Context, _ *mcp.CallToolRequest
 		if len(input.Description) > 4096 {
 			return mockMutationView{}, codedError{code: "INVALID_ARGUMENT", message: "description must not exceed 4096 UTF-8 bytes"}
 		}
-		result, err := selected.client.WithMockMetadata().CreateMockScenario(ctx, selected.project, selected.environment, contract.CreateMockRequest{Name: input.Scenario, Description: input.Description})
+		result, err := selected.client.WithMockMetadata().CreateMockScenario(ctx, selected.project, selected.environment, contract.CreateMockRequest{Name: input.Scenario, Description: input.Description, UnmatchedRequests: input.UnmatchedRequests})
 		return mockMutationResult(result, nil), err
 	})
 }
@@ -201,6 +209,50 @@ func (r *runtime) admitMockActivation(ctx context.Context, selected selectedEnvi
 		}
 	}
 	return result, nil
+}
+
+func (r *runtime) setMockScenarioPolicy(ctx context.Context, _ *mcp.CallToolRequest, input mockPolicyInput) (*mcp.CallToolResult, scopedResult[mockActivationView], error) {
+	return environmentCall(ctx, r, input.Environment, true, func(ctx context.Context, selected selectedEnvironment) (mockActivationView, error) {
+		if err := validateArtifactName(input.Scenario, "scenario"); err != nil {
+			return mockActivationView{}, err
+		}
+		if err := input.UnmatchedRequests.Validate(); err != nil {
+			return mockActivationView{}, err
+		}
+		wait, err := waitDuration(input.WaitSeconds)
+		if err != nil {
+			return mockActivationView{}, err
+		}
+		key, persisted, err := prepareIdempotency("set-mock-policy", input.Environment+"/"+input.Scenario, input.IdempotencyKey)
+		if err != nil {
+			return mockActivationView{}, err
+		}
+		result := mockActivationView{Scenario: input.Scenario, IdempotencyKey: key}
+		operation, err := selected.client.SetMockScenarioPolicy(ctx, selected.project, selected.environment, input.Scenario, contract.SetMockScenarioPolicyRequest{UnmatchedRequests: input.UnmatchedRequests}, persisted)
+		if err != nil {
+			if uncertainMutation(err) {
+				result.AdmissionUnknown = true
+				result.Warning = "Admission response was lost; inspect scenario operations before retrying with this key."
+				return result, nil
+			}
+			return result, err
+		}
+		result.Operation = operation
+		current, timedOut, err := waitForOperation(ctx, selected.client, operation, wait)
+		if err != nil {
+			result.TimedOutWaiting = true
+			result.Warning = "Waiting ended after admission; inspect the returned operation. Cancellation does not cancel the mock type change."
+			return result, nil
+		}
+		result.Operation, result.TimedOutWaiting = current, timedOut
+		if current.State != "running" {
+			page, err := selected.client.MockScenarioMetadata(ctx, selected.project, selected.environment, input.Scenario, contract.MockMetadataQuery{Limit: 1})
+			if err == nil {
+				result.Activation = &page.Scenario
+			}
+		}
+		return result, nil
+	})
 }
 
 func (r *runtime) setMockScenarioEnabled(ctx context.Context, _ *mcp.CallToolRequest, input mockActivationInput) (*mcp.CallToolResult, scopedResult[mockActivationView], error) {

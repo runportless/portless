@@ -19,7 +19,7 @@ func TestMCPApplicationWorkflowParity(t *testing.T) {
 	home, checkout := isolatedFixture(t, "store-lite")
 	defer cleanupInstallation(t, binary, home, checkout)
 	session, _ := connectMCPCommand(t, binary, home, checkout, "mcp", "serve", "--allow-configuration", "--allow-lifecycle", "--allow-traffic-control", "--allow-sensitive-traffic", "--allow-replay")
-	if count := len(mcpToolNames(t, session)); count != 63 {
+	if count := len(mcpToolNames(t, session)); count != 64 {
 		t.Fatalf("full inventory=%d", count)
 	}
 	args := func(extra map[string]any) map[string]any {
@@ -81,7 +81,7 @@ func TestMCPApplicationWorkflowParity(t *testing.T) {
 		cursor = chunk.NextCursor
 	}
 	var recording contract.RecordingExport
-	if err := json.Unmarshal(exported.Bytes(), &recording); err != nil || recording.SchemaVersion != 4 || len(recording.Exchanges) == 0 {
+	if err := json.Unmarshal(exported.Bytes(), &recording); err != nil || recording.SchemaVersion != 5 || len(recording.Exchanges) == 0 {
 		t.Fatalf("recording export=%s %v", exported.Bytes(), err)
 	}
 	invokeMCP[map[string]any](t, session, "portless_create_mock_scenario", args(map[string]any{"scenario": "review"}))

@@ -162,6 +162,16 @@ describe('persistent environment header', () => {
     expect(markup).not.toContain('old-capture')
   })
 
+  it('shows partial scenario activity while keeping the local application action', () => {
+    const value: Environment = { ...environment, primaryService: 'checkout',
+      services: [{ ...service, mock: { scenario: 'partial', unmatchedRequests: 'forward', state: 'enabled' } }],
+      bindings: [{ service: 'checkout', provider: 'local' }],
+    }
+    const markup = renderToStaticMarkup(<EnvironmentHeaderActions environment={value} activity={{ recordings: [], faults: [] }} actions={actions} onNavigate={() => undefined} />)
+    expect(markup).toContain('aria-label="Active mock scenario partial. Open mocks"')
+    expect(markup).toContain('OPEN APP')
+  })
+
   it('groups multiple bound scenarios into one icon that opens the scenario list', () => {
     const value: Environment = { ...environment, bindings: [
       { service: 'checkout', provider: 'mock', mock: { scenario: 'sold-out' } },

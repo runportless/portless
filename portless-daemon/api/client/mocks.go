@@ -66,6 +66,14 @@ func (c *Client) SetMockScenarioEnabled(ctx context.Context, project, environmen
 	return result, err
 }
 
+// SetMockScenarioPolicy changes full or partial mocking through a durable
+// operation, preserving routes and restoring the scenario's enabled state.
+func (c *Client) SetMockScenarioPolicy(ctx context.Context, project, environment, scenario string, input contract.SetMockScenarioPolicyRequest, idempotencyKey string) (contract.Operation, error) {
+	var result contract.Operation
+	err := c.doWithHeaders(ctx, http.MethodPut, mocksPath(project, environment)+"/"+EscapePath(scenario)+"/policy", input, &result, map[string]string{"Idempotency-Key": idempotencyKey})
+	return result, err
+}
+
 // ImportMockRecording imports retained traffic into a scenario.
 func (c *Client) ImportMockRecording(ctx context.Context, project, environment, scenario string, input contract.ImportMockRecordingRequest) (contract.MockScenarioMutation, error) {
 	var result contract.MockScenarioMutation

@@ -27,9 +27,9 @@ export function TrafficReplayEditor({ replay, environments, restoreFocusRef, onC
   const selected = candidates.find((environment) => environment.name === draft?.environment)
   const service = selected?.services.find((candidate) => candidate.name === baseline?.target)
   const binding = selected?.bindings?.find((candidate) => candidate.service === baseline?.target)
-  const reviewedDestination = workspace && workspace.destination?.environment === draft?.environment ? workspace.destination : undefined
+  const reviewedDestination = workspace && workspace.destination?.environment === draft?.environment && workspace.draft?.method === draft?.method && workspace.draft?.requestTarget === draft?.requestTarget ? workspace.destination : undefined
   const endpoint = service?.endpoints?.find((candidate) => candidate.kind === 'public' && candidate.protocol === 'http')?.url || reviewedDestination?.url
-  const provider = binding?.provider || reviewedDestination?.provider || (service?.kind === 'resource' ? 'container' : 'local')
+  const provider = reviewedDestination?.provider || binding?.provider || (service?.kind === 'resource' ? 'container' : 'local')
   const destinationReason = baseline && selected ? replayDestinationReason(selected, baseline) : 'Destination environment is unavailable'
   const outdated = !!workspace?.result && !!draft && replay.state.resultFingerprint !== replayDraftFingerprint(draft)
   const errorNotice = error && <div className="replay-error"><ActionErrorNotice error={error} onDismiss={replay.dismissError} /></div>
@@ -54,6 +54,7 @@ export function TrafficReplayEditor({ replay, environments, restoreFocusRef, onC
               <div className="replay-provider"><span>PROVIDER</span><strong>{provider}{provider === 'remote' ? ` · ${binding?.remote?.classification || reviewedDestination?.classification || 'unknown'} · ${binding?.remote?.writePolicy || reviewedDestination?.writePolicy || ''}` : ''}</strong></div>
             </div>
             {endpoint && <div className="replay-endpoint"><a href={endpoint} target="_blank" rel="noreferrer">{endpoint}</a><button type="button" className="traffic-copy-button" aria-label="Copy replay endpoint" onClick={() => void navigator.clipboard.writeText(endpoint).then(() => setCopied(true)).catch(() => setCopied(false))}>{copied ? 'COPIED' : 'COPY'}</button></div>}
+            {reviewedDestination?.mockScenario && <p className="replay-notice">{provider === 'mock' ? 'Mock response' : 'Forwarded by scenario'}: {reviewedDestination.mockScenario}{reviewedDestination.mockRoute ? ` / ${reviewedDestination.mockRoute}` : ''}</p>}
             <div className="replay-request-line"><label><span>METHOD</span><select aria-label="Replay method" value={draft.method} disabled={disabled} onChange={(event) => replay.change({ ...draft, method: event.target.value })}>{replayMethods.map((method) => <option key={method}>{method}</option>)}</select></label><label><span>PATH AND QUERY</span><input ref={pathInput} aria-label="Replay path and query" value={draft.requestTarget} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => replay.change({ ...draft, requestTarget: event.target.value })} /></label><button type="submit" className="button button--primary" disabled={disabled || !!destinationReason}>{running ? 'SENDING…' : 'SEND'}</button></div>
             {!!destinationReason && <p className="replay-notice">{destinationReason}. Portless will not start or change the destination.</p>}
           </form>

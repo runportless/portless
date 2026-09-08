@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 18.0.0
+  version: 20.1.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -36,7 +36,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '18.0.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '20.1.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -487,7 +487,7 @@ paths:
         - { $ref: '#/components/parameters/Limit1000' }
       responses:
         '200':
-          description: Environments across all projects or one filtered project
+          description: Environments across all projects or one filtered project, including the same service.mock activity context as individual environment inspection for full and partial mocks.
           content:
             application/json:
               schema:
@@ -1258,14 +1258,42 @@ paths:
               schema: { $ref: '#/components/schemas/MockDeletionPreview' }
         '204': { description: Scenario deleted }
         '409': { $ref: '#/components/responses/Conflict' }
+  /environments/{projectName}/{environmentName}/mocks/{scenarioName}/policy:
+    parameters: *mockScenarioParameters
+    put:
+      operationId: setMockScenarioPolicy
+      description: >-
+        Switches full or partial mocking while preserving routes and enabled state.
+        An enabled scenario is disabled, its policy saved, and then enabled again
+        through the existing provider handoff workflow. A failed change attempts
+        to restore the previous policy and enabled state. Degraded scenarios and
+        environments in a lifecycle transition reject changes. Follow the durable
+        operation to completion and inspect the current scenario after a failure.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetMockScenarioPolicyRequest' }
+      responses:
+        '202':
+          description: Mock policy operation accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+        '400': { description: Missing or invalid unmatched-request policy }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /environments/{projectName}/{environmentName}/mocks/{scenarioName}/activation:
     parameters: *mockScenarioParameters
     put:
       operationId: setMockScenarioActivation
       description: >-
         Enables or disables the whole scenario as one tracked operation. Enabling saves
-        each target service's exact previous binding before switching it to mock. Disabling
-        restores those bindings. Target coverage includes disabled routes. Empty scenarios
+        each target service's exact previous binding. Reject mode replaces the provider and
+        restores it on disable; forward mode atomically attaches routes while preserving
+        the real provider, process, debugger and WebSocket sessions. Target coverage includes disabled routes. Empty scenarios
         cannot be enabled, and enabled scenarios cannot overlap on a service. A partial
         transition is rolled back; if rollback fails, restoration records are retained and
         activation is degraded. Disable a degraded scenario to retry restoration.
@@ -1653,7 +1681,7 @@ paths:
       - { $ref: '#/components/parameters/RecordingName' }
     get:
       operationId: getRecordingExportChunk
-      description: Complete schema-4 export delivered in base64 chunks. First request freezes retained event count and sequence watermark; subsequent signed cursors bind recording/environment creation identities and a position within an event. Active recordings exclude later traffic. Name reuse, deletion or daemon restart invalidates the cursor. Reassemble bytes in order; complete is true only after the JSON suffix. The ordinary export endpoint streams this same complete iterator without the former 10000-event cutoff.
+      description: Complete schema-5 export delivered in base64 chunks. First request freezes retained event count and sequence watermark; subsequent signed cursors bind recording/environment creation identities and a position within an event. Active recordings exclude later traffic. Name reuse, deletion or daemon restart invalidates the cursor. Reassemble bytes in order; complete is true only after the JSON suffix. The ordinary export endpoint streams this same complete iterator without the former 10000-event cutoff.
       parameters:
         - in: query
           name: cursor
@@ -1871,7 +1899,7 @@ components:
         instanceId: { type: string }
         buildId: { type: string }
         protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '18.0.0', description: Stable semantic API version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '20.1.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonDiagnostics:
@@ -2151,8 +2179,10 @@ components:
         modifiedAt: { type: string, format: date-time, readOnly: true }
     MockScenario:
       type: object
-      required: [project, environment, name, routes, activation, createdAt, modifiedAt]
+      required: [project, environment, name, routes, activation, createdAt, modifiedAt, unmatchedRequests, version]
       properties:
+        unmatchedRequests: { $ref: '#/components/schemas/MockUnmatchedRequests' }
+        version: { $ref: '#/components/schemas/ResourceVersion' }
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         name: { $ref: '#/components/schemas/ArtifactName' }
@@ -2167,17 +2197,29 @@ components:
       properties:
         state: { type: string, enum: [disabled, enabled, degraded], description: Derived from scenario ownership and current service bindings, not service health. }
         targetServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' }, description: Unique sorted service names from all routes, including disabled routes. }
-        activeServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' }, description: Services currently bound to this scenario. }
+        activeServices: { type: array, items: { $ref: '#/components/schemas/ServiceName' }, description: Services controlled by the selected policy. Running forward policies require compiled runtime state; a stopped environment reports desired configuration. }
         enabledAt: { type: string, format: date-time }
     MockScenarioList:
       type: object
       required: [scenarios]
       properties:
         scenarios: { type: array, items: { $ref: '#/components/schemas/MockScenario' } }
+    MockUnmatchedRequests:
+      type: string
+      enum: [reject, forward]
+      description: Reject returns 501 on a miss and replaces the provider. Forward keeps the real HTTP provider and only overrides matches. Change through the scenario policy operation.
+    SetMockScenarioPolicyRequest:
+      type: object
+      required: [unmatchedRequests]
+      additionalProperties: false
+      properties:
+        unmatchedRequests: { $ref: '#/components/schemas/MockUnmatchedRequests' }
     CreateMockRequest:
       type: object
       required: [name]
+      additionalProperties: false
       properties:
+        unmatchedRequests: { $ref: '#/components/schemas/MockUnmatchedRequests', default: reject }
         name: { $ref: '#/components/schemas/ArtifactName' }
         description: { type: string }
     MockScenarioMutation:
@@ -2233,22 +2275,59 @@ components:
           type: string
           maxLength: 262144
           description: Optional request body used only for the side-effect-free preview. Request bodies are not route matchers.
-    MockPreview:
+    MockResponse:
       type: object
-      description: >-
-        Expected mock-owned response, including scenario/route headers and
-        unmatched JSON. Body is empty for HEAD, 204, and 304; Content-Type is
-        omitted for 304. Date, Content-Length, and other transport-added headers
-        are not synthesized. Delay is metadata and preview does not wait.
-      required: [service, matched, status]
+      required: [status]
       properties:
-        service: { $ref: '#/components/schemas/ServiceName' }
-        matched: { type: boolean }
-        route: { type: string }
         status: { $ref: '#/components/schemas/HTTPFinalStatusCode' }
         headers: { type: object, additionalProperties: { type: string } }
         body: { type: string }
-        delayMs: { type: integer, format: int64, minimum: 0, description: 'Configured response delay, reported without sleeping.' }
+        delayMs: { type: integer, format: int64, minimum: 0 }
+      description: Fixed response after HEAD/204/304 body suppression. No transport-added headers or delay is performed during preview.
+    MockPreview:
+      description: Request-specific routing prediction without application I/O, health probes, state changes, or traffic capture. Only mocked/rejected results have a fixed response.
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [service, outcome, route, response]
+          properties:
+            service: { $ref: '#/components/schemas/ServiceName' }
+            outcome: { const: mocked }
+            route: { type: string }
+            response: { $ref: '#/components/schemas/MockResponse' }
+        - type: object
+          additionalProperties: false
+          required: [service, outcome, response]
+          properties:
+            service: { $ref: '#/components/schemas/ServiceName' }
+            outcome: { const: rejected }
+            response: { $ref: '#/components/schemas/MockResponse' }
+        - type: object
+          additionalProperties: false
+          required: [service, outcome, destination]
+          properties:
+            service: { $ref: '#/components/schemas/ServiceName' }
+            outcome: { const: forward }
+            destination:
+              type: object
+              required: [provider, url]
+              properties:
+                provider: { type: string, enum: [local, remote] }
+                url: { type: string, description: Public Portless endpoint; no private runtime addresses. }
+                classification: { type: string }
+                writePolicy: { type: string, enum: [read-only, read-write] }
+        - type: object
+          additionalProperties: false
+          required: [service, outcome, reason]
+          properties:
+            service: { $ref: '#/components/schemas/ServiceName' }
+            outcome: { const: blocked }
+            reason:
+              type: object
+              required: [code, message]
+              properties:
+                code: { type: string }
+                message: { type: string }
     HealthCheck:
       type: object
       required: [kind, timeout, interval]
@@ -2291,6 +2370,13 @@ components:
         - type: object
           required: [status, launchMode, generation, endpoints, restartCount, recentRequests]
           properties:
+            mock:
+              type: object
+              required: [scenario, unmatchedRequests, state]
+              properties:
+                scenario: { $ref: '#/components/schemas/ArtifactName' }
+                unmatchedRequests: { $ref: '#/components/schemas/MockUnmatchedRequests' }
+                state: { type: string, enum: [disabled, enabled, degraded] }
             status: { type: string, enum: [planned, starting, recovering, ready, unhealthy, exited, failed, stopping, stopped, unknown] }
             launchMode: { type: string, enum: [managed, debug] }
             debugger:
@@ -2447,7 +2533,8 @@ components:
         responseCapturedBytes: { type: integer, format: int64, minimum: 0 }
         fault: { type: string }
         recording: { type: string }
-        mockScenario: { type: string, description: Mock scenario that served this exchange. }
+        mockOutcome: { type: string, enum: [mocked, forwarded, rejected, blocked], description: Scenario decision; absent when no scenario was evaluated. }
+        mockScenario: { type: string, description: Mock scenario evaluated for this exchange. }
         mockRoute: { type: string, description: Mock route that matched this exchange. }
         error: { type: string }
         traceId: { type: string, pattern: '^[0-9a-f]{32}$', description: Normalized trace identifier extracted from W3C/OpenTelemetry, B3, or Datadog context, or generated by Portless. }
@@ -2544,6 +2631,8 @@ components:
       properties:
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         provider: { type: string, enum: [local, container, remote, mock] }
+        mockScenario: { type: string, description: Scenario evaluated for this prepared request. }
+        mockRoute: { type: string, description: Matched route when a partial mock serves this prepared request. }
         classification: { type: string, enum: [development, qa, staging, unknown] }
         writePolicy: { type: string, enum: [read-only, read-write] }
         url: { type: string, format: uri, description: Stable public service URL; never a private upstream address. }
@@ -2798,7 +2887,7 @@ components:
       type: object
       required: [schemaVersion, project, environment, recording, exchanges]
       properties:
-        schemaVersion: { type: integer, const: 4 }
+        schemaVersion: { type: integer, const: 5 }
         project: { $ref: '#/components/schemas/ProjectName' }
         environment: { $ref: '#/components/schemas/EnvironmentName' }
         recording: { $ref: '#/components/schemas/ArtifactName' }
@@ -3077,6 +3166,8 @@ components:
       type: object
     MockScenarioMetadata:
       properties:
+        unmatchedRequests: { $ref: '#/components/schemas/MockUnmatchedRequests' }
+        version: { $ref: '#/components/schemas/ResourceVersion' }
         activation:
           $ref: '#/components/schemas/MockScenarioActivation'
         createdAt:
@@ -3096,6 +3187,8 @@ components:
         routeCount:
           type: integer
       required:
+        - unmatchedRequests
+        - version
         - project
         - environment
         - name
