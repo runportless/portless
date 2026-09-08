@@ -16,6 +16,12 @@ const title = 'Portless — Run it. See it. Break it. Locally';
 const description = 'Portless runs your whole application locally. Discover services automatically, trace requests, mock dependencies, and test failures—no config required.';
 const primaryCTA = primaryCallToAction(import.meta.env.PUBLIC_EARLY_ACCESS_URL);
 const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.com/runportless/portless';
+const docsURL = `${githubURL.replace(/\/+$/, '')}/blob/main`;
+const startSteps = [
+  {title: 'Install', detail: 'macOS with Homebrew', command: 'brew install runportless/tap/portless'},
+  {title: 'Set up', detail: 'Once per machine', command: 'portless setup'},
+  {title: 'Run', detail: "From your app's checkout", command: 'portless up'},
+];
 ---
 
 <SiteLayout title={title} description={description}>
@@ -27,6 +33,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       <a href="#control-plane">See it</a>
       <a href="#experiments">Break it</a>
       <a href="#demo">Demo</a>
+      <a href="#get-started">Get Started</a>
       {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
       <a class="button button--small" href={primaryCTA.href} target={primaryCTA.external ? '_blank' : undefined} rel={primaryCTA.external ? 'noreferrer' : undefined}>{primaryCTA.label}</a>
     </nav>
@@ -312,6 +319,45 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
       </div>
     </section>
 
+    <section class="section getting-started" id="get-started" aria-labelledby="get-started-title">
+      <div class="section-heading getting-started__heading">
+        <div>
+          <p class="eyebrow eyebrow--pillar">Get started</p>
+          <h2 id="get-started-title">Up and <span>running.</span></h2>
+        </div>
+        <a class="button getting-started__guide" href={`${docsURL}/guides/run-application.md`} target="_blank" rel="noreferrer">
+          <span>View the guide</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10" /></svg>
+        </a>
+      </div>
+
+      <div class="getting-started__panel">
+        <ol class="getting-started__steps" role="list">
+          {startSteps.map((step, index) => (
+            <li>
+              <span class="getting-started__number" aria-hidden="true">0{index + 1}</span>
+              <div class="getting-started__label">
+                <h3>{step.title}</h3>
+                <p>{step.detail}</p>
+              </div>
+              <pre class="getting-started__command"><span aria-hidden="true">$</span><code>{step.command}</code></pre>
+              <button class="getting-started__copy" type="button" data-copy-command={step.command} aria-label={`Copy ${step.title.toLowerCase()} command`} hidden>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                <span data-copy-label aria-live="polite">Copy</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+        <div class="getting-started__result">
+          <span aria-hidden="true">↳</span>
+          <p>Your services start. Your dashboard opens. You're ready.</p>
+        </div>
+      </div>
+      <div class="getting-started__footer">
+        <p>Install your app's dependencies first. Setup may ask for administrator approval.<br />Docker or Podman is only needed for managed container resources.</p>
+      </div>
+    </section>
+
     <section class="final-cta" id="early-access" aria-labelledby="cta-title">
       <div class="final-cta__grid" aria-hidden="true"></div>
       <BrandMark />
@@ -328,6 +374,7 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
     <a class="site-footer__back-to-top" href="#top">Back to Top</a>
     <div class="site-footer__meta">
       <nav aria-label="Footer navigation">
+        <a href="#get-started">Get started</a>
         {githubURL && <a href={githubURL} target="_blank" rel="noreferrer">GitHub</a>}
       </nav>
       <small>© {new Date().getFullYear()} Portless</small>
@@ -337,6 +384,28 @@ const githubURL = import.meta.env.PUBLIC_GITHUB_URL?.trim() || 'https://github.c
 </SiteLayout>
 
 <script>
+  document.querySelectorAll<HTMLButtonElement>('[data-copy-command]').forEach((button) => {
+    if (!navigator.clipboard?.writeText) return;
+    const label = button.querySelector<HTMLElement>('[data-copy-label]');
+    const command = button.dataset.copyCommand;
+    if (!label || !command) return;
+    button.hidden = false;
+    let resetTimer: ReturnType<typeof setTimeout>;
+    button.addEventListener('click', async () => {
+      clearTimeout(resetTimer);
+      button.disabled = true;
+      try {
+        await navigator.clipboard.writeText(command);
+        label.textContent = 'Copied';
+      } catch {
+        label.textContent = 'Select to copy';
+      } finally {
+        button.disabled = false;
+        resetTimer = setTimeout(() => { label.textContent = 'Copy'; }, 2500);
+      }
+    });
+  });
+
   const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-traffic-tab]'));
   const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-traffic-panel]'));
 

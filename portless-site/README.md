@@ -15,8 +15,12 @@ From the repository root, use `make site-dev` to run the local development
 server, `make site` for a production build, or `make test-site` for type
 checking, tests, and a production build.
 
+The on-page getting-started section covers installation, one-time networking
+setup, and starting an application from its checkout. Keep these commands and
+prerequisites aligned with the root README's install and quick-start guides.
+
 The optional `PUBLIC_EARLY_ACCESS_URL` environment variable changes the primary
-call to action from the on-page demo to an external early-access form.
+call to action from the getting-started section to an external early-access form.
 `PUBLIC_GITHUB_URL` can override the canonical repository link. Copy
 `.env.example` to `.env` for local overrides; local environment files are
 ignored by Git.

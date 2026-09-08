@@ -12,10 +12,10 @@ function sha256(bytes: Buffer) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-test('the primary call to action falls back to the on-page demo', () => {
+test('the primary call to action opens the getting-started section', () => {
   assert.deepEqual(primaryCallToAction(), {
-    href: '#demo',
-    label: 'Watch the demo',
+    href: '#get-started',
+    label: 'Get started',
     external: false,
   });
 });

@@ -49,5 +49,5 @@ export function primaryCallToAction(earlyAccessURL?: string) {
   const href = earlyAccessURL?.trim();
   return href
     ? {href, label: 'Get early access', external: true}
-    : {href: '#demo', label: 'Watch the demo', external: false};
+    : {href: '#get-started', label: 'Get started', external: false};
 }
