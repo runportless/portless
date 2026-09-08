@@ -105,6 +105,24 @@ MySQL, and NATS. Discovery reads your project files without executing code.
 To try Portless with a ready-made application, start with the
 [Chat](examples/chat/README.md) or [Store](examples/store/README.md) example.
 
+## Guides
+
+[Run your first application](guides/run-application.md) walks through starting
+Store, creating an order, and stopping and resuming the environment. The guides
+use screenshots from the running application to show each workflow.
+
+[![Portless showing Store's service readiness](guides/images/run-application/overview.jpg)](guides/README.md)
+
+- [Debug checkout with VS Code](guides/debug-checkout-vscode.md): start debug
+  mode in Portless, attach to the process, and inspect a live request.
+- [Investigate a failed request](guides/investigate-failed-request.md): follow
+  a rejected checkout through its dependency trace.
+- [Mock a dependency](guides/mock-dependency.md): preview a response and test
+  it through the real checkout page.
+
+[Browse all guides](guides/README.md) for service management, database and cache
+inspection, replay, faults, recordings, and multiple environments.
+
 ## Everyday commands
 
 Run these from a checkout belonging to your project:

@@ -1,5 +1,10 @@
 # Store example
 
+For a walkthrough with screenshots, start with
+[Run your first application](../../guides/run-application.md). The
+[UI guides](../../guides/README.md) use Store for debugging with VS Code,
+traffic inspection, mocks, faults, recordings, and environment cloning.
+
 Store is a compact, stateful commerce application that exercises the complete
 Portless loop from one checkout:
 
