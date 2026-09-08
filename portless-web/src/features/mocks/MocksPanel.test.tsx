@@ -60,6 +60,7 @@ describe('MocksPanel', () => {
     const html = renderToStaticMarkup(<MocksPanel environment={environment} onSelectScenario={() => undefined} onSelectRoute={() => undefined} onCreateRoute={() => undefined} onChanged={() => undefined} />)
     expect(html).toContain('<span>SCENARIOS</span>')
     expect(html).toContain('CREATE SCENARIO')
+    expect(html).toContain('role="region" aria-label="Mock scenarios" tabindex="0"')
     expect(html).toContain('class="sortable-grid-header is-active" role="columnheader" aria-sort="ascending"><span>Scenario</span>')
     for (const label of ['State', 'Mock type', 'Services', 'Routes', 'Modified']) expect(html).toContain(`aria-sort="none"><span>${label}</span>`)
     expect(html.match(/class="sortable-grid-header/g)).toHaveLength(6)

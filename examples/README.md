@@ -1,8 +1,7 @@
 # Portless Examples
 
-These runnable applications demonstrate Portless without requiring a
-`portless.yaml` file or an account. Portless discovers their topology from
-ordinary application files and sample environment values.
+These runnable applications show how Portless discovers services and
+dependencies from ordinary application files and sample environment values.
 
 ## Chat
 

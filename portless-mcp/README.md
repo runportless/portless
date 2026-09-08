@@ -94,9 +94,9 @@ Paths are normalized and symlink-resolved, and the daemon repeats confinement
 at its filesystem read boundary using directory handles. It cannot inspect an
 ancestor outside the grant or follow a replaced root/symlink outside it.
 Workspace creation must associate a discovered source with the startup
-checkout before anything is persisted. Discovery reads manifests; it does not
-execute project scripts, start services, install a relay, or create a required
-`portless.yaml`.
+checkout before anything is persisted. Discovery reads existing project files
+without modifying them. It does not execute project scripts, start services,
+or install a relay.
 
 ## Permissions
 

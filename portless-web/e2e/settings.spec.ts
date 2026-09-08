@@ -82,7 +82,7 @@ test('generates scoped MCP client configuration without persisting elevated acce
   await expect(preview).toContainText('--project')
   await expect(preview).toContainText('--source-root')
   await expect(preview).toContainText('--allow-configuration')
-  await expect(page.locator('.mcp-preview')).toContainText('SENSITIVE · 63 TOOLS')
+  await expect(page.locator('.mcp-preview')).toContainText('SENSITIVE · 64 TOOLS')
 
   await page.goto(`${state.baseURL}${environmentPath()}`)
   await expect(environmentHeader(page).getByRole('heading', { name: 'Overview', exact: true })).toBeVisible()

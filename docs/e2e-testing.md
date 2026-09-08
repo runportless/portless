@@ -222,7 +222,9 @@ The Playwright suite protects these browser journeys:
 - captured request and response inspection with repeated headers, redacted
   credentials, and Portless-injected trace carriers kept out of header views;
 - recording, mock-provider, and fault workflows, including scenario-table-first
-  navigation, empty service-independent scenario creation, URL-addressable
+  navigation, aligned scenario columns with scrolling confined to the table,
+  keyboard sorting and unclipped row menus in both themes down to 320 px,
+  empty service-independent scenario creation, URL-addressable
   scenario split workspaces with URL-addressable route selection, a
   service-selecting right-hand editor that respects focus mode, retained drafts
   while switching routes, save/discard and selected-route deletion, clickable

@@ -98,9 +98,8 @@ steps. `portless env current` explains the effective resolution,
 never changes saved state. Commands with an intentional inventory fallback,
 such as `portless status`, document that exception in the command reference.
 
-`portless up` additionally preserves the zero-configuration entry path: when
-the checkout is not registered, it asks the daemon to discover and create the
-project without requiring a `portless.yaml` or account.
+When the current checkout is not registered, `portless up` asks the daemon to
+discover and create the project automatically.
 
 ## Output and error contract
 

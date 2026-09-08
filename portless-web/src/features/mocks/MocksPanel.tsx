@@ -338,49 +338,53 @@ export function MockScenariosList({ scenarios, loading, busy, deleteName, transi
     {scenarios.length > 0 && <div className="mock-scenarios-bulk-actions">
       <button className="mock-scenarios-disable-all-link" type="button" disabled={!!busy || loading || transitionBlocked || !hasActiveScenarios} onClick={() => { setScenarioMenu(''); onDisableAll() }}>{busy === 'disable-all' ? 'DISABLING…' : 'DISABLE ALL'}</button>
     </div>}
-    <div className={`mock-scenario-row mock-scenario-row--header sortable-header-row${scenarioSort.key === defaultMockScenarioSort.key && scenarioSort.direction === defaultMockScenarioSort.direction ? ' is-default-sort' : ''}`} role="row">
-      <SortableGridHeader label="State" sortKey="state" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
-      <SortableGridHeader label="Scenario" sortKey="name" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
-      <SortableGridHeader label="Mock type" sortKey="type" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
-      <SortableGridHeader label="Services" sortKey="services" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
-      <SortableGridHeader label="Routes" sortKey="routes" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
-      <SortableGridHeader label="Modified" sortKey="modifiedAt" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
-      <span aria-label="Actions" />
-    </div>
-    {orderedScenarios.map((scenario) => {
-      const active = mockScenarioIsActive(scenario)
-      const toggleBusy = busy === `enable:${scenario.name}` || busy === `disable:${scenario.name}` || busy === 'disable-all' && active
-      const menuOpen = scenarioMenu === scenario.name
-      const enableBlocked = !active && scenario.routes.length === 0
-      const services = scenario.activation.targetServices
-      const typeLabel = mockScenarioTypeLabel(scenario.unmatchedRequests)
-      const typeTitle = typeLabel === 'PARTIAL'
-        ? 'Keeps the service running and forwards unmatched requests.'
-        : 'Replaces the service and returns 501 for unmatched requests.'
-      return <div className="mock-scenario-row" key={scenario.name} onClick={() => { if (!busy) onOpen(scenario) }}>
-        <MockEnabledState state={scenario.activation.state} />
-        <div className="mock-scenario-row__name"><button type="button" disabled={!!busy} aria-label={`Open ${scenario.name} mock scenario`} title={scenario.description} onClick={(event) => { event.stopPropagation(); onOpen(scenario) }}><strong>{scenario.name}</strong></button></div>
-        <span className="mock-scenario-type" title={typeTitle}>{typeLabel}</span>
-        <span className="mock-scenario-services" title={services.join(', ')}>{services.length ? services.join(', ') : '—'}</span>
-        <span>{scenario.routes.length}</span>
-        <MockTimestamp className="mock-scenario-row__modified" value={scenario.modifiedAt} />
-        <div className="mock-row-actions table-row-actions">
-          <ToggleSwitch label={`${scenario.name} enabled`} checked={active} disabled={!!busy || transitionBlocked || enableBlocked} pending={toggleBusy} title={enableBlocked ? 'Add a route before enabling this scenario.' : undefined} onChange={(enabled) => onToggle(scenario, enabled)} />
-          <RowActionsMenu
-            label={`Mock scenario actions for ${scenario.name}`}
-            menuLabel={`${scenario.name} mock scenario actions`}
-            open={menuOpen}
-            disabled={!!busy}
-            onOpenChange={(open) => {
-              setScenarioMenu(open ? scenario.name : '')
-              if (!open || scenarioMenu !== scenario.name) onDismissDelete()
-            }}
-          >
-            <button className={`is-danger${deleteName === scenario.name ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy || active} title={active ? 'Disable this scenario before deleting it.' : undefined} aria-label={deleteName === scenario.name ? `Confirm delete ${scenario.name}` : `Delete ${scenario.name}`} onClick={() => onDelete(scenario)}>{busy === `delete-scenario:${scenario.name}` ? 'DELETING…' : deleteName === scenario.name ? 'CONFIRM' : 'DELETE'}</button>
-          </RowActionsMenu>
+    <div className="mock-scenarios-scroll" role="region" aria-label="Mock scenarios" tabIndex={0}>
+      <div className="mock-scenarios-table">
+        <div className={`mock-scenario-row mock-scenario-row--header sortable-header-row${scenarioSort.key === defaultMockScenarioSort.key && scenarioSort.direction === defaultMockScenarioSort.direction ? ' is-default-sort' : ''}`} role="row">
+          <SortableGridHeader label="State" sortKey="state" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+          <SortableGridHeader label="Scenario" sortKey="name" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+          <SortableGridHeader label="Mock type" sortKey="type" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+          <SortableGridHeader label="Services" sortKey="services" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+          <SortableGridHeader label="Routes" sortKey="routes" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+          <SortableGridHeader label="Modified" sortKey="modifiedAt" sort={scenarioSort} itemCount={scenarios.length} onSort={changeScenarioSort} />
+          <span aria-label="Actions" />
         </div>
+        {orderedScenarios.map((scenario) => {
+          const active = mockScenarioIsActive(scenario)
+          const toggleBusy = busy === `enable:${scenario.name}` || busy === `disable:${scenario.name}` || busy === 'disable-all' && active
+          const menuOpen = scenarioMenu === scenario.name
+          const enableBlocked = !active && scenario.routes.length === 0
+          const services = scenario.activation.targetServices
+          const typeLabel = mockScenarioTypeLabel(scenario.unmatchedRequests)
+          const typeTitle = typeLabel === 'PARTIAL'
+            ? 'Keeps the service running and forwards unmatched requests.'
+            : 'Replaces the service and returns 501 for unmatched requests.'
+          return <div className="mock-scenario-row" key={scenario.name} onClick={() => { if (!busy) onOpen(scenario) }}>
+            <MockEnabledState state={scenario.activation.state} />
+            <div className="mock-scenario-row__name"><button type="button" disabled={!!busy} aria-label={`Open ${scenario.name} mock scenario`} title={scenario.description} onClick={(event) => { event.stopPropagation(); onOpen(scenario) }}><strong>{scenario.name}</strong></button></div>
+            <span className="mock-scenario-type" title={typeTitle}>{typeLabel}</span>
+            <span className="mock-scenario-services" title={services.join(', ')}>{services.length ? services.join(', ') : '—'}</span>
+            <span>{scenario.routes.length}</span>
+            <MockTimestamp className="mock-scenario-row__modified" value={scenario.modifiedAt} />
+            <div className="mock-row-actions table-row-actions">
+              <ToggleSwitch label={`${scenario.name} enabled`} checked={active} disabled={!!busy || transitionBlocked || enableBlocked} pending={toggleBusy} title={enableBlocked ? 'Add a route before enabling this scenario.' : undefined} onChange={(enabled) => onToggle(scenario, enabled)} />
+              <RowActionsMenu
+                label={`Mock scenario actions for ${scenario.name}`}
+                menuLabel={`${scenario.name} mock scenario actions`}
+                open={menuOpen}
+                disabled={!!busy}
+                onOpenChange={(open) => {
+                  setScenarioMenu(open ? scenario.name : '')
+                  if (!open || scenarioMenu !== scenario.name) onDismissDelete()
+                }}
+              >
+                <button className={`is-danger${deleteName === scenario.name ? ' is-confirming' : ''}`} type="button" role="menuitem" disabled={!!busy || active} title={active ? 'Disable this scenario before deleting it.' : undefined} aria-label={deleteName === scenario.name ? `Confirm delete ${scenario.name}` : `Delete ${scenario.name}`} onClick={() => onDelete(scenario)}>{busy === `delete-scenario:${scenario.name}` ? 'DELETING…' : deleteName === scenario.name ? 'CONFIRM' : 'DELETE'}</button>
+              </RowActionsMenu>
+            </div>
+          </div>
+        })}
       </div>
-    })}
+    </div>
     {!loading && scenarios.length === 0 && <div className="empty-row">No mock scenarios. Create one, then add routes for the services it should mock.</div>}
     {loading && <div className="empty-row">Loading mock scenarios…</div>}
   </section>

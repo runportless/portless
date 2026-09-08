@@ -6,9 +6,8 @@ schedules a delivery, persists it, and follows status events. Its topology is
 large enough to make provider changes and source-aware traffic visible while
 remaining understandable in one sitting.
 
-The example deliberately has no `portless.yaml`, Compose file, or shared
-application monorepo. A bootstrap script materializes these templates as three
-independent Git repositories:
+A bootstrap script materializes the application templates as three independent
+Git repositories:
 
 | Source | Stack | Services | Responsibility |
 | --- | --- | --- | --- |

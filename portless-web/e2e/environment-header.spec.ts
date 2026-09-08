@@ -31,7 +31,7 @@ test('keeps every destination and primary action reachable on a narrow screen', 
     await expect(palette.getByRole('textbox', { name: 'Search', exact: true })).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(search).toBeFocused()
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth), { message: `${view} should fit the narrow viewport` }).toBe(390)
     if (view === 'Topology') {
       const topology = page.locator('.topology-panel--page')
       expect(Math.round((await topology.boundingBox())!.y + (await topology.boundingBox())!.height)).toBe(830)
