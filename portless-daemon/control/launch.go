@@ -13,6 +13,7 @@ import (
 
 	"github.com/runportless/portless/portless-daemon/identity"
 	"github.com/runportless/portless/portless-daemon/lifecycle"
+	"github.com/runportless/portless/portless-daemon/replacement"
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
@@ -22,6 +23,9 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 		return identity.Record{}, err
 	}
 	if inspection, err := m.inspectDaemon(ctx); err == nil {
+		if recoveredBuild(inspection) && !inspection.Compatible {
+			return identity.Record{}, incompatibleDaemonError(inspection)
+		}
 		if inspection.Compatible && m.keepCompatibleDaemon(ctx, inspection) {
 			return inspection.Record, nil
 		}
@@ -56,6 +60,9 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 
 	inspection, inspectErr := m.inspectDaemon(ctx)
 	if inspectErr == nil {
+		if recoveredBuild(inspection) && !inspection.Compatible {
+			return identity.Record{}, incompatibleDaemonError(inspection)
+		}
 		if inspection.Compatible && inspection.CurrentBuild {
 			return inspection.Record, nil
 		}
@@ -98,7 +105,7 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 	var lastError error
 	for m.hooks.Now().Before(startupDeadline) {
 		inspection, err := m.inspectDaemon(ctx)
-		if err == nil && inspection.Compatible && inspection.CurrentBuild {
+		if err == nil && inspection.Compatible && (inspection.CurrentBuild || recoveredBuild(inspection)) {
 			return inspection.Record, nil
 		}
 		if err != nil {
@@ -120,7 +127,7 @@ func (m *Manager) ensureDaemon(ctx context.Context) (identity.Record, error) {
 }
 
 func (m *Manager) keepCompatibleDaemon(ctx context.Context, inspection Inspection) bool {
-	if inspection.CurrentBuild {
+	if inspection.CurrentBuild || recoveredBuild(inspection) {
 		return true
 	}
 	if len(inspection.Identity.ActiveEnvironments) == 0 {
@@ -135,7 +142,17 @@ func (m *Manager) keepCompatibleDaemon(ctx context.Context, inspection Inspectio
 }
 
 func startDaemonProcess(paths installation.Layout) error {
-	executable, err := os.Executable()
+	source, err := replacement.SourceExecutable()
+	if err != nil {
+		return err
+	}
+	buildID, err := installation.CurrentBuildID()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	executable, err := replacement.LaunchBuild(ctx, paths, source, buildID)
 	if err != nil {
 		return err
 	}
@@ -144,7 +161,7 @@ func startDaemonProcess(paths installation.Layout) error {
 		return err
 	}
 	defer logFile.Close()
-	command := exec.Command(executable, "__daemon", "--data-dir", paths.Root)
+	command := exec.Command(executable, "__daemon", "--data-dir", paths.Root, "--executable", source)
 	command.Stdin = nil
 	command.Stdout = logFile
 	command.Stderr = logFile

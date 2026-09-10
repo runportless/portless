@@ -354,6 +354,7 @@ func forbiddenProductImport(source, target string) string {
 	installation := daemonRoot + "/system/installation"
 	worktrees := daemonRoot + "/projects/worktrees"
 	replay := daemonRoot + "/traffic/replay"
+	replacement := daemonRoot + "/replacement"
 	mcpSDK := "github.com/modelcontextprotocol/go-sdk"
 	if target == relayRoot && source != cliRoot+"/cmd/portless" {
 		return "the relay root is private-command composition; import its owning installation, health, or runtime package"
@@ -374,6 +375,9 @@ func forbiddenProductImport(source, target string) string {
 	}
 	if source == client && strings.HasPrefix(target, modulePath+"/") && target != contract {
 		return "the daemon API client may depend only on the API contract"
+	}
+	if matchesAny(source, replacement) && (isThirdPartyImport(target) || strings.HasPrefix(target, modulePath+"/")) && target != contract && target != installation && !matchesAny(target, replacement) {
+		return "daemon replacement trials depend only on the standard library, installation primitives, and API contracts"
 	}
 	if matchesAny(source, replay) && strings.HasPrefix(target, modulePath+"/") && target != contract && target != daemonRoot+"/model" && !matchesAny(target, replay) {
 		return "replay workspaces depend only on stable models and the API contract; the control plane injects destination resolution and execution"

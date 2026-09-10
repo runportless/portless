@@ -160,7 +160,13 @@ must reload snapshots after reconnecting. A completed reconciliation emits the
 normal `environment.state`/`service.state` updates for subsequent changes, and
 the durable timeline includes an `environment.reconciled` entry.
 
-An accepted normal daemon restart has one five-second readiness deadline. The
+An accepted normal daemon restart has a five-second replacement deadline and
+an additional fifteen-second recovery allowance. API 21.0.0 receipts include
+`recoveryDeadlineAt`; daemon status and diagnostics expose `lastRestart.outcome`
+as `replaced` or `rolled-back`. Clients must check the outcome when reconnecting
+to a new instance instead of treating every instance change as upgrade success.
+Rollback restores the old daemon's SQLite snapshot only after its failed trial
+has exited, so the same snapshot reload rules apply. The
 old daemon cancels every live request context, including SSE subscriptions,
 before its bounded HTTP drain. Browsers should treat those stream closures as
 the expected handoff boundary, reconnect to the replacement instance, and then

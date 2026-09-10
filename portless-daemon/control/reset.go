@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/runportless/portless/portless-daemon/identity"
+	"github.com/runportless/portless/portless-daemon/replacement"
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
@@ -104,6 +105,14 @@ func verifyDaemonInstanceStopped(paths installation.Layout) error {
 }
 
 func daemonInstanceStopped(paths installation.Layout) (bool, error) {
+	lease, err := replacement.AcquireLease(paths, 0)
+	if errors.Is(err, replacement.ErrLeaseHeld) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer lease.Close()
 	lock, err := os.OpenFile(paths.InstanceLock, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return false, fmt.Errorf("open daemon instance lock: %w", err)
@@ -127,7 +136,7 @@ func (m *Manager) waitForResetDaemon(ctx context.Context) (identity.Record, erro
 	var lastError error
 	for m.hooks.Now().Before(deadline) {
 		inspection, err := m.inspectDaemon(ctx)
-		if err == nil && inspection.Compatible && inspection.CurrentBuild {
+		if err == nil && inspection.Compatible && (inspection.CurrentBuild || recoveredBuild(inspection)) {
 			return inspection.Record, nil
 		}
 		if err != nil {

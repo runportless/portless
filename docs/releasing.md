@@ -288,6 +288,12 @@ scoped to `runportless/homebrew-tap`. The source repository's normal
 - [ ] If a bad formula was already published, stop or revert its tap update and
       publish a corrected Portless patch release.
 
+For daemon upgrade checks, inspect `portless daemon status` after replacement.
+A `rolled-back` outcome means the candidate failed and the working daemon was
+restored; it is not a successful upgrade. Automatic retry of that exact build is
+paused. Publish a corrected build or retry explicitly after diagnosing the cause.
+The isolated CLI suite exercises these failure paths without changing the real relay.
+
 A Homebrew upgrade may leave the privileged relay helper from the previous
 binary in place. `portless setup` detects and refreshes that copy, while
 `portless doctor relay` reports the mismatch without disrupting active

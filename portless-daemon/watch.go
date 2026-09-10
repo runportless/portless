@@ -9,11 +9,13 @@ import (
 	"github.com/runportless/portless/portless-daemon/system/installation"
 )
 
-func watchExecutable(ctx context.Context, executable, currentBuildID string, canHandoff func(context.Context) (bool, []string), replacement func(string)) {
+func watchExecutable(ctx context.Context, executable, currentBuildID, rejectedBuildID string, canHandoff func(context.Context) (bool, []string), replacement func(string)) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	reportedBuild := ""
-	lastInfo, _ := os.Stat(executable)
+	// Check the first observed image too: it may already have changed before
+	// this watcher starts, especially when recovering from a rejected build.
+	var lastInfo os.FileInfo
 	pendingBuild := ""
 	for {
 		select {
@@ -34,7 +36,7 @@ func watchExecutable(ctx context.Context, executable, currentBuildID string, can
 				continue
 			}
 			lastInfo = currentInfo
-			if observedBuild == currentBuildID {
+			if observedBuild == currentBuildID || observedBuild == rejectedBuildID {
 				pendingBuild = ""
 				reportedBuild = ""
 				continue

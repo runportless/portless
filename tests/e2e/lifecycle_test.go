@@ -361,8 +361,8 @@ func TestCLIDaemonRestartAdoptsRunningServices(t *testing.T) {
 	if err := json.Unmarshal([]byte(restartOutput), &restart); err != nil {
 		t.Fatalf("decode daemon restart: %v\n%s", err, restartOutput)
 	}
-	if restart.Daemon.InstanceID == beforeDaemon.InstanceID || restart.Daemon.PID != beforeDaemon.PID {
-		t.Fatalf("daemon replacement did not preserve its PID while changing instance identity: before=%#v after=%#v", beforeDaemon, restart.Daemon)
+	if restart.Daemon.InstanceID == beforeDaemon.InstanceID || restart.Daemon.PID == beforeDaemon.PID {
+		t.Fatalf("daemon replacement did not publish a new owned process and instance: before=%#v after=%#v", beforeDaemon, restart.Daemon)
 	}
 	if !restart.Daemon.Compatible || !restart.Daemon.CurrentBuild || restart.Daemon.RuntimeState != "ready" || len(restart.Daemon.RecoveryProblems) != 0 {
 		t.Fatalf("replacement daemon was not healthy: %#v", restart.Daemon)
@@ -395,15 +395,16 @@ func TestCLIDaemonRestartAdoptsRunningServices(t *testing.T) {
 }
 
 type e2eDaemonStatus struct {
-	State            string   `json:"state"`
-	Compatible       bool     `json:"compatible"`
-	CurrentBuild     bool     `json:"currentBuild"`
-	BuildID          string   `json:"buildId"`
-	PID              int      `json:"pid"`
-	InstanceID       string   `json:"instanceId"`
-	RuntimeState     string   `json:"runtimeState"`
-	HandoffState     string   `json:"handoffState"`
-	RecoveryProblems []string `json:"recoveryProblems"`
+	State            string                        `json:"state"`
+	Compatible       bool                          `json:"compatible"`
+	CurrentBuild     bool                          `json:"currentBuild"`
+	BuildID          string                        `json:"buildId"`
+	PID              int                           `json:"pid"`
+	InstanceID       string                        `json:"instanceId"`
+	RuntimeState     string                        `json:"runtimeState"`
+	HandoffState     string                        `json:"handoffState"`
+	RecoveryProblems []string                      `json:"recoveryProblems"`
+	LastRestart      *contract.DaemonRestartStatus `json:"lastRestart,omitempty"`
 }
 
 func daemonStatus(t *testing.T, binary, home, checkout string) e2eDaemonStatus {

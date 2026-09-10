@@ -49,7 +49,8 @@ func (c *replacementCoordinator) prepare(reason, previousInstanceID, targetBuild
 		Restarting: true, RestartID: restartID, Reason: reason,
 		PreviousInstanceID: previousInstanceID, TargetBuildID: targetBuildID,
 		AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-		Handoff: handoff, ActiveEnvironments: append([]string(nil), activeEnvironments...),
+		RecoveryDeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA + contract.DaemonRecoverySLA),
+		Handoff:            handoff, ActiveEnvironments: append([]string(nil), activeEnvironments...),
 	}
 	c.pending = &replacementRequest{receipt: receipt, cause: cause}
 	return cloneDaemonRestart(receipt), nil
@@ -74,6 +75,7 @@ func cloneDaemonRestart(receipt contract.DaemonRestart) contract.DaemonRestart {
 type replacementExit struct {
 	receipt contract.DaemonRestart
 	cause   error
+	port    int
 }
 
 // Error returns the replacement trigger as the daemon run error.
@@ -96,7 +98,7 @@ func restartReceiptFromEnvironment() (*contract.DaemonRestart, error) {
 	if err := json.Unmarshal([]byte(encoded), &receipt); err != nil {
 		return nil, fmt.Errorf("decode daemon restart receipt: %w", err)
 	}
-	if !receipt.Restarting || receipt.RestartID == "" || receipt.Reason == "" || receipt.PreviousInstanceID == "" || receipt.TargetBuildID == "" || receipt.AcceptedAt.IsZero() || receipt.DeadlineAt.IsZero() || !receipt.DeadlineAt.After(receipt.AcceptedAt) {
+	if !receipt.Restarting || receipt.RestartID == "" || receipt.Reason == "" || receipt.PreviousInstanceID == "" || receipt.TargetBuildID == "" || receipt.AcceptedAt.IsZero() || !receipt.DeadlineAt.Equal(receipt.AcceptedAt.Add(contract.DaemonRestartSLA)) || !receipt.RecoveryDeadlineAt.Equal(receipt.DeadlineAt.Add(contract.DaemonRecoverySLA)) {
 		return nil, errors.New("daemon restart receipt is incomplete")
 	}
 	return &receipt, nil

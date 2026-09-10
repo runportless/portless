@@ -34,6 +34,7 @@ export interface DaemonStatus {
   apiVersion: string
   recoveryProblems: string[]
   activeEnvironments: string[]
+  lastRestart?: DaemonRestartStatus
 }
 
 export interface DaemonManagedInventory {
@@ -127,6 +128,7 @@ export interface DaemonRestart {
   targetBuildId: string
   acceptedAt: string
   deadlineAt: string
+  recoveryDeadlineAt: string
   handoff: boolean
   activeEnvironments: string[]
 }
@@ -142,6 +144,8 @@ export interface DaemonRestartStatus {
   readyAt: string
   durationMs: number
   withinSla: boolean
+  outcome: 'replaced' | 'rolled-back'
+  failure?: string
 }
 
 export interface RelayStatus {

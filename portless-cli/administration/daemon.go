@@ -15,24 +15,25 @@ import (
 )
 
 type daemonStatusOutput struct {
-	State              string    `json:"state"`
-	Compatible         bool      `json:"compatible"`
-	CurrentBuild       bool      `json:"currentBuild"`
-	PID                int       `json:"pid,omitempty"`
-	ProtocolVersion    string    `json:"protocolVersion,omitempty"`
-	APIVersion         string    `json:"apiVersion,omitempty"`
-	InstallationID     string    `json:"installationId,omitempty"`
-	InstanceID         string    `json:"instanceId,omitempty"`
-	BuildID            string    `json:"buildId,omitempty"`
-	ExpectedBuildID    string    `json:"expectedBuildId,omitempty"`
-	StartedAt          time.Time `json:"startedAt,omitempty"`
-	RuntimeState       string    `json:"runtimeState,omitempty"`
-	HandoffState       string    `json:"handoffState"`
-	HandoffVerifiedAt  time.Time `json:"handoffVerifiedAt,omitempty"`
-	HandoffProblems    []string  `json:"handoffProblems"`
-	RecoveryProblems   []string  `json:"recoveryProblems"`
-	ActiveEnvironments []string  `json:"activeEnvironments"`
-	Problems           []string  `json:"problems"`
+	State              string                        `json:"state"`
+	Compatible         bool                          `json:"compatible"`
+	CurrentBuild       bool                          `json:"currentBuild"`
+	PID                int                           `json:"pid,omitempty"`
+	ProtocolVersion    string                        `json:"protocolVersion,omitempty"`
+	APIVersion         string                        `json:"apiVersion,omitempty"`
+	InstallationID     string                        `json:"installationId,omitempty"`
+	InstanceID         string                        `json:"instanceId,omitempty"`
+	BuildID            string                        `json:"buildId,omitempty"`
+	ExpectedBuildID    string                        `json:"expectedBuildId,omitempty"`
+	StartedAt          time.Time                     `json:"startedAt,omitempty"`
+	RuntimeState       string                        `json:"runtimeState,omitempty"`
+	HandoffState       string                        `json:"handoffState"`
+	HandoffVerifiedAt  time.Time                     `json:"handoffVerifiedAt,omitempty"`
+	HandoffProblems    []string                      `json:"handoffProblems"`
+	RecoveryProblems   []string                      `json:"recoveryProblems"`
+	ActiveEnvironments []string                      `json:"activeEnvironments"`
+	Problems           []string                      `json:"problems"`
+	LastRestart        *contract.DaemonRestartStatus `json:"lastRestart,omitempty"`
 }
 
 type daemonRestartOutput struct {
@@ -85,6 +86,7 @@ func (c *Commands) daemonStatus(ctx context.Context, jsonOutput bool) error {
 		HandoffProblems:  append([]string(nil), handoff.Problems...),
 		RecoveryProblems: append([]string(nil), inspection.Identity.RecoveryProblems...),
 		Problems:         append([]string(nil), inspection.Problems...),
+		LastRestart:      inspection.Identity.LastRestart,
 	}
 	if result.ActiveEnvironments == nil {
 		result.ActiveEnvironments = []string{}
@@ -115,6 +117,10 @@ func (c *Commands) printDaemonStatus(result daemonStatusOutput) {
 	fmt.Fprintf(c.Out, "API Version: %s\n", result.APIVersion)
 	if result.RuntimeState != "" {
 		fmt.Fprintf(c.Out, "Runtime state: %s\n", result.RuntimeState)
+	}
+	if result.LastRestart != nil && result.LastRestart.Outcome == "rolled-back" {
+		fmt.Fprintln(c.Out, "Last replacement: rolled back.", result.LastRestart.Failure)
+		fmt.Fprintln(c.Out, "Automatic retry is paused for that build; install a corrected build or run `portless daemon restart` to retry explicitly.")
 	}
 	if result.HandoffState == "ready" {
 		fmt.Fprintln(c.Out, "Runtime handoff:", c.Success(c.Out, "ready"))
@@ -198,6 +204,7 @@ func daemonRestartJSONOutput(result control.RestartResult) daemonRestartOutput {
 			ExpectedBuildID: expectedBuildID, StartedAt: record.StartedAt, RuntimeState: runtimeState,
 			HandoffState: handoffState, HandoffProblems: []string{}, RecoveryProblems: recoveryProblems,
 			ActiveEnvironments: activeEnvironments, Problems: problems,
+			LastRestart: inspection.Identity.LastRestart,
 		},
 		DurationMS: result.DurationMS,
 		Forced:     result.Forced,
@@ -207,6 +214,11 @@ func daemonRestartJSONOutput(result control.RestartResult) daemonRestartOutput {
 func (c *Commands) restartDaemon(ctx context.Context, force, jsonOutput bool) error {
 	result, err := c.Daemon.Restart(ctx, control.RestartOptions{Force: force})
 	if err != nil {
+		var rollback *control.RollbackError
+		if errors.As(err, &rollback) && jsonOutput {
+			output := daemonRestartJSONOutput(result)
+			return &apiclient.ClientError{Code: "DAEMON_RESTART_ROLLED_BACK", Message: err.Error(), Details: map[string]any{"restart": output.Restart, "daemon": output.Daemon}}
+		}
 		return actionableDaemonRestartError(err)
 	}
 	if jsonOutput {

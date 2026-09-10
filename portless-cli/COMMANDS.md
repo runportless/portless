@@ -512,15 +512,19 @@ help.
 | --- | --- |
 | `portless daemon status` | Inspect and authenticate the local daemon without starting a replacement, including a fresh runtime-handoff safety audit. |
 | `portless daemon stop` | Gracefully stop the authenticated daemon. `--timeout <duration>` defaults to `15s`; `--force` permits a guarded stop with active environments or a legacy fallback. |
-| `portless daemon restart` | Replace the authenticated daemon with the current executable build and wait for ready state. Normal restart has one fixed five-second end-to-end deadline; `--force` uses the guarded legacy stop/start path outside that SLA. |
+| `portless daemon restart` | Replace the authenticated daemon and wait for its outcome. A candidate has five seconds to become ready, followed by up to fifteen seconds for automatic recovery if it fails; `--force` uses the guarded stop/start path outside those deadlines. |
 | `portless runtime status` | Show configured and detected Docker or Podman runtime status. |
 | `portless runtime start` | Start the configured container runtime when supported. |
 | `portless runtime use <auto|docker|podman>` | Save the container-runtime preference. `auto` chooses an available supported runtime. |
 
-A normal daemon restart is designed to adopt owned runtimes, target completion
-under two seconds, and fail with the daemon-log path if a different ready
-instance is not observed within five seconds. Concurrent CLI, browser, MCP,
-and executable-change requests coalesce into one replacement. Forced
+A normal daemon restart adopts owned runtimes and changes the daemon process
+and instance while preserving application processes. A failed candidate exits
+before the previous daemon restores its database and routes. An explicit restart
+reports rollback as an error, with its recovered status included in JSON.
+`portless daemon status` shows the last outcome. Automatic retries of that exact
+failed build are paused; install a different build or explicitly restart to retry.
+Compatible CLI operations remain available on the recovered daemon. Concurrent
+CLI, browser, MCP, and executable-change requests coalesce into one replacement. Forced
 replacement can interrupt active environments and is not a routine refresh
 mechanism or part of the normal restart SLA.
 
@@ -529,7 +533,8 @@ and active-environment state. Opening the daemon drawer or requesting a restart
 performs the deeper supervisor, container, proxy-listener, and ownership audit;
 restart always repeats that audit immediately before replacement and fails
 closed if current ownership cannot be proven. The restart receipt includes its
-identifier, trigger, target build, acceptance time, and shared ready deadline.
+identifier, trigger, target build, acceptance time, ready deadline, and recovery
+deadline. Requests and WebSockets can briefly disconnect during either handoff.
 
 ### Diagnostics
 

@@ -2,13 +2,16 @@
 // protocol shared by the daemon process, control clients, and API adapters.
 package lifecycle
 
-import "time"
+import (
+	"github.com/runportless/portless/portless-daemon/api/contract"
+	"time"
+)
 
 const (
 	// Product is the authenticated lifecycle product identifier.
 	Product = "portless"
 	// ProtocolVersion is the semantic version of the daemon lifecycle protocol.
-	ProtocolVersion = "4.0.0"
+	ProtocolVersion = "5.0.0"
 	// IdentityPath is the private authenticated daemon identity route.
 	IdentityPath = "/_portless/daemon/v1/identity"
 	// HandoffPath is the private authenticated daemon handoff-verification route.
@@ -31,17 +34,18 @@ const (
 // compatibility, recovery, and active-environment state. Handoff readiness is
 // verified separately because it requires live runtime ownership probes.
 type Identity struct {
-	Product            string    `json:"product"`
-	ProtocolVersion    string    `json:"protocolVersion"`
-	APIVersion         string    `json:"apiVersion"`
-	InstallationID     string    `json:"installationId"`
-	InstanceID         string    `json:"instanceId"`
-	BuildID            string    `json:"buildId"`
-	PID                int       `json:"pid"`
-	StartedAt          time.Time `json:"startedAt"`
-	State              string    `json:"state"`
-	RecoveryProblems   []string  `json:"recoveryProblems"`
-	ActiveEnvironments []string  `json:"activeEnvironments"`
+	Product            string                        `json:"product"`
+	ProtocolVersion    string                        `json:"protocolVersion"`
+	APIVersion         string                        `json:"apiVersion"`
+	InstallationID     string                        `json:"installationId"`
+	InstanceID         string                        `json:"instanceId"`
+	BuildID            string                        `json:"buildId"`
+	PID                int                           `json:"pid"`
+	StartedAt          time.Time                     `json:"startedAt"`
+	State              string                        `json:"state"`
+	RecoveryProblems   []string                      `json:"recoveryProblems"`
+	ActiveEnvironments []string                      `json:"activeEnvironments"`
+	LastRestart        *contract.DaemonRestartStatus `json:"lastRestart,omitempty"`
 }
 
 // HandoffStatus reports one completed live runtime-adoption audit.

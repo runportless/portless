@@ -41,7 +41,7 @@ function renderChrome(activeEnvironment?: Environment, activeView: EnvironmentVi
       onDaemonRefresh={async () => daemon}
       onDaemonDiagnosticsRefresh={async () => diagnostics}
       onDaemonHandoffVerify={async () => handoff}
-      onDaemonRestart={async (instanceId) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', handoff: true, activeEnvironments: [] })}
+      onDaemonRestart={async (instanceId) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', recoveryDeadlineAt: '2026-08-25T12:00:20Z', handoff: true, activeEnvironments: [] })}
       onDaemonReconnected={async () => undefined}
     >
       <div>content</div>

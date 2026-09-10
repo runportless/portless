@@ -5,9 +5,13 @@ import (
 	"time"
 )
 
-// DaemonRestartSLA is the end-to-end deadline for an authenticated in-process
+// DaemonRestartSLA is the end-to-end deadline for an authenticated
 // daemon replacement to publish a ready current-build instance.
 const DaemonRestartSLA = 5 * time.Second
+
+// DaemonRecoverySLA bounds restoration of the previous daemon after a failed
+// replacement, in addition to the replacement's readiness deadline.
+const DaemonRecoverySLA = 15 * time.Second
 
 // Health is the unauthenticated compatibility response used by relay checks.
 type Health struct {
@@ -38,15 +42,16 @@ type DirectorySelection struct {
 // DaemonStatus describes the authenticated daemon process, compatibility,
 // recovery, and active environments without performing runtime handoff probes.
 type DaemonStatus struct {
-	State              string    `json:"state"`
-	PID                int       `json:"pid"`
-	StartedAt          time.Time `json:"startedAt"`
-	InstanceID         string    `json:"instanceId"`
-	BuildID            string    `json:"buildId"`
-	ProtocolVersion    string    `json:"protocolVersion"`
-	APIVersion         string    `json:"apiVersion"`
-	RecoveryProblems   []string  `json:"recoveryProblems"`
-	ActiveEnvironments []string  `json:"activeEnvironments"`
+	State              string               `json:"state"`
+	PID                int                  `json:"pid"`
+	StartedAt          time.Time            `json:"startedAt"`
+	InstanceID         string               `json:"instanceId"`
+	BuildID            string               `json:"buildId"`
+	ProtocolVersion    string               `json:"protocolVersion"`
+	APIVersion         string               `json:"apiVersion"`
+	RecoveryProblems   []string             `json:"recoveryProblems"`
+	ActiveEnvironments []string             `json:"activeEnvironments"`
+	LastRestart        *DaemonRestartStatus `json:"lastRestart,omitempty"`
 }
 
 // DaemonDiagnostics is one bounded operational snapshot collected for the
@@ -139,6 +144,7 @@ type DaemonRestart struct {
 	TargetBuildID      string    `json:"targetBuildId"`
 	AcceptedAt         time.Time `json:"acceptedAt"`
 	DeadlineAt         time.Time `json:"deadlineAt"`
+	RecoveryDeadlineAt time.Time `json:"recoveryDeadlineAt"`
 	Handoff            bool      `json:"handoff"`
 	ActiveEnvironments []string  `json:"activeEnvironments"`
 }
@@ -156,6 +162,8 @@ type DaemonRestartStatus struct {
 	ReadyAt            time.Time `json:"readyAt"`
 	DurationMS         int64     `json:"durationMs"`
 	WithinSLA          bool      `json:"withinSla"`
+	Outcome            string    `json:"outcome"`
+	Failure            string    `json:"failure,omitempty"`
 }
 
 // DaemonRestartRequest identifies the daemon instance the caller intends to

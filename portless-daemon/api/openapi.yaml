@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Portless local control API
-  version: 20.1.0
+  version: 21.0.0
   description: >-
     Loopback-only API shared by the Portless CLI and embedded UI. Projects are
     reusable application topologies. Environments are independently configured
@@ -36,7 +36,7 @@ paths:
                 required: [ready, apiVersion]
                 properties:
                   ready: { type: boolean }
-                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '20.1.0', description: Stable semantic API version. }
+                  apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '21.0.0', description: Stable semantic API version. }
   /system:
     get:
       operationId: system
@@ -146,8 +146,12 @@ paths:
         active-environment inventory, but may return handoff false when it
         bypasses the blocked adoption check. Browser sessions remain valid
         across the replacement. A successful response is a restart receipt
-        with one shared five-second readiness deadline; clients reconnect by
-        observing a different ready instanceId. Concurrent CLI, browser, MCP,
+        with a five-second replacement deadline and an additional fifteen-second
+        recovery allowance. Clients inspect lastRestart.outcome on the new ready
+        instance: replaced or rolled-back. Failed candidates never serve feature
+        API or application requests. The previous daemon restores its SQLite
+        snapshot after its directly owned trial process has exited. Automatic
+        retry of the same rejected build is paused; an explicit restart can retry. Concurrent CLI, browser, MCP,
         and executable-change triggers coalesce into one replacement. A blocked
         ordinary handoff response identifies the environments responsible and
         provides stop-then-retry remediation commands.
@@ -1898,10 +1902,11 @@ components:
         startedAt: { type: string, format: date-time }
         instanceId: { type: string }
         buildId: { type: string }
-        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '4.0.0', description: Stable semantic daemon protocol version. }
-        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '20.1.0', description: Stable semantic API version. }
+        protocolVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '5.0.0', description: Stable semantic daemon protocol version. }
+        apiVersion: { type: string, pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$', example: '21.0.0', description: Stable semantic API version. }
         recoveryProblems: { type: array, items: { type: string } }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
+        lastRestart: { $ref: '#/components/schemas/DaemonRestartStatus' }
     DaemonDiagnostics:
       type: object
       required: [collectedAt, inventory, recovery, build]
@@ -2001,7 +2006,7 @@ components:
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonRestart:
       type: object
-      required: [restarting, restartId, reason, previousInstanceId, targetBuildId, acceptedAt, deadlineAt, handoff, activeEnvironments]
+      required: [restarting, restartId, reason, previousInstanceId, targetBuildId, acceptedAt, deadlineAt, recoveryDeadlineAt, handoff, activeEnvironments]
       properties:
         restarting: { type: boolean, const: true }
         restartId: { type: string, description: Stable identifier shared by every caller whose concurrent trigger coalesced into this replacement. }
@@ -2010,11 +2015,12 @@ components:
         targetBuildId: { type: string, description: SHA-256 identity of the executable the replacement will run. }
         acceptedAt: { type: string, format: date-time }
         deadlineAt: { type: string, format: date-time, description: Ready-state deadline five seconds after restart acceptance. }
+        recoveryDeadlineAt: { type: string, format: date-time, description: Recovery deadline fifteen seconds after the replacement deadline. }
         handoff: { type: boolean, description: True when every active runtime passed adoption safety checks; false only for an explicitly confirmed browser force restart. }
         activeEnvironments: { type: array, items: { type: string, example: billing/local } }
     DaemonRestartStatus:
       type: object
-      required: [restartId, reason, previousInstanceId, instanceId, targetBuildId, acceptedAt, deadlineAt, readyAt, durationMs, withinSla]
+      required: [restartId, reason, previousInstanceId, instanceId, targetBuildId, acceptedAt, deadlineAt, readyAt, durationMs, withinSla, outcome]
       properties:
         restartId: { type: string }
         reason: { type: string, enum: [cli, browser, mcp, executable-change] }
@@ -2025,7 +2031,9 @@ components:
         deadlineAt: { type: string, format: date-time }
         readyAt: { type: string, format: date-time }
         durationMs: { type: integer, format: int64, minimum: 0 }
-        withinSla: { type: boolean }
+        withinSla: { type: boolean, description: True only for a successful replacement ready before its five-second deadline. }
+        outcome: { type: string, enum: [replaced, rolled-back] }
+        failure: { type: string, description: Safe explanation of the failed replacement and recovery. }
     DirectorySelection:
       type: object
       required: [path]

@@ -44,6 +44,7 @@ Adjacent products keep separate responsibilities:
 | `api/client` | Typed authenticated HTTP client used by native consumers. |
 | `api/server` | HTTP routing and adapters from the wire contract to injected daemon capabilities. |
 | `control` | Out-of-process inspection, serialized startup, replacement, shutdown, reset, and uninstall coordination. |
+| `replacement` | Private retained builds, inherited process lease, failed-build quarantine, and bounded child trials; no database or application-runtime dependencies. |
 | `controlplane` | Application behavior for projects, environments, lifecycle operations, provider changes, observability, and reconciliation. |
 | `daemonlog` | Bounded, fixed-path inspection and known-secret redaction for the private daemon log. |
 | `database` | SQLite persistence for topology, operations, ownership, runtime state, traffic artifacts, mocks, and faults. |
@@ -101,13 +102,22 @@ refuses to launch a duplicate or signal an unverified process. A normal
 restart can therefore keep an environment running; a forced replacement is an
 explicit recovery action and is not routine development workflow.
 
-Normal CLI, browser, MCP, and executable-change triggers use one in-process
-replacement coordinator. Concurrent triggers coalesce into one receipt, the
-old daemon cancels long-lived request contexts before a bounded drain, and the
-replacement carries the receipt through `exec` so diagnostics can report its
-ready time. Callers enforce a five-second end-to-end readiness deadline; the
-operational target is under two seconds. Forced and legacy recovery remains on
-the slower stop/start path and is outside this SLA.
+Normal CLI, browser, MCP, and executable-change triggers coalesce into one
+replacement receipt. The old daemon drains its listeners, snapshots SQLite,
+and remains as the guardian of a directly owned candidate process. The candidate
+must reconcile runtimes and bind listeners within five seconds before serving
+requests. A failed candidate is killed and reaped before the previous daemon
+restores its database and routes, with an additional fifteen-second recovery
+allowance. A successful upgrade changes the daemon PID; application processes
+keep theirs. Diagnostics distinguish `replaced` from `rolled-back`.
+
+The same failed build is quarantined from automatic retry. Compatible CLI
+operations continue against the working image; explicit `daemon restart` can
+retry, and a different installed image becomes eligible automatically. Retained
+images are private and checked by SHA-256. See
+[replacement recovery](../docs/architecture/decisions/0009-daemon-replacement-recovery.md)
+for the lease, state transaction, and remaining boundaries. Forced CLI stop/start
+recovery remains outside this SLA.
 
 The privileged relay remains deliberately narrow. It binds the documented
 machine-wide loopback listeners, verifies the installed helper against its

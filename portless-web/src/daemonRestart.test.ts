@@ -1,26 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from './daemonRestart'
+import { DAEMON_RESTART_SLA_MS, DAEMON_RECOVERY_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from './daemonRestart'
 import type { DaemonRestart } from './api/contracts/system'
 
-const receipt = (deadlineAt: string): DaemonRestart => ({
+const receipt = (recoveryDeadlineAt: string): DaemonRestart => ({
   restarting: true,
   restartId: 'restart-1',
   reason: 'browser',
   previousInstanceId: 'instance-1',
   targetBuildId: 'build-2',
   acceptedAt: '2026-08-26T12:00:00Z',
-  deadlineAt,
+  deadlineAt: '2026-08-26T12:00:05Z',
+  recoveryDeadlineAt,
   handoff: true,
   activeEnvironments: ['store/local'],
 })
 
 describe('daemon restart SLA', () => {
-  it('uses the shared server deadline without exceeding five seconds locally', () => {
+  it('waits through bounded recovery without extending the replacement deadline', () => {
     const initiatedAt = Date.parse('2026-08-26T12:00:00Z')
     expect(daemonRestartDeadline(receipt('2026-08-26T12:00:04Z'), initiatedAt)).toBe(initiatedAt + 4_000)
-    expect(daemonRestartDeadline(receipt('2026-08-26T12:00:30Z'), initiatedAt)).toBe(initiatedAt + DAEMON_RESTART_SLA_MS)
+    expect(daemonRestartDeadline(receipt('2026-08-26T12:00:30Z'), initiatedAt)).toBe(initiatedAt + DAEMON_RESTART_SLA_MS + DAEMON_RECOVERY_SLA_MS)
     expect(daemonRestartDeadline(receipt('2026-08-26T11:59:59Z'), initiatedAt)).toBe(initiatedAt)
-    expect(daemonRestartDeadline(receipt('invalid'), initiatedAt)).toBe(initiatedAt + DAEMON_RESTART_SLA_MS)
+    expect(daemonRestartDeadline(receipt('invalid'), initiatedAt)).toBe(initiatedAt + DAEMON_RESTART_SLA_MS + DAEMON_RECOVERY_SLA_MS)
   })
 
   it('polls aggressively during the expected short outage', () => {

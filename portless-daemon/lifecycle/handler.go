@@ -163,6 +163,10 @@ func (h *Handler) Status(ctx context.Context) (Identity, error) {
 		return Identity{}, err
 	}
 	identity := h.identity
+	if identity.LastRestart != nil {
+		status := *identity.LastRestart
+		identity.LastRestart = &status
+	}
 	identity.ActiveEnvironments = active
 	identity.RecoveryProblems = append([]string(nil), h.identity.RecoveryProblems...)
 	if identity.RecoveryProblems == nil {

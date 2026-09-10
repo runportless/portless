@@ -106,7 +106,7 @@ func (m *Manager) checkDaemon(ctx context.Context) (identity.Record, error) {
 	if err != nil {
 		return identity.Record{}, err
 	}
-	if !inspection.Compatible || !inspection.CurrentBuild {
+	if !inspection.Compatible || (!inspection.CurrentBuild && !recoveredBuild(inspection)) {
 		return identity.Record{}, incompatibleDaemonError(inspection)
 	}
 	record := inspection.Record
@@ -116,6 +116,11 @@ func (m *Manager) checkDaemon(ctx context.Context) (identity.Record, error) {
 	record.State = inspection.Identity.State
 	record.RecoveryProblems = append([]string(nil), inspection.Identity.RecoveryProblems...)
 	return record, nil
+}
+
+func recoveredBuild(inspection Inspection) bool {
+	status := inspection.Identity.LastRestart
+	return status != nil && status.Outcome == "rolled-back" && status.TargetBuildID == inspection.ExpectedBuildID
 }
 
 func (m *Manager) fetchDaemonIdentity(ctx context.Context, port int, token string) (lifecycle.Identity, error) {

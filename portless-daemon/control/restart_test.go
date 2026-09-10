@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -40,7 +41,8 @@ func TestRestartDaemonUsesReceiptAndWaitsForReadyReplacement(t *testing.T) {
 				Restarting: true, RestartID: restartID, Reason: "cli",
 				PreviousInstanceID: oldIdentity.InstanceID, TargetBuildID: currentBuildID,
 				AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-				Handoff: true, ActiveEnvironments: []string{"store/local"},
+				RecoveryDeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA + contract.DaemonRecoverySLA),
+				Handoff:            true, ActiveEnvironments: []string{"store/local"},
 			}
 			currentIdentity = newIdentity
 			if err := daemonidentity.Write(paths, newRecord); err != nil {
@@ -105,7 +107,8 @@ func TestEnsureUsesCoordinatedRestartForOutdatedDaemon(t *testing.T) {
 				Restarting: true, RestartID: "automatic-restart", Reason: "cli",
 				PreviousInstanceID: oldIdentity.InstanceID, TargetBuildID: currentBuildID,
 				AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-				Handoff: true, ActiveEnvironments: []string{},
+				RecoveryDeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA + contract.DaemonRecoverySLA),
+				Handoff:            true, ActiveEnvironments: []string{},
 			}), nil
 		default:
 			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
@@ -194,7 +197,8 @@ func TestRestartDaemonFailsAtSharedReadinessDeadline(t *testing.T) {
 				Restarting: true, RestartID: "stuck-restart", Reason: "cli",
 				PreviousInstanceID: oldIdentity.InstanceID, TargetBuildID: currentBuildID,
 				AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-				Handoff: true, ActiveEnvironments: []string{},
+				RecoveryDeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA + contract.DaemonRecoverySLA),
+				Handoff:            true, ActiveEnvironments: []string{},
 			}), nil
 		default:
 			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
@@ -270,5 +274,57 @@ func jsonHTTPResponse(status int, value any) *http.Response {
 		Status:     http.StatusText(status),
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(string(content))),
+	}
+}
+
+func TestRollbackIsReportedAndRejectedBuildIsNotRetriedAutomatically(t *testing.T) {
+	paths, previous, record, expectedBuild := restartFixture(t)
+	previous.BuildID = "previous-working-build"
+	record.BuildID = previous.BuildID
+	if err := daemonidentity.Write(paths, record); err != nil {
+		t.Fatal(err)
+	}
+	current := previous
+	requests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == lifecycle.IdentityPath {
+			return jsonHTTPResponse(http.StatusOK, current), nil
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/daemon/restart" {
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+		}
+		requests++
+		accepted := time.Now().UTC()
+		receipt := contract.DaemonRestart{Restarting: true, RestartID: "failed-trial", Reason: "cli", PreviousInstanceID: previous.InstanceID, TargetBuildID: expectedBuild, AcceptedAt: accepted, DeadlineAt: accepted.Add(contract.DaemonRestartSLA), RecoveryDeadlineAt: accepted.Add(contract.DaemonRestartSLA + contract.DaemonRecoverySLA), Handoff: true}
+		current.InstanceID = "recovered-instance"
+		current.LastRestart = &contract.DaemonRestartStatus{RestartID: receipt.RestartID, PreviousInstanceID: previous.InstanceID, TargetBuildID: expectedBuild, Outcome: "rolled-back", Failure: "Previous daemon restored."}
+		record.InstanceID = current.InstanceID
+		if err := daemonidentity.Write(paths, record); err != nil {
+			t.Fatal(err)
+		}
+		return jsonHTTPResponse(http.StatusAccepted, receipt), nil
+	})
+	manager := NewWithHooks(paths, Hooks{HTTPClient: func(time.Duration) *http.Client { return &http.Client{Transport: transport} }})
+	result, err := manager.Restart(context.Background(), RestartOptions{})
+	var rollback *RollbackError
+	if !errors.As(err, &rollback) || result.Daemon.InstanceID != "recovered-instance" {
+		t.Fatalf("restart result = %#v, %v", result, err)
+	}
+	for _, check := range []func(context.Context) (daemonidentity.Record, error){manager.Ensure, manager.Check, manager.waitForResetDaemon} {
+		ready, err := check(context.Background())
+		if err != nil || ready.InstanceID != "recovered-instance" {
+			t.Fatalf("recovered daemon unavailable: %#v, %v", ready, err)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("rejected build retried %d times", requests)
+	}
+	current.APIVersion = "99.0.0"
+	record.APIVersion = current.APIVersion
+	if err := daemonidentity.Write(paths, record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Ensure(context.Background()); err == nil || requests != 1 {
+		t.Fatalf("incompatible recovered daemon retried or accepted: %v, requests=%d", err, requests)
 	}
 }

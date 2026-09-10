@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { APIError } from '../api'
 import { ActionErrorNotice } from './ActionError'
-import { DAEMON_RESTART_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from '../daemonRestart'
+import { DAEMON_RESTART_SLA_MS, DAEMON_RECOVERY_SLA_MS, daemonRestartDeadline, daemonRestartPollDelay } from '../daemonRestart'
 import type { ControlPlaneHealth, DaemonDiagnostics, DaemonHandoffStatus, DaemonRestart, DaemonStatus, RelayStatus, RuntimeStatus } from '../api/contracts/system'
 import { DaemonLogs } from './logs/DaemonLogs'
 import { DrawerShell } from './overlays/DrawerShell'
@@ -187,6 +187,14 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
           if (!replacement) break
           if (Date.now() <= deadline && replacement.instanceId !== previousInstance && replacement.state === 'ready') {
             if (!mounted.current) return
+            const last = replacement.lastRestart
+            if (last?.restartId === receipt.restartId && last.outcome === 'rolled-back') {
+              setPhase('failed')
+              setError(last.failure || 'The replacement failed. The previous daemon was restored.')
+              await onReconnected()
+              return
+            }
+            if (replacement.buildId !== receipt.targetBuildId) continue
             setPhase('reconnected')
             await onReconnected()
             return
@@ -195,7 +203,7 @@ export function DaemonDrawer({ status, diagnostics, controlPlaneHealth, runtime,
           // A refused connection is expected between shutdown and replacement readiness.
         }
       }
-      throw new Error(`The replacement daemon did not become ready within the ${DAEMON_RESTART_SLA_MS / 1_000} second SLA.`)
+      throw new Error(`The replacement daemon did not become ready within the ${DAEMON_RESTART_SLA_MS / 1_000} second SLA or recover within the additional ${DAEMON_RECOVERY_SLA_MS / 1_000} seconds.`)
     } catch (value) {
       if (!mounted.current) return
       setError(errorMessage(value))
@@ -291,7 +299,7 @@ function StatusPanel({ status, diagnostics, health, live }: { status: DaemonStat
         <Detail label="VERSION" value={build.version} />
         <Detail label="DISTRIBUTION" value={displayDistribution(build.distribution)} />
         <Detail label="COMMIT" value={shortFingerprint(build.commit)} title={build.commit} />
-        <Detail label="INSTALLED BINARY" value={build.problem ? 'Comparison unavailable' : build.current ? 'Current' : 'Replacement pending'} detail={build.onDiskBuildId ? `${shortFingerprint(build.runningBuildId)} running · ${shortFingerprint(build.onDiskBuildId)} installed` : build.problem || 'On-disk identity unavailable'} />
+        <Detail label="INSTALLED BINARY" value={build.problem ? 'Comparison unavailable' : build.current ? 'Current' : lastRestart?.outcome === 'rolled-back' && lastRestart.targetBuildId === build.onDiskBuildId ? 'Automatic retry paused' : 'Replacement pending'} detail={build.onDiskBuildId ? `${shortFingerprint(build.runningBuildId)} running · ${shortFingerprint(build.onDiskBuildId)} installed` : build.problem || 'On-disk identity unavailable'} />
       </div> : <p>Build provenance is loading.</p>}
     </section>
     <section className={`drawer-section daemon-control-health ${!live || health.api.state !== 'ready' ? 'daemon-section--warning' : ''}`}>
@@ -304,6 +312,7 @@ function StatusPanel({ status, diagnostics, health, live }: { status: DaemonStat
     {lastRestart && <section className={`drawer-section daemon-restart-status ${lastRestart.withinSla ? '' : 'daemon-section--warning'}`}>
       <div className="daemon-section-heading"><span className="eyebrow">LAST RESTART</span><StatusMark status={lastRestart.withinSla ? 'ready' : 'degraded'} /></div>
       <div className="daemon-recovery-grid">
+        <Detail label="OUTCOME" value={lastRestart.outcome === 'rolled-back' ? 'Previous daemon restored' : 'Replaced'} detail={lastRestart.failure} />
         <Detail label="TRIGGER" value={displayState(lastRestart.reason)} />
         <Detail label="DURATION" value={formatDuration(lastRestart.durationMs)} />
         <Detail label="READY" value={`${relativeTime(lastRestart.readyAt)} ago`} />
@@ -558,6 +567,8 @@ export function daemonDiagnostics(status: DaemonStatus, runtime: RuntimeStatus |
     `Event streams: ${health ? eventHealthLabel(health.events) : 'unknown'}`,
     `Last restart: ${lastRestart?.restartId ?? 'none'}`,
     `Last restart trigger: ${lastRestart?.reason ?? 'unknown'}`,
+    `Last restart outcome: ${lastRestart?.outcome ?? 'unknown'}`,
+    ...(lastRestart?.failure ? [`Last restart failure: ${lastRestart.failure}`] : []),
     `Last restart duration: ${lastRestart ? formatDuration(lastRestart.durationMs) : 'unknown'}`,
     `Last restart SLA: ${lastRestart ? lastRestart.withinSla ? 'met' : 'missed' : 'unknown'}`,
     `Managed processes: ${inventory?.processes ?? 'unknown'}`,

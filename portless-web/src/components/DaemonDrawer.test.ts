@@ -30,7 +30,7 @@ const diagnostics: DaemonDiagnostics = {
   lastRestart: {
     restartId: 'restart-browser', reason: 'browser', previousInstanceId: 'previous-instance', instanceId: 'current-instance',
     targetBuildId: 'build-current', acceptedAt: '2026-08-25T11:59:59Z', deadlineAt: '2026-08-25T12:00:04Z',
-    readyAt: '2026-08-25T12:00:00Z', durationMs: 731, withinSla: true,
+    readyAt: '2026-08-25T12:00:00Z', durationMs: 731, withinSla: true, outcome: 'replaced',
   },
 }
 
@@ -112,13 +112,13 @@ describe('daemon diagnostics', () => {
       protocolVersion: '4.0.0', apiVersion: '12.2.0', recoveryProblems: [], activeEnvironments: ['store/local'],
     }
     const handoff: DaemonHandoffStatus = { state: 'ready', verifiedAt: '2026-08-25T12:00:01Z', problems: [], activeEnvironments: ['store/local'] }
-    const render = (currentStatus: DaemonStatus | null) => renderToStaticMarkup(createElement(DaemonDrawer, {
-      status: currentStatus, diagnostics, controlPlaneHealth, runtime, relay, live: true,
+    const render = (currentStatus: DaemonStatus | null, currentDiagnostics = diagnostics) => renderToStaticMarkup(createElement(DaemonDrawer, {
+      status: currentStatus, diagnostics: currentDiagnostics, controlPlaneHealth, runtime, relay, live: true,
       onClose: () => undefined,
       onRefresh: async () => status,
       onRefreshDiagnostics: async () => diagnostics,
       onVerifyHandoff: async () => handoff,
-      onRestart: async (instanceId: string) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', handoff: true, activeEnvironments: [] }),
+      onRestart: async (instanceId: string) => ({ restarting: true, restartId: 'restart', reason: 'browser', previousInstanceId: instanceId, targetBuildId: 'build', acceptedAt: '2026-08-25T12:00:00Z', deadlineAt: '2026-08-25T12:00:05Z', recoveryDeadlineAt: '2026-08-25T12:00:20Z', handoff: true, activeEnvironments: [] }),
       onReconnected: async () => undefined,
     }))
     const markup = render(status)
@@ -150,6 +150,16 @@ describe('daemon diagnostics', () => {
     expect(markup).toContain('<span>DURATION</span><strong>731 ms</strong>')
     expect(markup).toContain('<span>5 SECOND SLA</span><strong title="restart-browser">Met</strong>')
     expect(markup).not.toContain('RUNTIME ENGINE')
+    const rolledBack: DaemonDiagnostics = {
+      ...diagnostics,
+      build: { ...diagnostics.build, onDiskBuildId: 'failed-build', current: false },
+      lastRestart: { ...diagnostics.lastRestart!, outcome: 'rolled-back', withinSla: false, targetBuildId: 'failed-build', failure: 'The previous daemon was restored.' },
+    }
+    const recovered = render(status, rolledBack)
+    expect(recovered).toContain('Previous daemon restored')
+    expect(recovered).toContain('Automatic retry paused')
+    expect(recovered).toContain('The previous daemon was restored.')
+    expect(daemonDiagnostics(status, runtime, relay, handoff, rolledBack)).toContain('Last restart outcome: rolled-back')
   })
 
   it('moves between tabs only for horizontal tab-list keys', () => {

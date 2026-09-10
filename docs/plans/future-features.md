@@ -10,12 +10,18 @@ direction than expanding into a generic container orchestrator.
 
 ### 1. Reliable daemon and relay upgrades
 
+Failed daemon replacement recovery is implemented: a bounded child trial,
+SQLite rollback, retained working image, and failed-build quarantine. See
+[ADR 0009](../architecture/decisions/0009-daemon-replacement-recovery.md).
+The remaining upgrade work is zero-gap ingress and release hardening.
+
 Finish the lifecycle foundation before adding more runtime surface area:
 
 - Detect when the installed privileged relay helper differs from the current
   Portless build and repair it through `portless relay install`.
 - Minimize or eliminate the ingress gap during daemon replacement.
-- Roll back automatically when a replacement cannot reconcile owned runtimes.
+- Extend recovery beyond startup trials to post-commit health regressions and
+  interruption of the guardian itself.
 - Add supported packaging, signing, notarization, and upgrade tooling.
 - Preserve explicit ownership checks and never replace an unverified process or
   system helper.

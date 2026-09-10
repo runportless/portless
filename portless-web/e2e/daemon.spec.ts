@@ -1,8 +1,43 @@
 import { expect, test } from '@playwright/test'
 import { applicationRequest, authenticate, controlAPI, environmentHeader, openCommandPalette } from './helpers'
 import { readE2EState } from './state'
+import type { DaemonStatus } from '../src/api/contracts/system'
 
 test.describe.configure({ mode: 'serial' })
+
+test('reports a rolled-back replacement as recovered without claiming upgrade success', async ({ page }) => {
+  const state = readE2EState()
+  await authenticate(page)
+  const before = await controlAPI<DaemonStatus>('/api/v1/daemon')
+  const endpoint = `${state.baseURL}/api/v1/daemon`
+  // The compiled CLI suite injects real startup failures. Here a real restart
+  // receives the rollback status contract to exercise the browser's outcome
+  // handling without replacing the executable shared by all browser journeys.
+  await page.route(endpoint, async (route) => {
+    try {
+      const response = await route.fetch()
+      const status = await response.json() as DaemonStatus
+      if (status.instanceId !== before.instanceId && status.lastRestart) {
+        status.lastRestart.outcome = 'rolled-back'
+        status.lastRestart.withinSla = false
+        status.lastRestart.failure = 'The replacement failed. The previous daemon was restored.'
+      }
+      await route.fulfill({ response, json: status })
+    } catch {
+      await route.abort('connectionfailed')
+    }
+  })
+  await page.locator('.sidebar__footer').click()
+  const drawer = page.getByRole('dialog', { name: 'Portless System' })
+  await expect(drawer.getByRole('button', { name: 'RESTART DAEMON' })).toBeEnabled()
+  await drawer.getByRole('button', { name: 'RESTART DAEMON' }).click()
+  await page.getByRole('alertdialog', { name: 'Confirm daemon restart' }).getByRole('button', { name: 'RESTART AND RECONNECT' }).click()
+  await expect(drawer).toContainText('The previous daemon was restored.', { timeout: 10_000 })
+  await expect(drawer).not.toContainText('Daemon restarted')
+  await expect(drawer.getByRole('button', { name: 'RESTART DAEMON' })).toBeEnabled()
+  await page.unroute(endpoint)
+  expect((await applicationRequest('/checkout?sku=recovered&quantity=1')).status).toBe(200)
+})
 
 test('surfaces a failed control-plane refresh and reconnects automatically', async ({ page }) => {
   const state = readE2EState()

@@ -122,6 +122,10 @@ The CLI E2E suite protects these product contracts:
   with adoption of the original service processes and proxy routes while live
   browser event streams reconnect;
 - hard daemon crashes and executable replacement with exact process adoption,
+- invalid replacement images, candidate crashes, readiness timeouts, and schema
+  changes followed by failed reconciliation; automatic restoration preserves
+  service PIDs and routing, quarantines the failed build, permits normal CLI
+  operations, and supports an explicit retry;
   plus service crashes, degraded state, retained logs, and recovery;
 - reboot-shaped loss where durable supervisor files still say `ready` but the
   authenticated supervisor PIDs and application process groups are gone,
@@ -322,7 +326,9 @@ The Playwright suite protects these browser journeys:
   not-found routes, and automatic recovery from a failed control-plane poll;
 - daemon details, restart timing, and logs; full-screen drawer behavior;
   blocked-handoff stop guidance and force-restart confirmation; five-second
-  restart failure messaging, reconnect, and runtime adoption.
+  restart failure messaging, reconnect, and runtime adoption. The rollback UI
+  contract test annotates the outcome of a real browser restart; actual failed
+  candidate processes and database restoration are covered by the CLI suite.
 
 Replay journeys also verify close cleanup and fresh reopening, continued delivery
 of an already admitted request after close, no workspace/expiry label, activity

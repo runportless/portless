@@ -122,7 +122,8 @@ func TestRestartReceiptEnvironmentRoundTrip(t *testing.T) {
 		Restarting: true, RestartID: "restart-id", Reason: "cli",
 		PreviousInstanceID: "old-instance", TargetBuildID: "new-build",
 		AcceptedAt: acceptedAt, DeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA),
-		Handoff: true, ActiveEnvironments: []string{"store/local"},
+		RecoveryDeadlineAt: acceptedAt.Add(contract.DaemonRestartSLA + contract.DaemonRecoverySLA),
+		Handoff:            true, ActiveEnvironments: []string{"store/local"},
 	}
 	environment, err := environmentWithRestartReceipt([]string{"PATH=/bin", daemonRestartReceiptEnvironment + "=stale"}, receipt)
 	if err != nil {
@@ -197,7 +198,7 @@ func TestExecutableWatcherRequestsSafeReplacement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	replacement := make(chan string, 1)
-	go watchExecutable(ctx, executable, buildID, func(context.Context) (bool, []string) {
+	go watchExecutable(ctx, executable, buildID, "", func(context.Context) (bool, []string) {
 		return true, nil
 	}, func(targetBuildID string) { replacement <- targetBuildID })
 
@@ -267,5 +268,40 @@ func TestDaemonDiagnosticsReportsLinkedBuildAndExecutableCurrency(t *testing.T) 
 	}
 	if replaced.Build.Current || replaced.Build.OnDiskBuildID == buildID || replaced.Storage == nil {
 		t.Fatalf("replacement build diagnostics = %#v", replaced)
+	}
+}
+
+func TestExecutableWatcherQuarantinesOneBuildAndAcceptsACorrectedImage(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "portless")
+	if err := os.WriteFile(executable, []byte("rejected-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := installation.BuildIDForPath(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requested := make(chan string, 1)
+	go watchExecutable(ctx, executable, "working-build", rejected, func(context.Context) (bool, []string) { return true, nil }, func(build string) { requested <- build })
+	select {
+	case <-requested:
+		t.Fatal("rejected build retried automatically")
+	case <-time.After(500 * time.Millisecond):
+	}
+	if err := os.WriteFile(executable, []byte("corrected-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := installation.BuildIDForPath(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case build := <-requested:
+		if build != expected {
+			t.Fatalf("requested %s, want %s", build, expected)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("corrected build did not start a new trial")
 	}
 }

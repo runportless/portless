@@ -262,6 +262,12 @@ Traffic capture stays local. Common credential headers are redacted, but
 application payloads can still contain sensitive data. Recording payloads is
 opt-in; review recordings before sharing them.
 
+Daemon upgrades retain a working build while the replacement starts. If startup
+fails, Portless restores the previous daemon and its state while application
+processes keep running. `portless daemon status` shows the outcome. Automatic
+retry of the failed build pauses until you install a different build or explicitly
+run `portless daemon restart`. Connections may briefly disconnect during recovery.
+
 `portless down` keeps your managed data volumes. For removing stored state or
 Portless itself, review the preview-first
 [reset and uninstall commands](portless-cli/COMMANDS.md#reset-and-uninstall).

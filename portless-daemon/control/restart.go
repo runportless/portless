@@ -30,6 +30,13 @@ type RestartResult struct {
 	Forced     bool                   `json:"forced"`
 }
 
+// RollbackError reports a failed replacement after the previous daemon has
+// recovered. The recovered instance remains available for normal operations.
+type RollbackError struct{ Failure string }
+
+// Error describes the failed upgrade and its automatic recovery.
+func (e *RollbackError) Error() string { return "daemon replacement rolled back: " + e.Failure }
+
 func (m *Manager) restartDaemon(ctx context.Context, options RestartOptions) (RestartResult, error) {
 	startedAt := m.hooks.Now()
 	if options.Force {
@@ -52,7 +59,7 @@ func (m *Manager) restartDaemon(ctx context.Context, options RestartOptions) (Re
 	}
 
 	deadline := startedAt.Add(contract.DaemonRestartSLA)
-	restartContext, cancel := context.WithDeadline(ctx, deadline)
+	restartContext, cancel := context.WithDeadline(ctx, deadline.Add(contract.DaemonRecoverySLA))
 	defer cancel()
 	inspection, err := m.inspectDaemon(restartContext)
 	if errors.Is(err, os.ErrNotExist) {
@@ -72,9 +79,13 @@ func (m *Manager) restartDaemon(ctx context.Context, options RestartOptions) (Re
 func (m *Manager) restartOutdatedDaemon(ctx context.Context, inspection Inspection) (identity.Record, error) {
 	startedAt := m.hooks.Now()
 	deadline := startedAt.Add(contract.DaemonRestartSLA)
-	restartContext, cancel := context.WithDeadline(ctx, deadline)
+	restartContext, cancel := context.WithDeadline(ctx, deadline.Add(contract.DaemonRecoverySLA))
 	defer cancel()
 	result, err := m.restartInspectedDaemon(restartContext, startedAt, deadline, inspection)
+	var rollback *RollbackError
+	if errors.As(err, &rollback) && result.Inspection.Compatible {
+		return result.Daemon, nil
+	}
 	return result.Daemon, err
 }
 
@@ -99,6 +110,7 @@ func (m *Manager) restartInspectedDaemon(ctx context.Context, startedAt, deadlin
 		receipt = contract.DaemonRestart{
 			Restarting: true, Reason: "cli", PreviousInstanceID: inspection.Record.InstanceID,
 			AcceptedAt: startedAt.UTC(), DeadlineAt: deadline.UTC(), Handoff: true,
+			RecoveryDeadlineAt: deadline.Add(contract.DaemonRecoverySLA).UTC(),
 			ActiveEnvironments: append([]string(nil), inspection.Identity.ActiveEnvironments...),
 		}
 	} else if inspection.Identity.APIVersion == contract.APIVersion {
@@ -116,7 +128,8 @@ func (m *Manager) restartInspectedDaemon(ctx context.Context, startedAt, deadlin
 		receipt.Reason = "cli"
 	}
 	ready, err := m.awaitReplacement(ctx, inspection.Record, receipt)
-	if err != nil {
+	var rollback *RollbackError
+	if err != nil && !errors.As(err, &rollback) {
 		if restartErr != nil {
 			return RestartResult{}, fmt.Errorf("request daemon restart (%v); replacement failed: %w", restartErr, err)
 		}
@@ -125,7 +138,7 @@ func (m *Manager) restartInspectedDaemon(ctx context.Context, startedAt, deadlin
 	readyRecord := ready.Record
 	readyRecord.State = ready.Identity.State
 	readyRecord.RecoveryProblems = append([]string(nil), ready.Identity.RecoveryProblems...)
-	return RestartResult{Restart: receipt, Daemon: readyRecord, Inspection: ready, DurationMS: m.hooks.Now().Sub(startedAt).Milliseconds()}, nil
+	return RestartResult{Restart: receipt, Daemon: readyRecord, Inspection: ready, DurationMS: m.hooks.Now().Sub(startedAt).Milliseconds()}, err
 }
 
 func (m *Manager) awaitReplacement(ctx context.Context, previous identity.Record, receipt contract.DaemonRestart) (Inspection, error) {
@@ -134,6 +147,12 @@ func (m *Manager) awaitReplacement(ctx context.Context, previous identity.Record
 		current, err := identity.Read(m.layout)
 		if err == nil && current.InstanceID != "" && current.InstanceID != previous.InstanceID {
 			inspection, inspectErr := m.inspectDaemon(ctx)
+			if inspectErr == nil && inspection.Identity.State == "ready" {
+				status := inspection.Identity.LastRestart
+				if status != nil && status.Outcome == "rolled-back" && (status.RestartID == receipt.RestartID || (receipt.RestartID == "" && status.PreviousInstanceID == previous.InstanceID)) {
+					return inspection, &RollbackError{Failure: status.Failure}
+				}
+			}
 			if inspectErr == nil && inspection.Compatible && inspection.CurrentBuild && inspection.Identity.State == "ready" {
 				return inspection, nil
 			}
@@ -150,7 +169,7 @@ func (m *Manager) awaitReplacement(ctx context.Context, previous identity.Record
 			if restart == "" {
 				restart = "without a receipt"
 			}
-			message := fmt.Sprintf("daemon restart %s exceeded the %s readiness SLA; inspect %s", restart, contract.DaemonRestartSLA, m.layout.DaemonLog)
+			message := fmt.Sprintf("daemon restart %s exceeded the %s readiness SLA and %s recovery allowance; inspect %s", restart, contract.DaemonRestartSLA, contract.DaemonRecoverySLA, m.layout.DaemonLog)
 			if lastError != nil {
 				message += ": " + lastError.Error()
 			}
@@ -160,7 +179,7 @@ func (m *Manager) awaitReplacement(ctx context.Context, previous identity.Record
 }
 
 func validateRestartReceipt(receipt contract.DaemonRestart, previousInstanceID string) error {
-	if !receipt.Restarting || receipt.RestartID == "" || receipt.Reason == "" || receipt.PreviousInstanceID != previousInstanceID || receipt.TargetBuildID == "" || receipt.AcceptedAt.IsZero() || receipt.DeadlineAt.IsZero() || !receipt.DeadlineAt.After(receipt.AcceptedAt) || receipt.DeadlineAt.Sub(receipt.AcceptedAt) > contract.DaemonRestartSLA {
+	if !receipt.Restarting || receipt.RestartID == "" || receipt.Reason == "" || receipt.PreviousInstanceID != previousInstanceID || receipt.TargetBuildID == "" || receipt.AcceptedAt.IsZero() || !receipt.DeadlineAt.Equal(receipt.AcceptedAt.Add(contract.DaemonRestartSLA)) || !receipt.RecoveryDeadlineAt.Equal(receipt.DeadlineAt.Add(contract.DaemonRecoverySLA)) {
 		return errors.New("daemon returned an invalid restart receipt")
 	}
 	if !receipt.Handoff {
